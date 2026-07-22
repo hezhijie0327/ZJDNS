@@ -6,10 +6,12 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/internal/dns64"
+	"zjdns/internal/log"
 	"zjdns/internal/pending"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
 
+	"codeberg.org/miekg/dns"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -61,7 +63,10 @@ type Dependencies struct {
 func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	// Innermost: no-op terminal.  Resolution is the real terminal —
 	// it ignores next and never calls this stub.
-	var h handler.QueryHandler = handler.QueryHandlerFunc(func(_ context.Context, _ *handler.QueryContext) error {
+	var h handler.QueryHandler = handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
+		log.Warnf("CHAIN: terminal handler reached — no resolution middleware configured")
+		qctx.Res = handler.BuildResponseMsg(qctx.Req)
+		qctx.Res.Rcode = dns.RcodeServerFailure
 		return nil
 	})
 

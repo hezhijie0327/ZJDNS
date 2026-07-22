@@ -47,11 +47,11 @@ func (db *DB) migrate() error {
 			protocol    TEXT NOT NULL,
 			rcode       INTEGER NOT NULL DEFAULT 0,
 			dnssec      TEXT NOT NULL DEFAULT '',  -- 'secure','insecure','bogus','' for hits
-			hijack      INTEGER NOT NULL DEFAULT 0,
+			poisoned    INTEGER NOT NULL DEFAULT 0,
 			fallback    INTEGER NOT NULL DEFAULT 0,
 			query_count INTEGER NOT NULL DEFAULT 0,
 			total_ms    INTEGER NOT NULL DEFAULT 0,
-			PRIMARY KEY (stat_day, result, protocol, rcode, dnssec, hijack, fallback)
+			PRIMARY KEY (stat_day, result, protocol, rcode, dnssec, poisoned, fallback)
 		) WITHOUT ROWID;
 
 		-- ── Query log ──────────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ func (db *DB) migrate() error {
 			rcode       INTEGER NOT NULL DEFAULT 0,
 			response_ms INTEGER NOT NULL DEFAULT 0,
 			server      TEXT NOT NULL DEFAULT '',
-			hijack      INTEGER NOT NULL DEFAULT 0,
+			poisoned    INTEGER NOT NULL DEFAULT 0,
 			fallback    INTEGER NOT NULL DEFAULT 0,
 			dnssec      TEXT NOT NULL DEFAULT ''
 		);

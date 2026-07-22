@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"time"
 	"zjdns/config"
 	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
@@ -15,6 +16,7 @@ import (
 
 	"gitee.com/Trisia/gotlcp/dtlcp"
 	"gitee.com/Trisia/gotlcp/tlcp"
+	"github.com/emmansun/gmsm/smx509"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -124,7 +126,37 @@ func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, 
 		serverCtx:   serverCtx,
 	}
 
+	displayCertificateInfo(&signCert)
+
 	return s, nil
+}
+
+// displayCertificateInfo logs the SM2 signing certificate details.
+func displayCertificateInfo(cert *tlcp.Certificate) {
+	if len(cert.Certificate) == 0 {
+		log.Errorf("TLCP: No certificate found")
+		return
+	}
+
+	x509Cert, err := smx509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		log.Errorf("TLCP: Failed to parse certificate: %v", err)
+		return
+	}
+
+	log.Infof("TLCP: Certificate: Subject: %s | Issuer: %s | Valid: %s -> %s | Algorithm: %s",
+		x509Cert.Subject.CommonName,
+		x509Cert.Issuer.String(),
+		x509Cert.NotBefore.Format(time.DateOnly),
+		x509Cert.NotAfter.Format(time.DateOnly),
+		x509Cert.SignatureAlgorithm.String())
+
+	daysUntilExpiry := int(time.Until(x509Cert.NotAfter).Hours() / 24)
+	if daysUntilExpiry <= 0 {
+		log.Errorf("TLCP: Certificate has already expired!")
+	} else if daysUntilExpiry <= config.DefaultCertExpiryWarnDays {
+		log.Warnf("TLCP: Certificate expires in %d days!", daysUntilExpiry)
+	}
 }
 
 // Start launches all TLCP protocol listeners and blocks until all servers have

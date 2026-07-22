@@ -399,23 +399,3 @@ func (s *Server) displayCertificateInfo(cert *eTLS.Certificate) {
 		log.Warnf("TLS: Certificate expires in %d days!", daysUntilExpiry)
 	}
 }
-
-// isTemporaryError delegates to zdnsutil.IsTemporaryError.
-func isTemporaryError(err error) bool {
-	return zdnsutil.IsTemporaryError(err)
-}
-
-// secureClientIP extracts the client IP address from a connection, supporting
-// both TCP and UDP remote addresses.
-func secureClientIP(conn any) net.IP {
-	c, ok := conn.(interface{ RemoteAddr() net.Addr })
-	if ok {
-		if addr, ok := c.RemoteAddr().(*net.TCPAddr); ok {
-			return addr.IP
-		}
-		if addr, ok := c.RemoteAddr().(*net.UDPAddr); ok {
-			return addr.IP
-		}
-	}
-	return nil
-}

@@ -194,7 +194,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		return
 	}
 
-	clientIP := secureClientIP(conn)
+	clientIP := zdnsutil.ClientIPFromAddr(conn.RemoteAddr())
 	response := s.handler.ServeDNS(req, clientIP, true, config.ProtoQUIC)
 	pool.DefaultMessage.Put(req)
 

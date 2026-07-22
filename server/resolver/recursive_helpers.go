@@ -48,7 +48,7 @@ func (r *Recursive) collectBestNSMatch(response *dns.Msg, normalizedQname, query
 			Cacheable: true,
 			Answer:    nil, Authority: nsSlice, Additional: extraSlice,
 			Validated: validated, ECS: ecsResponse,
-			Server: config.RecursiveIndicator, Hijack: false, Err: nil,
+			Server: config.RecursiveIndicator, Poisoned: false, Err: nil,
 		}
 	}
 	return bestMatch, bestNSRecords, false, nil

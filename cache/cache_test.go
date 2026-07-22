@@ -626,7 +626,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		Qname: "error.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
 		ECS: nil, DNSSECOK: false,
 		Protocol: "tcp", Result: "error", Rcode: dns.RcodeServerFailure,
-		Server: "192.0.2.1:53 (TCP)", Hijack: true, DNSSECStatus: "bogus",
+		Server: "192.0.2.1:53 (TCP)", Poisoned: true, DNSSECStatus: "bogus",
 	})
 
 	txt := &dns.TXT{Hdr: dns.Header{Name: ".", Class: dns.ClassINET, TTL: 3600}, TXT: rdata.TXT{Txt: []string{"198.41.0.4:53"}}}

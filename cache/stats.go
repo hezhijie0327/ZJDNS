@@ -39,12 +39,12 @@ func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 		return
 	}
 	_, _ = s.db.StmtQueryStats.Exec(r.Result, r.Protocol, r.Rcode, r.DNSSECStatus,
-		database.BoolToInt(r.Hijack), database.BoolToInt(r.Fallback), r.ResponseTime)
+		database.BoolToInt(r.Poisoned), database.BoolToInt(r.Fallback), r.ResponseTime)
 	if r.Result != "hit" {
 		_, _ = s.db.StmtQueryLog.Exec(
 			log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass),
 			r.Protocol, r.Result, r.Rcode, r.ResponseTime, r.Server,
-			database.BoolToInt(r.Hijack), database.BoolToInt(r.Fallback), r.DNSSECStatus,
+			database.BoolToInt(r.Poisoned), database.BoolToInt(r.Fallback), r.DNSSECStatus,
 		)
 	}
 }
@@ -176,7 +176,7 @@ func (s *SQLiteCache) Stats() []string {
 	var total, hits, misses, stales, zones, errCount, blockedCount, badcookieCount int64
 	var udp, tcp, tls, quic, https, http3, dtls, dnscrypt, dnscryptTCP, tlcp, httpTLCP, dtlcp int64
 	var noerr, formerr, servfail, nxdomain, notimp, refused, other int64
-	var secureCount, insecureCount, bogusCount, hijack, fallback int64
+	var secureCount, insecureCount, bogusCount, poisoned, fallback int64
 	var totalMS int64
 
 	// Single scan of query_stats — result+protocol+rcode breakdown + totals.
@@ -216,7 +216,7 @@ func (s *SQLiteCache) Stats() []string {
 			" COALESCE(SUM(CASE WHEN dnssec='"+config.DNSSECStatusInsecure+"' THEN query_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN dnssec='"+config.DNSSECStatusBogus+"' THEN query_count ELSE 0 END), 0),"+
 			// misc
-			" COALESCE(SUM(CASE WHEN hijack THEN query_count ELSE 0 END), 0),"+
+			" COALESCE(SUM(CASE WHEN poisoned THEN query_count ELSE 0 END), 0),"+
 			" COALESCE(SUM(CASE WHEN fallback THEN query_count ELSE 0 END), 0),"+
 			// total response time
 			" COALESCE(SUM(total_ms), 0)"+
@@ -227,7 +227,7 @@ func (s *SQLiteCache) Stats() []string {
 		&udp, &tcp, &tls, &quic, &https, &http3, &dtls, &dnscrypt, &dnscryptTCP, &tlcp, &httpTLCP, &dtlcp,
 		&noerr, &formerr, &servfail, &nxdomain, &notimp, &refused, &other,
 		&secureCount, &insecureCount, &bogusCount,
-		&hijack, &fallback,
+		&poisoned, &fallback,
 		&totalMS,
 	)
 
@@ -253,8 +253,8 @@ func (s *SQLiteCache) Stats() []string {
 			dnscrypt, dnscryptTCP),
 		fmt.Sprintf("tlcp=%d http-tlcp=%d dtlcp=%d",
 			tlcp, httpTLCP, dtlcp),
-		fmt.Sprintf("hijack=%d fallback=%d",
-			hijack, fallback),
+		fmt.Sprintf("poisoned=%d fallback=%d",
+			poisoned, fallback),
 		fmt.Sprintf("secure=%d insecure=%d bogus=%d",
 			secureCount, insecureCount, bogusCount),
 	}

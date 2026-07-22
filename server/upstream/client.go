@@ -118,7 +118,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	if len(msg.Question) > 0 {
 		qname = msg.Question[0].Header().Name
 	}
-	log.Debugf("UPSTREAM: querying %s (%s) for %s", server.Address, strings.ToUpper(server.Protocol), qname)
+	log.Debugf("UPSTREAM: querying %s (%s) for %s", server.Address, server.Protocol, qname)
 
 	queryCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -152,7 +152,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 		}
 
 		result.Duration = time.Since(start)
-		result.Protocol = strings.ToUpper(protocol)
+		result.Protocol = protocol
 		return result
 	}
 
@@ -191,7 +191,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	}
 
 	result.Duration = time.Since(start)
-	result.Protocol = strings.ToUpper(server.Protocol)
+	result.Protocol = server.Protocol
 
 	if result.Error != nil {
 		log.Debugf("UPSTREAM: query failed for %s via %s (%s) in %v, error=%v", qname, server.Address, result.Protocol, result.Duration, result.Error)

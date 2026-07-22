@@ -63,7 +63,7 @@ func TestClassify_NSInAnswer(t *testing.T) {
 		nsRec("sub.example.com.", "ns1.example.com."),
 		"example.com", "sub.example.com",
 	)
-	if v == VerdictHijack {
+	if v == VerdictPoisoned {
 		t.Fatal("NS records in answer section should not be flagged as hijack")
 	}
 }
@@ -74,7 +74,7 @@ func TestClassify_DSInAnswer(t *testing.T) {
 		Hdr: dns.Header{Name: dnsutil.Fqdn("sub.example.com."), Class: dns.ClassINET, TTL: 86400},
 	}
 	v := classifyRecord(d, ds, "example.com", "sub.example.com")
-	if v == VerdictHijack {
+	if v == VerdictPoisoned {
 		t.Fatal("DS records in answer section should not be flagged as hijack")
 	}
 }
@@ -86,7 +86,7 @@ func TestClassify_DifferentName(t *testing.T) {
 		aRec("other.example.com.", "10.0.0.1"),
 		"example.com", "www.example.com",
 	)
-	if v == VerdictHijack {
+	if v == VerdictPoisoned {
 		t.Fatal("answer for a different name should be accepted")
 	}
 }
@@ -98,8 +98,8 @@ func TestClassify_OutOfAuthority(t *testing.T) {
 		aRec("www.example.com.", "10.0.0.1"),
 		"com", "www.example.com",
 	)
-	if v != VerdictHijack {
-		t.Fatalf("TLD returning A for subdomain should be VerdictHijack, got %s", v)
+	if v != VerdictPoisoned {
+		t.Fatalf("TLD returning A for subdomain should be VerdictPoisoned, got %s", v)
 	}
 }
 
@@ -110,7 +110,7 @@ func TestClassify_RootServerGlue(t *testing.T) {
 		aRec("a.root-servers.net.", "198.41.0.4"),
 		"", "a.root-servers.net",
 	)
-	if v == VerdictHijack {
+	if v == VerdictPoisoned {
 		t.Fatal("root server glue should be accepted")
 	}
 }
@@ -122,8 +122,8 @@ func TestClassify_RootServerUnauthorized(t *testing.T) {
 		aRec("www.google.com.", "185.45.5.35"),
 		"", "www.google.com",
 	)
-	if v != VerdictHijack {
-		t.Fatalf("root server returning non-glue A should be VerdictHijack, got %s", v)
+	if v != VerdictPoisoned {
+		t.Fatalf("root server returning non-glue A should be VerdictPoisoned, got %s", v)
 	}
 }
 
@@ -136,12 +136,12 @@ func TestValidate_NormalAnswer(t *testing.T) {
 		aRec("www.example.com.", "10.0.0.1"),
 	}
 	v := d.Validate("example.com", "www.example.com", resp)
-	if v == VerdictHijack {
+	if v == VerdictPoisoned {
 		t.Fatalf("normal answer should not be hijack, got %s", v)
 	}
 }
 
-func TestValidate_RootHijack(t *testing.T) {
+func TestValidate_RootPoisoned(t *testing.T) {
 	d := newDetector()
 
 	resp := &dns.Msg{}
@@ -150,12 +150,12 @@ func TestValidate_RootHijack(t *testing.T) {
 	}
 
 	v := d.Validate("", "www.google.com", resp)
-	if v != VerdictHijack {
-		t.Fatalf("root server returning A for www.google.com should be VerdictHijack, got %s", v)
+	if v != VerdictPoisoned {
+		t.Fatalf("root server returning A for www.google.com should be VerdictPoisoned, got %s", v)
 	}
 }
 
-func TestValidate_TLDHijack(t *testing.T) {
+func TestValidate_TLDPoisoned(t *testing.T) {
 	d := newDetector()
 
 	resp := &dns.Msg{}
@@ -164,12 +164,12 @@ func TestValidate_TLDHijack(t *testing.T) {
 	}
 
 	v := d.Validate("com", "www.google.com", resp)
-	if v != VerdictHijack {
-		t.Fatalf("TLD server returning A for subdomain should be VerdictHijack, got %s", v)
+	if v != VerdictPoisoned {
+		t.Fatalf("TLD server returning A for subdomain should be VerdictPoisoned, got %s", v)
 	}
 }
 
-func TestValidate_DelegationIsNotHijack(t *testing.T) {
+func TestValidate_DelegationIsNotPoisoned(t *testing.T) {
 	d := newDetector()
 
 	resp := &dns.Msg{}
@@ -182,7 +182,7 @@ func TestValidate_DelegationIsNotHijack(t *testing.T) {
 	}
 
 	v := d.Validate("cn", "dns.weixin.qq.com.cn", resp)
-	if v == VerdictHijack {
+	if v == VerdictPoisoned {
 		t.Fatalf("delegation response should not be hijack, got %s", v)
 	}
 }
@@ -227,7 +227,7 @@ func TestHijack_WeixinQQComCN_NotFlagged(t *testing.T) {
 	}
 
 	v := d.Validate("qq.com.cn", "dns.weixin.qq.com.cn", resp)
-	if v == VerdictHijack {
+	if v == VerdictPoisoned {
 		t.Fatalf("dns.weixin.qq.com.cn response should not be hijack, got %s", v)
 	}
 }
@@ -240,8 +240,8 @@ func TestHijack_GoogleAtRoot_Flagged(t *testing.T) {
 	}
 
 	v := d.Validate("", "www.google.com", resp)
-	if v != VerdictHijack {
-		t.Fatalf("GFW hijack at root level should be VerdictHijack, got %s", v)
+	if v != VerdictPoisoned {
+		t.Fatalf("GFW hijack at root level should be VerdictPoisoned, got %s", v)
 	}
 }
 
@@ -253,8 +253,8 @@ func TestHijack_GoogleAtComTLD_Flagged(t *testing.T) {
 	}
 
 	v := d.Validate("com", "www.google.com", resp)
-	if v != VerdictHijack {
-		t.Fatalf("GFW hijack at TLD level should be VerdictHijack, got %s", v)
+	if v != VerdictPoisoned {
+		t.Fatalf("GFW hijack at TLD level should be VerdictPoisoned, got %s", v)
 	}
 }
 
@@ -274,7 +274,7 @@ func TestValidate_LegitimateGlueNotFlagged(t *testing.T) {
 	}
 
 	v := d.Validate("com", "www.youtube.com", resp)
-	if v == VerdictHijack {
+	if v == VerdictPoisoned {
 		t.Fatalf("legitimate glue should not be hijack, got %s", v)
 	}
 }
@@ -287,7 +287,7 @@ func TestValidate_RootServerGlueNotFlagged(t *testing.T) {
 	}
 
 	v := d.Validate("", "a.root-servers.net", resp)
-	if v == VerdictHijack {
+	if v == VerdictPoisoned {
 		t.Fatalf("root server glue in Additional should not be hijack, got %s", v)
 	}
 }
@@ -300,7 +300,7 @@ func TestValidate_NonMatchingAdditionalNotFlagged(t *testing.T) {
 	}
 
 	v := d.Validate("", "www.google.com", resp)
-	if v == VerdictHijack {
+	if v == VerdictPoisoned {
 		t.Fatalf("Additional section is not inspected, got %s", v)
 	}
 }
@@ -354,8 +354,8 @@ func TestClassifyRoot_EmptyQuery(t *testing.T) {
 func TestClassifyRoot_NonGlueAnswer(t *testing.T) {
 	d := newDetector()
 	v := d.classifyRoot("www.google.com", dns.TypeA)
-	if v != VerdictHijack {
-		t.Fatalf("root server returning non-glue A should be VerdictHijack, got %s", v)
+	if v != VerdictPoisoned {
+		t.Fatalf("root server returning non-glue A should be VerdictPoisoned, got %s", v)
 	}
 }
 
@@ -372,8 +372,8 @@ func TestClassifyTLD_SelfQuery(t *testing.T) {
 func TestClassifyTLD_SubdomainAnswer(t *testing.T) {
 	d := newDetector()
 	v := d.classifyTLD("com", "www.example.com")
-	if v != VerdictHijack {
-		t.Fatalf("TLD returning A for subdomain should be VerdictHijack, got %s", v)
+	if v != VerdictPoisoned {
+		t.Fatalf("TLD returning A for subdomain should be VerdictPoisoned, got %s", v)
 	}
 }
 
@@ -387,8 +387,8 @@ func TestClassify_NSatRootForNonTLD(t *testing.T) {
 		nsRec("www.youtube.com.", "fake.gfw.cn."),
 		"", "www.youtube.com",
 	)
-	if v != VerdictHijack {
-		t.Fatalf("NS record for non-TLD at root should be VerdictHijack, got %s", v)
+	if v != VerdictPoisoned {
+		t.Fatalf("NS record for non-TLD at root should be VerdictPoisoned, got %s", v)
 	}
 }
 
@@ -400,7 +400,7 @@ func TestClassify_NSatRootForTLD(t *testing.T) {
 		nsRec("com.", "a.gtld-servers.net."),
 		"", "com",
 	)
-	if v == VerdictHijack {
+	if v == VerdictPoisoned {
 		t.Fatalf("NS record for TLD at root should be clean, got %s", v)
 	}
 }
@@ -411,8 +411,8 @@ func TestVerdict_String(t *testing.T) {
 	if s := VerdictClean.String(); s != "clean" {
 		t.Fatalf("Clean string: got %q, want %q", s, "clean")
 	}
-	if s := VerdictHijack.String(); s != "hijack" {
-		t.Fatalf("Hijack string: got %q, want %q", s, "hijack")
+	if s := VerdictPoisoned.String(); s != "poisoned" {
+		t.Fatalf("Hijack string: got %q, want %q", s, "poisoned")
 	}
 	if s := VerdictUncertain.String(); s != "uncertain" {
 		t.Fatalf("Uncertain string: got %q, want %q", s, "uncertain")

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
@@ -21,7 +22,7 @@ type dtlcpListener struct {
 	cfg     *dtlcp.Config
 	mu      sync.Mutex
 	buf     []byte
-	closed  bool
+	closed  atomic.Bool
 	active  map[string]*dtlcp.Conn
 }
 
@@ -75,11 +76,11 @@ func (l *dtlcpListener) Accept() (net.Conn, error) {
 
 func (l *dtlcpListener) Close() error {
 	l.mu.Lock()
-	if l.closed {
+	if l.closed.Load() {
 		l.mu.Unlock()
 		return nil
 	}
-	l.closed = true
+	l.closed.Store(true)
 	// Collect active connections under the lock, then unlock before closing.
 	// dtlcpConnWrapper.Close() acquires parent.mu — holding it here would
 	// cause a self-deadlock.
@@ -104,7 +105,7 @@ func (l *dtlcpListener) Addr() net.Addr {
 // already tracked in the active set.
 func (l *dtlcpListener) readFirstDatagram() ([]byte, *net.UDPAddr, error) {
 	for {
-		if l.closed {
+		if l.closed.Load() {
 			return nil, nil, net.ErrClosed
 		}
 

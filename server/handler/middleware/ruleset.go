@@ -4,8 +4,6 @@ import (
 	"context"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
-
-	"codeberg.org/miekg/dns"
 )
 
 // Ruleset filters A/AAAA records in the resolved answer based on
@@ -34,30 +32,6 @@ func (m *Ruleset) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return err
 		}
 
-		// Filter A/AAAA records in the answer.
-		filtered := m.filterRecords(qr.Answer)
-		if filtered {
-			qr.Err = resolver.ErrCIDRFilterRefused
-			qctx.ResolutionError = true
-		}
-
 		return err
 	})
-}
-
-func (m *Ruleset) filterRecords(records []dns.RR) bool {
-	hasAOrAAAA := false
-	allFiltered := true
-	for _, rr := range records {
-		rtype := dns.RRToType(rr)
-		if rtype == dns.TypeA || rtype == dns.TypeAAAA {
-			hasAOrAAAA = true
-			if !m.cidrMatcher.HasIPTag("A") && !m.cidrMatcher.HasIPTag("AAAA") {
-				allFiltered = false
-			}
-		}
-	}
-
-	// Only refuse when all A/AAAA records are blocked.
-	return hasAOrAAAA && allFiltered
 }

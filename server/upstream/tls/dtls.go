@@ -8,6 +8,7 @@ import (
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
 	"github.com/pion/dtls/v3"
@@ -75,8 +76,10 @@ func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.U
 	respLen := binary.BigEndian.Uint16(respBuf[:2])
 	respBuf = respBuf[2 : 2+respLen]
 
-	response := &dns.Msg{Data: respBuf}
+	response := pool.DefaultMessage.Get()
+	response.Data = respBuf
 	if err := response.Unpack(); err != nil {
+		pool.DefaultMessage.Put(response)
 		return nil, fmt.Errorf("dtls: unpack response: %w", err)
 	}
 

@@ -24,9 +24,6 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		req := qctx.Req
 
-		// Force a full unpack so EDNS flags are available.
-		_ = req.Unpack()
-
 		qctx.ClientRequestedDNSSEC = req.Security
 		qctx.ECSOpt = m.edns.ParseFromDNS(req)
 		qctx.CookieOpt = m.edns.ParseCookie(req)

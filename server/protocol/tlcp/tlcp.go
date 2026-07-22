@@ -76,7 +76,7 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 	defer zdnsutil.HandlePanic("TLCP DoT handler")
 	defer func() { _ = conn.Close() }()
 
-	clientIP := clientIPFromAddr(conn.RemoteAddr())
+	clientIP := zdnsutil.ClientIPFromAddr(conn.RemoteAddr())
 
 	for {
 		msg, err := zdnsutil.ReadTCPMsg(conn)
@@ -96,21 +96,5 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 			log.Debugf("TLCP: DoT write error to %s: %v", clientIP, err)
 			return
 		}
-	}
-}
-
-// clientIPFromAddr extracts the IP address from a net.Addr.
-func clientIPFromAddr(addr net.Addr) net.IP {
-	switch a := addr.(type) {
-	case *net.TCPAddr:
-		return a.IP
-	case *net.UDPAddr:
-		return a.IP
-	default:
-		host, _, err := net.SplitHostPort(addr.String())
-		if err != nil {
-			return nil
-		}
-		return net.ParseIP(host)
 	}
 }

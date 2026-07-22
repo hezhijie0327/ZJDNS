@@ -75,9 +75,9 @@ func (c *Client) warmUpConnection(ctx context.Context, server *config.UpstreamSe
 	case config.ProtoQUIC:
 		c.tlsClient.WarmUpQUIC(ctx, server)
 	case config.ProtoHTTPS:
-		c.tlsClient.WarmUpHTTPS(ctx, server)
+		c.tlsClient.WarmUpHTTPS(server)
 	case config.ProtoHTTP3:
-		c.tlsClient.WarmUpHTTP3(ctx, server)
+		c.tlsClient.WarmUpHTTP3(server)
 	case config.ProtoDNSCrypt, config.ProtoDNSCryptTCP:
 		c.dnscryptClient.WarmUp(ctx, server)
 	}

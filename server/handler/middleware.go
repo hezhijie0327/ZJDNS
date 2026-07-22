@@ -66,10 +66,6 @@ type EDNSHandler interface {
 // to the client (e.g. rate-limit or hijack detection drops the query silently).
 var ErrDrop = errors.New("drop: no response")
 
-// ErrSuspense is returned by a Handler when processing is intentionally
-// deferred (e.g. follower waiting on a singleflight leader).
-var ErrSuspense = errors.New("suspense: result pending")
-
 // ---------------------------------------------------------------------------
 // QueryHandlerFunc method
 // ---------------------------------------------------------------------------

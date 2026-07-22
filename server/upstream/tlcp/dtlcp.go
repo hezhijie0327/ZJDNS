@@ -8,6 +8,7 @@ import (
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
 	"gitee.com/Trisia/gotlcp/dtlcp"
@@ -78,8 +79,10 @@ func (c *Client) ExecuteDTLCP(ctx context.Context, msg *dns.Msg, server *config.
 	}
 	respBuf = respBuf[2 : 2+respLen]
 
-	response := &dns.Msg{Data: respBuf}
+	response := pool.DefaultMessage.Get()
+	response.Data = respBuf
 	if err := response.Unpack(); err != nil {
+		pool.DefaultMessage.Put(response)
 		return nil, fmt.Errorf("dtlcp: unpack response: %w", err)
 	}
 

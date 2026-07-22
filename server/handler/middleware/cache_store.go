@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"time"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -106,8 +105,8 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	m.store.RecordRequest(&cache.RequestRecord{
 		Qname: qname, Qtype: qtype, Qclass: qclass,
 		ECS: ecsOpt, DNSSECOK: dnssecOK,
-		Protocol: qctx.Protocol, Result: "miss", ResponseTime: time.Since(qctx.StartTime).Milliseconds(),
-		Rcode: dns.RcodeSuccess, Server: qr.Server, Hijack: qr.Hijack, Fallback: qr.Fallback,
+		Protocol: qctx.Protocol, Result: "miss", ResponseTime: handler.ElapsedMS(qctx.StartTime),
+		Rcode: dns.RcodeSuccess, Server: qr.Server, Poisoned: qr.Poisoned, Fallback: qr.Fallback,
 		DNSSECStatus: dnssecStatus,
 		EntryID:      entryID,
 	})
@@ -155,7 +154,7 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 			Qname: qname, Qtype: qtype, Qclass: qclass,
 			ECS: ecsOpt, DNSSECOK: dnssecOK,
 			Protocol: qctx.Protocol, Result: "error", Rcode: dns.RcodeServerFailure,
-			ResponseTime: time.Since(qctx.StartTime).Milliseconds(),
+			ResponseTime: handler.ElapsedMS(qctx.StartTime),
 			EntryID:      entry.ID,
 		})
 		return m.buildFromCacheEntry(qctx, entry, true)
@@ -168,11 +167,14 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 
 	edeCode := dns.ExtendedErrorNetworkError
 	dnssecStatus := ""
-	if code := m.resolver.DNSSECEDECode(); m.resolver != nil && code != 0 {
-		edeCode = code
-		dnssecStatus = config.DNSSECStatusBogus
-		log.Debugf("SECURITY: using DNSSEC EDE %d from recursive resolver", edeCode)
-	} else {
+	if m.resolver != nil {
+		if code := m.resolver.DNSSECEDECode(); code != 0 {
+			edeCode = code
+			dnssecStatus = config.DNSSECStatusBogus
+			log.Debugf("SECURITY: using DNSSEC EDE %d from recursive resolver", edeCode)
+		}
+	}
+	if dnssecStatus == "" {
 		var dnsErr *resolver.DNSSECError
 		if errors.As(queryErr, &dnsErr) {
 			edeCode = dnsErr.EDECode
@@ -185,7 +187,7 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 		Qname: qname, Qtype: qtype, Qclass: qclass,
 		ECS: ecsOpt, DNSSECOK: dnssecOK,
 		Protocol: qctx.Protocol, Result: "error", Rcode: dns.RcodeServerFailure,
-		ResponseTime: time.Since(qctx.StartTime).Milliseconds(),
+		ResponseTime: handler.ElapsedMS(qctx.StartTime),
 		DNSSECStatus: dnssecStatus,
 	})
 
@@ -212,7 +214,7 @@ func (m *CacheStore) buildCIDRRefused(qctx *handler.QueryContext) *dns.Msg {
 		Qname: qname, Qtype: qtype, Qclass: qclass,
 		ECS: ecsOpt, DNSSECOK: dnssecOK,
 		Protocol: qctx.Protocol, Result: "blocked", Rcode: dns.RcodeRefused,
-		ResponseTime: time.Since(qctx.StartTime).Milliseconds(),
+		ResponseTime: handler.ElapsedMS(qctx.StartTime),
 	})
 
 	return msg

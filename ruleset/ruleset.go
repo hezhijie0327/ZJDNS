@@ -32,6 +32,7 @@ type Engine struct {
 	tags          map[string]bool                      // all known tags from config
 	matchCache    *lrumap.Map[string, map[string]bool] // bounded memory cache for domain→tags
 	matchCacheCap int
+	ipTrie        ipTrie // binary radix trie for O(128) CIDR matching
 }
 
 // New creates an Engine backed by the given database.
@@ -92,7 +93,33 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 	var n int
 	_ = e.db.SQLQueryRow("SELECT COUNT(*) FROM ruleset_entries").Scan(&n)
 	log.Infof("RULESET: %d rules loaded into %d tags", n, len(e.tags))
+
+	// Preload all CIDR rules into memory to avoid SQL queries on the hot path.
+	e.loadIPRules()
+
 	return nil
+}
+
+// loadIPRules loads all CIDR rules from SQLite into memory.
+func (e *Engine) loadIPRules() {
+	rows, err := e.db.SQLQuery("SELECT tag, value FROM ruleset_entries WHERE type='ip'")
+	if err != nil {
+		return
+	}
+	defer rows.Close() //nolint:errcheck // best-effort
+
+	e.ipTrie.reset()
+	for rows.Next() {
+		var tag, cidr string
+		if err := rows.Scan(&tag, &cidr); err != nil {
+			continue
+		}
+		_, n, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		e.ipTrie.insert(n, tag)
+	}
 }
 
 // Match returns all tags that match the given query name and client IP.
@@ -135,33 +162,17 @@ func (e *Engine) Match(qname, ip string) map[string]bool {
 		}
 	}
 
-	// IP: load all CIDR rules.
+	// IP: binary radix trie — O(128) regardless of rule count.
 	parsedIP := net.ParseIP(ip)
 	if parsedIP == nil {
 		return tags
 	}
 
-	rows, err := e.db.SQLQuery("SELECT tag, value FROM ruleset_entries WHERE type='ip'")
-	if err != nil {
-		return tags
-	}
-	defer rows.Close() //nolint:errcheck // best-effort
-
-	for rows.Next() {
-		var t, cidr string
-		if err := rows.Scan(&t, &cidr); err != nil {
-			continue
+	for _, t := range e.ipTrie.match(parsedIP) {
+		if tags == nil {
+			tags = make(map[string]bool)
 		}
-		_, n, err := net.ParseCIDR(cidr)
-		if err != nil {
-			continue
-		}
-		if n.Contains(parsedIP) {
-			if tags == nil {
-				tags = make(map[string]bool)
-			}
-			tags[t] = true
-		}
+		tags[t] = true
 	}
 
 	return tags
@@ -169,12 +180,7 @@ func (e *Engine) Match(qname, ip string) map[string]bool {
 
 // HasIPTag reports whether a tag has CIDR rules for IP-based filtering.
 func (e *Engine) HasIPTag(tag string) bool {
-	var n int
-	_ = e.db.SQLQueryRow(
-		"SELECT COUNT(*) FROM ruleset_entries WHERE type='ip' AND tag=?",
-		tag,
-	).Scan(&n)
-	return n > 0
+	return e.ipTrie.hasTag(tag)
 }
 
 // MatchIP checks whether an IP matches a specific tag's CIDR rules.
@@ -197,29 +203,7 @@ func (e *Engine) MatchIP(ip, tag string) (matched, exists bool) {
 		return false, true
 	}
 
-	rows, err := e.db.SQLQuery(
-		"SELECT value FROM ruleset_entries WHERE type='ip' AND tag=?",
-		tag,
-	)
-	if err != nil {
-		return false, true
-	}
-	defer rows.Close() //nolint:errcheck // best-effort
-
-	for rows.Next() {
-		var cidr string
-		if err := rows.Scan(&cidr); err != nil {
-			continue
-		}
-		_, n, err := net.ParseCIDR(cidr)
-		if err != nil {
-			continue
-		}
-		matched = n.Contains(parsedIP)
-		if matched {
-			break
-		}
-	}
+	matched = e.ipTrie.matchTag(parsedIP, tag)
 
 	if negate {
 		return !matched, true

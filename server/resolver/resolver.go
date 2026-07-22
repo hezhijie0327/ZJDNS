@@ -11,6 +11,7 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/defense"
 	"zjdns/server/resolver/dnssec"
@@ -43,7 +44,7 @@ type QueryResult struct {
 	ECS        *edns.ECSOption
 	Server     string
 	Fallback   bool
-	Hijack     bool
+	Poisoned   bool
 	Err        error
 }
 
@@ -84,12 +85,19 @@ type Resolver struct {
 	spoofEnabled bool
 }
 
-// Validator holds the DNSSEC and hijack detection components for response
+// DefenseConfig bundles poison/spoof guard dependencies, mirroring the
+// JSON "features.defense" section.
+type DefenseConfig struct {
+	Poisonguard *defense.Detector // nil → poisonguard disabled
+	Spoofguard  bool
+}
+
+// Validator holds the DNSSEC and poison detection components for response
 // validation. Lightweight record-presence checking is provided by the
 // package-level dnssec.IsResponseValid function.
 type Validator struct {
-	Crypto *dnssec.CryptoValidator // Full cryptographic DNSSEC validation
-	Hijack *defense.Detector       // DNS hijack detection
+	Crypto      *dnssec.CryptoValidator // Full cryptographic DNSSEC validation
+	Poisonguard *defense.Detector       // DNS poison detection
 }
 
 // UpstreamClient is the interface for sending DNS queries to upstream servers,
@@ -102,16 +110,13 @@ type UpstreamClient interface {
 type Config struct {
 	QueryClient   UpstreamClient
 	Crypto        *dnssec.CryptoValidator
-	Hijack        *defense.Detector
+	Defense       DefenseConfig
 	EDNS          *edns.Handler
 	CIDRMatcher   CIDRMatcher
 	BuildMsg      BuildQueryFunc
 	Cache         cache.Store
 	DNSSECEnforce bool
 	Ctx           context.Context // lifecycle context propagated to Recursive for probes
-
-	// Tail selection: UDP multi-read + LastResponse (upstream mode).
-	SpoofguardEnabled bool
 }
 
 // concurrencyTier1/2/3 define server-count thresholds for adaptive concurrency
@@ -170,7 +175,7 @@ func New(cfg *Config) *Resolver {
 		upstream:      &upstreamSet{},
 		fallback:      &upstreamSet{},
 		cache:         cfg.Cache,
-		spoofEnabled:  cfg.SpoofguardEnabled,
+		spoofEnabled:  cfg.Defense.Spoofguard,
 	}
 	r.recursive = &Recursive{
 		resolver: r,
@@ -178,7 +183,7 @@ func New(cfg *Config) *Resolver {
 		ctx:      cfg.Ctx,
 	}
 	r.cname = &CNAME{resolver: r}
-	r.validator = &Validator{Crypto: cfg.Crypto, Hijack: cfg.Hijack}
+	r.validator = &Validator{Crypto: cfg.Crypto, Poisonguard: cfg.Defense.Poisonguard}
 	return r
 }
 
@@ -293,6 +298,7 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 	defer cancel(errors.New("query completed"))
 
 	go func() {
+		defer zdnsutil.HandlePanic("UPSTREAM primary query")
 		qr := r.queryUpstream(queryCtx, question, ecs, servers)
 		select {
 		case upstreamCh <- qr:
@@ -301,6 +307,7 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 	}()
 
 	go func() {
+		defer zdnsutil.HandlePanic("UPSTREAM fallback query")
 		qr := r.queryUpstream(queryCtx, question, ecs, fallbackServers)
 		select {
 		case fallbackCh <- qr:

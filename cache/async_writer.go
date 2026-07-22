@@ -159,7 +159,7 @@ func (w *AsyncStatsWriter) flush(batch []RequestRecord) {
 		// Always upsert into query_stats (per-day aggregated counters).
 		_, _ = w.db.StmtQueryStats.Exec(
 			r.Result, r.Protocol, r.Rcode, r.DNSSECStatus,
-			database.BoolToInt(r.Hijack), database.BoolToInt(r.Fallback),
+			database.BoolToInt(r.Poisoned), database.BoolToInt(r.Fallback),
 			r.ResponseTime,
 		)
 
@@ -168,7 +168,7 @@ func (w *AsyncStatsWriter) flush(batch []RequestRecord) {
 			_, _ = w.db.StmtQueryLog.Exec(
 				log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass),
 				r.Protocol, r.Result, r.Rcode, r.ResponseTime, r.Server,
-				database.BoolToInt(r.Hijack), database.BoolToInt(r.Fallback),
+				database.BoolToInt(r.Poisoned), database.BoolToInt(r.Fallback),
 				r.DNSSECStatus,
 			)
 		}

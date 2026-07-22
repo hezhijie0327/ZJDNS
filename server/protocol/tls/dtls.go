@@ -69,7 +69,7 @@ func (s *Server) handleDTLSConnections(listener net.Listener) {
 			case <-s.ctx.Done():
 				return
 			default:
-				if isTemporaryError(err) {
+				if zdnsutil.IsTemporaryError(err) {
 					log.Debugf("TLS: DTLS accept temporary error: %v", err)
 					continue
 				}
@@ -111,7 +111,7 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 
 		n, err := conn.Read(buf)
 		if err != nil {
-			if !isTemporaryError(err) {
+			if !zdnsutil.IsTemporaryError(err) {
 				return
 			}
 			continue

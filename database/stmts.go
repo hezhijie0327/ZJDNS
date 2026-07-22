@@ -14,16 +14,16 @@ func (db *DB) prepareStatements() error {
 	}
 	db.StmtQueryLog, err = db.SQ.Prepare(
 		`INSERT INTO query_log (timestamp, qname, qtype, qclass, protocol, result,
-			rcode, response_ms, server, hijack, fallback, dnssec)
+			rcode, response_ms, server, poisoned, fallback, dnssec)
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
 	)
 	if err != nil {
 		return err
 	}
 	db.StmtQueryStats, err = db.SQ.Prepare(
-		`INSERT INTO query_stats (stat_day, result, protocol, rcode, dnssec, hijack, fallback, query_count, total_ms)
+		`INSERT INTO query_stats (stat_day, result, protocol, rcode, dnssec, poisoned, fallback, query_count, total_ms)
 		 VALUES (unixepoch() / 86400, ?1, ?2, ?3, ?4, ?5, ?6, 1, ?7)
-		 ON CONFLICT(stat_day, result, protocol, rcode, dnssec, hijack, fallback) DO UPDATE
+		 ON CONFLICT(stat_day, result, protocol, rcode, dnssec, poisoned, fallback) DO UPDATE
 		 SET query_count = query_stats.query_count + 1,
 		     total_ms = query_stats.total_ms + ?7`,
 	)

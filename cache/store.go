@@ -146,11 +146,13 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	dbuf := decompressBufPool.Get().(*[]byte)
 	wire, err := zdnsutil.DecompressTo(msgWire, *dbuf)
 	if err != nil {
+		clear(*dbuf)
 		decompressBufPool.Put(dbuf)
 		log.Warnf("CACHE: decompress wire for entry %d: %v", id, err)
 		return nil, false, false
 	}
-	defer decompressBufPool.Put(dbuf) // runs after msg.Put (LIFO ensures msg.Data is nil'd first)
+	defer clear(*dbuf)
+	decompressBufPool.Put(dbuf) // runs after msg.Put (LIFO ensures msg.Data is nil'd first)
 
 	msg := pool.DefaultMessage.Get()
 	// Safety: msg.Data aliases the decompression buffer.  The LIFO defer
@@ -334,11 +336,15 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	additional = stripOPT(additional)
 
 	// Pack wire format and compress.
-	msg := &dns.Msg{Answer: answer, Ns: authority, Extra: additional}
+	msg := pool.DefaultMessage.Get()
+	msg.Answer = answer
+	msg.Ns = authority
+	msg.Extra = additional
 	var msgWire []byte
 	if err := msg.Pack(); err == nil {
 		msgWire = zdnsutil.Compress(msg.Data)
 	}
+	pool.DefaultMessage.Put(msg)
 
 	// ── Transaction ──────────────────────────────────────────────────────
 	// SQLite WAL mode serializes writers, so no application-level mutex is
@@ -488,8 +494,8 @@ func (s *SQLiteCache) evictOldest(toEvict int64) {
 	// Clean up stale rows from tables with no FK cascade to entries.
 	// All three use the same staleMaxAge cutoff — batched into a single Exec.
 	if _, err := tx.Exec(
-		`DELETE FROM ip_latency WHERE last_probe_time > 0 AND last_probe_time < unixepoch() - ?;`+
-			`DELETE FROM query_log WHERE timestamp < unixepoch() - ?`,
+		`DELETE FROM ip_latency WHERE last_probe_time > 0 AND last_probe_time < ?`+
+			`DELETE FROM query_log WHERE timestamp < ?`,
 		defaultStaleMaxAge, defaultStaleMaxAge,
 	); err != nil {
 		log.Debugf("CACHE: stale cleanup failed (non-fatal): %v", err)

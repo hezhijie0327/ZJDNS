@@ -163,12 +163,22 @@ func (d *Dialer) establishUDPRelay(ctx context.Context) error {
 	d.udpConn = udpConn
 	d.relayAddr = relay
 
-	// Monitor the control connection.  The goroutine exits when ctrlConn
-	// is closed (by cleanupLocked on Close or proxy-side close). If the proxy closes it, the relay
-	// becomes invalid — signal that so the next caller can re-establish.
+	// Monitor the control connection. The goroutine exits when ctrlConn
+	// is closed by cleanupLocked (Close/proxy-side) or when the closed signal
+	// fires. Using a select prevents the goroutine from leaking when the Dialer
+	// is garbage-collected without an explicit Close call.
 	go func() {
-		var buf [1]byte
-		_, _ = ctrlConn.Read(buf[:])
+		done := make(chan struct{})
+		go func() {
+			var buf [1]byte
+			_, _ = ctrlConn.Read(buf[:])
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-ctrlClosed:
+			_ = ctrlConn.Close() // unblock the read goroutine
+		}
 		d.mu.Lock()
 		if d.ctrlConn == ctrlConn {
 			d.cleanupLocked()

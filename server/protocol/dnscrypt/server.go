@@ -13,6 +13,7 @@ import (
 	"zjdns/edns"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 
 	zdnsutil "zjdns/internal/dnsutil"
 
@@ -26,6 +27,7 @@ import (
 type keyEntry struct {
 	pair      *dnscryptcrypto.CertPair
 	createdAt time.Time
+	cachedTXT [2][]string // pre-built TXT chunks: [0]=classical, [1]=PQ
 }
 
 // Server is a DNSCrypt v2 server that listens on UDP and TCP.
@@ -219,6 +221,8 @@ func (s *Server) rotationLoop() {
 	defer ticker.Stop()
 	for {
 		select {
+		case <-s.ctx.Done():
+			return
 		case <-ticker.C:
 			s.rotateKeys()
 		case <-s.rotateCh:
@@ -322,7 +326,7 @@ func buildCertTXTForCert(cert *dnscryptcrypto.Certificate) []string {
 }
 
 // remainingTTL returns the seconds until this key's certificates expire, floored at 0.
-func (k keyEntry) remainingTTL() uint32 {
+func (k *keyEntry) remainingTTL() uint32 {
 	d := time.Until(k.createdAt.Add(config.DefaultDNSCryptCertificateTTL + config.DefaultDNSCryptKeyOverlap))
 	if d <= 0 {
 		return 0
@@ -349,6 +353,10 @@ func (s *Server) rotateKeys() {
 	entry := keyEntry{
 		pair:      newPair,
 		createdAt: time.Now(),
+		cachedTXT: [2][]string{
+			buildCertTXTForCert(newPair.Classical),
+			buildCertTXTForCert(newPair.PQ),
+		},
 	}
 	s.keys = append([]keyEntry{entry}, s.keys...)
 
@@ -406,7 +414,7 @@ func escapeBackslash(b []byte) []byte {
 }
 
 func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
-	m := &dns.Msg{}
+	m := pool.DefaultMessage.Get()
 	m.Data = b
 	err = m.Unpack()
 	if err != nil {
@@ -425,7 +433,9 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 		return nil, dnscryptcrypto.ErrInvalidQuery
 	}
 
-	reply := dnsutil.SetReply(new(dns.Msg), m)
+	reply := pool.DefaultMessage.Get()
+	dnsutil.SetReply(reply, m)
+	pool.DefaultMessage.Put(m)
 	s.mu.RLock()
 	for _, k := range s.keys {
 		remainingTTL := k.remainingTTL()
@@ -451,9 +461,12 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 
 	err = reply.Pack()
 	if err != nil {
+		pool.DefaultMessage.Put(reply)
 		return nil, fmt.Errorf("packing handshake response: %w", err)
 	}
-	return reply.Data, nil
+	res = reply.Data
+	pool.DefaultMessage.Put(reply)
+	return res, nil
 }
 
 func (s *Server) serveDNS(ctx context.Context, rw responseWriter, m *dns.Msg, protocol string) error {
@@ -462,20 +475,10 @@ func (s *Server) serveDNS(ctx context.Context, rw responseWriter, m *dns.Msg, pr
 	}
 	log.Debugf("DNSCRYPT: handling query for %s from %s", m.Question[0].Header().Name, rw.RemoteAddr())
 
-	clientIP := clientIPFromAddr(rw.RemoteAddr())
+	clientIP := zdnsutil.ClientIPFromAddr(rw.RemoteAddr())
 	resp := s.handler.ServeDNS(m, clientIP, false, protocol)
 	if resp == nil {
 		return nil
 	}
 	return rw.WriteMsg(ctx, resp)
-}
-
-func clientIPFromAddr(addr net.Addr) net.IP {
-	switch a := addr.(type) {
-	case *net.UDPAddr:
-		return a.IP
-	case *net.TCPAddr:
-		return a.IP
-	}
-	return nil
 }

@@ -45,7 +45,7 @@ func BenchmarkDetector_ValidateClean(b *testing.B) {
 	}
 }
 
-func BenchmarkDetector_IsHijackedByTLD(b *testing.B) {
+func BenchmarkDetector_IsPoisonedByTLD(b *testing.B) {
 	log.Default.SetLevel(log.Error)
 	det := &Detector{}
 	det.Enable(true)
@@ -58,6 +58,6 @@ func BenchmarkDetector_IsHijackedByTLD(b *testing.B) {
 	}
 	b.ResetTimer()
 	for b.Loop() {
-		_ = det.IsHijackedByTLD(msg, "www.google.com.")
+		_ = det.IsPoisonedByTLD(msg, "www.google.com.")
 	}
 }

@@ -132,12 +132,15 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 		}
 	}
 
+	qd := req.Question[0]
 	qctx := &QueryContext{
 		Req:       req,
 		ClientIP:  clientIP,
 		IsSecure:  isSecure,
 		Protocol:  protocol,
-		StartTime: time.Now(),
+		StartTime: log.NowUnixNano(),
+		Qname:     dnsutil.Fqdn(qd.Header().Name),
+		Qtype:     dns.RRToType(qd),
 	}
 
 	err := h.chain.ServeDNS(h.ctx, qctx)
@@ -161,7 +164,7 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 		qtype := dns.RRToType(req.Question[0])
 		log.Debugf("RESULT: %s %s | rcode=%s time=%v answer=%d authority=%d additional=%d ad=%t\n%s",
 			qname, dns.TypeToString[qtype], dns.RcodeToString[qctx.Res.Rcode],
-			time.Since(qctx.StartTime).Truncate(time.Microsecond), len(qctx.Res.Answer), len(qctx.Res.Ns),
+			time.Duration(log.NowUnixNano()-qctx.StartTime).Truncate(time.Microsecond), len(qctx.Res.Answer), len(qctx.Res.Ns),
 			len(qctx.Res.Extra), qctx.Res.AuthenticatedData,
 			qctx.Res.String())
 	}
@@ -169,9 +172,17 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	return qctx.Res
 }
 
+// ElapsedMS returns the elapsed time in milliseconds since startNs
+// (a log.NowUnixNano() timestamp).
+func ElapsedMS(startNs int64) int64 {
+	return (log.NowUnixNano() - startNs) / int64(time.Millisecond)
+}
+
 // BuildQueryMsg constructs an outbound DNS query message for the resolver.
 // It is a standalone function (not a method) so it can be used before the
 // Handler is created.
+
+// BuildQueryMsg constructs a DNS query message for upstream/recursive resolution.
 func BuildQueryMsg(ednsH *edns.Handler, question Question, ecs *edns.ECSOption, recursionDesired, isSecureConnection bool) *dns.Msg {
 	msg := pool.DefaultMessage.Get()
 

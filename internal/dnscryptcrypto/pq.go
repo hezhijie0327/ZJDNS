@@ -11,9 +11,7 @@ import (
 )
 
 // Pre-computed SHA-256 of the PQ profile extension bytes — deterministic.
-var cachedProfileExtensionHash = func() [32]byte {
-	return sha256.Sum256(PQProfileExtension())
-}()
+var cachedProfileExtensionHash = sha256.Sum256(PQProfileExtension())
 
 func HKDFSHA256(salt, ikm, info []byte, outLen int) ([]byte, error) {
 	r := hkdf.New(sha256.New, ikm, salt, info)

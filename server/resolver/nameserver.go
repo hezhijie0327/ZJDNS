@@ -38,7 +38,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	g.SetLimit(limit)
 
 	var activeConnections atomic.Int32
-	var hijackRejected atomic.Bool
+	var poisonRejected atomic.Bool
 	normalizedQname := dnsutil.Canonical(question.Name)
 
 	for _, ns := range nameservers {
@@ -73,16 +73,16 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 				if rcode == dns.RcodeNameError && len(result.Response.Answer) > 0 {
 					log.Debugf("RECURSION: rejecting malformed NXDOMAIN+answer — poison from %s", nsAddr)
-					hijackRejected.Store(true)
+					poisonRejected.Store(true)
 					pool.DefaultMessage.Put(result.Response)
 					return nil
 				}
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
 					if detector != nil && detector.IsEnabled() {
 						v := detector.Validate(currentDomain, normalizedQname, result.Response)
-						if v == defense.VerdictHijack {
+						if v == defense.VerdictPoisoned {
 							log.Debugf("RECURSION: rejecting poisoned response from %s", nsAddr)
-							hijackRejected.Store(true)
+							poisonRejected.Store(true)
 							pool.DefaultMessage.Put(result.Response)
 							return nil
 						}
@@ -100,7 +100,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 				if rcode == dns.RcodeFormatError {
 					pool.DefaultMessage.Put(result.Response)
-					r.retryWithoutEDNS(queryCtx, resultChan, cancel, server, question, nsAddr, detector, currentDomain, normalizedQname, &hijackRejected)
+					r.retryWithoutEDNS(queryCtx, resultChan, cancel, server, question, nsAddr, detector, currentDomain, normalizedQname, &poisonRejected)
 					return nil
 				}
 
@@ -113,7 +113,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		})
 	}
 
-	settleTimer := time.NewTimer(config.DefaultHijackSettleTimeout)
+	settleTimer := time.NewTimer(config.DefaultPoisonSettleTimeout)
 	defer settleTimer.Stop()
 	select {
 	case <-settleTimer.C:
@@ -121,8 +121,8 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	}
 
 	verdict := defense.VerdictClean
-	if hijackRejected.Load() {
-		verdict = defense.VerdictHijack
+	if poisonRejected.Load() {
+		verdict = defense.VerdictPoisoned
 	}
 
 	// First response wins.
@@ -286,7 +286,7 @@ func domainNamesEqual(a, b string) bool {
 
 // retryWithoutEDNS attempts a query without EDNS options and sends the result
 // to resultChan. Used as a FORMERR fallback per RFC 6891 §6.2.2.
-func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns.Msg, cancel context.CancelFunc, server *config.UpstreamServer, question Question, nsAddr string, detector *defense.Detector, currentDomain, normalizedQname string, hijackRejected *atomic.Bool) {
+func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns.Msg, cancel context.CancelFunc, server *config.UpstreamServer, question Question, nsAddr string, detector *defense.Detector, currentDomain, normalizedQname string, poisonRejected *atomic.Bool) {
 	log.Debugf("RECURSION: ns=%s FORMERR, retrying without EDNS for %s %s", nsAddr, question.Name, dns.TypeToString[question.Qtype])
 
 	bareMsg := pool.DefaultMessage.Get()
@@ -316,9 +316,9 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 	// Reject hijacked responses in FORMERR retry path as well.
 	if detector != nil && detector.IsEnabled() {
 		v := detector.Validate(currentDomain, normalizedQname, retryResult.Response)
-		if v == defense.VerdictHijack {
+		if v == defense.VerdictPoisoned {
 			log.Debugf("RECURSION: rejecting poisoned FORMERR retry from %s", nsAddr)
-			hijackRejected.Store(true)
+			poisonRejected.Store(true)
 			pool.DefaultMessage.Put(retryResult.Response)
 			return
 		}

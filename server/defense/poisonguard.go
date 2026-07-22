@@ -30,10 +30,10 @@ const (
 	// authority — no hijacking detected.
 	VerdictClean Verdict = iota
 
-	// VerdictHijack means the response contains records the zone's
+	// VerdictPoisoned means the response contains records the zone's
 	// server should never return (e.g. a root server returning an A
 	// record for www.google.com).
-	VerdictHijack
+	VerdictPoisoned
 
 	// VerdictUncertain means the zone *could* legitimately return
 	// these records, but content analysis alone cannot distinguish a
@@ -50,8 +50,8 @@ func (v Verdict) String() string {
 	switch v {
 	case VerdictClean:
 		return "clean"
-	case VerdictHijack:
-		return "hijack"
+	case VerdictPoisoned:
+		return "poisoned"
 	case VerdictUncertain:
 		return "uncertain"
 	default:
@@ -90,7 +90,7 @@ func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 			continue
 		}
 		if v := d.classify(z, n, dns.RRToType(rr)); v != VerdictClean {
-			if v == VerdictHijack {
+			if v == VerdictPoisoned {
 				log.Debugf("SECURITY: poison detected from %s: %s record for '%s'",
 					zone, dns.TypeToString[dns.RRToType(rr)], queryName)
 			}
@@ -100,11 +100,11 @@ func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 	return VerdictClean
 }
 
-// IsHijackedByTLD checks whether a TLD or root server returned
+// IsPoisonedByTLD checks whether a TLD or root server returned
 // direct A/AAAA answers for a query name.  Those servers never
 // put A/AAAA in the Answer section for a subdomain — if they
 // do, the response was injected by a middlebox.
-func (d *Detector) IsHijackedByTLD(response *dns.Msg, queryName string) bool {
+func (d *Detector) IsPoisonedByTLD(response *dns.Msg, queryName string) bool {
 	if !d.enabled.Load() || response == nil {
 		return false
 	}
@@ -154,7 +154,7 @@ func (d *Detector) classifyRoot(name string, rrtype uint16) Verdict {
 	}
 
 	if name != "." {
-		return VerdictHijack
+		return VerdictPoisoned
 	}
 	return VerdictClean
 }
@@ -164,7 +164,7 @@ func (d *Detector) classifyRoot(name string, rrtype uint16) Verdict {
 // subdomains.
 func (d *Detector) classifyTLD(zone, name string) Verdict {
 	if name != zone {
-		return VerdictHijack
+		return VerdictPoisoned
 	}
 	return VerdictClean
 }

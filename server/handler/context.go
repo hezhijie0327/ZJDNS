@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net"
-	"time"
 	"zjdns/cache"
 	"zjdns/edns"
 	"zjdns/server/resolver"
@@ -64,5 +63,10 @@ type QueryContext struct {
 	Dropped      bool // true when ErrDrop was returned (no response will be sent)
 	OriginalName string
 	TCPKeepalive uint16
-	StartTime    time.Time
+	StartTime    int64 // log.NowUnixNano() — zero-alloc timestamp for response-time calculation
+
+	// ── Pre-extracted question fields (set once in ServeDNS) ──
+
+	Qname string // canonical question name (already FQDN)
+	Qtype uint16 // question type (A, AAAA, etc.)
 }

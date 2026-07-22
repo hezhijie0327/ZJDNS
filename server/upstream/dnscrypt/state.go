@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
@@ -22,6 +23,8 @@ type certPair struct {
 
 // State caches per-upstream DNSCrypt resolver state.
 type State struct {
+	mu sync.Mutex
+
 	serverAddress string
 	sharedKey     [dnscryptcrypto.SharedKeySize]byte
 	secretKey     [dnscryptcrypto.KeySize]byte

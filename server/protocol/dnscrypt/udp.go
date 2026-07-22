@@ -9,6 +9,7 @@ import (
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 
 	zdnsutil "zjdns/internal/dnsutil"
 
@@ -58,7 +59,7 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 	s.wg.Add(1)
 	defer s.wg.Done()
 
-	buf := make([]byte, dns.MaxMsgSize)
+	buf := pool.DefaultBuffer.Get()
 
 	for s.isStarted() {
 		select {
@@ -85,11 +86,15 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 			continue
 		}
 
-		packet := make([]byte, n)
-		copy(packet, buf[:n])
+		// Transfer buffer ownership to the handler goroutine and obtain
+		// a fresh buffer for the next read iteration.  The goroutine
+		// returns the buffer to the pool via defer.
+		packet := buf[:n]
+		buf = pool.DefaultBuffer.Get()
 
 		s.wg.Go(func() {
 			defer zdnsutil.HandlePanic("DNSCrypt UDP handler")
+			defer pool.DefaultBuffer.Put(packet)
 			s.handleUDPPacket(ctx, packet, addr, udpConn)
 		})
 	}

@@ -65,11 +65,11 @@ const (
 	// RFC 8767 §4.2: timeout SHOULD default to less than 10 seconds.
 	DefaultDNSQueryTimeout = 10 * time.Second // single DNS query / dial / per-message I/O
 
-	// DefaultHijackProbeTimeout bounds the TLD hijack probe query.
+	// DefaultPoisonProbeTimeout bounds the TLD hijack probe query.
 	// The probe detects GFW-injected A/AAAA records at the delegation
 	// level before the authoritative query.  A short timeout avoids
 	// blocking the resolution pipeline when a TLD server is unresponsive.
-	DefaultHijackProbeTimeout = 2 * time.Second
+	DefaultPoisonProbeTimeout = 2 * time.Second
 
 	DefaultRecursiveResolveTimeout = 30 * time.Second // full recursive resolution
 )
@@ -122,7 +122,7 @@ const (
 
 const (
 	DefaultAcceptRetryDelay      = 100 * time.Millisecond // DoT/DoQ accept retry sleep
-	DefaultHijackSettleTimeout   = 5 * time.Millisecond   // max window for GFW detection race after clean response wins
+	DefaultPoisonSettleTimeout   = 5 * time.Millisecond   // max window for GFW detection race after clean response wins
 	DefaultSweepInterval         = 5 * time.Minute        // periodic cleanup sweep
 	DefaultTCPWriteMuStaleCutoff = 2 * time.Minute        // stale TCP write mutex cutoff
 
@@ -149,6 +149,7 @@ const (
 
 	DefaultTransportMax        = 64
 	DefaultTLSSessionCacheSize = 256
+	DefaultHTTPTLCPClientMax   = 64 // max cached TLCP DoH HTTP clients
 	DefaultMaxIdleConns        = 100
 	DefaultMaxIdleConnsPerHost = 8
 	DefaultDOTWriteChannelSize = 64

@@ -3,6 +3,8 @@
 package tlcp
 
 import (
+	"net/http"
+	"sync"
 	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
@@ -15,8 +17,10 @@ import (
 
 // Client executes DNS queries over TLCP and DTLCP transports.
 type Client struct {
-	getProxy func(*config.UpstreamServer) *socks5.Dialer
-	timeout  time.Duration
+	getProxy   func(*config.UpstreamServer) *socks5.Dialer
+	timeout    time.Duration
+	httpMu     sync.Mutex
+	httpClient map[string]*http.Client // cached DoH-over-TLCP clients by key
 }
 
 // New creates a Client for TLCP and DTLCP DNS queries.

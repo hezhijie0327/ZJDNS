@@ -38,6 +38,41 @@ var migrations = []migration{
 	{"3.4.18", "add last_hit_time to entry_hit_counters for time-based cleanup", migrateV3_4_18},
 	{"3.4.19", "query-stats-sliding-window", migrateV3_4_19},
 	{"3.4.24", "fqdn-canonical-form", migrateV3_4_24},
+	{"3.5.0", "rename-hijack-to-poisoned", migrateV3_5_0},
+}
+
+// compareSemver compares two semantic version strings (major.minor.patch).
+// Returns -1 if a < b, 0 if a == b, 1 if a > b.
+func compareSemver(a, b string) int {
+	parse := func(v string) (r [3]int) {
+		var i, n int
+		for _, c := range v {
+			if c == '.' {
+				r[i] = n
+				n = 0
+				i++
+				if i >= 3 {
+					break
+				}
+				continue
+			}
+			n = n*10 + int(c-'0')
+		}
+		if i < 3 {
+			r[i] = n
+		}
+		return r
+	}
+	pa, pb := parse(a), parse(b)
+	for i := range 3 {
+		if pa[i] < pb[i] {
+			return -1
+		}
+		if pa[i] > pb[i] {
+			return 1
+		}
+	}
+	return 0
 }
 
 func migrateV3_2_17(db *DB) error {
@@ -201,7 +236,7 @@ func (db *DB) runMigrations() error {
 
 	// "0.0.0" is the sentinel set by base DDL for fresh databases — treat as
 	// current and let runMigrations apply any pending migrations on top.
-	if applied != "" && applied != "0.0.0" && applied < minSupportedVersion {
+	if applied != "" && applied != "0.0.0" && compareSemver(applied, minSupportedVersion) < 0 {
 		return fmt.Errorf(
 			"database too old: version %s is below minimum supported %s; upgrade through an intermediate version first",
 			applied, minSupportedVersion,
@@ -212,10 +247,10 @@ func (db *DB) runMigrations() error {
 		applied = "0.0.0"
 	}
 
-	if applied < Version {
+	if compareSemver(applied, Version) < 0 {
 		log.Infof("DB: running migrations %s → %s", applied, Version)
 		for _, m := range migrations {
-			if m.version <= applied {
+			if compareSemver(m.version, applied) <= 0 {
 				continue
 			}
 			log.Infof("DB: migration %s: %s", m.version, m.name)
@@ -335,6 +370,32 @@ func migrateV3_4_24(db *DB) error {
 		)
 		if _, err := db.SQ.Exec(query); err != nil {
 			return fmt.Errorf("fqdn migration %s.%s: %w", t.table, t.col, err)
+		}
+	}
+	return nil
+}
+
+func migrateV3_5_0(db *DB) error {
+	// Rename hijack column to poisoned in query_stats and query_log.
+	// PRAGMA table_info guards handle both already-migrated databases
+	// (column already named poisoned) and fresh databases (base DDL
+	// already has poisoned).
+	tables := []string{"query_stats", "query_log"}
+	for _, table := range tables {
+		var count int
+		err := db.SQ.QueryRow(
+			"SELECT COUNT(*) FROM pragma_table_info(?) WHERE name='hijack'",
+			table,
+		).Scan(&count)
+		if err != nil {
+			return fmt.Errorf("check hijack column in %s: %w", table, err)
+		}
+		if count > 0 {
+			if _, err := db.SQ.Exec(
+				fmt.Sprintf("ALTER TABLE %s RENAME COLUMN hijack TO poisoned", table),
+			); err != nil {
+				return fmt.Errorf("rename hijack in %s: %w", table, err)
+			}
 		}
 	}
 	return nil

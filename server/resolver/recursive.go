@@ -64,10 +64,10 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 	currentDomain := "."
 	normalizedQname := dnsutil.Canonical(qname)
 
-	// hijackSeen is set to true when any VerdictHijack is observed at any
+	// poisonSeen is set to true when any VerdictPoisoned is observed at any
 	// delegation level, including through internal TCP restarts.  The CNAME
 	// resolver uses this to force TCP for subsequent CNAME targets.
-	var hijackSeen bool
+	var poisonSeen bool
 
 	// QNAME minimisation (RFC 9156). Only applied at the top-level resolve
 	// call (depth == 0). Internal infrastructure queries (NS address
@@ -88,29 +88,29 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 	// Root-domain query (normalizedQname is empty for the root zone ".").
 	if normalizedQname == "." {
-		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Hijack)
-		if verdict == defense.VerdictHijack {
-			hijackSeen = true
+		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+		if verdict == defense.VerdictPoisoned {
+			poisonSeen = true
 		}
 		if err != nil {
-			if verdict == defense.VerdictHijack && !forceTCP {
+			if verdict == defense.VerdictPoisoned && !forceTCP {
 				qr := r.resolve(ctx, question, ecs, depth, true)
-				qr.Hijack = true
+				qr.Poisoned = true
 				return qr
 			}
-			return QueryResult{Cacheable: true, Hijack: hijackSeen, Err: fmt.Errorf("root domain query: %w", err)}
+			return QueryResult{Cacheable: true, Poisoned: poisonSeen, Err: fmt.Errorf("root domain query: %w", err)}
 		}
 		cryptoValidated := r.isValidWithDNSSEC(response, currentDomain, chain)
 		ecsResponse := r.resolver.edns.ParseFromDNS(response)
 		answer, authority, additional := response.Answer, response.Ns, response.Extra
 		pool.DefaultMessage.Put(response)
-		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Validated: cryptoValidated, ECS: ecsResponse, Server: config.RecursiveIndicator, Hijack: hijackSeen}
+		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Validated: cryptoValidated, ECS: ecsResponse, Server: config.RecursiveIndicator, Poisoned: poisonSeen}
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			return QueryResult{Cacheable: true, Hijack: hijackSeen, Err: ctx.Err()}
+			return QueryResult{Cacheable: true, Poisoned: poisonSeen, Err: ctx.Err()}
 		default:
 		}
 
@@ -127,30 +127,30 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		if !authoritativeForceTCP && qnameMinimise &&
 			strings.EqualFold(queryQuestion.Name, qname) &&
 			len(tldServers) > 0 {
-			authoritativeForceTCP = r.probeTLDForHijack(ctx, tldServers, qname)
+			authoritativeForceTCP = r.probeTLDForPoison(ctx, tldServers, qname)
 		}
 
-		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, ecs, authoritativeForceTCP, currentDomain, r.resolver.validator.Hijack)
+		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, ecs, authoritativeForceTCP, currentDomain, r.resolver.validator.Poisonguard)
 
 		// ── Single TCP fallback decision point ──────────────────────
 		// If any response at this delegation level was flagged as
 		// hijack, restart the ENTIRE resolution via TCP.  GFW cannot
 		// inject TCP responses, so all subsequent levels (including
 		// authoritative) are protected.
-		if verdict == defense.VerdictHijack {
-			hijackSeen = true
+		if verdict == defense.VerdictPoisoned {
+			poisonSeen = true
 			if !forceTCP {
 				if response != nil {
 					pool.DefaultMessage.Put(response)
 				}
 				qr := r.resolve(ctx, question, ecs, depth, true)
-				qr.Hijack = true
+				qr.Poisoned = true
 				return qr
 			}
 		}
 
 		if err != nil {
-			return QueryResult{Cacheable: true, Hijack: hijackSeen, Err: fmt.Errorf("query %s: %w", currentDomain, err)}
+			return QueryResult{Cacheable: true, Poisoned: poisonSeen, Err: fmt.Errorf("query %s: %w", currentDomain, err)}
 		}
 		// ── End TCP fallback ────────────────────────────────────────
 
@@ -224,10 +224,10 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 	}
 }
 
-// probeTLDForHijack sends a single UDP probe to a TLD server for the full
-// QNAME and delegates the verdict to security.Detector.IsHijackedByTLD.
-func (r *Recursive) probeTLDForHijack(ctx context.Context, tldServers []string, qname string) bool {
-	detector := r.resolver.validator.Hijack
+// probeTLDForPoison sends a single UDP probe to a TLD server for the full
+// QNAME and delegates the verdict to security.Detector.IsPoisonedByTLD.
+func (r *Recursive) probeTLDForPoison(ctx context.Context, tldServers []string, qname string) bool {
+	detector := r.resolver.validator.Poisonguard
 	if detector == nil || !detector.IsEnabled() || len(tldServers) == 0 {
 		return false
 	}
@@ -244,7 +244,7 @@ func (r *Recursive) probeTLDForHijack(ctx context.Context, tldServers []string, 
 		Proxy:    r.resolver.recursiveProxyURL,
 	}
 
-	probeCtx, probeCancel := context.WithTimeout(ctx, config.DefaultHijackProbeTimeout)
+	probeCtx, probeCancel := context.WithTimeout(ctx, config.DefaultPoisonProbeTimeout)
 	defer probeCancel()
 
 	result := r.resolver.queryClient.ExecuteQuery(probeCtx, msg, server)
@@ -253,7 +253,7 @@ func (r *Recursive) probeTLDForHijack(ctx context.Context, tldServers []string, 
 	}
 	defer pool.DefaultMessage.Put(result.Response)
 
-	if detector.IsHijackedByTLD(result.Response, qname) {
+	if detector.IsPoisonedByTLD(result.Response, qname) {
 		log.Debugf("RECURSION: poison probe detected A/AAAA for %s from TLD server %s, forcing TCP",
 			qname, tldServers[0])
 		return true
@@ -266,7 +266,7 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	var finalAuthority, finalAdditional []dns.RR
 	var finalECSResponse *edns.ECSOption
 	var usedServer string
-	var hijackOccurred bool
+	var poisonOccurred bool
 	allValidated := true
 
 	currentQuestion := question
@@ -292,7 +292,7 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 		// subsequent CNAME targets also use TCP so GFW cannot
 		// inject at the authoritative level (where hijack
 		// detection can't distinguish real from spoofed answers).
-		forceTCP := hijackOccurred
+		forceTCP := poisonOccurred
 
 		qr := c.resolver.recursive.resolve(ctx, currentQuestion, ecs, 0, forceTCP)
 		if qr.Err != nil {
@@ -302,8 +302,8 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 		if usedServer == "" {
 			usedServer = qr.Server
 		}
-		if qr.Hijack {
-			hijackOccurred = true
+		if qr.Poisoned {
+			poisonOccurred = true
 		}
 		if !qr.Validated {
 			allValidated = false
@@ -343,5 +343,5 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	if cnameDepth >= config.DefaultMaxCNAMEChain-1 {
 		log.Warnf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, dnsutil.Canonical(question.Name))
 	}
-	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Hijack: hijackOccurred}
+	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Poisoned: poisonOccurred}
 }

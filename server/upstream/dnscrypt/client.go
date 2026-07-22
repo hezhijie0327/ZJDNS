@@ -11,6 +11,7 @@ import (
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -58,7 +59,9 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 	if state.esVersion.IsPQ() {
 		q.PQCertContext = state.pqCertContext
 	}
+	state.mu.Lock()
 	encrypted, clientNonce, err := prepareQuery(state, q, msg.Data)
+	state.mu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("encrypting dnscrypt query: %w", err)
 	}
@@ -130,10 +133,11 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 	}
 
 	log.Debugf("UPSTREAM: DNSCrypt decrypted response from %s (%d bytes)", state.serverAddress, len(decrypted))
-	response := &dns.Msg{}
+	response := pool.DefaultMessage.Get()
 	response.Data = decrypted
 	err = response.Unpack()
 	if err != nil {
+		pool.DefaultMessage.Put(response)
 		return nil, fmt.Errorf("unpacking dnscrypt response: %w", err)
 	}
 

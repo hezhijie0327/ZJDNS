@@ -368,19 +368,21 @@ All layers share a mutable `QueryContext` that carries request/response state, E
 | `Conn` / `Pool` | `server/upstream/pool` | RFC 7766 pipelined TCP/DoT |
 | `QUIC` / `QUICConn` | `server/upstream/pool` | QUIC connection pool |
 | `Resolver` | `server/resolver` | Upstream + recursive resolution; constructed via `New(Config)` |
-| `Config` | `server/resolver` | Bundles QueryClient, Crypto, Hijack, EDNS, CIDRMatcher, BuildMsg, Cache, DNSSECEnforce for `New()` |
+| `Config` | `server/resolver` | Bundles QueryClient, Crypto, Defense (DefenseConfig{Poisonguard,Spoofguard}), EDNS, CIDRMatcher, BuildMsg, Cache, DNSSECEnforce for `New()` |
 | `QueryResult` | `server/resolver` | Unified result struct — used throughout resolver and handler layers; `queryUpstream`, `Recursive.resolve`, and `CNAME.resolve` return it by value; handler uses `*QueryResult` directly (no duplicate struct) |
 | `Recursive` | `server/resolver` | Built-in recursive walk |
 | `CryptoValidator` | `server/resolver/dnssec` | DNSSEC chain-of-trust (RRSIG, DS, trust anchors); NSEC/NSEC3 in nsec.go |
-| `Detector` | `server/defense` | DNS hijack detection; Verdict type + IsHijackedByTLD |
+| `Detector` | `server/defense` | DNS poison detection; Verdict type + IsPoisonedByTLD |
 | `WriteTCPMsgSegmented` | `server/defense` | TCP DNS message segmentation; first segment carries 2B prefix + 1B payload |
 | `CollectAndVote` | `server/defense` | Majority-consensus voting across DNS responses by semantic equivalence |
 | `LastResponse` | `server/defense` | Returns the chronologically last response (tail of stream = real answer) |
 | `DrainResponseChan` | `server/defense` | Non-blocking drain of all available messages from a channel |
 | `DefenseConfig` | `config` | Groups DNS defense mechanisms: Detection (bool), Tail (bool), Segmentation (bool) |
-| `Verdict` | `server/defense` | DNS hijack verdict: Clean / Hijack / Uncertain |
-| `Engine` | `ruleset` | SQLite-backed CIDR + domain tag matching; `Match(qname,ip)`, `MatchIP`. `LoadRules` accepts `RuleSetStorage` interface (satisfied by `*database.DB`) |
+| `Verdict` | `server/defense` | DNS poison verdict: Clean / Poisoned / Uncertain |
+| `Engine` | `ruleset` | SQLite-backed domain + CIDR tag matching; domain uses `lrumap` cache, CIDR uses binary radix trie (`ipTrie` — O(128) regardless of rule count). `Match(qname,ip)`, `MatchIP`, `HasIPTag` |
+| `ipTrie` | `ruleset` | Binary radix trie for O(128) CIDR matching; both IPv4 (via ::ffff:0:0/96) and IPv6 share the same trie |
 | `RuleSetStorage` | `ruleset` | Interface: SQLExec, SQLQueryRow, SQLQuery, BeginTx — breaks domain→domain import cycle |
+| `DefenseConfig` | `server/resolver` | Groups defense deps: `Poisonguard *defense.Detector` (nil=off) + `Spoofguard bool`; mirrors JSON `features.defense` |
 | `Prober` | `internal/latency` | Unified probe engine (generic sorter) |
 | `Prober` | `server/resolver/probe` | A/AAAA latency probe + record reordering + ProbeNSAddrs for NS/Root |
 | `PendingRequests` | `server/handler` | Singleflight dedup: coalesces concurrent identical queries; leader sends upstream, followers wait for shared result |
