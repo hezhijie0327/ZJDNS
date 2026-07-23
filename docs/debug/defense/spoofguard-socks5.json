@@ -1,16 +1,14 @@
 {
   "server": {
     "log_level": "debug:UPSTREAM,RESULT",
-    "protocol": {
-      "udp": "10533",
-      "tcp": "10533"
-    }
+    "protocol": { "udp": "10533" }
   },
   "upstream": [
     {
       "address": "8.8.8.8:53",
-      "protocol": "tcp",
-      "splitguard": true
+      "protocol": "udp",
+      "spoofguard": true,
+      "proxy": "socks5://127.0.0.1:11080"
     }
   ]
 }

@@ -374,7 +374,15 @@ All layers share a mutable `QueryContext` that carries request/response state, E
 | `CryptoValidator` | `server/resolver/dnssec` | DNSSEC chain-of-trust (RRSIG, DS, trust anchors); NSEC/NSEC3 in nsec.go |
 | `Detector` | `server/defense` | DNS poison detection; Verdict type + IsPoisonedByTLD + Validate (empty struct, always active) |
 | `WriteTCPMsgSegmented` | `internal/dnsutil` | TCP DNS message segmentation with random [1,N] payload sizes and optional delay jitter; caller enables TCP_NODELAY |
-| `Poisonguard` / `Spoofguard` / `Splitguard` | `config.UpstreamServer` | Per-upstream defense flags: poison detection (recursive), UDP dynamic-silence multi-read + richness heuristic, TCP random segmentation |
+| `Poisonguard` / `Spoofguard` / `Splitguard` | `config.UpstreamServer` | Per-upstream defense: poisonguard=recursive zone-authority validation, spoofguard=UDP raw-header signal detection, splitguard=TCP random segmentation |
+
+**Spoofguard algorithm** (`server/upstream/plain/udp.go:executeUDPMultiRead`):
+Multi-read loop with three-layer filtering, all from raw DNS header (zero unpack until needed). Based on two GFW constraints: (a) only hijacks A/AAAA records, never returns NS/delegation records; (b) only returns NOERROR rcode.
+
+1. `AR=0 + rcode=NOERROR + query-has-EDNS` → reject. Non-NOERROR rcode (FORMERR/NXDOMAIN/REFUSED) → accept (real server error). Query without EDNS (FORMERR retry) → accept even if NOERROR+AR=0.
+2. `AN>=2`, `NS>0`, or `AD=1` → return immediately. GFW never injects 2+ fake IPs; never returns NS/delegation records; can't forge DNSSEC validation. NS>0 covers entire delegation chain (root→TLD→auth), eliminating 500ms wait for recursive resolution.
+3. `AN<=1, NS=0` + EDNS → ambiguous candidate; collect multiple, after `DefaultSpoofguardCollectWindow` (500ms) silence pick richest via `pickBest`. Only single-answer EDNS responses reach this path.
+The caller (EDNS middleware / `buildMsg`) sets EDNS via fork's v2 API (`msg.UDPSize`/`msg.Security`). Must NOT add a second OPT (fork handles EDNS transparently; duplicate causes FORMERR).
 | `Verdict` | `server/defense` | DNS poison verdict: Clean / Poisoned / Uncertain |
 | `Engine` | `ruleset` | SQLite-backed domain + CIDR tag matching; domain uses `lrumap` cache, CIDR uses binary radix trie (`ipTrie` — O(128) regardless of rule count). `Match(qname,ip)`, `MatchIP`, `HasIPTag` |
 | `ipTrie` | `ruleset` | Binary radix trie for O(128) CIDR matching; both IPv4 (via ::ffff:0:0/96) and IPv6 share the same trie |

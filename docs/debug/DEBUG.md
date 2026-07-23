@@ -114,7 +114,7 @@ pkill -f "server-dnssec"
 
 防御机制分为 forwarding 和 recursive 两类场景，独立测试：
 
-### Spoofguard (forwarding UDP 尾部选择)
+### Spoofguard (forwarding UDP EDNS OPT gate)
 
 ```bash
 /tmp/zjdns -config docs/debug/defense/spoofguard.json &
@@ -122,10 +122,29 @@ sleep 2
 
 dig @127.0.0.1 -p 10533 www.google.com A +short
 
-# 单 socket 多读，取最后到达的响应 — GFW 假包先到，真包后到
-# 预期日志: "UDP spoofguard collected response"
+# EDNS-gate + richness: 查询带 EDNS，非 EDNS 响应直接丢弃，EDNS 响应间选 richest
+# 预期日志: "UDP spoofguard rejected non-EDNS response" → "UDP spoofguard EDNS candidate"
 
 pkill -f "spoofguard"
+```
+
+### Spoofguard + SOCKS5 (forwarding UDP over proxy)
+
+```bash
+# Start a SOCKS5 proxy (e.g. go-socks5)
+go run github.com/things-go/go-socks5/cmd/socks5@latest -addr :11080 &
+sleep 1
+
+/tmp/zjdns -config docs/debug/defense/spoofguard-socks5.json &
+sleep 2
+
+dig @127.0.0.1 -p 10533 www.google.com A +short
+
+# Same detection logic over SOCKS5 UDP ASSOCIATE
+# Expected: "UDP spoofguard rejected non-EDNS response" → "UDP spoofguard fast return"
+
+pkill -f "spoofguard-socks5"
+pkill -f "socks5"
 ```
 
 ### Splitguard (forwarding TCP 分段)
@@ -164,7 +183,7 @@ sleep 2
 
 dig @127.0.0.1 -p 10533 www.google.com A +short
 
-# spoofguard: 每跳 UDP 多读尾部选择
+# spoofguard: 每跳 UDP EDNS OPT 门控
 # poisonguard: 内容检测 + 劫持触发 TCP 回退
 # splitguard: TCP 回退时分段抗 RST
 

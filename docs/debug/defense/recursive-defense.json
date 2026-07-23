@@ -1,9 +1,17 @@
 {
   "server": {
     "log_level": "debug:RECURSION,SECURITY,UPSTREAM,RESULT",
-    "protocol": { "udp": "10533" }
+    "protocol": {
+      "udp": "10533",
+      "tcp": "10533"
+    }
   },
   "upstream": [
-    { "address": "builtin_recursive", "poisonguard": true, "spoofguard": true, "splitguard": true }
+    {
+      "address": "builtin_recursive",
+      "poisonguard": true,
+      "spoofguard": true,
+      "splitguard": true
+    }
   ]
 }
