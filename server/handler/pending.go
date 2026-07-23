@@ -85,7 +85,9 @@ func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.
 	timer := time.NewTimer(60 * time.Second)
 	select {
 	case <-call.done:
-		timer.Stop()
+		if !timer.Stop() {
+			<-timer.C
+		}
 	case <-timer.C:
 		log.Warnf("CACHE: pending-request follower timeout for %s", qname)
 		return &resolver.QueryResult{Err: errors.New("pending request timeout")}, true

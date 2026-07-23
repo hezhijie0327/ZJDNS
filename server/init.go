@@ -21,7 +21,7 @@ func initResolver(
 	cfg *config.ServerConfig,
 	queryClient *upstream.Client,
 	cryptoValidator *dnssec.CryptoValidator,
-	poisonDetector *defense.Detector,
+	poisonDetector defense.Detector,
 	ednsHandler *edns.Handler,
 	cidrMatcher resolver.CIDRMatcher,
 	cacheStore cache.Store,
@@ -29,18 +29,15 @@ func initResolver(
 	backgroundCtx context.Context,
 ) *resolver.Resolver {
 	r := resolver.New(&resolver.Config{
-		QueryClient: queryClient,
-		Crypto:      cryptoValidator,
-		Defense: resolver.DefenseConfig{
-			Poisonguard: poisonDetector,
-			Spoofguard:  cfg.Server.Features.Defense.HasSpoofguard(),
-		},
-		EDNS:          ednsHandler,
-		CIDRMatcher:   cidrMatcher,
-		BuildMsg:      buildMsg,
-		Cache:         cacheStore,
-		DNSSECEnforce: cfg.Server.Features.DNSSECEnforce,
-		Ctx:           backgroundCtx,
+		QueryClient:    queryClient,
+		Crypto:         cryptoValidator,
+		PoisonDetector: poisonDetector,
+		EDNS:           ednsHandler,
+		CIDRMatcher:    cidrMatcher,
+		BuildMsg:       buildMsg,
+		Cache:          cacheStore,
+		DNSSECEnforce:  cfg.Server.Features.DNSSECEnforce,
+		Ctx:            backgroundCtx,
 	})
 	r.ConfigureServers(cfg.Upstream, cfg.Fallback)
 	return r

@@ -24,10 +24,6 @@ type Zone struct {
 // Wrap implements Middleware.
 func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
-		if !m.evaluator.HasRules() {
-			return next.ServeDNS(ctx, qctx)
-		}
-
 		qd := qctx.Req.Question[0]
 		qname := qd.Header().Name
 		qtype := dns.RRToType(qd)

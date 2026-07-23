@@ -28,6 +28,9 @@ type Recursive struct {
 	lastDNSSECEDECode atomic.Uint64 // EDE code from the most recent DNSSEC validation failure
 	cache             cache.Store
 	ctx               context.Context // lifecycle context for background probes
+	spoofguard        bool            // from builtin_recursive upstream
+	splitguard        bool            // from builtin_recursive upstream
+	poisonguard       bool            // from builtin_recursive upstream
 }
 
 // CNAME handles CNAME record chasing during DNS resolution, following the
@@ -227,8 +230,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 // probeTLDForPoison sends a single UDP probe to a TLD server for the full
 // QNAME and delegates the verdict to security.Detector.IsPoisonedByTLD.
 func (r *Recursive) probeTLDForPoison(ctx context.Context, tldServers []string, qname string) bool {
-	detector := r.resolver.validator.Poisonguard
-	if detector == nil || !detector.IsEnabled() || len(tldServers) == 0 {
+	if !r.poisonguard || len(tldServers) == 0 {
 		return false
 	}
 
@@ -253,7 +255,7 @@ func (r *Recursive) probeTLDForPoison(ctx context.Context, tldServers []string, 
 	}
 	defer pool.DefaultMessage.Put(result.Response)
 
-	if detector.IsPoisonedByTLD(result.Response, qname) {
+	if r.resolver.validator.Poisonguard.IsPoisonedByTLD(result.Response, qname) {
 		log.Debugf("RECURSION: poison probe detected A/AAAA for %s from TLD server %s, forcing TCP",
 			qname, tldServers[0])
 		return true

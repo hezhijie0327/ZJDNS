@@ -153,7 +153,8 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 		ProtoDTLCP: true,
 	}
 
-	for i, server := range cfg.Upstream {
+	for i := range cfg.Upstream {
+		server := &cfg.Upstream[i]
 		protocol := strings.ToLower(server.Protocol)
 		if server.Protocol != "" && !validProtocols[protocol] {
 			return fmt.Errorf("upstream server %d protocol invalid: %s", i, server.Protocol)

@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	codeberg.org/miekg/dns v0.6.85-0.20260719080845-1db1230d9666
 	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033
-	github.com/cloudflare/circl v1.6.5-0.20260718163227-07dbe16881b2
+	github.com/cloudflare/circl v1.6.5-0.20260722160430-1554bbf1fdba
 	github.com/emmansun/gmsm v0.44.0
 	github.com/klauspost/compress v1.19.2-0.20260721100123-117430d3b0e3
 	github.com/ncruces/go-sqlite3 v0.35.3-0.20260721171147-1c3fb78d91a3

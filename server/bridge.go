@@ -88,7 +88,9 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 				writeTimer := time.NewTimer(config.DefaultDNSQueryTimeout)
 				select {
 				case entry.writeMu <- struct{}{}:
-					writeTimer.Stop()
+					if !writeTimer.Stop() {
+						<-writeTimer.C
+					}
 					defer func() { <-entry.writeMu }()
 				case <-writeTimer.C:
 					log.Debugf("SERVER: TCP write lock timeout for %s", addr)

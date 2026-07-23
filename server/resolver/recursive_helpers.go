@@ -18,7 +18,7 @@ import (
 // When no match is found, it either triggers a QNAME minimisation retry
 // (continue=true) or returns a terminal result.
 func (r *Recursive) collectBestNSMatch(response *dns.Msg, normalizedQname, queryName, qname string, qnameMinimise, validated bool, ecsResponse *edns.ECSOption) (bestMatch string, bestNSRecords []*dns.NS, shouldContinue bool, termRes *QueryResult) {
-	var allRRSections []dns.RR
+	allRRSections := make([]dns.RR, 0, len(response.Ns)+len(response.Answer))
 	allRRSections = append(allRRSections, response.Ns...)
 	allRRSections = append(allRRSections, response.Answer...)
 

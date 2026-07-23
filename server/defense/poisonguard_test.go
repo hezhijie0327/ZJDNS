@@ -26,9 +26,7 @@ func nsRec(name, target string) *dns.NS {
 }
 
 func newDetector() *Detector {
-	d := &Detector{}
-	d.Enable(true)
-	return d
+	return &Detector{}
 }
 
 // classifyRecord is a test helper that classifies a single record.
@@ -184,21 +182,6 @@ func TestValidate_DelegationIsNotPoisoned(t *testing.T) {
 	v := d.Validate("cn", "dns.weixin.qq.com.cn", resp)
 	if v == VerdictPoisoned {
 		t.Fatalf("delegation response should not be hijack, got %s", v)
-	}
-}
-
-func TestValidate_Disabled(t *testing.T) {
-	d := &Detector{}
-	d.Enable(false)
-
-	resp := &dns.Msg{}
-	resp.Answer = []dns.RR{
-		aRec("www.google.com.", "185.45.5.35"),
-	}
-
-	v := d.Validate("", "www.google.com", resp)
-	if v != VerdictClean {
-		t.Fatalf("disabled detector should return clean, got %s", v)
 	}
 }
 
@@ -416,23 +399,6 @@ func TestVerdict_String(t *testing.T) {
 	}
 	if s := VerdictUncertain.String(); s != "uncertain" {
 		t.Fatalf("Uncertain string: got %q, want %q", s, "uncertain")
-	}
-}
-
-// ── Enable / IsEnabled ─────────────────────────────────────────────────────────
-
-func TestDetector_Enable(t *testing.T) {
-	d := &Detector{}
-	if d.IsEnabled() {
-		t.Fatal("new detector should be disabled by default")
-	}
-	d.Enable(true)
-	if !d.IsEnabled() {
-		t.Fatal("should be enabled after Enable(true)")
-	}
-	d.Enable(false)
-	if d.IsEnabled() {
-		t.Fatal("should be disabled after Enable(false)")
 	}
 }
 

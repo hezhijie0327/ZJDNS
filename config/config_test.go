@@ -145,3 +145,86 @@ func TestECSOption_Normalize(t *testing.T) {
 		})
 	}
 }
+
+func TestUpstreamServer_DefenseFlagsParsed(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		wantPG  bool
+		wantSG  bool
+		wantSpG bool
+	}{
+		{"all on", `[{"address":"builtin_recursive","poisonguard":true,"spoofguard":true,"splitguard":true}]`, true, true, true},
+		{"all off", `[{"address":"8.8.8.8:53","protocol":"udp"}]`, false, false, false},
+		{"only poisonguard", `[{"address":"builtin_recursive","poisonguard":true}]`, true, false, false},
+		{"only spoofguard", `[{"address":"8.8.8.8:53","spoofguard":true}]`, false, true, false},
+		{"only splitguard", `[{"address":"1.2.4.8:53","protocol":"tcp","splitguard":true}]`, false, false, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			path := filepath.Join(tmpDir, "config.json")
+			cfg := `{"server":{"protocol":{"udp":"53535"},"certificate":{"domain":"test.example.com"}},"upstream":` + tt.json + `}`
+			if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := LoadConfig(path)
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if len(c.Upstream) != 1 {
+				t.Fatalf("expected 1 upstream, got %d", len(c.Upstream))
+			}
+			u := c.Upstream[0]
+			if u.Poisonguard != tt.wantPG {
+				t.Errorf("Poisonguard = %v, want %v", u.Poisonguard, tt.wantPG)
+			}
+			if u.Spoofguard != tt.wantSG {
+				t.Errorf("Spoofguard = %v, want %v", u.Spoofguard, tt.wantSG)
+			}
+			if u.Splitguard != tt.wantSpG {
+				t.Errorf("Splitguard = %v, want %v", u.Splitguard, tt.wantSpG)
+			}
+		})
+	}
+}
+
+func TestValidateUpstreamServers_InvalidProtocol(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	cfg := `{"server":{"protocol":{"udp":"53535"},"certificate":{"domain":"test.example.com"}},"upstream":[{"address":"8.8.8.8:53","protocol":"invalid_proto"}]}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Error("expected error for invalid protocol")
+	}
+}
+
+func TestValidateUpstreamServers_EmptyAddress(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	cfg := `{"server":{"protocol":{"udp":"53535"},"certificate":{"domain":"test.example.com"}},"upstream":[{"protocol":"udp"}]}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Error("expected error for empty upstream address")
+	}
+}
+
+func TestValidateConfig_MissingCertDomain(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	cfg := `{"server":{"protocol":{"tls":"853"}},"upstream":[{"address":"8.8.8.8:53"}]}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Error("expected error for TLS without cert domain")
+	}
+}

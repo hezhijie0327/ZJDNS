@@ -170,6 +170,7 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 		pool.DefaultMessage.Put(response)
 		return nil, fmt.Errorf("unpack: %w", err)
 	}
+	response.Data = nil
 
 	msg.ID = originalID
 	response.ID = originalID

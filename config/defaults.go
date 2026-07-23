@@ -85,9 +85,8 @@ const (
 	DefaultQUICServerIdleTimeout = 30 * time.Second // server QUIC idle (RFC 9000 default)
 	DefaultQUICAddrCacheTTL      = 30 * time.Minute // QUIC address cache sweep cutoff
 
-	DefaultTCPPoolIdleTimeout      = 120 * time.Second // TCP/DoT pool connection idle
-	DefaultTCPKeepAlivePeriod      = 30 * time.Second  // TCP keep-alive probe interval
-	DefaultEDNSTCPKeepaliveTimeout = 1200              // EDNS TCP keepalive idle timeout (100ms units = 120s)
+	DefaultTCPPoolIdleTimeout = 120 * time.Second // TCP/DoT pool connection idle
+	DefaultTCPKeepAlivePeriod = 30 * time.Second  // TCP keep-alive probe interval
 
 	DefaultHTTPServerIdleTimeout  = 60 * time.Second // HTTP keep-alive idle
 	DefaultHTTPServerWriteTimeout = 10 * time.Second // HTTP response write
@@ -112,6 +111,7 @@ const (
 
 const (
 	DefaultSpoofguardCollectWindow = 500 * time.Millisecond // response collection window
+	DefaultSpoofguardPollInterval  = 100 * time.Millisecond // per-read deadline within collection window
 	DefaultSplitguardSize          = 1                      // bytes per TCP segment
 	DefaultSplitguardDelay         = 0 * time.Millisecond   // inter-segment delay
 )
@@ -279,7 +279,6 @@ var (
 	NextProtoDOH  = []string{"h2"}  // RFC 8484: DNS-over-HTTPS (HTTP/2)
 	NextProtoDOQ  = []string{"doq"} // RFC 9250: DNS-over-QUIC
 	NextProtoDOH3 = []string{"h3"}  // DNS-over-HTTP/3
-	NextProtoDTLS = []string{"dot"} // RFC 8094: DNS-over-DTLS (same ALPN as DoT)
 )
 
 // =============================================================================

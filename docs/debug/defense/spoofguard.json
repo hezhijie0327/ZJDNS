@@ -1,12 +1,9 @@
 {
   "server": {
     "log_level": "debug:UPSTREAM,RESULT",
-    "protocol": { "udp": "10533" },
-    "features": {
-      "defense": { "spoofguard": true }
-    }
+    "protocol": { "udp": "10533" }
   },
   "upstream": [
-    { "address": "8.8.8.8:53", "protocol": "udp" }
+    { "address": "8.8.8.8:53", "protocol": "udp", "spoofguard": true }
   ]
 }

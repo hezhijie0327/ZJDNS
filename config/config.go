@@ -80,11 +80,10 @@ type DNSCryptCertificate struct {
 	PublicKey  string `json:"public_key,omitzero"`  // Ed25519 public key (hex, optional — auto-generated if empty)
 }
 
-// FeatureFlags enables optional features: defense, KTLS, DDR, ECS, database,
+// FeatureFlags enables optional features: KTLS, DDR, ECS, database,
 // cache, latency probes, and stats.
 type FeatureFlags struct {
 	KTLS          *KTLSSettings      `json:"ktls,omitzero"`
-	Defense       *DefenseConfig     `json:"defense,omitzero"` // nil = all defense mechanisms off
 	DNSSECEnforce bool               `json:"dnssec_enforce,omitzero"`
 	DDR           DDRSettings        `json:"ddr,omitzero"`
 	ECS           ECSConfig          `json:"ecs_subnet,omitzero"`
@@ -92,20 +91,6 @@ type FeatureFlags struct {
 	Cache         CacheSettings      `json:"cache,omitzero"`
 	LatencyProbe  []LatencyProbeStep `json:"latency_probe,omitzero"`
 	DNS64         *DNS64Config       `json:"dns64,omitzero"`
-}
-
-// DefenseConfig groups DNS response integrity mechanisms:
-//
-//	poisonguard  — content-based authority validation + TCP fallback
-//	spoofguard   — UDP multi-read + last-response selection
-//	splitguard   — segmented TCP writes to evade DPI-based RST
-//
-// When DefenseConfig is nil (omitted), all three mechanisms are disabled.
-// When a sub-field is non-zero/non-nil, that mechanism is enabled.
-type DefenseConfig struct {
-	Poisonguard bool `json:"poisonguard,omitzero"`
-	Spoofguard  bool `json:"spoofguard,omitzero"`
-	Splitguard  bool `json:"splitguard,omitzero"`
 }
 
 // KTLSSettings configures kernel TLS offload for DoT/DoH server listeners.
@@ -163,6 +148,9 @@ type UpstreamServer struct {
 	Proxy         string   `json:"proxy,omitzero"`
 	PublicKey     string   `json:"public_key,omitzero"`
 	PQDNSCrypt    *bool    `json:"pqdnscrypt,omitzero"` // prefer PQ DNSCrypt certs (default true)
+	Poisonguard   bool     `json:"poisonguard,omitzero"`
+	Spoofguard    bool     `json:"spoofguard,omitzero"`
+	Splitguard    bool     `json:"splitguard,omitzero"`
 }
 
 // ZoneConfig wraps zone rules and global zone settings.
@@ -249,29 +237,4 @@ func (s *UpstreamServer) IsRecursive() bool {
 		return false
 	}
 	return s.Address == RecursiveIndicator
-}
-
-// --- DefenseConfig methods ---
-
-// IsEnabled reports whether hijack detection is active.  Basic NXDOMAIN+answer
-// rejection always runs; this flag controls content-based zone-authority
-// validation and proactive TLD probing with TCP fallback.
-func (d *DefenseConfig) IsEnabled() bool {
-	return d != nil
-}
-
-// HasPoisonguard reports whether the content-based hijack detection
-// (zone-authority validation + TLD probing + TCP fallback) is active.
-func (d *DefenseConfig) HasPoisonguard() bool {
-	return d != nil && d.Poisonguard
-}
-
-// HasSpoofguard reports whether tail selection is active.
-func (d *DefenseConfig) HasSpoofguard() bool {
-	return d != nil && d.Spoofguard
-}
-
-// HasSplitguard reports whether TCP segmentation is active.
-func (d *DefenseConfig) HasSplitguard() bool {
-	return d != nil && d.Splitguard
 }

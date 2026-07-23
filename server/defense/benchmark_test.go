@@ -12,7 +12,6 @@ import (
 func BenchmarkDetector_Validate(b *testing.B) {
 	log.Default.SetLevel(log.Error)
 	det := &Detector{}
-	det.Enable(true)
 
 	// Root server response with A record for non-TLD (hijack).
 	msg := &dns.Msg{
@@ -30,7 +29,6 @@ func BenchmarkDetector_Validate(b *testing.B) {
 func BenchmarkDetector_ValidateClean(b *testing.B) {
 	log.Default.SetLevel(log.Error)
 	det := &Detector{}
-	det.Enable(true)
 
 	// Root server response with TLD NS delegation (clean).
 	msg := &dns.Msg{
@@ -48,7 +46,6 @@ func BenchmarkDetector_ValidateClean(b *testing.B) {
 func BenchmarkDetector_IsPoisonedByTLD(b *testing.B) {
 	log.Default.SetLevel(log.Error)
 	det := &Detector{}
-	det.Enable(true)
 
 	msg := &dns.Msg{
 		Answer: []dns.RR{&dns.A{

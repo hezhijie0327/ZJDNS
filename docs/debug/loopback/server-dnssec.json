@@ -6,10 +6,9 @@
       "tcp": "12533"
     },
     "features": {
-      "defense": { "poisonguard": false },
       "dnssec_enforce": true,
       "cache": { "max_entries": 1000 }
     }
   },
-  "upstream": [{ "address": "builtin_recursive" }]
+  "upstream": [{ "address": "builtin_recursive", "poisonguard": false }]
 }

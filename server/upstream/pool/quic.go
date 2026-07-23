@@ -86,8 +86,16 @@ func (p *QUIC) Acquire(ctx context.Context, key string, dialFunc func(context.Co
 		}
 	}
 
-	// Update the stored live list under the lock.
+	// Update the stored live list under the lock.  Re-read p.conns[key]
+	// to avoid TOCTOU: concurrent Put/Remove may have modified the list
+	// while we were outside the lock filtering dead connections.
 	p.mu.Lock()
+	live = p.conns[key][:0]
+	for _, pc := range p.conns[key] {
+		if !pc.isDead() {
+			live = append(live, pc)
+		}
+	}
 	p.conns[key] = live
 
 	if len(live) > 0 {

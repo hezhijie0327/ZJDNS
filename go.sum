@@ -10,8 +10,8 @@ github.com/andybalholm/brotli v1.2.2 h1:HzTuoo2ErYQqf5qvcJInB8uvqSVxRttzkFexPWtn
 github.com/andybalholm/brotli v1.2.2/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/blang/semver/v4 v4.0.0 h1:1PFHFE6yCCTv8C1TeyNNarDzntLi7wMI5i/pzqYIsAM=
 github.com/blang/semver/v4 v4.0.0/go.mod h1:IbckMUScFkM3pff0VJDNKRiT6TG/YpiHIM2yvyW5YoQ=
-github.com/cloudflare/circl v1.6.5-0.20260718163227-07dbe16881b2 h1:yXNFfTWHEYkFOGXATIkJXgiaucfEoC53tdLg2aEaPv4=
-github.com/cloudflare/circl v1.6.5-0.20260718163227-07dbe16881b2/go.mod h1:h5LNyxAc5nTue9DS5jT+48en2PSDYt3zdGnz5OstK6c=
+github.com/cloudflare/circl v1.6.5-0.20260722160430-1554bbf1fdba h1:TEqdGj29EwaCb9KbI9HPcIrz3LxnFjavI/CTp1eEDX8=
+github.com/cloudflare/circl v1.6.5-0.20260722160430-1554bbf1fdba/go.mod h1:h5LNyxAc5nTue9DS5jT+48en2PSDYt3zdGnz5OstK6c=
 github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488 h1:tLWBZgPg6TV67oe76W4p+aUQEWIa52wbcuiz8GFd3vo=
 github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488/go.mod h1:QKJhjoqUtBsXCAVEjw38mFqoi7DebT7kthcD7UzbnoA=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=

@@ -14,7 +14,6 @@
       }
     },
     "features": {
-      "defense": { "poisonguard": false },
       "cache": {
         "max_entries": 1000
       }
@@ -22,7 +21,8 @@
   },
   "upstream": [
     {
-      "address": "builtin_recursive"
+      "address": "builtin_recursive",
+      "poisonguard": false
     }
   ]
 }

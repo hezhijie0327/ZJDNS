@@ -77,7 +77,6 @@ func NewDefaultServerConfig() *ServerConfig {
 	cfg.Server.Features.DDR = DDRSettings{IPv4: "127.0.0.1", IPv6: "::1"}
 	cfg.Server.Features.ECS = ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.DNSSECEnforce = true
-	cfg.Server.Features.Defense = &DefenseConfig{Poisonguard: true, Splitguard: true}
 
 	return cfg
 }

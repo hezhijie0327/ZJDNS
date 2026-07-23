@@ -83,8 +83,9 @@ func (r *Recursive) getRootServers() []string {
 		return allRootAddrs()
 	}
 
-	var all []string
-	for name, addrs := range loadHints() {
+	hints := loadHints()
+	all := make([]string, 0, len(hints)*2) // ~2 addrs per root server
+	for name, addrs := range hints {
 		cached := r.lookupNSAddrsFromCache(name, func() { cacheRootHint(r.cache, name, addrs) })
 		if len(cached) == 0 {
 			// Cold start for this name: write + probe + read back.

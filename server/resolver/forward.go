@@ -6,28 +6,17 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"sync"
 	"sync/atomic"
-	"time"
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
-	"zjdns/server/defense"
 	"zjdns/server/resolver/dnssec"
 	"zjdns/server/upstream"
 
 	"codeberg.org/miekg/dns"
 	"golang.org/x/sync/errgroup"
 )
-
-// spoofEntry holds a QueryResult and its associated *dns.Msg for spoofguard.
-// The message is kept alive until after selection; unused messages are returned
-// to the pool by the collector.
-type spoofEntry struct {
-	qr  QueryResult
-	msg *dns.Msg
-}
 
 func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *edns.ECSOption, servers []*config.UpstreamServer) QueryResult {
 	if len(servers) == 0 {
@@ -52,10 +41,6 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 		log.Debugf("UPSTREAM: querying %d servers for %s: %v", len(servers), question.Name, serverAddrs)
 	}
 
-	// Tail: when enabled, collect multiple UDP responses and trust the
-	// chronologically last one (GFW fakes arrive before the real response).
-	spoofActive := r.spoofEnabled
-
 	resultChan := make(chan QueryResult, 1)
 	var nxdomainResult atomic.Pointer[QueryResult]
 	queryCtx, cancel := context.WithCancelCause(ctx)
@@ -65,12 +50,6 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	g.SetLimit(concurrencyLimit(len(servers)))
 
 	var activeConnections atomic.Int32
-
-	// spoofguard: mutex-protected accumulator for (QueryResult, *dns.Msg) pairs.
-	// Messages are kept alive until after selection; unused ones are returned to
-	// the pool by the collector.
-	var spoofMu sync.Mutex
-	var spoofEntries []spoofEntry
 
 	for _, srv := range servers {
 		server := srv
@@ -90,15 +69,6 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 				if handled := r.handleRecursiveQuery(groupCtx, server, question, ecs, resultChan, cancel); handled {
 					return nil
 				}
-
-			case spoofActive && (server.Protocol == config.ProtoUDP || server.Protocol == ""):
-				// Tail + UDP: raw multi-read. GFW fakes arrive first,
-				// real response always last — trust the tail.
-				msg := r.buildMsg(question, ecs, true, false)
-				if err := msg.Pack(); err == nil {
-					r.executeUDPMultiRead(groupCtx, msg.Data, msg.ID, server, &spoofEntries, &spoofMu, &nxdomainResult)
-				}
-				pool.DefaultMessage.Put(msg)
 
 			default:
 				// TCP/TLS/other: encrypted or single-response —
@@ -139,80 +109,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 		close(resultChan)
 	}()
 
-	if spoofActive {
-		// Wait for the collection window, then drain and vote.
-		tailTimer := time.NewTimer(config.DefaultSpoofguardCollectWindow)
-		select {
-		case <-tailTimer.C:
-		case <-ctx.Done():
-			if !tailTimer.Stop() {
-				<-tailTimer.C
-			}
-		}
-
-		spoofMu.Lock()
-		entries := spoofEntries
-		spoofEntries = nil
-		spoofMu.Unlock()
-
-		if len(entries) > 0 {
-			// Build *dns.Msg slice for spoofguard selection. Entries from recursive
-			// queries have nil msg (their QueryResult already carries
-			// the answer RRs).
-			msgs := make([]*dns.Msg, len(entries))
-			for i := range entries {
-				if entries[i].msg != nil {
-					msgs[i] = entries[i].msg
-				}
-			}
-			winner := defense.LastResponse(msgs)
-			if winner != nil {
-				for i := range entries {
-					if entries[i].msg == winner {
-						// Put back non-winner messages.
-						for j := range entries {
-							if j != i && entries[j].msg != nil {
-								pool.DefaultMessage.Put(entries[j].msg)
-							}
-						}
-						qr := entries[i].qr
-						pool.DefaultMessage.Put(entries[i].msg)
-						return qr
-					}
-				}
-			}
-			// No majority: fallback to first response, put the rest.
-			for i := range entries {
-				if i > 0 && entries[i].msg != nil {
-					pool.DefaultMessage.Put(entries[i].msg)
-				}
-			}
-			qr := entries[0].qr
-			if qr.Server != "" {
-				return qr
-			}
-		}
-
-		// Fallback: check for CIDR filter or NXDOMAIN, then error.
-		select {
-		case res, ok := <-resultChan:
-			if ok && errors.Is(res.Err, ErrCIDRFilterRefused) {
-				return QueryResult{Err: ErrCIDRFilterRefused}
-			}
-		default:
-		}
-		if nxRes := nxdomainResult.Load(); nxRes != nil && nxRes.Server != "" {
-			return *nxRes
-		}
-		if opt := r.lastUpstreamEDE.Load(); opt != nil {
-			log.Debugf("UPSTREAM: all %d servers failed for %s, propagating EDE %d", len(servers), question.Name, opt.InfoCode)
-			return QueryResult{Err: dnssecEDEError(uint64(opt.InfoCode))}
-		}
-		log.Debugf("UPSTREAM: all %d servers failed for %s", len(servers), question.Name)
-		return QueryResult{Err: errors.New("all upstream queries failed")}
-	}
-
-	// Non-tail path: first-wins (existing behaviour).
+	// First-wins: wait for the first successful result from any upstream.
 	select {
 	case res, ok := <-resultChan:
 		if ok {
@@ -275,101 +172,6 @@ func captureUpstreamEDE(r *Resolver, resp *dns.Msg, serverAddr string) {
 			log.Debugf("UPSTREAM: captured EDE %d (%s) from %s (rcode=%s)",
 				ede.InfoCode, dns.ExtendedErrorToString[ede.InfoCode], serverAddr, dns.RcodeToString[resp.Rcode])
 			break
-		}
-	}
-}
-
-// executeUDPMultiRead sends a DNS query via raw UDP and reads multiple
-// responses within the Tail collect window. Unlike miekg/dns.Client.Exchange
-// which returns the first packet, this captures both GFW-injected fakes and
-// the real server response so spoofguard can distinguish them.
-func (r *Resolver) executeUDPMultiRead(ctx context.Context, wireQuery []byte, msgID uint16, server *config.UpstreamServer, spoofEntries *[]spoofEntry, mu *sync.Mutex, nxdomainResult *atomic.Pointer[QueryResult]) {
-	conn, err := net.Dial("udp", server.Address)
-	if err != nil {
-		return
-	}
-	defer func() { _ = conn.Close() }()
-
-	if _, err := conn.Write(wireQuery); err != nil {
-		return
-	}
-
-	deadline := time.Now().Add(config.DefaultSpoofguardCollectWindow)
-	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
-		deadline = ctxDeadline
-	}
-
-	buf := make([]byte, 4096)
-	for {
-		_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-		n, err := conn.Read(buf)
-		if err != nil {
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				if time.Now().After(deadline) {
-					return
-				}
-				continue
-			}
-			return
-		}
-
-		// Quick ID check — skip packets not matching our query.
-		if n < 12 || uint16(buf[0])<<8|uint16(buf[1]) != msgID {
-			continue
-		}
-
-		raw := make([]byte, n)
-		copy(raw, buf[:n])
-
-		resp := pool.DefaultMessage.Get()
-		resp.Data = raw
-		if err := resp.Unpack(); err != nil {
-			pool.DefaultMessage.Put(resp)
-			continue
-		}
-		resp.Data = nil
-
-		serverDesc := server.Address
-		if server.Protocol != "" && server.Protocol != config.ProtoUDP {
-			serverDesc = server.Address + " (" + strings.ToUpper(server.Protocol) + ")"
-		}
-
-		captureUpstreamEDE(r, resp, server.Address)
-
-		rcode := resp.Rcode
-		switch rcode {
-		case dns.RcodeSuccess:
-			validated := dnssec.IsResponseValid(resp, true)
-			ecsResponse := r.edns.ParseFromDNS(resp)
-			qr := QueryResult{
-				Answer:     resp.Answer,
-				Authority:  resp.Ns,
-				Additional: resp.Extra,
-				Validated:  validated,
-				Cacheable:  !server.NoCache,
-				ECS:        ecsResponse,
-				Server:     serverDesc,
-			}
-			mu.Lock()
-			*spoofEntries = append(*spoofEntries, spoofEntry{qr: qr, msg: resp})
-			mu.Unlock()
-			log.Debugf("UPSTREAM: UDP spoofguard collected response from %s, answer=%d", serverDesc, len(resp.Answer))
-
-		case dns.RcodeNameError:
-			nxdomainResult.CompareAndSwap(nil, &QueryResult{
-				Answer:     resp.Answer,
-				Authority:  resp.Ns,
-				Additional: resp.Extra,
-				Validated:  false,
-				Cacheable:  !server.NoCache,
-				ECS:        r.edns.ParseFromDNS(resp),
-				Server:     serverDesc,
-			})
-			pool.DefaultMessage.Put(resp)
-
-		default:
-			pool.DefaultMessage.Put(resp)
 		}
 	}
 }

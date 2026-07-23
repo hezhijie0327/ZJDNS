@@ -1,7 +1,6 @@
 package defense
 
 import (
-	"sync/atomic"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
@@ -21,9 +20,10 @@ type Verdict int
 // A records for www.google.com, or a TLD server returning A records for a
 // subdomain. Detection triggers a UDP→TCP fallback which often bypasses the
 // middlebox.
-type Detector struct {
-	enabled atomic.Bool
-}
+//
+// Enablement is gated at the call site via Recursive.poisonguard — the Detector
+// itself is always active when constructed.
+type Detector struct{}
 
 const (
 	// VerdictClean means the response is consistent with the zone's
@@ -61,16 +61,6 @@ func (v Verdict) String() string {
 
 // --- Detector methods ---
 
-// IsEnabled returns whether hijack detection is currently active.
-func (d *Detector) IsEnabled() bool {
-	return d.enabled.Load()
-}
-
-// Enable activates or deactivates hijack detection.
-func (d *Detector) Enable(enabled bool) {
-	d.enabled.Store(enabled)
-}
-
 // Validate checks whether a DNS response from a server authoritative for zone
 // is legitimate for the given queryName.  Only the Answer section is inspected.
 //
@@ -78,7 +68,7 @@ func (d *Detector) Enable(enabled bool) {
 //	isTLD(zone)       → TLD server (e.g. "com", "cn")
 //	otherwise         → authoritative server
 func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
-	if !d.enabled.Load() || response == nil {
+	if response == nil {
 		return VerdictClean
 	}
 
@@ -105,7 +95,7 @@ func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 // put A/AAAA in the Answer section for a subdomain — if they
 // do, the response was injected by a middlebox.
 func (d *Detector) IsPoisonedByTLD(response *dns.Msg, queryName string) bool {
-	if !d.enabled.Load() || response == nil {
+	if response == nil {
 		return false
 	}
 	n := dnsutil.Canonical(queryName)

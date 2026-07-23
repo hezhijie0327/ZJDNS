@@ -1,12 +1,9 @@
 {
   "server": {
     "log_level": "debug:UPSTREAM,RESULT",
-    "protocol": { "udp": "10533" },
-    "features": {
-      "defense": { "splitguard": true }
-    }
+    "protocol": { "udp": "10533" }
   },
   "upstream": [
-    { "address": "8.8.8.8:53", "protocol": "tcp" }
+    { "address": "8.8.8.8:53", "protocol": "tcp", "splitguard": true }
   ]
 }

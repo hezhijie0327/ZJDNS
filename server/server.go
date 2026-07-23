@@ -169,7 +169,6 @@ func (s *Server) initQueryClient(cfg *config.ServerConfig) *upstream.Client {
 	if cfg.Server.Features.KTLS != nil {
 		client.SetKTLS(cfg.Server.Features.KTLS.KernelTX, cfg.Server.Features.KTLS.KernelRX)
 	}
-	client.SetDefense(cfg.Server.Features.Defense)
 	s.queryClient = client
 	return client
 }
@@ -212,8 +211,7 @@ func (s *Server) initDNSResolver(cfg *config.ServerConfig, queryClient *upstream
 		resolver.LoadRootHints()
 	}
 
-	poisonDetector := &defense.Detector{}
-	poisonDetector.Enable(cfg.Server.Features.Defense.HasPoisonguard())
+	poisonDetector := defense.Detector{} // gated per-query by Recursive.poisonguard
 
 	var cidrMatcher resolver.CIDRMatcher
 	if rulesetEngine != nil {
@@ -524,15 +522,5 @@ func (s *Server) displayExtras() {
 				log.Infof("TLS: kTLS unavailable (load with: modprobe tls)")
 			}
 		}
-	}
-
-	if s.config.Server.Features.Defense.HasPoisonguard() {
-		log.Infof("SECURITY: poisonguard (recursive poison detection): enabled")
-	}
-	if s.config.Server.Features.Defense.HasSpoofguard() {
-		log.Infof("SECURITY: spoofguard (UDP anti-spoofing): enabled")
-	}
-	if s.config.Server.Features.Defense.HasSplitguard() {
-		log.Infof("SECURITY: splitguard (TCP segmentation): enabled")
 	}
 }

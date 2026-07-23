@@ -52,11 +52,8 @@ func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				}
 				return nil
 			}
-		}
-
-		// Ensure Done is always called — even on panic — so the pending
-		// map entry is cleaned up and followers are unblocked.
-		if m.pending != nil {
+			// Ensure Done is always called — even on panic — so the pending
+			// map entry is cleaned up and followers are unblocked.
 			defer func() {
 				m.pending.Done(qname, qtype, qclass, ecsOpt, dnssecOK, qctx.ResolutionResult)
 			}()

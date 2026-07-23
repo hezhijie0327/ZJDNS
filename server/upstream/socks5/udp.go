@@ -232,7 +232,7 @@ func (d *Dialer) DialUDP(ctx context.Context, targetAddr string) (net.Conn, erro
 // and returns the payload with the real source address.
 func (c *socks5PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	buf := socks5ReadBufPool.Get().(*[]byte)
-	defer socks5ReadBufPool.Put(buf)
+	defer func() { clear(*buf); socks5ReadBufPool.Put(buf) }()
 
 	nr, err := c.conn.Read((*buf))
 	if err != nil {
@@ -306,7 +306,7 @@ func (c *socks5PacketConn) SetWriteDeadline(t time.Time) error {
 
 func (c *socks5UDPConn) Read(p []byte) (n int, err error) {
 	buf := socks5ReadBufPool.Get().(*[]byte)
-	defer socks5ReadBufPool.Put(buf)
+	defer func() { clear(*buf); socks5ReadBufPool.Put(buf) }()
 
 	nr, err := c.conn.Read((*buf))
 	if err != nil {

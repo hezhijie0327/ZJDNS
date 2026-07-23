@@ -26,9 +26,10 @@ docs/debug/
 │   ├── 
 │   └── proxy-classic.toml         # DNSCrypt-proxy client (pqdnscrypt=false)
 ├── defense/                # Anti-pollution defense scenarios
-│   ├── poisonguard.json    # recursive + poisonguard + splitguard
-│   ├── spoofguard.json     # upstream UDP + spoofguard (8.8.8.8)
-│   └── splitguard.json     # upstream TCP + splitguard (8.8.8.8)
+│   ├── spoofguard.json              # forwarding UDP + spoofguard (8.8.8.8)
+│   ├── splitguard.json              # forwarding TCP + splitguard (8.8.8.8)
+│   ├── poisonguard.json             # recursive + poisonguard (content detection)
+│   └── recursive-defense.json       # recursive all three: poisonguard + spoofguard + splitguard
 └── upstream/               # ZJDNS → external upstream tests
     ├── alidns-tls.json      # AliDNS via TLS
     ├── alidns-https.json    # AliDNS via HTTPS
@@ -111,49 +112,63 @@ pkill -f "server-dnssec"
 
 ## Defense Tests
 
-三层防污染机制独立测试，所有配置位于 `docs/debug/defense/`。
+防御机制分为 forwarding 和 recursive 两类场景，独立测试：
 
-### Poisonguard (递归越权检测)
-
-```bash
-/tmp/zjdns -config docs/debug/defense/poisonguard.json &
-sleep 2
-
-# 被劫持域名 → 检测 fake A/AAAA → TCP 回退
-dig @127.0.0.1 -p 10533 www.google.com A +short
-dig @127.0.0.1 -p 10533 www.youtube.com A +short
-
-# 预期日志: "hijack probe" / "hijack detected" / "tcp=true"
-
-pkill -f "poisonguard"
-```
-
-### Spoofguard (上游 UDP 防欺骗)
+### Spoofguard (forwarding UDP 尾部选择)
 
 ```bash
 /tmp/zjdns -config docs/debug/defense/spoofguard.json &
 sleep 2
 
 dig @127.0.0.1 -p 10533 www.google.com A +short
-dig @127.0.0.1 -p 10533 www.youtube.com A +short
 
-# 预期日志: "UDP multi-read collected" — 假包先到，真包最后，取尾部
+# 单 socket 多读，取最后到达的响应 — GFW 假包先到，真包后到
+# 预期日志: "UDP spoofguard collected response"
 
 pkill -f "spoofguard"
 ```
 
-### Splitguard (TCP 分段)
+### Splitguard (forwarding TCP 分段)
 
 ```bash
 /tmp/zjdns -config docs/debug/defense/splitguard.json &
 sleep 2
 
-dig @127.0.0.1 -p 10533 www.google.com A +short
-dig @127.0.0.1 -p 10533 www.youtube.com A +short
+dig @127.0.0.1 -p 10533 www.google.com A +short +tcp
 
-# TCP DNS 帧被拆成小段发送，DPI 首包看不到完整域名 → RST 绕过
+# TCP DNS 帧被拆成小段发送，DPI 首包看不到完整域名 → 绕过 RST
 
 pkill -f "splitguard"
+```
+
+### Poisonguard (recursive 越权检测)
+
+```bash
+/tmp/zjdns -config docs/debug/defense/poisonguard.json &
+sleep 2
+
+dig @127.0.0.1 -p 10533 www.google.com A +short
+
+# 递归每跳验证响应内容，检测 root/TLD 服务器越权返回 A/AAAA
+# 劫持时触发 TCP 回退
+# 预期日志: "poison detected" / "tcp=true"
+
+pkill -f "poisonguard"
+```
+
+### Recursive Defense (recursive 三层全开)
+
+```bash
+/tmp/zjdns -config docs/debug/defense/recursive-defense.json &
+sleep 2
+
+dig @127.0.0.1 -p 10533 www.google.com A +short
+
+# spoofguard: 每跳 UDP 多读尾部选择
+# poisonguard: 内容检测 + 劫持触发 TCP 回退
+# splitguard: TCP 回退时分段抗 RST
+
+pkill -f "recursive-defense"
 ```
 
 ## RouteDNS DTLS Test (ZJDNS ↔ RouteDNS)
@@ -303,7 +318,6 @@ For interactive debugging, create `config.debug.json` (not committed):
       "tcp": "15353"
     },
     "features": {
-      "defense": { "poisonguard": true, "spoofguard": true, "splitguard": true },
       "dnssec_enforce": true,
       "cache": {
         "max_entries": 10000,
@@ -316,7 +330,7 @@ For interactive debugging, create `config.debug.json` (not committed):
     }
   },
   "upstream": [
-    { "address": "builtin_recursive" }
+    { "address": "builtin_recursive", "poisonguard": true, "splitguard": true }
   ]
 }
 ```
@@ -357,14 +371,14 @@ dig @127.0.0.1 -p 15353 zjdns.db.clear.stats CH TXT +short
 ./zjdns -config <(echo '{"server":{"protocol":{"udp":"53535"}},"upstream":[{"address":"https://sm2.doh.pub/dns-query","protocol":"doh-tlcp","server_name":"sm2.doh.pub","skip_tls_verify":true}]}') &
 
 # Self-hosted TLCP server (self-signed SM2 certs)
-./zjdns -config <(echo '{"server":{"protocol":{"tlcp":"8530","http_tlcp":{"port":"4430","endpoint":"/dns-query"}},"certificate":{"domain":"tlcp.local","tlcp":{"self_signed":true}},"features":{"defense": {}","cache":{"max_entries":0}}},"upstream":[{"address":"builtin_recursive"}]}') &
+./zjdns -config <(echo '{"server":{"protocol":{"tlcp":"8530","http_tlcp":{"port":"4430","endpoint":"/dns-query"}},"certificate":{"domain":"tlcp.local","tlcp":{"self_signed":true}},"features":{"cache":{"max_entries":0}}},"upstream":[{"address":"builtin_recursive"}]}') &
 
 # TLCP HTTPS loopback
 ./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454"}},"upstream":[{"address":"https://127.0.0.1:4430/dns-query","protocol":"doh-tlcp","server_name":"ZJDNS TLCP","skip_tls_verify":true}]}') &
 dig @127.0.0.1 -p 55454 www.baidu.com A +short
 
 # DTLCP loopback (use [::1] on Windows)
-./zjdns -config <(echo '{"server":{"protocol":{"dtlcp":"8542"},"certificate":{"domain":"dtlcp.local","tlcp":{"self_signed":true}},"features":{"defense": {}","cache":{"max_entries":0}}},"upstream":[{"address":"builtin_recursive"}]}') &
+./zjdns -config <(echo '{"server":{"protocol":{"dtlcp":"8542"},"certificate":{"domain":"dtlcp.local","tlcp":{"self_signed":true}},"features":{"cache":{"max_entries":0}}},"upstream":[{"address":"builtin_recursive"}]}') &
 ./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454"}},"upstream":[{"address":"127.0.0.1:8542","protocol":"dtlcp","server_name":"dtlcp.local","skip_tls_verify":true}]}') &
 dig @127.0.0.1 -p 55454 www.baidu.com A +short
 ```

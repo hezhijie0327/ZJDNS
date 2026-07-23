@@ -65,7 +65,7 @@ func New() *Client {
 	defaultTransport := &dns.Transport{
 		Dialer: &net.Dialer{
 			Timeout:   config.DefaultDNSQueryTimeout,
-			KeepAlive: 30 * time.Second,
+			KeepAlive: config.DefaultTCPKeepAlivePeriod,
 		},
 		ReadTimeout:  config.DefaultDNSQueryTimeout,
 		WriteTimeout: config.DefaultDNSQueryTimeout,
@@ -232,18 +232,6 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 // SetKTLS configures kernel TLS offload for upstream DoT/DoH connections.
 func (c *Client) SetKTLS(tx, rx bool) {
 	c.tlsClient.SetKTLS(tx, rx)
-}
-
-// SetDefense configures anti-pollution mechanisms (splitguard) from the
-// defense config block.  Spoofguard is configured via resolver.Config and does
-// not flow through here.
-func (c *Client) SetDefense(cfg *config.DefenseConfig) {
-	if cfg == nil {
-		return
-	}
-	if cfg.HasSplitguard() {
-		c.plainClient.SetSegmentation(config.DefaultSplitguardSize, config.DefaultSplitguardDelay)
-	}
 }
 
 // Close shuts down all pooled connections and transports.

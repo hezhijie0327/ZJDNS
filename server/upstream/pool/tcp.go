@@ -16,7 +16,6 @@ import (
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
-	"zjdns/server/defense"
 
 	"codeberg.org/miekg/dns"
 
@@ -55,14 +54,11 @@ type ConnPool struct {
 	maxConns int
 	maxPipe  int
 	closed   bool
-
-	segmentSize  int
-	segmentDelay time.Duration
 }
 
 const dnsIDMask = 0xFFFF // 16-bit DNS message ID space
 
-func newConn(addr string, conn net.Conn, maxPipe, segSize int, segDelay time.Duration) *Conn {
+func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 	if maxPipe <= 0 {
 		maxPipe = config.DefaultMaxPipe
 	}
@@ -81,8 +77,8 @@ func newConn(addr string, conn net.Conn, maxPipe, segSize int, segDelay time.Dur
 		maxPipe:  int32(maxPipe),
 		done:     make(chan struct{}),
 
-		segmentSize:  segSize,
-		segmentDelay: segDelay,
+		segmentSize:  0,
+		segmentDelay: 0,
 	}
 	c.nextID.Store(rand.Uint32()) //nolint:gosec // G404: DNS message ID — not cryptographic
 	go c.readLoop()
@@ -91,6 +87,15 @@ func newConn(addr string, conn net.Conn, maxPipe, segSize int, segDelay time.Dur
 
 // Exchange sends a DNS message over the pipelined connection and returns the
 // response.
+// SetSegmentation configures TCP DNS message segmentation for this connection.
+// segSize=0 disables segmentation (normal Write).
+func (c *Conn) SetSegmentation(segSize int, delay time.Duration) {
+	c.writeMu.Lock()
+	c.segmentSize = segSize
+	c.segmentDelay = delay
+	c.writeMu.Unlock()
+}
+
 func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	select {
 	case c.capacity <- struct{}{}:
@@ -163,7 +168,7 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	}()
 
 	c.writeMu.Lock()
-	_, writeErr := defense.WriteTCPMsgSegmented(c.conn, writeBuf, c.segmentSize, c.segmentDelay)
+	_, writeErr := zdnsutil.WriteTCPMsgSegmented(c.conn, writeBuf, c.segmentSize, c.segmentDelay)
 	c.writeMu.Unlock()
 	if writeErr != nil {
 		c.close()
@@ -283,13 +288,6 @@ func (c *Conn) IsDead() bool {
 	return c.closed.Load()
 }
 
-// SetSegmentation configures TCP DNS message segmentation for all connections
-// created by this pool. segSize=0 disables segmentation (normal Write).
-func (p *ConnPool) SetSegmentation(segSize int, delay time.Duration) {
-	p.segmentSize = segSize
-	p.segmentDelay = delay
-}
-
 // NewPool creates a Pool with the specified connection and in-flight limits.
 func NewConnPool(maxConns, maxPipe int) *ConnPool {
 	if maxConns <= 0 {
@@ -401,7 +399,7 @@ func (p *ConnPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFun
 		return nil, fmt.Errorf("client: dial %s: %w", key, dialErr)
 	}
 
-	c := newConn(key, conn, p.maxPipe, p.segmentSize, p.segmentDelay)
+	c := newConn(key, conn, p.maxPipe)
 
 	// Pool already at capacity — try replacing a dead connection.
 	if len(p.conns[key]) >= p.maxConns {

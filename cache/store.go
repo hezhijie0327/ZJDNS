@@ -151,8 +151,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		log.Warnf("CACHE: decompress wire for entry %d: %v", id, err)
 		return nil, false, false
 	}
-	defer clear(*dbuf)
-	decompressBufPool.Put(dbuf) // runs after msg.Put (LIFO ensures msg.Data is nil'd first)
+	defer func() { clear(*dbuf); decompressBufPool.Put(dbuf) }()
 
 	msg := pool.DefaultMessage.Get()
 	// Safety: msg.Data aliases the decompression buffer.  The LIFO defer

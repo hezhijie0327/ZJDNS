@@ -99,7 +99,10 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 	reader := bufio.NewReaderSize(tlsConn, TLSConnBufferSize)
 	connCtx, connCancel := context.WithCancel(s.ctx)
 
-	type writeTask struct{ data []byte }
+	type writeTask struct {
+		data   []byte
+		pooled bool // true if data aliases a pool.DefaultBuffer allocation
+	}
 	writeCh := make(chan writeTask, config.DefaultDOTWriteChannelSize)
 
 	writerDone := make(chan struct{})
@@ -109,7 +112,9 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		for task := range writeCh {
 			_ = tlsConn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
 			_, err := tlsConn.Write(task.data)
-			pool.DefaultBuffer.Put(task.data)
+			if task.pooled {
+				pool.DefaultBuffer.Put(task.data)
+			}
 			if err != nil {
 				log.Debugf("TLS: write error: %v", err)
 				connCancel()
@@ -241,7 +246,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			copy(writeBuf[zdnsutil.DNSFramePrefixLen:], respBuf)
 
 			select {
-			case writeCh <- writeTask{data: writeBuf}:
+			case writeCh <- writeTask{data: writeBuf, pooled: poolBufOK}:
 			case <-connCtx.Done():
 				if poolBufOK {
 					pool.DefaultBuffer.Put(writeBuf)

@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/binary"
 	"net"
+	"time"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
-	"zjdns/server/defense"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -18,6 +19,11 @@ import (
 // available, falling back to a single-shot exchange.
 func (c *Client) ExecuteTCP(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
 	proxyDialer := c.getProxy(server)
+
+	segSize, segDelay := 0, time.Duration(0)
+	if server.Splitguard {
+		segSize, segDelay = config.DefaultSplitguardSize, config.DefaultSplitguardDelay
+	}
 
 	if c.tcpPool != nil {
 		poolKey := server.Address
@@ -32,6 +38,7 @@ func (c *Client) ExecuteTCP(ctx context.Context, msg *dns.Msg, server *config.Up
 			return d.DialContext(dialCtx, "tcp", addr)
 		})
 		if err == nil {
+			pc.SetSegmentation(segSize, segDelay)
 			response, err := pc.Exchange(ctx, msg)
 			if err == nil {
 				return response, nil
@@ -46,7 +53,7 @@ func (c *Client) ExecuteTCP(ctx context.Context, msg *dns.Msg, server *config.Up
 	// Non-pooled fallback. When a proxy is configured, do manual dial + exchange
 	// because dns.Client.ExchangeContext cannot be routed through a SOCKS5 proxy.
 	if proxyDialer != nil {
-		return c.exchangeViaProxy(ctx, msg, server.Address, proxyDialer)
+		return c.exchangeViaProxy(ctx, msg, server.Address, proxyDialer, segSize, segDelay)
 	}
 
 	response, _, err := c.tcpClient.Exchange(ctx, msg, config.ProtoTCP, server.Address)
@@ -55,7 +62,7 @@ func (c *Client) ExecuteTCP(ctx context.Context, msg *dns.Msg, server *config.Up
 
 // exchangeViaProxy sends a DNS query over TCP through a SOCKS5 proxy using
 // manual dial + dns.Conn exchange.
-func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string, proxyDialer *socks5.Dialer) (*dns.Msg, error) {
+func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string, proxyDialer *socks5.Dialer, segSize int, segDelay time.Duration) (*dns.Msg, error) {
 	conn, err := proxyDialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
@@ -69,7 +76,7 @@ func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string
 	writeBuf := make([]byte, 2+len(msg.Data))
 	binary.BigEndian.PutUint16(writeBuf[:2], uint16(len(msg.Data))) //nolint:gosec // G115: DNS length prefix
 	copy(writeBuf[2:], msg.Data)
-	if _, err := defense.WriteTCPMsgSegmented(conn, writeBuf, c.segmentSize, c.segmentDelay); err != nil {
+	if _, err := zdnsutil.WriteTCPMsgSegmented(conn, writeBuf, segSize, segDelay); err != nil {
 		return nil, err
 	}
 

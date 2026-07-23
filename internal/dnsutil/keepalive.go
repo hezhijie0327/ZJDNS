@@ -12,7 +12,9 @@ type TCPKeepAliveListener struct {
 	net.Listener
 }
 
-// defaultTCPKeepAlivePeriod is the interval between TCP keep-alive probes.
+// defaultTCPKeepAlivePeriod mirrors config.DefaultTCPKeepAlivePeriod.
+// internal/dnsutil cannot import config (layering), so the constant is
+// duplicated here.
 const defaultTCPKeepAlivePeriod = 30 * time.Second
 
 // Accept implements net.Listener.

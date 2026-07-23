@@ -6,10 +6,9 @@
       "tcp": "12633"
     },
     "features": {
-      "defense": { "poisonguard": true },
       "dnssec_enforce": false,
       "cache": { "max_entries": 1000 }
     }
   },
-  "upstream": [{ "address": "builtin_recursive" }]
+  "upstream": [{ "address": "builtin_recursive", "poisonguard": true, "splitguard": true }]
 }

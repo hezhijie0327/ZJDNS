@@ -66,9 +66,11 @@ func generateExampleConfig() string {
 	}
 
 	cfg.Fallback = []config.UpstreamServer{
-		{Address: config.RecursiveIndicator},
 		{Address: "sdns://AQcAAAAAAAAAEjk0LjE0MC4xNC4xNDA6NTQ0MyC16ETWuDo-PhJo62gfvqcN48X6aNvWiBQdvy7AZrLa-iUyLmRuc2NyeXB0LnVuZmlsdGVyZWQubnMxLmFkZ3VhcmQuY29t"},
 		{Address: "149.112.112.9:53", Protocol: config.ProtoUDP, NoCache: true},
+		{Address: config.RecursiveIndicator, Poisonguard: true, Splitguard: true, Spoofguard: true},
+		{Address: "8.8.4.4:53", Protocol: config.ProtoUDP, Spoofguard: true},
+		{Address: "8.8.8.8:53", Protocol: config.ProtoTCP, Splitguard: true},
 	}
 
 	// ── zone / ruleset ──────────────────────────────────────────────────────

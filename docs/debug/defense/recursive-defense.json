@@ -4,6 +4,6 @@
     "protocol": { "udp": "10533" }
   },
   "upstream": [
-    { "address": "builtin_recursive", "poisonguard": true }
+    { "address": "builtin_recursive", "poisonguard": true, "spoofguard": true, "splitguard": true }
   ]
 }

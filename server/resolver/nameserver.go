@@ -22,7 +22,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector *defense.Detector) (*dns.Msg, defense.Verdict, error) {
+func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector defense.Detector) (*dns.Msg, defense.Verdict, error) {
 	if len(nameservers) == 0 {
 		return nil, defense.VerdictClean, errors.New("no nameservers")
 	}
@@ -47,7 +47,13 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		if forceTCP {
 			protocol = config.ProtoTCP
 		}
-		server := &config.UpstreamServer{Address: nsAddr, Protocol: protocol, Proxy: r.resolver.recursiveProxyURL}
+		server := &config.UpstreamServer{
+			Address:    nsAddr,
+			Protocol:   protocol,
+			Proxy:      r.resolver.recursiveProxyURL,
+			Spoofguard: r.spoofguard && protocol == config.ProtoUDP,
+			Splitguard: r.splitguard && protocol == config.ProtoTCP,
+		}
 
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("Query nameserver")
@@ -78,7 +84,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 					return nil
 				}
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
-					if detector != nil && detector.IsEnabled() {
+					if r.poisonguard {
 						v := detector.Validate(currentDomain, normalizedQname, result.Response)
 						if v == defense.VerdictPoisoned {
 							log.Debugf("RECURSION: rejecting poisoned response from %s", nsAddr)
@@ -113,25 +119,32 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		})
 	}
 
-	settleTimer := time.NewTimer(config.DefaultPoisonSettleTimeout)
+	// Wait for first successful response. When spoofguard is active, give
+	// goroutines enough time for multi-read collection (up to 500ms per
+	// nameserver). Without spoofguard, a brief settle window is sufficient
+	// to let concurrent goroutines accumulate poison-rejection verdicts.
+	settleTimeout := config.DefaultPoisonSettleTimeout
+	if r.spoofguard {
+		settleTimeout = config.DefaultSpoofguardCollectWindow + config.DefaultDNSQueryTimeout
+	}
+	settleTimer := time.NewTimer(settleTimeout)
 	defer settleTimer.Stop()
+
+	verdict := defense.VerdictClean
+
 	select {
+	case resp := <-resultChan:
+		if poisonRejected.Load() {
+			verdict = defense.VerdictPoisoned
+		}
+		return resp, verdict, nil
 	case <-settleTimer.C:
 	case <-ctx.Done():
 	}
 
-	verdict := defense.VerdictClean
 	if poisonRejected.Load() {
 		verdict = defense.VerdictPoisoned
 	}
-
-	// First response wins.
-	select {
-	case resp := <-resultChan:
-		return resp, verdict, nil
-	default:
-	}
-
 	log.Debugf("RECURSION: all %d nameservers failed for %s (zone=%s)", len(nameservers), question.Name, currentDomain)
 	return nil, verdict, errors.New("no successful response")
 }
@@ -286,7 +299,7 @@ func domainNamesEqual(a, b string) bool {
 
 // retryWithoutEDNS attempts a query without EDNS options and sends the result
 // to resultChan. Used as a FORMERR fallback per RFC 6891 §6.2.2.
-func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns.Msg, cancel context.CancelFunc, server *config.UpstreamServer, question Question, nsAddr string, detector *defense.Detector, currentDomain, normalizedQname string, poisonRejected *atomic.Bool) {
+func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns.Msg, cancel context.CancelFunc, server *config.UpstreamServer, question Question, nsAddr string, detector defense.Detector, currentDomain, normalizedQname string, poisonRejected *atomic.Bool) {
 	log.Debugf("RECURSION: ns=%s FORMERR, retrying without EDNS for %s %s", nsAddr, question.Name, dns.TypeToString[question.Qtype])
 
 	bareMsg := pool.DefaultMessage.Get()
@@ -314,7 +327,7 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 	}
 
 	// Reject hijacked responses in FORMERR retry path as well.
-	if detector != nil && detector.IsEnabled() {
+	if r.poisonguard {
 		v := detector.Validate(currentDomain, normalizedQname, retryResult.Response)
 		if v == defense.VerdictPoisoned {
 			log.Debugf("RECURSION: rejecting poisoned FORMERR retry from %s", nsAddr)
@@ -347,12 +360,12 @@ func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype 
 		switch a := rrec.(type) {
 		case *dns.A:
 			if qtype == dns.TypeA {
-				*nsAddrs = append(*nsAddrs, net.JoinHostPort(a.A.String(), "53"))
+				*nsAddrs = append(*nsAddrs, net.JoinHostPort(a.A.String(), config.DefaultUDPPort))
 				addrs = append(addrs, a.A.String())
 			}
 		case *dns.AAAA:
 			if qtype == dns.TypeAAAA {
-				*nsAddrs = append(*nsAddrs, net.JoinHostPort(a.AAAA.String(), "53"))
+				*nsAddrs = append(*nsAddrs, net.JoinHostPort(a.AAAA.String(), config.DefaultUDPPort))
 				addrs = append(addrs, a.AAAA.String())
 			}
 		}
@@ -361,7 +374,7 @@ func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype 
 	if qtype == dns.TypeA {
 		for _, rrec := range qr.Additional {
 			if aaaa, ok := rrec.(*dns.AAAA); ok && strings.EqualFold(aaaa.Header().Name, nsName) {
-				*nsAddrs = append(*nsAddrs, net.JoinHostPort(aaaa.AAAA.String(), "53"))
+				*nsAddrs = append(*nsAddrs, net.JoinHostPort(aaaa.AAAA.String(), config.DefaultUDPPort))
 			}
 		}
 	}

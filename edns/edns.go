@@ -85,7 +85,7 @@ func NewHandler(defaultECS config.ECSConfig) (*Handler, error) {
 // lets the client opt out via +nopadding / +noalignment. tcpKeepaliveTimeout,
 // in 100ms units (RFC 7828), is only included in TCP-server responses.
 func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnection bool, cookieStr string, ede *dns.EDE, isRequest, clientWantsPadding bool, tcpKeepaliveTimeout uint16) {
-	if h == nil || msg == nil {
+	if msg == nil {
 		return
 	}
 

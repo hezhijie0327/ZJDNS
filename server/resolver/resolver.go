@@ -80,16 +80,6 @@ type Resolver struct {
 	cache           cache.Store             // DNS response cache for NS A/AAAA lookups
 
 	recursiveProxyURL string // proxy for recursive mode (from builtin_recursive upstream)
-
-	// Tail selection: UDP multi-read + LastResponse (upstream mode).
-	spoofEnabled bool
-}
-
-// DefenseConfig bundles poison/spoof guard dependencies, mirroring the
-// JSON "features.defense" section.
-type DefenseConfig struct {
-	Poisonguard *defense.Detector // nil → poisonguard disabled
-	Spoofguard  bool
 }
 
 // Validator holds the DNSSEC and poison detection components for response
@@ -97,7 +87,7 @@ type DefenseConfig struct {
 // package-level dnssec.IsResponseValid function.
 type Validator struct {
 	Crypto      *dnssec.CryptoValidator // Full cryptographic DNSSEC validation
-	Poisonguard *defense.Detector       // DNS poison detection
+	Poisonguard defense.Detector        // DNS poison detection
 }
 
 // UpstreamClient is the interface for sending DNS queries to upstream servers,
@@ -108,15 +98,15 @@ type UpstreamClient interface {
 
 // Config bundles the dependencies needed to construct a Resolver.
 type Config struct {
-	QueryClient   UpstreamClient
-	Crypto        *dnssec.CryptoValidator
-	Defense       DefenseConfig
-	EDNS          *edns.Handler
-	CIDRMatcher   CIDRMatcher
-	BuildMsg      BuildQueryFunc
-	Cache         cache.Store
-	DNSSECEnforce bool
-	Ctx           context.Context // lifecycle context propagated to Recursive for probes
+	QueryClient    UpstreamClient
+	Crypto         *dnssec.CryptoValidator
+	PoisonDetector defense.Detector // gated per-query by Recursive.poisonguard
+	EDNS           *edns.Handler
+	CIDRMatcher    CIDRMatcher
+	BuildMsg       BuildQueryFunc
+	Cache          cache.Store
+	DNSSECEnforce  bool
+	Ctx            context.Context // lifecycle context propagated to Recursive for probes
 }
 
 // concurrencyTier1/2/3 define server-count thresholds for adaptive concurrency
@@ -175,7 +165,6 @@ func New(cfg *Config) *Resolver {
 		upstream:      &upstreamSet{},
 		fallback:      &upstreamSet{},
 		cache:         cfg.Cache,
-		spoofEnabled:  cfg.Defense.Spoofguard,
 	}
 	r.recursive = &Recursive{
 		resolver: r,
@@ -183,7 +172,7 @@ func New(cfg *Config) *Resolver {
 		ctx:      cfg.Ctx,
 	}
 	r.cname = &CNAME{resolver: r}
-	r.validator = &Validator{Crypto: cfg.Crypto, Poisonguard: cfg.Defense.Poisonguard}
+	r.validator = &Validator{Crypto: cfg.Crypto, Poisonguard: cfg.PoisonDetector}
 	return r
 }
 
@@ -195,8 +184,13 @@ func (r *Resolver) ConfigureServers(servers, fallback []config.UpstreamServer) {
 		if s.Protocol == "" {
 			s.Protocol = config.ProtoUDP
 		}
-		if s.IsRecursive() && s.Proxy != "" {
-			r.recursiveProxyURL = s.Proxy
+		if s.IsRecursive() {
+			if s.Proxy != "" {
+				r.recursiveProxyURL = s.Proxy
+			}
+			r.recursive.spoofguard = r.recursive.spoofguard || s.Spoofguard
+			r.recursive.splitguard = r.recursive.splitguard || s.Splitguard
+			r.recursive.poisonguard = r.recursive.poisonguard || s.Poisonguard
 		}
 		active = append(active, s)
 	}
@@ -208,8 +202,13 @@ func (r *Resolver) ConfigureServers(servers, fallback []config.UpstreamServer) {
 		if s.Protocol == "" {
 			s.Protocol = config.ProtoUDP
 		}
-		if s.IsRecursive() && s.Proxy != "" && r.recursiveProxyURL == "" {
-			r.recursiveProxyURL = s.Proxy
+		if s.IsRecursive() {
+			if s.Proxy != "" && r.recursiveProxyURL == "" {
+				r.recursiveProxyURL = s.Proxy
+			}
+			r.recursive.spoofguard = r.recursive.spoofguard || s.Spoofguard
+			r.recursive.splitguard = r.recursive.splitguard || s.Splitguard
+			r.recursive.poisonguard = r.recursive.poisonguard || s.Poisonguard
 		}
 		fb = append(fb, s)
 	}
