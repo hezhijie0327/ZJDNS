@@ -68,6 +68,7 @@ func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
 		_ = tcpConn.SetKeepAlive(true)
 		_ = tcpConn.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)
+		_ = tcpConn.SetNoDelay(true) // disable Nagle for splitguard small-segment writes
 	}
 	c := &Conn{
 		conn:     conn,

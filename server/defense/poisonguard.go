@@ -81,8 +81,8 @@ func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 		}
 		if v := d.classify(z, n, dns.RRToType(rr)); v != VerdictClean {
 			if v == VerdictPoisoned {
-				log.Debugf("SECURITY: poison detected from %s: %s record for '%s'",
-					zone, dns.TypeToString[dns.RRToType(rr)], queryName)
+				log.Debugf("SECURITY: poison detected from %s: %s record for '%s' → %s",
+					zone, dns.TypeToString[dns.RRToType(rr)], queryName, rr.String())
 			}
 			return v
 		}

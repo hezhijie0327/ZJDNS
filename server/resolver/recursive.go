@@ -97,6 +97,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		}
 		if err != nil {
 			if verdict == defense.VerdictPoisoned && !forceTCP {
+				log.Debugf("RECURSION: poisonguard triggered TCP fallback for %s (zone=.)", question.Name)
 				qr := r.resolve(ctx, question, ecs, depth, true)
 				qr.Poisoned = true
 				return qr
@@ -143,6 +144,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		if verdict == defense.VerdictPoisoned {
 			poisonSeen = true
 			if !forceTCP {
+				log.Debugf("RECURSION: poisonguard triggered TCP fallback for %s (zone=%s)", question.Name, currentDomain)
 				if response != nil {
 					pool.DefaultMessage.Put(response)
 				}

@@ -2,6 +2,7 @@ package dnsutil
 
 import (
 	"io"
+	"math/rand/v2"
 	"net"
 	"time"
 
@@ -35,10 +36,10 @@ func ReadTCPMsg(conn net.Conn) (*dns.Msg, error) {
 // When segSize is 0 or >= len(msg)-2, the entire message (length prefix
 // + payload) is written in a single Write call.
 //
-// When segSize > 0, the first segment consists of the 2-byte length
-// prefix plus segSize bytes of payload. Subsequent segments each carry
-// up to segSize bytes. An optional inter-segment delay can be set
-// via the delay parameter.
+// When segSize > 0, each segment's payload size is randomly chosen from
+// [1, segSize] to avoid fingerprinting (a fixed size like 1B is a DPI
+// signature).  The first segment includes the 2-byte length prefix.
+// An optional inter-segment delay can be set via the delay parameter.
 func WriteTCPMsgSegmented(conn net.Conn, msg []byte, segSize int, delay time.Duration) (int, error) {
 	if segSize <= 0 || segSize >= len(msg)-2 {
 		return conn.Write(msg)
@@ -47,26 +48,27 @@ func WriteTCPMsgSegmented(conn net.Conn, msg []byte, segSize int, delay time.Dur
 	totalWritten := 0
 	firstSeg := true
 	for totalWritten < len(msg) {
+		// Random payload size in [1, segSize] to avoid fingerprinting.
+		n := 1 + rand.IntN(segSize) //nolint:gosec // G404: TCP segmentation jitter — not cryptographic
 		var end int
 		if firstSeg {
-			// First segment: 2-byte length prefix + segSize payload bytes.
-			end = totalWritten + 2 + segSize
+			end = totalWritten + 2 + n // first segment includes 2B length prefix
 			firstSeg = false
 		} else {
-			end = totalWritten + segSize
+			end = totalWritten + n
 		}
 		if end > len(msg) {
 			end = len(msg)
 		}
 
-		n, err := conn.Write(msg[totalWritten:end])
-		totalWritten += n
+		written, err := conn.Write(msg[totalWritten:end])
+		totalWritten += written
 		if err != nil {
 			return totalWritten, err
 		}
 
 		if totalWritten < len(msg) && delay > 0 {
-			time.Sleep(delay)
+			time.Sleep(time.Duration(rand.Int64N(int64(delay)))) //nolint:gosec // G404: delay jitter — not cryptographic
 		}
 	}
 	return totalWritten, nil

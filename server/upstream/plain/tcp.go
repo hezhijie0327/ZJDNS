@@ -22,7 +22,8 @@ func (c *Client) ExecuteTCP(ctx context.Context, msg *dns.Msg, server *config.Up
 
 	segSize, segDelay := 0, time.Duration(0)
 	if server.Splitguard {
-		segSize, segDelay = config.DefaultSplitguardSize, config.DefaultSplitguardDelay
+		segSize, segDelay = config.DefaultSplitguardMaxSegSize, config.DefaultSplitguardMaxDelay
+		log.Debugf("UPSTREAM: splitguard active for %s", server.Address)
 	}
 
 	if c.tcpPool != nil {
@@ -68,6 +69,9 @@ func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string
 		return nil, err
 	}
 	defer func() { _ = conn.Close() }()
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		_ = tcpConn.SetNoDelay(true) // disable Nagle for splitguard small-segment writes
+	}
 
 	// Pack and write with optional TCP segmentation.
 	if err := msg.Pack(); err != nil {

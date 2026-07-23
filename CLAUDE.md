@@ -373,8 +373,8 @@ All layers share a mutable `QueryContext` that carries request/response state, E
 | `Recursive` | `server/resolver` | Built-in recursive walk |
 | `CryptoValidator` | `server/resolver/dnssec` | DNSSEC chain-of-trust (RRSIG, DS, trust anchors); NSEC/NSEC3 in nsec.go |
 | `Detector` | `server/defense` | DNS poison detection; Verdict type + IsPoisonedByTLD + Validate (empty struct, always active) |
-| `WriteTCPMsgSegmented` | `internal/dnsutil` | TCP DNS message segmentation; first segment carries 2B prefix + 1B payload |
-| `Poisonguard` / `Spoofguard` / `Splitguard` | `config.UpstreamServer` | Per-upstream defense flags: poison detection (recursive), UDP multi-read tail selection, TCP segmentation |
+| `WriteTCPMsgSegmented` | `internal/dnsutil` | TCP DNS message segmentation with random [1,N] payload sizes and optional delay jitter; caller enables TCP_NODELAY |
+| `Poisonguard` / `Spoofguard` / `Splitguard` | `config.UpstreamServer` | Per-upstream defense flags: poison detection (recursive), UDP dynamic-silence multi-read + richness heuristic, TCP random segmentation |
 | `Verdict` | `server/defense` | DNS poison verdict: Clean / Poisoned / Uncertain |
 | `Engine` | `ruleset` | SQLite-backed domain + CIDR tag matching; domain uses `lrumap` cache, CIDR uses binary radix trie (`ipTrie` — O(128) regardless of rule count). `Match(qname,ip)`, `MatchIP`, `HasIPTag` |
 | `ipTrie` | `ruleset` | Binary radix trie for O(128) CIDR matching; both IPv4 (via ::ffff:0:0/96) and IPv6 share the same trie |
