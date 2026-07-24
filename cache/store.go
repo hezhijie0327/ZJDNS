@@ -162,7 +162,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	if err != nil {
 		clear(*dbuf)
 		decompressBufPool.Put(dbuf)
-		log.Warnf("CACHE: decompress wire for entry %d: %v", id, err)
+		log.Warnf("CACHE: decompress wire for entry %d (name=%s type=%d): %v", id, qname, qtype, err)
 		return nil, false, false
 	}
 	defer func() { clear(*dbuf); decompressBufPool.Put(dbuf) }()
@@ -175,7 +175,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	msg.Data = wire
 	if err := msg.Unpack(); err != nil {
 		pool.DefaultMessage.Put(msg)
-		log.Warnf("CACHE: unpack wire for entry %d: %v", id, err)
+		log.Warnf("CACHE: unpack wire for entry %d (name=%s type=%d): %v", id, qname, qtype, err)
 		return nil, false, false
 	}
 	defer pool.DefaultMessage.Put(msg)

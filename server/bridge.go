@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -49,7 +50,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 			msg := pool.DefaultMessage.Get()
 			dnsutil.SetReply(msg, req)
 			msg.Rcode = dns.RcodeServerFailure
-			if err := msg.Pack(); err != nil {
+			if err := packSafe(msg); err != nil {
 				log.Debugf("SERVER: TCP SERVFAIL pack error for %s: %v", addr, err)
 				pool.DefaultMessage.Put(msg)
 				return
@@ -79,7 +80,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 
 				// Pack before acquiring writeMu — keeps the lock
 				// critical section I/O-only and brief (P2).
-				if err := response.Pack(); err != nil {
+				if err := packSafe(response); err != nil {
 					log.Debugf("SERVER: TCP pack error for %s: %v", addr, err)
 					pool.DefaultMessage.Put(response)
 					return
@@ -110,7 +111,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 
 	response := s.handler.ServeDNS(req, clientIP, false, detectRequestProtocol(w))
 	if response != nil {
-		if err := response.Pack(); err != nil {
+		if err := packSafe(response); err != nil {
 			log.Debugf("SERVER: UDP pack error for %s: %v", w.RemoteAddr().String(), err)
 			pool.DefaultMessage.Put(response)
 			return
@@ -121,7 +122,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		udpSize := max(req.UDPSize, dns.MinMsgSize)
 		if response.Len() > int(udpSize) {
 			dnsutil.Truncate(response)
-			if err := response.Pack(); err != nil {
+			if err := packSafe(response); err != nil {
 				log.Debugf("SERVER: UDP truncate pack error for %s: %v", w.RemoteAddr().String(), err)
 				pool.DefaultMessage.Put(response)
 				return
@@ -148,4 +149,17 @@ func detectRequestProtocol(w dns.ResponseWriter) string {
 		}
 	}
 	return config.ProtoUDP
+}
+
+// packSafe calls msg.Pack() and recovers from any panic, returning it as an
+// error so the caller can handle it gracefully (e.g. send SERVFAIL) instead
+// of crashing the request goroutine.
+func packSafe(msg *dns.Msg) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+			log.Errorf("SERVER: pack panic recovered: %v", r)
+		}
+	}()
+	return msg.Pack()
 }
