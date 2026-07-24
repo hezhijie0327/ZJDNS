@@ -281,6 +281,7 @@ func addChaosRecord(cfg *ServerConfig) {
 		DefaultProjectName + ".db.clear",
 		DefaultProjectName + ".db.clear.cache",
 		DefaultProjectName + ".db.clear.stats",
+		DefaultProjectName + ".db.clear.querylog",
 		DefaultProjectName + ".db.clear.latency",
 		DefaultProjectName + ".db.clear.zone",
 		DefaultProjectName + ".db.clear.ruleset",

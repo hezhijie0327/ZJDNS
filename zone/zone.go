@@ -440,16 +440,23 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 
 func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicEntry) Result {
 	var contents []string
-	for _, rec := range de.configs {
-		recClass := rec.Class
-		if recClass == 0 {
-			recClass = dns.ClassINET
-		}
-		if rec.Type == qtype && recClass == qclass {
-			if contents == nil {
-				contents = de.fn()
+	if len(de.configs) == 0 {
+		// No config records — invoke the dynamic function for every
+		// query (e.g. ZJDNS.db.clear.* rules that have no static
+		// answer records, only a DynamicContent function).
+		contents = de.fn()
+	} else {
+		for _, rec := range de.configs {
+			recClass := rec.Class
+			if recClass == 0 {
+				recClass = dns.ClassINET
 			}
-			break
+			if rec.Type == qtype && recClass == qclass {
+				if contents == nil {
+					contents = de.fn()
+				}
+				break
+			}
 		}
 	}
 
