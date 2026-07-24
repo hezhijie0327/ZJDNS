@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"sync/atomic"
+	"time"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -257,10 +258,12 @@ func (r *Resolver) FallbackServers() []*config.UpstreamServer {
 // recursive resolution if no upstream is configured.
 //
 // When both upstream and fallback servers are configured, they are queried
-// concurrently. The upstream result is preferred; if upstream fails, the
-// fallback result is immediately available without waiting for a sequential
-// retry. Fallback results are cacheable — the concurrent model ensures they
-// are fresh, not stale second-attempt data.
+// concurrently. Upstream is given DefaultFallbackTimeout to respond; if it
+// succeeds within the deadline, it is always preferred. After the deadline
+// expires (or if the fallback responds first with a successful answer), the
+// fallback result is used. If the fallback also failed, the resolver waits
+// for the upstream. Fallback results are cacheable — the concurrent model
+// ensures they are fresh, not stale second-attempt data.
 func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOption) *QueryResult {
 	servers := r.upstream.list()
 	fallbackServers := r.fallback.list()
@@ -288,8 +291,11 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 		return &qr
 	}
 
-	// Both upstream and fallback configured — query concurrently so the
-	// fallback answer is already ready if upstream fails.
+	// Both upstream and fallback configured — query concurrently. A deadline
+	// timer prevents a slow primary upstream from delaying the fallback:
+	// upstream gets DefaultFallbackTimeout to respond; after that the
+	// concurrent fallback result is preferred if it succeeded. If the
+	// fallback also failed, the resolver waits for the upstream.
 
 	upstreamCh := make(chan QueryResult, 1)
 	fallbackCh := make(chan QueryResult, 1)
@@ -314,10 +320,12 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 		}
 	}()
 
-	// Prefer upstream; if it fails, the concurrent fallback is already
-	// available (or nearly so) instead of starting a fresh sequential query.
+	deadline := time.NewTimer(config.DefaultFallbackTimeout)
+	defer deadline.Stop()
+
 	select {
 	case up := <-upstreamCh:
+		// Upstream responded within the deadline — prefer it.
 		if up.Err == nil {
 			return &up
 		}
@@ -332,6 +340,72 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 		case <-ctx.Done():
 			return &QueryResult{Err: ctx.Err()}
 		}
+
+	case fb := <-fallbackCh:
+		// Fallback responded first.
+		if fb.Err == nil {
+			// Give upstream until the deadline to also respond.
+			select {
+			case up := <-upstreamCh:
+				if up.Err == nil {
+					return &up
+				}
+			case <-deadline.C:
+			case <-ctx.Done():
+				return &QueryResult{Err: ctx.Err()}
+			}
+			fb.Fallback = true
+			return &fb
+		}
+		// Fallback failed — must wait for upstream.
+		select {
+		case up := <-upstreamCh:
+			if up.Err == nil {
+				return &up
+			}
+			return &QueryResult{Err: up.Err}
+		case <-ctx.Done():
+			return &QueryResult{Err: ctx.Err()}
+		}
+
+	case <-deadline.C:
+		// Deadline expired — prefer fallback if it succeeded, otherwise
+		// wait for whichever responds first.
+		select {
+		case fb := <-fallbackCh:
+			if fb.Err == nil {
+				fb.Fallback = true
+				return &fb
+			}
+			// Fallback failed — wait for upstream.
+			select {
+			case up := <-upstreamCh:
+				if up.Err == nil {
+					return &up
+				}
+				return &QueryResult{Err: up.Err}
+			case <-ctx.Done():
+				return &QueryResult{Err: ctx.Err()}
+			}
+		case up := <-upstreamCh:
+			if up.Err == nil {
+				return &up
+			}
+			// Upstream failed — wait for fallback.
+			select {
+			case fb := <-fallbackCh:
+				if fb.Err == nil {
+					fb.Fallback = true
+					return &fb
+				}
+				return &QueryResult{Err: fb.Err}
+			case <-ctx.Done():
+				return &QueryResult{Err: ctx.Err()}
+			}
+		case <-ctx.Done():
+			return &QueryResult{Err: ctx.Err()}
+		}
+
 	case <-ctx.Done():
 		return &QueryResult{Err: ctx.Err()}
 	}

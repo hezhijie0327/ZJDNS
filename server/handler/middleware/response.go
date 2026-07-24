@@ -46,6 +46,11 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
 		}
 	}
 
+	if ecsOpt != nil {
+		log.Debugf("EDNS: response ECS: family=%d addr=%s/%d scope=%d fromClient=%t",
+			ecsOpt.Family, ecsOpt.Address, ecsOpt.SourcePrefix, ecsOpt.ScopePrefix, qctx.ECSOpt != nil)
+	}
+
 	clientWantsPadding := qctx.ClientWantsPadding
 	if !clientWantsPadding {
 		clientWantsPadding = edns.HasPaddingOption(req)
