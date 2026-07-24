@@ -78,10 +78,24 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 				rcode := result.Response.Rcode
 
 				if rcode == dns.RcodeNameError && len(result.Response.Answer) > 0 {
-					log.Debugf("RECURSION: rejecting malformed NXDOMAIN+answer — poison from %s", nsAddr)
-					poisonRejected.Store(true)
-					pool.DefaultMessage.Put(result.Response)
-					return nil
+					// RFC 6604 §1.1: NXDOMAIN may include CNAME/DNAME records
+					// when the original query name is an alias whose target
+					// does not exist. Only reject when non-alias answer records
+					// are present — those indicate data injection.
+					hasNonAlias := false
+					for _, rr := range result.Response.Answer {
+						switch rr.(type) {
+						case *dns.CNAME, *dns.DNAME:
+						default:
+							hasNonAlias = true
+						}
+					}
+					if hasNonAlias {
+						log.Debugf("RECURSION: rejecting malformed NXDOMAIN+answer — poison from %s", nsAddr)
+						poisonRejected.Store(true)
+						pool.DefaultMessage.Put(result.Response)
+						return nil
+					}
 				}
 				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
 					if r.poisonguard {

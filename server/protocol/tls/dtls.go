@@ -137,9 +137,13 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 
 		response := s.handler.ServeDNS(query, clientIP, true, config.ProtoDTLS)
 		pool.DefaultMessage.Put(query)
+		if response == nil {
+			continue
+		}
 
 		if err := response.Pack(); err != nil {
 			log.Debugf("TLS: DTLS pack error: %v", err)
+			pool.DefaultMessage.Put(response)
 			continue
 		}
 
@@ -147,6 +151,7 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 		respLen := len(response.Data)
 		if respLen > 65535 {
 			log.Debugf("TLS: DTLS response too large (%d bytes)", respLen)
+			pool.DefaultMessage.Put(response)
 			continue
 		}
 		resp := make([]byte, 2+respLen)
@@ -155,7 +160,9 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 
 		if _, err := conn.Write(resp); err != nil {
 			log.Debugf("TLS: DTLS write error: %v", err)
+			pool.DefaultMessage.Put(response)
 			return
 		}
+		pool.DefaultMessage.Put(response)
 	}
 }

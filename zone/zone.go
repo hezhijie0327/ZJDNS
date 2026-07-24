@@ -480,12 +480,8 @@ func matchScore(entryTags []matchTag, matchedTags map[string]bool) int {
 	if len(entryTags) == 0 {
 		return 0 // untagged — lowest priority
 	}
-	if matchedTags == nil {
-		// nil means no tag matcher configured — treat as empty (any
-		// negated-only rule passes, positive rules fail). This keeps
-		// zone behaviour consistent whether or not a ruleset exists.
-		matchedTags = map[string]bool{}
-	}
+	// When matchedTags is nil (no ruleset configured), nil-map reads
+	// return the zero value without panic — no allocation needed.
 	score := 0
 	for _, mt := range entryTags {
 		_, exists := matchedTags[mt.tag]

@@ -8,6 +8,7 @@ import (
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns/dnshttp"
 	"gitee.com/Trisia/gotlcp/tlcp"
@@ -76,9 +77,11 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 	clientIP := net.ParseIP(host)
 
 	resp := s.handler.ServeDNS(msg, clientIP, true, config.ProtoHTTPTLCP)
+	pool.DefaultMessage.Put(msg)
 	if resp == nil {
 		return
 	}
+	defer pool.DefaultMessage.Put(resp)
 
 	if err := resp.Pack(); err != nil {
 		log.Debugf("TLCP: DoH pack error: %v", err)
@@ -87,5 +90,7 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", dnshttp.MimeType)
+	// NOTE(M12): Write error is intentionally ignored — partial response cannot be
+	// recovered. Client will detect truncation via connection close.
 	_, _ = w.Write(resp.Data) //nolint:gosec // G705: DNS wire format bytes, not HTML
 }

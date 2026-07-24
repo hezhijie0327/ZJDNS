@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 	"zjdns/cache"
 	"zjdns/config"
@@ -122,10 +123,15 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler.QueryContext, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, entry *cache.Entry) error {
 	done := make(chan struct{})
 	var qr *resolver.QueryResult
+	var refreshFinished atomic.Bool
 
 	go func() {
 		defer close(done)
-		defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
+		defer func() {
+			if refreshFinished.CompareAndSwap(false, true) {
+				m.finishRefresh(qname, qtype, qclass, ecsOpt)
+			}
+		}()
 		// Bound the background refresh to prevent goroutine accumulation under
 		// pathological upstream latency.  refreshCtx already covers shutdown.
 		refreshCtx, cancel := context.WithTimeout(m.refreshCtx, config.DefaultBackgroundTimeout)
@@ -162,12 +168,15 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			EntryID: entry.ID,
 		})
 		m.refreshGroup.Go(func() error {
-			defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
+			defer func() {
+				if refreshFinished.CompareAndSwap(false, true) {
+					m.finishRefresh(qname, qtype, qclass, ecsOpt)
+				}
+			}()
 			select {
 			case <-done:
 				if qr != nil && qr.Err == nil && qr.Cacheable {
-					qd := qctx.Req.Question[0]
-					m.store.Set(qname, qtype, qclass, ecsOpt, dns.RRToType(qd) != 0, // dnssecOK approximation
+					m.store.Set(qname, qtype, qclass, ecsOpt, false, // dnssecOK — background refresh does not need DNSSEC
 						qr.Answer, qr.Authority, qr.Additional, qr.Validated)
 				}
 			case <-m.refreshCtx.Done():

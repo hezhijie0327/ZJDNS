@@ -240,6 +240,8 @@ func (c *Conn) readLoop() {
 		}
 		// Detach resp.Data from the pooled buffer before returning it,
 		// otherwise the message carries a dangling pointer to zeroed memory.
+		// NOTE(L15): resp.Data=nil before buffer Put relies on miekg/dns copy-based
+		// Unpack. A future zero-copy parser would corrupt pooled responses.
 		resp.Data = nil
 		if pooled {
 			zpool.DefaultBuffer.Put(bodyBuf)
@@ -402,15 +404,20 @@ func (p *ConnPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFun
 
 	c := newConn(key, conn, p.maxPipe)
 
-	// Pool already at capacity — try replacing a dead connection.
+	// Pool already at capacity — try evicting a dead connection.
 	if len(p.conns[key]) >= p.maxConns {
-		if !p.replaceDead(key, c) {
+		old := p.replaceDead(key)
+		if old == nil {
 			c.close()
 			log.Debugf("TCPPOOL: pool for %s already at limit (%d), discarding extra connection", key, p.maxConns)
 			p.mu.Unlock()
 			return nil, fmt.Errorf("client: max conns reached for %s", key)
 		}
+		p.conns[key] = append(p.conns[key], c)
+		n := len(p.conns[key])
 		p.mu.Unlock()
+		old.close()
+		log.Debugf("TCPPOOL: dialed new connection to %s (pool=%d/%d)", key, n, p.maxConns)
 		return c, nil
 	}
 
@@ -421,27 +428,22 @@ func (p *ConnPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFun
 	return c, nil
 }
 
-// replaceDead replaces a dead connection in the pool with a new one. Returns
-// true if a replacement was made. Must be called with p.mu held.
-//
-// NOTE: drops p.mu during c.close() to avoid ABBA deadlock with Conn.mu.
-// Between Unlock and re-Lock, Shutdown may concurrently close the new
-// connection.  This is a benign race — the caller gets a dead connection,
-// Exchange detects it via closed.Load(), and the upper layer retries.
-func (p *ConnPool) replaceDead(key string, newConn *Conn) bool {
+// replaceDead removes and returns a dead connection from the pool.
+// Returns nil if no dead connection exists. Must be called with p.mu held.
+// The caller is responsible for closing the returned connection outside p.mu
+// to avoid ABBA deadlock with Conn.mu.
+func (p *ConnPool) replaceDead(key string) *Conn {
 	for i, c := range p.conns[key] {
 		if !c.IsDead() {
 			continue
 		}
-		old := c
-		p.conns[key][i] = newConn
-		p.mu.Unlock()
-		old.close()
-		p.mu.Lock()
-		log.Debugf("TCPPOOL: replaced dead connection in pool for %s", key)
-		return true
+		p.conns[key] = append(p.conns[key][:i], p.conns[key][i+1:]...)
+		if len(p.conns[key]) == 0 {
+			delete(p.conns, key)
+		}
+		return c
 	}
-	return false
+	return nil
 }
 
 // Shutdown closes all pooled connections and clears the pool. It is safe to

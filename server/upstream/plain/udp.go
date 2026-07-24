@@ -3,6 +3,7 @@ package plain
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"net"
 	"sync"
 	"time"
@@ -27,7 +28,7 @@ type spoofguardState struct {
 // spoofguardBufPool reuses 4KB read buffers across spoofguard queries.
 var spoofguardBufPool = sync.Pool{
 	New: func() any {
-		b := make([]byte, 4096)
+		b := make([]byte, 4096) // NOTE(M21): UDP DNS responses >4096B are truncated; rare in practice
 		return &b
 	},
 }
@@ -105,6 +106,11 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 	var sg spoofguardState
 
 	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
 		var n int
 		var err error
 		if pconn != nil {
@@ -120,19 +126,18 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 			if errors.As(err, &netErr) && netErr.Timeout() {
 				now := time.Now()
 				if sg.last != nil {
-					// Don't return a lone single-answer candidate
-					// — likely a GFW fake copying EDNS.  Keep waiting
-					// for a richer response or a second candidate.
-					ambiguous := sg.prev == nil && sg.lastAns == 1
-					if !ambiguous && now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
+					// Return the best candidate after the collect window expires.
+					// After the collect window expires, return the best candidate
+					// even if ambiguous — single-answer EDNS responses are common
+					// for uncensored domains. The window already waited for a second
+					// candidate (potential GFW fake) to compare against.
+					if now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
 						return sg.pickBest(), nil
 					}
 					if now.After(maxDeadline) {
-						if ambiguous {
-							pool.DefaultMessage.Put(sg.last)
-							return nil, errors.New("no EDNS response received")
+						if sg.last != nil {
+							return sg.pickBest(), nil
 						}
-						return sg.pickBest(), nil
 					}
 				} else if now.After(maxDeadline) {
 					return nil, errors.New("no UDP response received")
@@ -217,7 +222,8 @@ func dialProxyUDP(ctx context.Context, proxyDialer *socks5.Dialer, addr string, 
 func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, addr string) *dns.Msg {
 	s.lastRecv = time.Now()
 
-	// EDNS-gate: GFW only injects NOERROR responses.
+	// EDNS-gate: GFW only injects NOERROR responses with no additional
+	// sections (ARCOUNT=0, no EDNS OPT record).
 	if uint16(raw[10])<<8|uint16(raw[11]) == 0 {
 		rcode := int(raw[3] & 0x0F)
 		if rcode == dns.RcodeSuccess && queryUDPSize > 0 {
@@ -290,9 +296,14 @@ func (s *spoofguardState) pickBest() *dns.Msg {
 		pool.DefaultMessage.Put(s.prev)
 		return s.last
 	}
-	log.Debugf("UPSTREAM: spoofguard chose tail (ans=%d, same richness)", s.lastAns)
-	if s.prev != nil {
-		pool.DefaultMessage.Put(s.prev)
+	// Equal answer count: pick randomly to avoid deterministic tail-win
+	// that a GFW attacker can exploit by delaying their fake response.
+	if rand.IntN(2) == 0 { //nolint:gosec // G404: tie-breaking — not cryptographic
+		log.Debugf("UPSTREAM: spoofguard chose prev (ans=%d, same richness, random)", s.prevAns)
+		pool.DefaultMessage.Put(s.last)
+		return s.prev
 	}
+	log.Debugf("UPSTREAM: spoofguard chose tail (ans=%d, same richness, random)", s.lastAns)
+	pool.DefaultMessage.Put(s.prev)
 	return s.last
 }

@@ -9,7 +9,6 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/pending"
 	"zjdns/server/handler"
-	"zjdns/server/resolver"
 
 	"codeberg.org/miekg/dns"
 	"golang.org/x/sync/errgroup"
@@ -33,8 +32,7 @@ type Dependencies struct {
 	PendingRefrs *pending.Group[handler.PendingKey]
 
 	// Optional features
-	DNS64         *dns64.Synthesizer
-	RulesetEngine resolver.CIDRMatcher
+	DNS64 *dns64.Synthesizer
 
 	// Lifecycle
 	Closed           func() bool
@@ -57,7 +55,6 @@ type Dependencies struct {
 //	EDNS          — ECS + cookie parsing
 //	CacheLookup   — cache lookup (short-circuit on hit)
 //	PTR           — reverse PTR from cache (cache-miss only)
-//	Ruleset       — CIDR-based A/AAAA filtering
 //	DNS64         — AAAA synthesis
 //	Resolution    — terminal: upstream / recursive resolution
 func AssembleChain(deps *Dependencies) handler.QueryHandler {
@@ -84,9 +81,6 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 			resolver:    deps.Resolver,
 			pending:     deps.PendingReqs,
 		}).Wrap(h)
-	}
-	if deps.RulesetEngine != nil {
-		h = (&Ruleset{cidrMatcher: deps.RulesetEngine}).Wrap(h)
 	}
 
 	// PTR reverse lookup only fires on cache miss.

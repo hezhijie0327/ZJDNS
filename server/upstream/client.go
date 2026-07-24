@@ -165,6 +165,8 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 			result.Response, result.Error = c.plainClient.ExecuteUDP(queryCtx, msg, server)
 		}
 
+		result.Protocol = server.Protocol
+
 		if c.needsTCPFallback(result, protocol) {
 			if queryCtx.Err() != nil {
 				return result
@@ -191,7 +193,6 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	}
 
 	result.Duration = time.Since(start)
-	result.Protocol = server.Protocol
 
 	if result.Error != nil {
 		log.Debugf("UPSTREAM: query failed for %s via %s (%s) in %v, error=%v", qname, server.Address, result.Protocol, result.Duration, result.Error)

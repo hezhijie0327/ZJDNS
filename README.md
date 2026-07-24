@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.6.3-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.6.4-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -257,7 +257,7 @@ TLCP 密码套件（默认全部启用）：`ECC_SM4_GCM_SM3`、`ECC_SM4_CBC_SM3
 > - `dtlcp.Listen("udp", ...)` → `net.Listen` 不支持 UDP → ZJDNS 使用 `acceptDTLCP()` 适配函数替代
 > - `dtlcp.Dial("udp", ...)` → connected socket 与库内部 `WriteTo` 冲突 → ZJDNS 使用 `dialDTLCP()` 适配函数替代
 >
-> 详见 `CLAUDE.md` §DTLCP。
+> 详见 [ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 **服务端配置**（复用 SM2 双证书，与 TLCP TLS/HTTPS 共用）：
 
@@ -568,7 +568,7 @@ go test -bench=. -short -benchtime=500ms ./...             # 稳定数据采样
 go test -bench=BenchmarkServerProcessQuery -benchtime=3s . # 集成 QPS
 ```
 
-基准性能存档在 [`docs/benchmark-baseline.txt`](docs/benchmark-baseline.txt)（Apple M4 Max，Go 1.26）。
+基准性能存档在 [`docs/benchmark/benchmark-baseline.txt`](docs/benchmark/benchmark-baseline.txt)（Apple M4 Max，Go 1.26）。
 
 ## 调试
 

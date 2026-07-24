@@ -220,7 +220,7 @@ func ProbeNSAddrs(ctx context.Context, cache CacheSetter, addrs []string) {
 	}
 	defer nsPending.Done(key)
 
-	prober := latency.New(defaultNSProbeSteps(), nil)
+	prober := latency.New(defaultNSProbeSteps(), context.Background())
 	defer prober.Close()
 	ctx, cancel := context.WithTimeout(ctx, config.DefaultNSProbeTimeout)
 	defer cancel()

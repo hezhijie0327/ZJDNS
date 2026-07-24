@@ -46,11 +46,33 @@ type pendingCall struct {
 	result *resolver.QueryResult
 }
 
+const maxPendingEntries = 10000 // safety bound against unbounded growth
+
 // NewPendingRequests creates a PendingRequests ready for use.
 func NewPendingRequests() *PendingRequests {
-	return &PendingRequests{
+	p := &PendingRequests{
 		sets: make(map[PendingKey]*pendingCall),
 	}
+	// Periodic cleanup of orphaned entries from panicked/broken leaders.
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			p.mu.Lock()
+			if len(p.sets) > maxPendingEntries {
+				n := 0
+				for k := range p.sets {
+					delete(p.sets, k)
+					n++
+					if n >= len(p.sets)/2 {
+						break
+					}
+				}
+			}
+			p.mu.Unlock()
+		}
+	}()
+	return p
 }
 
 // NewRefreshGroup creates a pending group for cache refresh dedup.
@@ -82,6 +104,8 @@ func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.
 	// Follower: wait for leader to finish.  Safety timeout prevents
 	// indefinite blocking if the leader panics and Done is never called.
 	log.Debugf("CACHE: pending-request dedup — waiting for in-flight query of %s (type=%s)", qname, dns.TypeToString[qtype])
+	// NOTE(L20): 60s follower timeout is not configurable. Ok for most deployments;
+	// high-latency upstreams may need a longer timeout.
 	timer := time.NewTimer(60 * time.Second)
 	select {
 	case <-call.done:

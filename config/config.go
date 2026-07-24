@@ -211,7 +211,7 @@ const DNSCryptV2Prefix = "2.dnscrypt-cert."
 // auto-generated when empty, so this is always true when the dnscrypt cert
 // block is present in config.
 func (d *DNSCryptCertificate) IsEnabled() bool {
-	return d.PublicKey != "" || d.PrivateKey != ""
+	return d.PublicKey != "" && d.PrivateKey != ""
 }
 
 // ProviderName returns the DNSCrypt v2 provider name derived from the DDR

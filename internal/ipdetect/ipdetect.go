@@ -1,3 +1,5 @@
+// detect makes a single HTTP request to determine the public IP. Uses a fresh
+// http.Transport per call — acceptable for startup-only (not hot-path) usage.
 // Package ipdetect detects public IP addresses via external service.
 package ipdetect
 

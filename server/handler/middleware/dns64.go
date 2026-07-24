@@ -53,8 +53,10 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				aqr = shared
 			} else {
 				aQuestion := handler.Question{Name: qname, Qtype: dns.TypeA, Qclass: qclass}
+				defer func() {
+					m.pending.Done(qname, dns.TypeA, qclass, ecsOpt, dnssecOK, aqr)
+				}()
 				aqr = m.resolver.Query(ctx, aQuestion, ecsOpt)
-				m.pending.Done(qname, dns.TypeA, qclass, ecsOpt, dnssecOK, aqr)
 			}
 		} else {
 			aQuestion := handler.Question{Name: qname, Qtype: dns.TypeA, Qclass: qclass}

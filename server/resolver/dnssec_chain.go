@@ -32,9 +32,12 @@ func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, c
 
 	// If the response came from a zone with known DNSKEYs, verify the answer
 	if len(chain.zoneDNSKEYs) > 0 && len(response.Answer) > 0 {
-		validated, _ := crypto.IsResponseValid(response, currentDomain, chain.zoneDNSKEYs)
+		validated, valErr := crypto.IsResponseValid(response, currentDomain, chain.zoneDNSKEYs)
 		if validated {
 			return true
+		}
+		if valErr != nil {
+			log.Debugf("SECURITY: DNSSEC validation error: %v", valErr)
 		}
 	}
 

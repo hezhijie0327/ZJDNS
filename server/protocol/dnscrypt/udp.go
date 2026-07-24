@@ -64,6 +64,7 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 	for s.isStarted() {
 		select {
 		case <-ctx.Done():
+			pool.DefaultBuffer.Put(buf)
 			return
 		default:
 		}
@@ -73,12 +74,14 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 		n, addr, err := udpConn.ReadFromUDP(buf)
 		if err != nil {
 			if !s.isStarted() {
+				pool.DefaultBuffer.Put(buf)
 				return
 			}
 			if zdnsutil.IsTemporaryError(err) {
 				continue
 			}
 			log.Debugf("DNSCRYPT: UDP read error: %v", err)
+			pool.DefaultBuffer.Put(buf)
 			return
 		}
 
@@ -122,7 +125,9 @@ func (s *Server) handleUDPPacket(ctx context.Context, b []byte, addr *net.UDPAdd
 			}
 			log.Debugf("DNSCRYPT: UDP cert response (%d bytes) exceeds request (%d bytes) — returning TC", len(reply), len(b))
 		}
-		_, _ = udpConn.WriteToUDP(reply, addr)
+		if _, err := udpConn.WriteToUDP(reply, addr); err != nil {
+			log.Debugf("DNSCRYPT: UDP write error to %s: %v", addr, err)
+		}
 		log.Debugf("DNSCRYPT: UDP handshake response sent to %s", addr)
 		return
 	}

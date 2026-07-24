@@ -107,13 +107,27 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 				// Shallow-copy entry to re-sort by latest latency
 				// without mutating the cached *Entry.
 				if len(entry.Answer) > 1 {
+					// Deep-copy Answer (for latency re-sort), Authority,
+					// and Additional so callers cannot mutate the cache.
 					e := *entry
 					e.Answer = make([]dns.RR, len(entry.Answer))
 					copy(e.Answer, entry.Answer)
+					e.Authority = make([]dns.RR, len(entry.Authority))
+					copy(e.Authority, entry.Authority)
+					e.Additional = make([]dns.RR, len(entry.Additional))
+					copy(e.Additional, entry.Additional)
 					s.sortAnswerByLatency(&e)
 					return &e, true, false
 				}
-				return entry, true, false
+				// Single-answer: deep-copy slices to prevent caller mutation.
+				e := *entry
+				e.Answer = make([]dns.RR, len(entry.Answer))
+				copy(e.Answer, entry.Answer)
+				e.Authority = make([]dns.RR, len(entry.Authority))
+				copy(e.Authority, entry.Authority)
+				e.Additional = make([]dns.RR, len(entry.Additional))
+				copy(e.Additional, entry.Additional)
+				return &e, true, false
 			}
 			// Expired in L1 — fall through to SQLite.
 		}
@@ -493,7 +507,7 @@ func (s *SQLiteCache) evictOldest(toEvict int64) {
 	// Clean up stale rows from tables with no FK cascade to entries.
 	// All three use the same staleMaxAge cutoff — batched into a single Exec.
 	if _, err := tx.Exec(
-		`DELETE FROM ip_latency WHERE last_probe_time > 0 AND last_probe_time < ?`+
+		`DELETE FROM ip_latency WHERE last_probe_time > 0 AND last_probe_time < ?; `+
 			`DELETE FROM query_log WHERE timestamp < ?`,
 		defaultStaleMaxAge, defaultStaleMaxAge,
 	); err != nil {

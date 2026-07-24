@@ -105,6 +105,8 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.Encrypte
 			copy(resolverSk[:], k.pair.PQ.PqPrivateKey)
 			decrypted, decErr := query.Decrypt(b, resolverSk)
 			if decErr == nil {
+				// NOTE(L10): could use pool.DefaultMessage.Get() here — left as &dns.Msg{}
+				// because pool ownership semantics differ for decrypt-shortlived messages.
 				msg = &dns.Msg{}
 				msg.Data = decrypted
 				if unpackErr := msg.Unpack(); unpackErr != nil {

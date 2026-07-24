@@ -119,6 +119,7 @@ func TestAsyncStatsWriter_NilSafety(t *testing.T) {
 	w.Close()
 }
 
+// NOTE(L8): buffer-size-1 test may race with goroutine consumption. Run with -count=5.
 func TestAsyncStatsWriter_ChannelFullDrops(t *testing.T) {
 	w, db := testWriter(t, 1) // buffer of 1 — second record drops immediately
 

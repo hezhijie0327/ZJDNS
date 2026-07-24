@@ -4,14 +4,14 @@
 package ttl
 
 import (
-	"zjdns/internal/log"
+	"time"
 
 	"codeberg.org/miekg/dns"
 )
 
 // NowUnix returns the current Unix timestamp via the cached time source.
 // Override in tests for deterministic results.
-var NowUnix = log.NowUnix
+var NowUnix = time.Now().Unix
 
 // IsExpired reports whether the TTL has elapsed relative to timestamp.
 func IsExpired(timestamp int64, ttlSeconds int) bool {

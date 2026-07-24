@@ -242,6 +242,11 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 		// indicates either a bogus signature, a zone cut (child zone keys),
 		// or a cross-zone CNAME target (e.g. an A record signed by a CDN
 		// zone's keys that is completely unrelated to the current zone).
+		// For cross-zone records (signer not in any verified DNSKEY zone), skip
+		// the RRset rather than rejecting it. The CNAME resolver will validate
+		// them against their own zone's DNSKEYs.
+		// SECURITY NOTE: in mixed RRsets (verified + cross-zone), cross-zone
+		// records pass unverified when any other RRset validates successfully.
 		// For cross-zone records, skip the RRset — the CNAME resolver will
 		// validate them against their own zone's DNSKEYs.
 		if !groupValidated {

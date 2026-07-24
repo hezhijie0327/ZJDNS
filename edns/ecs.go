@@ -179,6 +179,8 @@ func (h *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, err
 	return ecs, nil
 }
 
+// detectVia resolves ECS options via IP detection. allowFallback is reserved
+// for future IPv4→IPv6 fallback support and is currently always false.
 func (h *Handler) detectVia(forceIPv6, allowFallback bool) *ECSOption {
 	var ip net.IP
 	if forceIPv6 {

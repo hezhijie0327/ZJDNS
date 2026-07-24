@@ -50,6 +50,9 @@ func validateConfig(cfg *ServerConfig) error {
 		return err
 	}
 
+	if err := validateDDR(cfg); err != nil {
+		return err
+	}
 	if err := validateDatabase(cfg); err != nil {
 		return err
 	}
@@ -211,6 +214,23 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 			if !rulesetTags[cleanTag] {
 				return fmt.Errorf("upstream server %d: match tag '%s' not found", i, cleanTag)
 			}
+		}
+	}
+	return nil
+}
+
+// validateDDR checks that DDR (Discovery of Designated Resolvers) IPv4/IPv6
+// addresses are valid IPs when non-empty. Invalid values would silently create
+// malformed zone entries during DDR record generation.
+func validateDDR(cfg *ServerConfig) error {
+	if v4 := cfg.Server.Features.DDR.IPv4; v4 != "" {
+		if ip := net.ParseIP(v4); ip == nil || ip.To4() == nil {
+			return fmt.Errorf("server.features.ddr.ipv4: %q is not a valid IPv4 address", v4)
+		}
+	}
+	if v6 := cfg.Server.Features.DDR.IPv6; v6 != "" {
+		if ip := net.ParseIP(v6); ip == nil || ip.To16() == nil {
+			return fmt.Errorf("server.features.ddr.ipv6: %q is not a valid IPv6 address", v6)
 		}
 	}
 	return nil

@@ -52,6 +52,8 @@ var socks5ReadBufPool = sync.Pool{
 //
 // For callers that need a net.Conn instead (e.g. DNSCrypt), use DialUDP which
 // returns a socks5UDPConn with Read/Write semantics.
+// NOTE(M20): caller must Close() the returned PacketConn to stop the monitor
+// goroutine and release TCP/UDP relay resources. Dropping without Close() leaks.
 func (d *Dialer) ListenPacket(ctx context.Context) (net.PacketConn, error) {
 	// Create a fresh, independent dialer so the relay is not shared.
 	fresh := &Dialer{
@@ -176,6 +178,8 @@ func (d *Dialer) establishUDPRelay(ctx context.Context) error {
 		}()
 		select {
 		case <-done:
+		// NOTE(M19): ctrlConn may be closed twice (monitor goroutine + cleanupLocked).
+		// Go stdlib tolerates multiple Close() calls, but alternative Conn implementations may not.
 		case <-ctrlClosed:
 			_ = ctrlConn.Close() // unblock the read goroutine
 		}

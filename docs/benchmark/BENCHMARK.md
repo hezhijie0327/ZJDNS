@@ -24,7 +24,7 @@ go test -bench=BenchmarkServerProcessQuery -benchtime=3s -count=3 ./cmd/zjdns
 
 # Update baseline
 go test -bench=. -short -benchtime=500ms ./... \
-  | grep '^Benchmark' | sort > docs/benchmark-baseline.txt
+  | grep '^Benchmark' | sort > docs/benchmark/benchmark-baseline.txt
 ```
 
 ## dnsperf QPS Benchmark (Zone Cache)

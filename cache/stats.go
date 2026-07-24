@@ -285,6 +285,8 @@ func (s *SQLiteCache) LatencyLastProbe(ip string) (int64, bool) {
 		return 0, false
 	}
 	var ts int64
+	// Note: ts==0 is ambiguous (no row vs. fresh row with last_probe_time=0).
+	// Both cases trigger a probe, which is harmless for fresh rows.
 	if err := s.db.StmtLastProbe.QueryRow(ip).Scan(&ts); err != nil || ts == 0 {
 		return 0, false
 	}

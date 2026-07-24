@@ -8,6 +8,7 @@ import (
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 
 	"gitee.com/Trisia/gotlcp/tlcp"
 )
@@ -68,7 +69,7 @@ func (s *Server) serveDOT(listener net.Listener) {
 			log.Debugf("TLCP: DoT accept error: %v", err)
 			continue
 		}
-		go s.handleDOTConn(conn)
+		s.serverGroup.Go(func() error { defer zdnsutil.HandlePanic("TLCP DoT handler"); s.handleDOTConn(conn); return nil })
 	}
 }
 
@@ -88,13 +89,16 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 		}
 
 		resp := s.handler.ServeDNS(msg, clientIP, true, config.ProtoTLCP)
+		pool.DefaultMessage.Put(msg)
 		if resp == nil {
 			return
 		}
 
 		if err := zdnsutil.WriteTCPMsg(conn, resp); err != nil {
 			log.Debugf("TLCP: DoT write error to %s: %v", clientIP, err)
+			pool.DefaultMessage.Put(resp)
 			return
 		}
+		pool.DefaultMessage.Put(resp)
 	}
 }

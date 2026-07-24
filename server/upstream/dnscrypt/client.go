@@ -125,9 +125,11 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 	if len(resp.PQControl) > 0 {
 		ticket, lifetime, parseErr := dnscryptcrypto.PQParseControlBlock(resp.PQControl)
 		if parseErr == nil && len(ticket) > 0 {
+			state.mu.Lock()
 			state.pqTicket = ticket
 			state.pqTicketExpiry = time.Now().Add(time.Duration(lifetime) * time.Second)
 			state.pqResumeSecret = dnscryptcrypto.PQResumeSecret(state.sharedKey, state.clientMagic, clientNonce[:dnscryptcrypto.NonceSize/2])
+			state.mu.Unlock()
 			log.Debugf("UPSTREAM: DNSCrypt PQ resumption ticket stored (expires in %ds)", lifetime)
 		}
 	}

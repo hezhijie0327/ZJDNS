@@ -49,12 +49,12 @@ func DNSSize(proto string, r *dns.Msg) int {
 
 // readPrefixed reads a DNS message with a 2-byte length prefix.
 func ReadPrefixed(conn net.Conn) (b []byte, err error) {
-	l := make([]byte, 2)
-	_, err = io.ReadFull(conn, l)
+	var l [2]byte
+	_, err = io.ReadFull(conn, l[:])
 	if err != nil {
 		return nil, fmt.Errorf("reading msg len: %w", err)
 	}
-	packetLen := binary.BigEndian.Uint16(l)
+	packetLen := binary.BigEndian.Uint16(l[:])
 	if packetLen > dns.MaxMsgSize {
 		return nil, ErrQueryTooLarge
 	}
@@ -68,9 +68,9 @@ func ReadPrefixed(conn net.Conn) (b []byte, err error) {
 
 // writePrefixed writes a DNS message with a 2-byte length prefix.
 func WritePrefixed(b []byte, conn net.Conn) (err error) {
-	l := make([]byte, 2)
-	binary.BigEndian.PutUint16(l, uint16(len(b))) //nolint:gosec // G115: DNS message length bounded by MaxMsgSize
-	_, err = (&net.Buffers{l, b}).WriteTo(conn)
+	var l [2]byte
+	binary.BigEndian.PutUint16(l[:], uint16(len(b))) //nolint:gosec // G115: DNS message length bounded by MaxMsgSize
+	_, err = (&net.Buffers{l[:], b}).WriteTo(conn)
 	if err != nil {
 		return fmt.Errorf("writing to connection: %w", err)
 	}

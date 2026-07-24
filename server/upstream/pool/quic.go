@@ -74,6 +74,7 @@ func (p *QUIC) Acquire(ctx context.Context, key string, dialFunc func(context.Co
 	// mutex held during it.
 	p.mu.Lock()
 	conns := p.conns[key]
+	// Snapshot connection list to filter dead ones outside the lock.
 	all := make([]*QUICConn, len(conns))
 	copy(all, conns)
 	p.mu.Unlock()

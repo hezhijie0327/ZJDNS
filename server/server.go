@@ -262,7 +262,6 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 		PendingReqs:      handler.NewPendingRequests(),
 		PendingRefrs:     handler.NewRefreshGroup(),
 		DNS64:            nil,
-		RulesetEngine:    nil,
 		Closed:           func() bool { return false },
 		RefreshGroup:     cacheRefreshGroup,
 		RefreshCtx:       cacheRefreshCtx,
@@ -271,7 +270,6 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 	}
 
 	if rulesetEngine != nil {
-		deps.RulesetEngine = rulesetEngine
 		deps.TagMatcher = func(qname string, ip net.IP) map[string]bool {
 			return rulesetEngine.Match(qname, ip.String())
 		}

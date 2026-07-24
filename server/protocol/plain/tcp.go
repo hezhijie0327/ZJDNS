@@ -20,6 +20,8 @@ func (s *Server) startTCP(g Group, ctx context.Context, handler dns.Handler) err
 		return fmt.Errorf("TCP address resolution: %w", err)
 	}
 	log.Infof("PLAIN: TCP server started on %v", addrs)
+	// Note: if one bind address fails, previously started listeners continue
+	// serving. The caller should cancel the context to stop them.
 	for _, addr := range addrs {
 		listener, err := net.Listen("tcp", addr)
 		if err != nil {

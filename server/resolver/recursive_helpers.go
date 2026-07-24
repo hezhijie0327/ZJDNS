@@ -72,6 +72,8 @@ func (r *Recursive) applyQnameMinimisation(question Question, qname, currentDoma
 	return question, minimiseSteps
 }
 
+// NOTE(M10): len(response.Answer)==0 branch is unreachable — callers filter
+// non-empty answers before invoking this function. Retained as defensive check.
 // checkLameDelegation detects lame delegations where NS records point back
 // to the same zone but the response is not authoritative (AA flag not set).
 // Returns a terminal result for the caller to return, or nil if not lame.
@@ -149,8 +151,6 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 		// delegation; they do not apply to sub-zones discovered
 		// via RRSIG signer mismatch. Clear them so failed zone
 		// cut resolution is treated as insecure, not bogus.
-		chain.childDS = nil
-		chain.dsPresentButUnverified = false
 
 		if cutValidated, cutErr := r.resolveZoneCut(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain); cutErr == nil {
 			*validated = cutValidated
@@ -163,10 +163,14 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 			log.Debugf("SECURITY: zone cut resolution failed for %s: %v (treating as insecure)", question.Name, cutErr)
 			*validated = false
 		}
+		answer := stripCrossZoneRecords(response.Answer, response.Extra, currentDomain)
+		auth := response.Ns
+		extra := response.Extra
+		pool.DefaultMessage.Put(response)
 		return &QueryResult{
 			Cacheable: true,
-			Answer:    stripCrossZoneRecords(response.Answer, response.Extra, currentDomain),
-			Authority: response.Ns, Additional: response.Extra,
+			Answer:    answer,
+			Authority: auth, Additional: extra,
 			Validated: *validated, ECS: ecsResponse, Server: config.RecursiveIndicator,
 		}
 	}
@@ -181,10 +185,14 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 			}
 		}
 	}
+	answer := stripCrossZoneRecords(response.Answer, response.Extra, currentDomain)
+	auth := response.Ns
+	extra := response.Extra
+	pool.DefaultMessage.Put(response)
 	return &QueryResult{
 		Cacheable: true,
-		Answer:    stripCrossZoneRecords(response.Answer, response.Extra, currentDomain),
-		Authority: response.Ns, Additional: response.Extra,
+		Answer:    answer,
+		Authority: auth, Additional: extra,
 		Validated: *validated, ECS: ecsResponse, Server: config.RecursiveIndicator,
 	}
 }

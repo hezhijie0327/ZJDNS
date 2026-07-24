@@ -70,7 +70,7 @@ func XchachaSeal(out, nonce, message, key []byte) (res []byte) {
 	var polyKey [XchachaKeySize]byte
 	copy(polyKey[:], firstBlock[:XchachaKeySize])
 
-	res, out = SliceForAppend(out, poly1305.TagSize+len(message))
+	res, out = sliceForAppend(out, poly1305.TagSize+len(message))
 	firstMessageBlock := message
 	if len(firstMessageBlock) > (XchachaBlockSize - XchachaKeySize) {
 		firstMessageBlock = firstMessageBlock[:(XchachaBlockSize - XchachaKeySize)]
@@ -128,7 +128,7 @@ func XchachaOpen(out, nonce, ciphertext, key []byte) (res []byte, err error) {
 		return nil, errCipherTextAuthenticationFail
 	}
 
-	res, out = SliceForAppend(out, len(msg))
+	res, out = sliceForAppend(out, len(msg))
 	firstMessageBlock := msg
 	if len(firstMessageBlock) > (XchachaBlockSize - XchachaKeySize) {
 		firstMessageBlock = firstMessageBlock[:(XchachaBlockSize - XchachaKeySize)]
@@ -147,7 +147,7 @@ func XchachaOpen(out, nonce, ciphertext, key []byte) (res []byte, err error) {
 
 // sliceForAppend extends the input slice by n bytes and returns the extended
 // slice and the tail slice pointing to the appended region.
-func SliceForAppend(in []byte, n int) (head, tail []byte) {
+func sliceForAppend(in []byte, n int) (head, tail []byte) {
 	if total := len(in) + n; cap(in) >= total {
 		head = in[:total]
 	} else {

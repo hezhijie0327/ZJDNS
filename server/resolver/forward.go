@@ -27,7 +27,10 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	// this query's response.
 	r.lastUpstreamEDE.Store(nil)
 
-	ShuffleSlice(servers)
+	shuffled := make([]*config.UpstreamServer, len(servers))
+	copy(shuffled, servers)
+	ShuffleSlice(shuffled)
+	servers = shuffled
 
 	if log.Default.Level() >= log.Debug {
 		serverAddrs := make([]string, 0, len(servers))

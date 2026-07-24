@@ -83,12 +83,12 @@ func (l *dtlcpListener) Close() error {
 	l.closed.Store(true)
 	// Collect active connections under the lock, then unlock before closing.
 	// dtlcpConnWrapper.Close() acquires parent.mu — holding it here would
-	// cause a self-deadlock.
+	// cause a self-deadlock. Do not nil l.active — connection handlers'
+	// deferred Close() calls delete from the map, and a nil-map delete panics.
 	active := make([]*dtlcp.Conn, 0, len(l.active))
 	for _, conn := range l.active {
 		active = append(active, conn)
 	}
-	l.active = nil
 	l.mu.Unlock()
 
 	for _, conn := range active {
@@ -295,9 +295,13 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 
 		response := s.handler.ServeDNS(query, clientIP, true, config.ProtoDTLCP)
 		pool.DefaultMessage.Put(query)
+		if response == nil {
+			continue
+		}
 
 		if err := response.Pack(); err != nil {
 			log.Debugf("TLCP: DTLCP pack error: %v", err)
+			pool.DefaultMessage.Put(response)
 			continue
 		}
 
@@ -305,6 +309,7 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 		respLen := len(response.Data)
 		if respLen > 65535 {
 			log.Debugf("TLCP: DTLCP response too large (%d bytes)", respLen)
+			pool.DefaultMessage.Put(response)
 			continue
 		}
 		resp := make([]byte, 2+respLen)
@@ -313,7 +318,9 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 
 		if _, err := conn.Write(resp); err != nil {
 			log.Debugf("TLCP: DTLCP write error: %v", err)
+			pool.DefaultMessage.Put(response)
 			return
 		}
+		pool.DefaultMessage.Put(response)
 	}
 }

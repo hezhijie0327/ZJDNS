@@ -232,6 +232,8 @@ func (s *Server) rotationLoop() {
 }
 
 // Shutdown gracefully stops the DNSCrypt server.
+// NOTE(M16): WaitGroup swap between cancel and lock has a race window where
+// handler goroutines may add to the old wg. Benign in single-shutdown scenarios.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	if !s.started {
@@ -415,6 +417,11 @@ func escapeBackslash(b []byte) []byte {
 
 func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 	m := pool.DefaultMessage.Get()
+	defer func() {
+		if m != nil {
+			pool.DefaultMessage.Put(m)
+		}
+	}()
 	m.Data = b
 	err = m.Unpack()
 	if err != nil {
@@ -464,6 +471,8 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 		pool.DefaultMessage.Put(reply)
 		return nil, fmt.Errorf("packing handshake response: %w", err)
 	}
+	// NOTE(M14): res aliases pooled reply.Data. Used synchronously before any
+	// concurrent pool.Get(); refactoring must not introduce async between Put and use.
 	res = reply.Data
 	pool.DefaultMessage.Put(reply)
 	return res, nil
@@ -480,5 +489,6 @@ func (s *Server) serveDNS(ctx context.Context, rw responseWriter, m *dns.Msg, pr
 	if resp == nil {
 		return nil
 	}
+	defer pool.DefaultMessage.Put(resp)
 	return rw.WriteMsg(ctx, resp)
 }

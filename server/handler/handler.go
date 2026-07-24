@@ -146,7 +146,9 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	err := h.chain.ServeDNS(h.ctx, qctx)
 
 	if errors.Is(err, ErrDrop) || qctx.Dropped {
-		pool.DefaultMessage.Put(req)
+		// NOTE: Do NOT Put(req) here — the protocol caller owns the
+		// request message lifecycle and will Put it after ServeDNS returns.
+		// Putting here would cause a double-put race with the caller.
 		return nil
 	}
 

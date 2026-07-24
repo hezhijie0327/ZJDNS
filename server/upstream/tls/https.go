@@ -106,11 +106,13 @@ func (c *Client) getDOHClient(key string) (*http.Client, bool) {
 // shouldRetryHTTP checks whether an HTTP/2 error warrants recreating the client
 // and retrying.
 func shouldRetryHTTP(err error) bool {
-	if err == nil {
-		return false
-	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	// Also retry on transient operation errors (connection reset, etc.).
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Temporary() {
 		return true
 	}
 	return false

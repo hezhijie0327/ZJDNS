@@ -10,6 +10,21 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
+// pqProfileExt is the pre-built, immutable PQ profile extension payload.
+// Content is invariant — allocated once to avoid per-certificate heap alloc.
+var pqProfileExt = func() []byte {
+	ext := make([]byte, PQProfileExtSize)
+	copy(ext[0:3], "PQD")
+	ext[3] = 0x01
+	ext[4] = PQESVersion[0]
+	ext[5] = PQESVersion[1]
+	ext[6] = 0x01
+	ext[7] = 0x01
+	binary.BigEndian.PutUint16(ext[8:10], PQPublicKeySize)
+	binary.BigEndian.PutUint16(ext[10:12], PQCiphertextSize)
+	return ext
+}()
+
 // Pre-computed SHA-256 of the PQ profile extension bytes — deterministic.
 var cachedProfileExtensionHash = sha256.Sum256(PQProfileExtension())
 
@@ -22,17 +37,10 @@ func HKDFSHA256(salt, ikm, info []byte, outLen int) ([]byte, error) {
 	return out, nil
 }
 
+// PQProfileExtension returns a shared, pre-allocated PQ profile extension.
+// The payload is immutable — cached in pqProfileExt to avoid per-certificate alloc.
 func PQProfileExtension() []byte {
-	ext := make([]byte, PQProfileExtSize)
-	copy(ext[0:3], "PQD")
-	ext[3] = 0x01
-	ext[4] = PQESVersion[0]
-	ext[5] = PQESVersion[1]
-	ext[6] = 0x01
-	ext[7] = 0x01
-	binary.BigEndian.PutUint16(ext[8:10], PQPublicKeySize)
-	binary.BigEndian.PutUint16(ext[10:12], PQCiphertextSize)
-	return ext
+	return pqProfileExt
 }
 
 func PQCertContext(binCert []byte) []byte {
