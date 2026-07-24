@@ -443,6 +443,7 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 	reply := pool.DefaultMessage.Get()
 	dnsutil.SetReply(reply, m)
 	pool.DefaultMessage.Put(m)
+	m = nil // prevent defer from double-Put
 	s.mu.RLock()
 	for _, k := range s.keys {
 		remainingTTL := k.remainingTTL()

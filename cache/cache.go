@@ -177,3 +177,16 @@ func hasDNSSECRecords(rrs []dns.RR) bool {
 	}
 	return false
 }
+
+// cloneRRs returns a deep copy of a slice of RRs. Each RR is cloned via
+// its Clone method, which copies the header and record data.
+func cloneRRs(rrs []dns.RR) []dns.RR {
+	if len(rrs) == 0 {
+		return nil
+	}
+	out := make([]dns.RR, len(rrs))
+	for i, rr := range rrs {
+		out[i] = rr.Clone()
+	}
+	return out
+}

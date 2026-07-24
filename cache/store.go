@@ -348,6 +348,12 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	// waste storage space (up to 468 bytes per encrypted response).
 	additional = stripOPT(additional)
 
+	// Clone records to prevent downstream mutations (e.g. restoreDomain
+	// rewriting rr.Header().Name) from corrupting the cache.
+	answer = cloneRRs(answer)
+	authority = cloneRRs(authority)
+	additional = cloneRRs(additional)
+
 	// Pack wire format and compress.
 	msg := pool.DefaultMessage.Get()
 	msg.Answer = answer
