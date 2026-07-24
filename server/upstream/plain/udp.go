@@ -23,6 +23,14 @@ type spoofguardState struct {
 	prevAns, lastAns     int
 	rejected, candidates int
 	lastRecv             time.Time
+
+	// nonEDNS holds a non-EDNS fallback candidate.  It is only populated
+	// when the response carries an authority signal (CNAME chain or AN≥2)
+	// that GFW injection does not replicate — GFW injects bare A/AAAA
+	// records without CNAMEs.  EDNS-bearing candidates always take
+	// precedence; non-EDNS is used only when no EDNS response arrives.
+	nonEDNS    *dns.Msg
+	nonEDNSAns int
 }
 
 // spoofguardBufPool reuses 4KB read buffers across spoofguard queries.
@@ -125,19 +133,21 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {
 				now := time.Now()
-				if sg.last != nil {
+				if sg.last != nil || sg.nonEDNS != nil {
 					// Return the best candidate after the collect window expires.
 					// After the collect window expires, return the best candidate
 					// even if ambiguous — single-answer EDNS responses are common
 					// for uncensored domains. The window already waited for a second
 					// candidate (potential GFW fake) to compare against.
-					if now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
+					if sg.last != nil && now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
+						return sg.pickBest(), nil
+					}
+					// For non-EDNS-only fallback, use the same window.
+					if sg.last == nil && sg.nonEDNS != nil && now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
 						return sg.pickBest(), nil
 					}
 					if now.After(maxDeadline) {
-						if sg.last != nil {
-							return sg.pickBest(), nil
-						}
+						return sg.pickBest(), nil
 					}
 				} else if now.After(maxDeadline) {
 					return nil, errors.New("no UDP response received")
@@ -149,6 +159,9 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 			}
 			if sg.prev != nil {
 				pool.DefaultMessage.Put(sg.prev)
+			}
+			if sg.nonEDNS != nil {
+				pool.DefaultMessage.Put(sg.nonEDNS)
 			}
 			return nil, err
 		}
@@ -222,24 +235,15 @@ func dialProxyUDP(ctx context.Context, proxyDialer *socks5.Dialer, addr string, 
 func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, addr string) *dns.Msg {
 	s.lastRecv = time.Now()
 
-	// EDNS-gate: GFW only injects NOERROR responses with no additional
-	// sections (ARCOUNT=0, no EDNS OPT record).
-	if uint16(raw[10])<<8|uint16(raw[11]) == 0 {
-		rcode := int(raw[3] & 0x0F)
-		if rcode == dns.RcodeSuccess && queryUDPSize > 0 {
-			s.rejected++
-			log.Debugf("UPSTREAM: UDP spoofguard rejected non-EDNS response #%d from %s", s.rejected, addr)
-			return nil
-		}
-		if rcode != dns.RcodeSuccess {
-			log.Debugf("UPSTREAM: UDP spoofguard accepted %s (no-EDNS, real server) from %s", dns.RcodeToString[uint16(rcode)], addr)
-		}
-	}
-
-	// Fast signals from raw header.
+	// Fast signals from raw header — check first, before EDNS gate.
+	// AN≥2, NS>0, or AD=1 are strong authority signals regardless of
+	// whether the server supports EDNS.
 	ancount := uint16(raw[6])<<8 | uint16(raw[7])
 	nscount := uint16(raw[8])<<8 | uint16(raw[9])
 	ad := (raw[3] >> 5) & 1
+	hasEDNS := uint16(raw[10])<<8|uint16(raw[11]) > 0
+	rcode := int(raw[3] & 0x0F)
+
 	if ancount >= 2 || nscount > 0 || ad == 1 {
 		resp := pool.DefaultMessage.Get()
 		resp.Data = make([]byte, n)
@@ -255,11 +259,62 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 		if s.last != nil {
 			pool.DefaultMessage.Put(s.last)
 		}
-		log.Debugf("UPSTREAM: UDP spoofguard fast return from %s (AN=%d, NS=%d, AD=%d, rejected=%d)", addr, ancount, nscount, ad, s.rejected)
+		if s.nonEDNS != nil {
+			pool.DefaultMessage.Put(s.nonEDNS)
+			s.nonEDNS = nil
+		}
+		log.Debugf("UPSTREAM: UDP spoofguard fast return from %s (AN=%d, NS=%d, AD=%d, EDNS=%v, rejected=%d)", addr, ancount, nscount, ad, hasEDNS, s.rejected)
 		return resp
 	}
 
-	// Ambiguous — collect as candidate.
+	// Non-NOERROR with no EDNS — accepted as a real server signal.
+	if rcode != dns.RcodeSuccess && !hasEDNS {
+		log.Debugf("UPSTREAM: UDP spoofguard accepted %s (no-EDNS, real server) from %s", dns.RcodeToString[uint16(rcode)], addr)
+	}
+
+	// EDNS-gate: GFW only injects bare A/AAAA records without EDNS and
+	// without CNAME chains.  Non-EDNS responses are collected as a fallback
+	// only when they contain a CNAME or multiple answers — patterns that
+	// GFW does not replicate.  Single-answer non-EDNS (GFW signature) is
+	// still rejected.
+	if rcode == dns.RcodeSuccess && !hasEDNS && queryUDPSize > 0 {
+		resp := pool.DefaultMessage.Get()
+		resp.Data = make([]byte, n)
+		copy(resp.Data, raw[:n])
+		if err := resp.Unpack(); err != nil {
+			pool.DefaultMessage.Put(resp)
+			return nil
+		}
+		resp.Data = nil
+
+		// Only keep non-EDNS responses with CNAME or AN≥2 — these are
+		// authoritative patterns GFW doesn't inject (GFW injects single
+		// A/AAAA records).
+		hasCNAME := false
+		for _, rr := range resp.Answer {
+			if _, ok := rr.(*dns.CNAME); ok {
+				hasCNAME = true
+				break
+			}
+		}
+		if !hasCNAME && len(resp.Answer) < 2 {
+			s.rejected++
+			pool.DefaultMessage.Put(resp)
+			log.Debugf("UPSTREAM: UDP spoofguard rejected non-EDNS response #%d from %s", s.rejected, addr)
+			return nil
+		}
+
+		s.rejected++
+		if s.nonEDNS != nil {
+			pool.DefaultMessage.Put(s.nonEDNS)
+		}
+		s.nonEDNS = resp
+		s.nonEDNSAns = len(resp.Answer)
+		log.Debugf("UPSTREAM: UDP spoofguard non-EDNS fallback #%d from %s, answer=%d (collecting, waiting for EDNS)", s.rejected, addr, s.nonEDNSAns)
+		return nil
+	}
+
+	// Ambiguous EDNS-bearing — collect as primary candidate.
 	resp := pool.DefaultMessage.Get()
 	resp.Data = make([]byte, n)
 	copy(resp.Data, raw[:n])
@@ -281,8 +336,25 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 	return nil
 }
 
-// pickBest returns the richer of the two EDNS-bearing candidates.
+// pickBest returns the best candidate.  EDNS-bearing candidates are always
+// preferred; the non-EDNS fallback is only used when no EDNS response arrived
+// (e.g. authoritative servers that don't support EDNS).  Non-EDNS fallback
+// candidates are only stored if they carry CNAME or AN≥2 — patterns GFW
+// injection does not replicate.
 func (s *spoofguardState) pickBest() *dns.Msg {
+	// No EDNS candidate — fall back to non-EDNS (already validated as
+	// CNAME-bearing or multi-answer in processPacket).
+	if s.last == nil {
+		if s.nonEDNS != nil {
+			log.Debugf("UPSTREAM: spoofguard fell back to non-EDNS candidate (ans=%d, rejected=%d)", s.nonEDNSAns, s.rejected)
+		}
+		return s.nonEDNS
+	}
+	// EDNS candidates exist — prefer them.  Discard non-EDNS fallback.
+	if s.nonEDNS != nil {
+		pool.DefaultMessage.Put(s.nonEDNS)
+		s.nonEDNS = nil
+	}
 	if s.prev == nil {
 		return s.last
 	}
