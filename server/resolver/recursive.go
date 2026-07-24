@@ -316,7 +316,12 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 			finalECSResponse = qr.ECS
 		}
 
-		allAnswers = append(allAnswers, qr.Answer...)
+		for _, rr := range qr.Answer {
+			h := rr.Header()
+			if strings.EqualFold(h.Name, currentQuestion.Name) || dns.RRToType(rr) == question.Qtype {
+				allAnswers = append(allAnswers, rr)
+			}
+		}
 		finalAuthority = qr.Authority
 		finalAdditional = qr.Additional
 

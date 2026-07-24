@@ -9,9 +9,9 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// NowUnix returns the current Unix timestamp via the cached time source.
-// Override in tests for deterministic results.
-var NowUnix = time.Now().Unix
+// NowUnix returns the current Unix timestamp. Override in tests for
+// deterministic results.
+var NowUnix = func() int64 { return time.Now().Unix() }
 
 // IsExpired reports whether the TTL has elapsed relative to timestamp.
 func IsExpired(timestamp int64, ttlSeconds int) bool {

@@ -122,7 +122,6 @@ const (
 
 const (
 	DefaultAcceptRetryDelay      = 100 * time.Millisecond // DoT/DoQ accept retry sleep
-	DefaultPoisonSettleTimeout   = 5 * time.Millisecond   // max window for GFW detection race after clean response wins
 	DefaultSweepInterval         = 5 * time.Minute        // periodic cleanup sweep
 	DefaultTCPWriteMuStaleCutoff = 2 * time.Minute        // stale TCP write mutex cutoff
 

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
@@ -66,7 +65,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			default:
 			}
 
-			msg := r.resolver.buildMsg(question, ecs, true, false)
+			msg := r.resolver.buildMsg(question, ecs, false, false)
 			msg.UDPSize = pool.RecursiveUDPBufferSize
 			defer pool.DefaultMessage.Put(msg)
 
@@ -77,11 +76,17 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			if result.Error == nil && result.Response != nil {
 				rcode := result.Response.Rcode
 
-				if rcode == dns.RcodeNameError && len(result.Response.Answer) > 0 {
+				if rcode == dns.RcodeNameError && len(result.Response.Answer) > 0 && !result.Response.Authoritative {
 					// RFC 6604 §1.1: NXDOMAIN may include CNAME/DNAME records
 					// when the original query name is an alias whose target
 					// does not exist. Only reject when non-alias answer records
 					// are present — those indicate data injection.
+					//
+					// When the AA (Authoritative Answer) flag is set, the
+					// response originates from the zone's own nameserver —
+					// trust it even if it carries unusual NXDOMAIN+answer
+					// records (e.g. Microsoft outlook.com returns NXDOMAIN
+					// with placeholder A records for delegated sub-zones).
 					hasNonAlias := false
 					for _, rr := range result.Response.Answer {
 						switch rr.(type) {
@@ -133,16 +138,19 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		})
 	}
 
-	// Wait for first successful response. When spoofguard is active, give
-	// goroutines enough time for multi-read collection (up to 500ms per
-	// nameserver). Without spoofguard, a brief settle window is sufficient
-	// to let concurrent goroutines accumulate poison-rejection verdicts.
-	settleTimeout := config.DefaultPoisonSettleTimeout
-	if r.spoofguard {
-		settleTimeout = config.DefaultSpoofguardCollectWindow + config.DefaultDNSQueryTimeout
-	}
-	settleTimer := time.NewTimer(settleTimeout)
-	defer settleTimer.Stop()
+	// Wait for first successful response, or until all goroutines complete.
+	// This ensures every nameserver gets a fair chance — when some
+	// addresses fail instantly (e.g. IPv6 unreachable on an IPv4-only host),
+	// we don't prematurely time out before the remaining addresses have been
+	// tried. With spoofguard, goroutines internally collect for up to 500ms
+	// before sending a result, so the errgroup naturally accounts for that.
+	errgroupDone := make(chan struct{})
+	go func() {
+		defer close(errgroupDone)
+		if err := g.Wait(); err != nil {
+			log.Debugf("RECURSION: NS query errgroup: %v", err)
+		}
+	}()
 
 	verdict := defense.VerdictClean
 
@@ -152,7 +160,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			verdict = defense.VerdictPoisoned
 		}
 		return resp, verdict, nil
-	case <-settleTimer.C:
+	case <-errgroupDone:
 	case <-ctx.Done():
 	}
 
@@ -319,7 +327,7 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 	bareMsg := pool.DefaultMessage.Get()
 	defer pool.DefaultMessage.Put(bareMsg)
 	dnsutil.SetQuestion(bareMsg, dnsutil.Fqdn(question.Name), question.Qtype)
-	bareMsg.RecursionDesired = true
+	bareMsg.RecursionDesired = false
 
 	retryCtx, retryCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
 	defer retryCancel()

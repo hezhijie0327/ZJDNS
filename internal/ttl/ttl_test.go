@@ -3,6 +3,7 @@ package ttl
 import (
 	"net/netip"
 	"testing"
+	"time"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/rdata"
@@ -296,6 +297,76 @@ func TestDeductElapsedCyclical_ZeroTTL(t *testing.T) {
 	result := DeductElapsedCyclical([]dns.RR{rr}, 50)
 	if result[0].Header().TTL != 0 {
 		t.Errorf("TTL = %d, want 0 (zero TTL unchanged)", result[0].Header().TTL)
+	}
+}
+
+// ── Real-time NowUnix (no setNow override) ────────────────────────────────────
+
+func TestNowUnix_Advances(t *testing.T) {
+	// Verify NowUnix() returns a real function, not a captured method value.
+	// Two calls separated by ≥1s must return different values.
+	t1 := NowUnix()
+	time.Sleep(1100 * time.Millisecond)
+	t2 := NowUnix()
+	if t2 <= t1 {
+		t.Errorf("NowUnix must advance over time: t1=%d, t2=%d", t1, t2)
+	}
+}
+
+func TestElapsed_RealTime(t *testing.T) {
+	ts := NowUnix()
+	time.Sleep(1100 * time.Millisecond)
+	elapsed := Elapsed(ts)
+	if elapsed < 1 {
+		t.Errorf("elapsed after ~1s sleep = %d, want ≥1", elapsed)
+	}
+}
+
+func TestRemainingTTL_RealTime(t *testing.T) {
+	ts := NowUnix()
+	r1 := RemainingTTL(ts, 300, 30)
+	if r1 < 299 || r1 > 300 {
+		t.Errorf("remaining immediately = %d, want ~300", r1)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	r2 := RemainingTTL(ts, 300, 30)
+	if r2 >= r1 {
+		t.Errorf("remaining must decrease: r1=%d, r2=%d", r1, r2)
+	}
+}
+
+func TestIsExpired_RealTime(t *testing.T) {
+	ts := NowUnix()
+	if IsExpired(ts, 10) {
+		t.Error("entry with future TTL should not be expired")
+	}
+	// Use a timestamp far enough in the past to guarantee expiry.
+	if !IsExpired(ts-100, 1) {
+		t.Error("entry 100s past a 1s TTL should be expired")
+	}
+}
+
+func TestCanServeExpired_RealTime(t *testing.T) {
+	ts := NowUnix()
+	// Entry expired 10s ago, maxAge=86400 → should serve.
+	if !CanServeExpired(ts-20, 10, 86400) {
+		t.Error("entry 10s past expiry should be within 86400s stale window")
+	}
+	// Entry expired 100000s ago, maxAge=100 → should not serve.
+	if CanServeExpired(ts-100100, 100, 100) {
+		t.Error("entry far beyond stale window should not be servable")
+	}
+}
+
+func TestShouldPrefetch_RealTime(t *testing.T) {
+	ts := NowUnix()
+	// Just stored with TTL=300 → 100% remaining → no prefetch.
+	if ShouldPrefetch(ts, 300, 50) {
+		t.Error("fresh entry should not trigger prefetch")
+	}
+	// Nearly expired: 1s remaining of 300s TTL → triggers 50% threshold.
+	if !ShouldPrefetch(ts-299, 300, 50) {
+		t.Error("nearly-expired entry should trigger prefetch")
 	}
 }
 
