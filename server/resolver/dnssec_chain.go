@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"context"
+	"errors"
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
@@ -240,20 +241,7 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 
 	// If we already have verified DNSKEYs for this zone, verify directly
 	if len(chain.zoneDNSKEYs) > 0 {
-		validated, err := crypto.IsResponseValid(response, currentDomain, chain.zoneDNSKEYs)
-		if err != nil {
-			log.Debugf("SECURITY: answer RRSIG verification failed for %s: %v", question.Name, err)
-			chain.lastEDECode = dns.ExtendedErrorDNSBogus
-			if r.isZoneCut(response, currentDomain) {
-				log.Debugf("SECURITY: zone cut detected for %s — RRSIG signer differs from %s", question.Name, currentDomain)
-				chain.zoneCutDetected = true
-			}
-			return false
-		}
-		if !validated {
-			chain.lastEDECode = dns.ExtendedErrorRRSIGsMissing
-		}
-		return validated
+		return r.validateOrRetry(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain, chain.zoneDNSKEYs)
 	}
 
 	// Query the authoritative nameservers explicitly for DNSKEY + RRSIG
@@ -309,19 +297,69 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 	crypto.CacheZoneKeys(currentDomain, dnskeyRecords)
 	chain.zoneDNSKEYs = dnskeyRecords
 
-	validated, err := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
+	return r.validateOrRetry(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain, dnskeyRecords)
+}
+
+// validateOrRetry validates a response against verified DNSKEYs.  When RRSIGs
+// are missing, it retries the authoritative query once — a different NS may
+// have synchronised signatures.  Missing RRSIGs (not bogus) don't set DNSBogus
+// and don't trigger dnssec_enforce.
+func (r *Recursive) validateOrRetry(ctx context.Context, response *dns.Msg, nameservers []string, question Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain, verifiedKeys []*dns.DNSKEY) bool {
+	crypto := r.resolver.validator.Crypto
+
+	validated, err := crypto.IsResponseValid(response, currentDomain, verifiedKeys)
 	if err != nil {
 		log.Debugf("SECURITY: answer RRSIG verification failed for %s: %v", question.Name, err)
-		chain.lastEDECode = dns.ExtendedErrorDNSBogus
-		if r.isZoneCut(response, currentDomain) {
-			log.Debugf("SECURITY: zone cut detected for %s — RRSIG signer differs from %s", question.Name, currentDomain)
-			chain.zoneCutDetected = true
-			return false
+
+		// RRSIGs missing — retry once; a different NS may have signed records.
+		if errors.Is(err, dnssec.ErrMissingRRSIG) {
+			if r.tryRRSIGRetry(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, verifiedKeys) {
+				return true
+			}
 		}
-	} else if !validated {
+
+		// Missing RRSIGs ≠ bogus signatures.
+		if errors.Is(err, dnssec.ErrMissingRRSIG) {
+			chain.lastEDECode = dns.ExtendedErrorRRSIGsMissing
+		} else {
+			chain.lastEDECode = dns.ExtendedErrorDNSBogus
+			if r.isZoneCut(response, currentDomain) {
+				log.Debugf("SECURITY: zone cut detected for %s — RRSIG signer differs from %s", question.Name, currentDomain)
+				chain.zoneCutDetected = true
+			}
+		}
+		return false
+	}
+	if !validated {
 		chain.lastEDECode = dns.ExtendedErrorRRSIGsMissing
 	}
 	return validated
+}
+
+// tryRRSIGRetry re-queries the authoritative nameservers and validates the
+// response against the given verified keys.  Returns true if the retry
+// succeeds with valid RRSIGs.
+func (r *Recursive) tryRRSIGRetry(ctx context.Context, response *dns.Msg, nameservers []string, question Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, verifiedKeys []*dns.DNSKEY) bool {
+	retryCtx, retryCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
+	defer retryCancel()
+	retryResp, _, retryErr := r.queryNameserversConcurrent(retryCtx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+	if retryErr != nil || retryResp == nil {
+		log.Debugf("SECURITY: RRSIG retry failed for %s", question.Name)
+		return false
+	}
+	defer pool.DefaultMessage.Put(retryResp)
+
+	retryValidated, retryValErr := r.resolver.validator.Crypto.IsResponseValid(retryResp, currentDomain, verifiedKeys)
+	if retryValErr != nil || !retryValidated {
+		log.Debugf("SECURITY: RRSIG retry failed for %s", question.Name)
+		return false
+	}
+
+	log.Debugf("SECURITY: RRSIG retry succeeded for %s", question.Name)
+	response.Answer = retryResp.Answer
+	response.Ns = retryResp.Ns
+	response.Extra = retryResp.Extra
+	return true
 }
 
 func (r *Recursive) recordDNSSECFailure(chain *dnssecChain, validated bool, msg string) error {

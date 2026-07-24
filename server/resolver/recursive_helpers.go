@@ -177,7 +177,11 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 
 	if (len(chain.childDS) > 0 || chain.dsPresentButUnverified) && !*validated {
 		r.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
-		if r.resolver.DNSSECEnforce {
+		// RRSIGs missing from an otherwise-valid DNSSEC chain means the
+		// zone has verified DNSKEYs but the individual records aren't
+		// signed (e.g. Cloudflare challenge subdomains).  Treat as
+		// insecure, not bogus — same behaviour as 1.1.1.1.
+		if r.resolver.DNSSECEnforce && chain.lastEDECode != dns.ExtendedErrorRRSIGsMissing {
 			return &QueryResult{
 				Cacheable: true,
 				Server:    config.RecursiveIndicator, ECS: ecsResponse,

@@ -31,6 +31,7 @@ type rrsetKey struct {
 // Common DNSSEC-related errors.
 var (
 	ErrNoRRSIG        = errors.New("no RRSIG found for rrset")
+	ErrMissingRRSIG   = errors.New("answer RRset has no RRSIG")
 	ErrNoDNSKEY       = errors.New("no DNSKEY found for zone")
 	ErrNoDS           = errors.New("no DS found for delegation")
 	ErrDSMismatch     = errors.New("DS digest does not match DNSKEY")
@@ -208,7 +209,7 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 	groups := groupRRset(answer)
 	allRRSIGs := CollectRRSIGs(answer, extra)
 
-	var anyValidated bool
+	var anyValidated, anyRRSIGSeen bool
 	for _, group := range groups {
 		if len(group) == 0 {
 			continue
@@ -219,6 +220,7 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 			log.Debugf("SECURITY: no RRSIG for %s/%s", header.Name, dns.TypeToString[dns.RRToType(group[0])])
 			continue
 		}
+		anyRRSIGSeen = true
 
 		var groupValidated bool
 		for _, sig := range sigs {
@@ -274,7 +276,10 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 	}
 
 	if !anyValidated && len(answer) > 0 {
-		return false, errors.New("no answer RRset could be cryptographically verified")
+		if !anyRRSIGSeen {
+			return false, ErrMissingRRSIG
+		}
+		return false, fmt.Errorf("%w: no answer RRset could be cryptographically verified", ErrBogusSignature)
 	}
 	return anyValidated, nil
 }
