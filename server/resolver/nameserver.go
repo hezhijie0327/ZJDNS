@@ -38,6 +38,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 	var activeConnections atomic.Int32
 	var poisonRejected atomic.Bool
+	var nxdomainMsg atomic.Pointer[dns.Msg] // NXDOMAIN stored as secondary — never wins race against NOERROR
 	normalizedQname := dnsutil.Canonical(question.Name)
 
 	for _, ns := range nameservers {
@@ -82,11 +83,11 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 					// does not exist. Only reject when non-alias answer records
 					// are present — those indicate data injection.
 					//
-					// When the AA (Authoritative Answer) flag is set, the
-					// response originates from the zone's own nameserver —
-					// trust it even if it carries unusual NXDOMAIN+answer
-					// records (e.g. Microsoft outlook.com returns NXDOMAIN
-					// with placeholder A records for delegated sub-zones).
+					// Note: this check only triggers when the AA flag is absent.
+					// GFW-injected responses can carry fake AA=1, so this gate
+					// alone is insufficient. NXDOMAIN deferral (below) provides
+					// the primary defence: fake NXDOMAIN never wins the race
+					// against a real NOERROR response.
 					hasNonAlias := false
 					for _, rr := range result.Response.Answer {
 						switch rr.(type) {
@@ -102,7 +103,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 						return nil
 					}
 				}
-				if rcode == dns.RcodeSuccess || rcode == dns.RcodeNameError {
+				if rcode == dns.RcodeSuccess {
 					if r.poisonguard {
 						v := detector.Validate(currentDomain, normalizedQname, result.Response)
 						if v == defense.VerdictPoisoned {
@@ -121,6 +122,26 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 						pool.DefaultMessage.Put(result.Response)
 						return queryCtx.Err()
 					}
+				}
+
+				if rcode == dns.RcodeNameError {
+					// NXDOMAIN is deferred — GFW can inject fake NXDOMAIN
+					// faster than real NOERROR responses. By storing it as
+					// a secondary result (never canceling the errgroup), we
+					// give legitimate NOERROR responses time to arrive.
+					// Falls back to NXDOMAIN only if no NOERROR succeeds.
+					if r.poisonguard {
+						v := detector.Validate(currentDomain, normalizedQname, result.Response)
+						if v == defense.VerdictPoisoned {
+							log.Debugf("RECURSION: rejecting poisoned response from %s", nsAddr)
+							poisonRejected.Store(true)
+							pool.DefaultMessage.Put(result.Response)
+							return nil
+						}
+					}
+
+					nxdomainMsg.CompareAndSwap(nil, result.Response)
+					return nil
 				}
 
 				if rcode == dns.RcodeFormatError {
@@ -162,6 +183,14 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		return resp, verdict, nil
 	case <-errgroupDone:
 	case <-ctx.Done():
+	}
+
+	// No NOERROR response — fall back to NXDOMAIN if one was collected.
+	if nx := nxdomainMsg.Load(); nx != nil {
+		if poisonRejected.Load() {
+			verdict = defense.VerdictPoisoned
+		}
+		return nx, verdict, nil
 	}
 
 	if poisonRejected.Load() {
