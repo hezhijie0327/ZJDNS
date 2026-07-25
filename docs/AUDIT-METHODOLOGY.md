@@ -123,14 +123,37 @@ go test -short ./server/...       # 核心包测试
 go test -short ./cache/...        # 缓存测试
 ```
 
-### 3.3 Linter 纪律
+### 3.3 Benchmark 回归检测
+
+审计修复可能引入性能回退（如额外的 nil 检查、锁竞争、内存分配）。每个 Sprint 修复完成后必须执行 benchmark 对比：
+
+```bash
+# 刷新基线
+go test -bench=. -short -benchtime=500ms ./... \
+  | grep '^Benchmark' | sort > docs/benchmark/benchmark-baseline.txt
+
+# 对比旧基线（>15% 变慢即为回归）
+git diff HEAD~1 -- docs/benchmark/benchmark-baseline.txt
+```
+
+回归判定标准：
+
+| 变化 | 判断 |
+|------|------|
+| >15% 变慢 | **回归** — 审计修改影响了热路径，需回滚或优化 |
+| <15% 波动 | 测量噪声 — `time.Now()` 调用 ~28ns 是正常下限，<5ns 为编译器架空 |
+| >15% 变快 | 附带优化 — 记录到提交信息中 |
+
+回退判定前需确认：(1) 修改确实触及了该 benchmark 的代码路径，(2) 差异不是运行环境波动（CPU 频率、缓存状态）。
+
+### 3.4 Linter 纪律
 
 - **零全局排除** — 所有抑制通过 `//nolint:NAME // reason` 内联
 - **声明顺序** (`decorder`)：`type → const → var → func`
 - **格式化** (`gofumpt`)：禁止空行分组，导入按字母排序
 - **每个 nolint 注释** 必须包含 linter 名称和具体原因
 
-### 3.4 提交规范
+### 3.5 提交规范
 
 **每次提交只包含一类修复**，不要将不同维度/不同包的修复混在一个 commit 中。
 
@@ -252,6 +275,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 | `go build` | 编译验证 |
 | `golangci-lint` | 代码质量 |
 | `go test` | 回归验证 |
+| `go test -bench=.` | Benchmark 回归检测（对比基线） |
 
 ---
 
@@ -292,6 +316,12 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 - 死代码检测集成到 CI（`staticcheck -checks U1000`）
 - 竞态检测器作为 CI 必需项（`go test -race`）
 - 定期（季度）重新运行全审计流程
+- 审计修复后执行 benchmark 瓶颈分析：
+  1. 刷新基线 `go test -bench=. -short -benchtime=500ms ./... | grep '^Benchmark' | sort`
+  2. 排序 `ns/op` 找最慢 20 个 benchmark，确认是否被审计修改触及
+  3. 按模块分中位数，对比旧基线识别 >15% 回归
+  4. 对可疑回归做 `-benchmem` 分配分析，确认根因后回退或优化
+- 每次审计修复后刷新 benchmark 基线，对比检测性能回归
 - 每次审计包含专门的 CrossCut Logging 阶段：grep `log\.(Info|Warn)` 确认不在热路径，grep `log\.Error` 确认是可恢复还是不可恢复
 - 每次审计包含 CrossCut Docs 阶段：grep 全部 .md 文件中的类型名/函数名/字段名，与代码交叉验证是否仍存在
 - 每次审计包含 CrossCut Validation 阶段：grep `_, :=\|_ = ` 确认每个 `_` 丢弃的 error 有注释说明原因；grep `func.*_.*,\|\.(.*)` 确认裸类型断言；grep `net\.ParseIP\|net\.ParseCIDR` 确认结果判 nil；grep `func.*(_.*,\|func.*(_.*)` 排除接口/callback 后确认没有 standalone function 用 `_` 隐藏废弃参数

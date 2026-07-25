@@ -307,7 +307,16 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 	// 5. Wildcard suffix batch — single IN query replaces N per-label queries.
 	// ORDER BY length(qname) DESC, qtype DESC ensures the most specific
 	// suffix and the concrete qtype match (over qtype=0 sentinel) win.
-	return e.queryWildcardBatch(qname, qtype, qclass, matchedTags, loadedAt)
+	r := e.queryWildcardBatch(qname, qtype, qclass, matchedTags, loadedAt)
+
+	// Cache negative results for untagged queries to skip repeated SQLite
+	// lookups for domains that have no zone rules.  Cleared automatically
+	// on LoadRules() via exactCache recreation.
+	if !r.Matched && e.exactCache != nil && len(matchedTags) == 0 {
+		r.cachable = true
+		e.exactCache.Set(exactKey{qname, qtype, qclass}, r)
+	}
+	return r
 }
 
 func (e *Evaluator) queryExact(qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {

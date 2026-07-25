@@ -28,11 +28,12 @@ type RuleSetStorage interface {
 // The ruleset_entries PK is (type, tag, value), so WHERE type=? uses a PK
 // prefix seek (not a full scan).
 type Engine struct {
-	db            RuleSetStorage
-	tags          map[string]bool                      // all known tags from config
-	matchCache    *lrumap.Map[string, map[string]bool] // bounded memory cache for domain→tags
-	matchCacheCap int
-	ipTrie        ipTrie // binary radix trie for O(128) CIDR matching
+	db             RuleSetStorage
+	tags           map[string]bool                      // all known tags from config
+	matchCache     *lrumap.Map[string, map[string]bool] // bounded memory cache for domain→tags
+	matchCacheCap  int
+	hasDomainRules bool   // set by LoadRules when domain-type rules exist
+	ipTrie         ipTrie // binary radix trie for O(128) CIDR matching
 }
 
 // New creates an Engine backed by the given database.
@@ -62,6 +63,9 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 	}
 
 	for _, rs := range rulesets {
+		if rs.Type == "domain" {
+			e.hasDomainRules = true
+		}
 		for _, v := range rs.Rule {
 			if err := insertRule(tx, rs.Tag, rs.Type, v); err != nil {
 				return err
@@ -85,7 +89,8 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 		return err
 	}
 
-	// Reset memory cache on reload.
+	// Reset memory cache and domain-rule flag on reload.
+	e.hasDomainRules = false
 	if e.matchCache != nil {
 		e.matchCache = lrumap.New[string, map[string]bool](e.matchCacheCap)
 	}
@@ -158,6 +163,11 @@ func (e *Engine) Match(qname, ip string) map[string]bool {
 			}
 			if e.matchCache != nil && len(domainTags) > 0 {
 				e.matchCache.Set(key, domainTags)
+			} else if e.matchCache != nil && e.hasDomainRules && len(domainTags) == 0 {
+				// Cache negative result — avoids repeated SQLite queries for
+				// TLD+1 domains that have no matching rules.  Only caches when
+				// domain rules exist (skip for IP-only rulesets).
+				e.matchCache.Set(key, nil)
 			}
 		}
 	}
