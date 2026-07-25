@@ -108,6 +108,162 @@ func TestSet_Get_ECSScoping(t *testing.T) {
 	}
 }
 
+// ── ECS prefix fallback ──────────────────────────────────────────────────────
+
+func TestGet_ECSFallback(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	// Store at /16
+	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("10.0.0.1")}}
+	ecs16 := &config.ECSOption{Family: 1, SourcePrefix: 16, ScopePrefix: 0, Address: netParseIP("1.2.0.0").AsSlice()}
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs16, false, []dns.RR{rr}, nil, nil, false)
+
+	// Exact match with /16
+	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs16, false)
+	if !found {
+		t.Error("should hit with exact /16")
+	}
+
+	// Fallback from /24 to /16 within same range
+	ecs24 := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("1.2.3.0").AsSlice()}
+	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs24, false)
+	if !found {
+		t.Error("should fallback from /24 to /16")
+	}
+	if len(entry.Answer) == 1 {
+		if a, ok := entry.Answer[0].(*dns.A); ok && a.A.String() != "10.0.0.1" {
+			t.Errorf("fallback returned wrong IP: %s, want 10.0.0.1", a.A.String())
+		}
+	}
+
+	// Another /24 in same /16 range should also hit
+	ecs24b := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("1.2.255.0").AsSlice()}
+	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs24b, false)
+	if !found {
+		t.Error("should fallback from different /24 to same /16")
+	}
+
+	// Completely different /16 should miss
+	ecsOther := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("10.0.0.0").AsSlice()}
+	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecsOther, false)
+	if found {
+		t.Error("should miss with different IP range")
+	}
+}
+
+func TestGet_ECSFallback_ExactPreferred(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	// Store broad answer at /16
+	rrBroad := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("10.0.0.1")}}
+	ecs16 := &config.ECSOption{Family: 1, SourcePrefix: 16, ScopePrefix: 0, Address: netParseIP("1.2.0.0").AsSlice()}
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs16, false, []dns.RR{rrBroad}, nil, nil, false)
+
+	// Store specific answer at /24
+	rrSpecific := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("10.0.0.2")}}
+	ecs24 := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("1.2.3.0").AsSlice()}
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs24, false, []dns.RR{rrSpecific}, nil, nil, false)
+
+	// Query with /24 should hit exact entry, not the /16 fallback
+	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs24, false)
+	if !found {
+		t.Fatal("should find entry")
+	}
+	if a, ok := entry.Answer[0].(*dns.A); ok && a.A.String() != "10.0.0.2" {
+		t.Errorf("exact /24 should return specific IP, got %s", a.A.String())
+	}
+
+	// Query with different /24 in same /16 should fallback to /16
+	ecs24b := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("1.2.4.0").AsSlice()}
+	entry, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs24b, false)
+	if !found {
+		t.Fatal("should fallback to /16")
+	}
+	if a, ok := entry.Answer[0].(*dns.A); ok && a.A.String() != "10.0.0.1" {
+		t.Errorf("fallback should return broad IP, got %s", a.A.String())
+	}
+}
+
+func TestGet_ECSFallback_IPv6(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	// Store at /48
+	rr := &dns.AAAA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, AAAA: rdata.AAAA{Addr: netParseIP("2001:db8::1")}}
+	ecs48 := &config.ECSOption{Family: 2, SourcePrefix: 48, ScopePrefix: 0, Address: netParseIP("2001:db8:1::").AsSlice()}
+	mc.Set("example.com.", dns.TypeAAAA, dns.ClassINET, ecs48, false, []dns.RR{rr}, nil, nil, false)
+
+	// Exact match with /48
+	_, found, _ := mc.Get("example.com.", dns.TypeAAAA, dns.ClassINET, ecs48, false)
+	if !found {
+		t.Error("should hit with exact /48")
+	}
+
+	// Fallback from /56 to /48
+	ecs56 := &config.ECSOption{Family: 2, SourcePrefix: 56, ScopePrefix: 0, Address: netParseIP("2001:db8:1:ff00::").AsSlice()}
+	_, found, _ = mc.Get("example.com.", dns.TypeAAAA, dns.ClassINET, ecs56, false)
+	if !found {
+		t.Error("should fallback from /56 to /48")
+	}
+
+	// Different /48 range should miss
+	ecsOther := &config.ECSOption{Family: 2, SourcePrefix: 56, ScopePrefix: 0, Address: netParseIP("2001:db8:2::").AsSlice()}
+	_, found, _ = mc.Get("example.com.", dns.TypeAAAA, dns.ClassINET, ecsOther, false)
+	if found {
+		t.Error("should miss with different IPv6 range")
+	}
+}
+
+func TestECSFallbackCandidates(t *testing.T) {
+	// nil ECS
+	c := ecsFallbackCandidates(nil)
+	if len(c) != 1 || c[0].addr != "" || c[0].prefix != 0 {
+		t.Errorf("nil ECS: got %+v, want [(, 0)]", c)
+	}
+
+	// IPv4 /24
+	ecs24 := &config.ECSOption{Family: 1, SourcePrefix: 24, Address: netParseIP("1.2.3.0").AsSlice()}
+	c = ecsFallbackCandidates(ecs24)
+	if len(c) != 4 {
+		t.Fatalf("IPv4 /24: got %d candidates, want 4", len(c))
+	}
+	if c[0].prefix != 24 || c[1].prefix != 16 || c[2].prefix != 8 || c[3].prefix != 0 {
+		t.Errorf("prefix order wrong: %v", c)
+	}
+	if c[0].addr != "1.2.3.0" || c[1].addr != "1.2.0.0" || c[2].addr != "1.0.0.0" || c[3].addr != "0.0.0.0" {
+		t.Errorf("addr order wrong: %v", c)
+	}
+
+	// IPv4 /16
+	ecs16 := &config.ECSOption{Family: 1, SourcePrefix: 16, Address: netParseIP("1.2.0.0").AsSlice()}
+	c = ecsFallbackCandidates(ecs16)
+	if len(c) != 3 {
+		t.Fatalf("IPv4 /16: got %d candidates, want 3", len(c))
+	}
+	if c[0].prefix != 16 || c[1].prefix != 8 || c[2].prefix != 0 {
+		t.Errorf("prefix order wrong: %v", c)
+	}
+
+	// IPv4 /0
+	ecs0 := &config.ECSOption{Family: 1, SourcePrefix: 0, Address: netParseIP("0.0.0.0").AsSlice()}
+	c = ecsFallbackCandidates(ecs0)
+	if len(c) != 1 || c[0].prefix != 0 {
+		t.Errorf("IPv4 /0: got %+v, want [(0.0.0.0, 0)]", c)
+	}
+
+	// IPv6 /56
+	ecs56 := &config.ECSOption{Family: 2, SourcePrefix: 56, Address: netParseIP("2001:db8:1:ff00::").AsSlice()}
+	c = ecsFallbackCandidates(ecs56)
+	if len(c) != 4 {
+		t.Fatalf("IPv6 /56: got %d candidates, want 4", len(c))
+	}
+	if c[0].prefix != 56 || c[1].prefix != 48 || c[2].prefix != 32 || c[3].prefix != 0 {
+		t.Errorf("prefix order wrong: %v", c)
+	}
+}
+
 func TestSet_Get_DNSSECScoping(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()

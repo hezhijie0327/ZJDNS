@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,12 @@ type SQLiteCache struct {
 	asyncWriter *AsyncStatsWriter
 }
 
+// ecsCandidate is a single ECS cache-key candidate used during fallback lookup.
+type ecsCandidate struct {
+	addr   string
+	prefix int
+}
+
 const (
 	defaultStaleMaxAge  = int64(config.DefaultStaleMaxAge)
 	maxLatencyLookupIPs = 64 // cap IN-clause IPs to bound SQL compilation overhead
@@ -45,6 +52,13 @@ var decompressBufPool = sync.Pool{
 var latencyArgsPool = sync.Pool{
 	New: func() any { return new([maxLatencyLookupIPs]any) },
 }
+
+// ECS fallback prefix boundaries — standard CIDR granularities most commonly
+// used by CDN and authoritative DNS operators (RFC 7871).
+var (
+	ipv4FallbackPrefixes = []int{24, 16, 8, 0}
+	ipv6FallbackPrefixes = []int{56, 48, 32, 0}
+)
 
 // New creates a cache backed by the given database. The caller is responsible
 // for opening the database via database.Open() before calling New.
@@ -77,21 +91,28 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	}
 
 	qname = dnsutil.Canonical(qname)
-	ecsAddr, ecsPrefix := ecsParams(ecs)
+	dnssecInt := database.BoolToInt(dnssecOK)
 	var id int64
 	var ts int64
 	var entryTTL int
 	var validated int
 	var msgWire []byte
-	err := s.db.StmtEntry.QueryRow(
-		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, database.BoolToInt(dnssecOK),
-	).Scan(&id, &ts, &entryTTL, &validated, &msgWire)
-	if errors.Is(err, sql.ErrNoRows) {
-		log.Debugf("CACHE: miss for %s (type=%d)", qname, qtype)
-		return nil, false, false
+	found := false
+	for _, c := range ecsFallbackCandidates(ecs) {
+		err := s.db.StmtEntry.QueryRow(
+			qname, int(qtype), int(qclass), c.addr, c.prefix, dnssecInt,
+		).Scan(&id, &ts, &entryTTL, &validated, &msgWire)
+		if err == nil {
+			found = true
+			break
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Warnf("CACHE: get query failed for %s (type=%d): %v", qname, qtype, err)
+			return nil, false, false
+		}
 	}
-	if err != nil {
-		log.Warnf("CACHE: get query failed for %s (type=%d): %v", qname, qtype, err)
+	if !found {
+		log.Debugf("CACHE: miss for %s (type=%d)", qname, qtype)
 		return nil, false, false
 	}
 
@@ -524,6 +545,44 @@ func ecsParams(ecs *config.ECSOption) (addr string, prefix int) {
 		return "", 0
 	}
 	return ecs.Address.String(), int(ecs.SourcePrefix)
+}
+
+// maskIP applies a CIDR mask to ip, returning a new net.IP.
+func maskIP(ip net.IP, prefixBits int) net.IP {
+	bits := 128
+	if ip.To4() != nil {
+		bits = 32
+	}
+	mask := net.CIDRMask(prefixBits, bits)
+	if mask == nil {
+		return ip
+	}
+	return ip.Mask(mask)
+}
+
+// ecsFallbackCandidates generates ECS cache-key candidates from most specific
+// to least specific. nil ECS returns only the zero-value candidate (no fallback).
+// IPv4 falls back through /24, /16, /8, /0; IPv6 through /56, /48, /32, /0.
+func ecsFallbackCandidates(ecs *config.ECSOption) []ecsCandidate {
+	if ecs == nil {
+		return []ecsCandidate{{"", 0}}
+	}
+	var standardPrefixes []int
+	if ecs.Address.To4() != nil {
+		standardPrefixes = ipv4FallbackPrefixes
+	} else {
+		standardPrefixes = ipv6FallbackPrefixes
+	}
+	candidates := []ecsCandidate{
+		{ecs.Address.String(), int(ecs.SourcePrefix)},
+	}
+	for _, p := range standardPrefixes {
+		if p < int(ecs.SourcePrefix) {
+			masked := maskIP(ecs.Address, p)
+			candidates = append(candidates, ecsCandidate{masked.String(), p})
+		}
+	}
+	return candidates
 }
 
 // stripOPT removes EDNS OPT pseudo-records (TypeOPT) from an RR slice in-place.
