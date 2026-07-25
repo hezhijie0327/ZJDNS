@@ -17,18 +17,22 @@ import (
 
 // Client executes DNS queries over TLCP and DTLCP transports.
 type Client struct {
-	getProxy   func(*config.UpstreamServer) *socks5.Dialer
-	timeout    time.Duration
-	httpMu     sync.Mutex
-	httpClient map[string]*http.Client // cached DoH-over-TLCP clients by key
+	getProxy     func(*config.UpstreamServer) *socks5.Dialer
+	timeout      time.Duration
+	tlcpSessions tlcp.SessionCache
+	dtlcpSession dtlcp.SessionCache
+	httpMu       sync.Mutex
+	httpClient   map[string]*http.Client // cached DoH-over-TLCP clients by key
 }
 
 // New creates a Client for TLCP and DTLCP DNS queries.
 func New(getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Duration) *Client {
 	return &Client{
-		getProxy:   getProxy,
-		timeout:    timeout,
-		httpClient: make(map[string]*http.Client),
+		getProxy:     getProxy,
+		timeout:      timeout,
+		tlcpSessions: tlcp.NewLRUSessionCache(config.DefaultTLCPSessionCacheSize),
+		dtlcpSession: dtlcp.NewLRUSessionCache(config.DefaultDTLCPSessionCacheSize),
+		httpClient:   make(map[string]*http.Client),
 	}
 }
 
@@ -40,6 +44,7 @@ func (c *Client) tlcpClientConfig(server *config.UpstreamServer) *tlcp.Config {
 		InsecureSkipVerify: server.SkipTLSVerify,
 		ServerName:         server.ServerName,
 		RootCAs:            smx509.NewCertPool(), // prevent fallback to system pool (cannot parse SM2 certs)
+		SessionCache:       c.tlcpSessions,
 		VerifyConnection: func(cs tlcp.ConnectionState) error {
 			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
 				Role:       "UPSTREAM",
@@ -61,6 +66,7 @@ func (c *Client) dtlcpClientConfig(server *config.UpstreamServer) *dtlcp.Config 
 	addr := server.Address // capture for the VerifyConnection closure
 	return &dtlcp.Config{
 		InsecureSkipVerify: server.SkipTLSVerify,
+		SessionCache:       c.dtlcpSession,
 		VerifyConnection: func(cs dtlcp.ConnectionState) error {
 			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
 				Role:       "UPSTREAM",

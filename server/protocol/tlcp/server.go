@@ -78,6 +78,7 @@ func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, 
 	tlcpConfig := &tlcp.Config{
 		Certificates:     []tlcp.Certificate{signCert, encCert},
 		CurvePreferences: []tlcp.CurveID{tlcp.CurveSM2},
+		SessionCache:     tlcp.NewLRUSessionCache(config.DefaultTLCPSessionCacheSize),
 		VerifyConnection: func(cs tlcp.ConnectionState) error {
 			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
 				Role:       "TLCP",
