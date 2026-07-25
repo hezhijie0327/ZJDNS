@@ -178,6 +178,9 @@ func (p *Prober) probeAndReorder(ctx context.Context, qname string, answer []dns
 // in ip_latency. Does NOT write cache entries — the caller is responsible for
 // that. Used by the resolver for NS/Root addresses.
 func ProbeNSAddrs(ctx context.Context, cache CacheSetter, addrs []string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if cache == nil || len(addrs) <= 1 {
 		return
 	}

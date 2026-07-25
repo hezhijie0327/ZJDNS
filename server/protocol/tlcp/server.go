@@ -165,6 +165,9 @@ func displayCertificateInfo(cert *tlcp.Certificate) {
 // Start launches all TLCP protocol listeners and blocks until all servers have
 // exited or an error occurs.
 func (s *Server) Start(dnsHandler edns.DNSHandler) error {
+	if dnsHandler == nil {
+		return errors.New("tlcp: nil DNS handler")
+	}
 	s.handler = dnsHandler
 
 	if s.dotPort != "" {

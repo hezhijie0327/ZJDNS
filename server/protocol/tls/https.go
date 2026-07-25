@@ -33,10 +33,6 @@ func (s *Server) startDOHServer(port string) error {
 		return fmt.Errorf("DoH address resolution: %w", err)
 	}
 
-	// dnshttp.DefaultMsgAcceptFunc rejects non-zero DNS IDs, but server-side
-	// DoH queries from real clients always have non-zero IDs.
-	dnshttp.MsgAcceptFunc = zdnsutil.ServerDOHMsgAccept
-
 	log.Infof("TLS: DoH server started on %v", addrs)
 	for _, addr := range addrs {
 		listener, err := net.Listen("tcp", addr)

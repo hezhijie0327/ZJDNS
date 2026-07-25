@@ -20,8 +20,6 @@ func (s *Server) startDOHServer() error {
 		return fmt.Errorf("resolve bind addrs: %w", err)
 	}
 
-	dnshttp.MsgAcceptFunc = zdnsutil.ServerDOHMsgAccept
-
 	log.Infof("TLCP: DoH server started on %v (TLCP HTTP/1.1)", addrs)
 	for _, addr := range addrs {
 		rawListener, err := net.Listen("tcp", addr)
@@ -57,6 +55,11 @@ func (s *Server) startDOHServer() error {
 }
 
 func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
+	if s == nil || s.handler == nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
 	endpoint := s.dohEndpoint
 	if endpoint == "" {
 		endpoint = config.DefaultQueryPath

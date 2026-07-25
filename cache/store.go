@@ -33,11 +33,13 @@ type dnsL1Key struct {
 // SQLiteCache is a DNS response cache backed by a SQLite database managed by
 // the database package. It implements the Store interface.
 type SQLiteCache struct {
-	db          *database.DB
-	evictCount  atomic.Int64
-	asyncWriter *AsyncStatsWriter
-	dnsL1       *lrumap.Map[dnsL1Key, *Entry] // bounded memory L1 for hot entries
-	latencyL1   *lrumap.Map[string, int]      // bounded memory cache for IP latency
+	db           *database.DB
+	evictCount   atomic.Int64
+	asyncWriter  *AsyncStatsWriter
+	dnsL1        *lrumap.Map[dnsL1Key, *Entry] // bounded memory L1 for hot entries
+	dnsL1Cap     int                           // capacity preserved for L1 reset on FlushDB
+	latencyL1    *lrumap.Map[string, int]      // bounded memory cache for IP latency
+	latencyL1Cap int                           // capacity preserved for L1 reset on FlushDB
 }
 
 const (
@@ -63,8 +65,10 @@ var latencyArgsPool = sync.Pool{
 // for opening the database via database.Open() before calling New.
 func New(db *database.DB, dnsL1Entries, ipLatencyEntries int) *SQLiteCache {
 	c := &SQLiteCache{
-		db:          db,
-		asyncWriter: NewAsyncStatsWriter(db, config.DefaultAsyncStatsBufferSize),
+		db:           db,
+		asyncWriter:  NewAsyncStatsWriter(db, config.DefaultAsyncStatsBufferSize),
+		dnsL1Cap:     dnsL1Entries,
+		latencyL1Cap: ipLatencyEntries,
 	}
 	if dnsL1Entries > 0 {
 		c.dnsL1 = lrumap.New[dnsL1Key, *Entry](dnsL1Entries)

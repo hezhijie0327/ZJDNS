@@ -4,6 +4,7 @@ package upstream
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -117,6 +118,12 @@ func New() *Client {
 
 // ExecuteQuery sends a DNS query to an upstream server and returns the result.
 func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) *Result {
+	if msg == nil {
+		return &Result{Error: errors.New("nil query message")}
+	}
+	if server == nil {
+		return &Result{Error: errors.New("nil server config")}
+	}
 	start := time.Now()
 	result := &Result{Server: server.Address, Protocol: server.Protocol}
 

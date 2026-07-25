@@ -3,6 +3,7 @@ package plain
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"net"
 	"time"
 	"zjdns/config"
@@ -18,6 +19,12 @@ import (
 // routing through a SOCKS5 proxy. Uses the pipelined connection pool when
 // available, falling back to a single-shot exchange.
 func (c *Client) ExecuteTCP(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+	if msg == nil {
+		return nil, errors.New("plain: nil query message")
+	}
+	if server == nil {
+		return nil, errors.New("plain: nil server config")
+	}
 	proxyDialer := c.getProxy(server)
 
 	segSize, segDelay := 0, time.Duration(0)

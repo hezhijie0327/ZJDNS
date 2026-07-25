@@ -212,19 +212,19 @@ func (m *Logger) Log(lvl Level, format string, args ...any) {
 		return
 	}
 
-	message := sanitizeLogMessage(fmt.Sprintf(format, args...))
-
 	// Check component filter: if set, only emit messages whose prefix
 	// matches. Messages without a recognizable "PREFIX: " always pass.
 	m.mu.RLock()
 	filter := m.componentFilter
 	m.mu.RUnlock()
 	if filter != nil {
-		prefix := extractPrefix(message)
+		prefix := extractPrefix(format)
 		if prefix != "" && !filter[prefix] {
 			return
 		}
 	}
+
+	message := sanitizeLogMessage(fmt.Sprintf(format, args...))
 
 	levelStr := levelNames[lvl]
 

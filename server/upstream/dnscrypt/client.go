@@ -4,6 +4,7 @@ package dnscrypt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -34,6 +35,12 @@ func New(getProxy func(*config.UpstreamServer) *socks5.Dialer) *Client {
 
 // Execute sends an encrypted DNS query to a DNSCrypt resolver.
 func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, useTCP bool) (*dns.Msg, error) {
+	if msg == nil {
+		return nil, errors.New("dnscrypt: nil query message")
+	}
+	if server == nil {
+		return nil, errors.New("dnscrypt: nil server config")
+	}
 	stampAddr, providerName, publicKey, err := c.resolveStamp(server)
 	if err != nil {
 		return nil, fmt.Errorf("resolving dnscrypt stamp: %w", err)

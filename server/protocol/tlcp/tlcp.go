@@ -52,6 +52,7 @@ func (s *Server) startDOTServer() error {
 		s.dotListeners = append(s.dotListeners, tlcpListener)
 
 		s.serverGroup.Go(func() error {
+			defer zdnsutil.HandlePanic("TLCP DoT server")
 			s.serveDOT(tlcpListener)
 			return nil
 		})

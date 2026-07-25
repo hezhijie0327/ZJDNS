@@ -49,6 +49,12 @@ var spoofguardBufPool = sync.Pool{
 // socket multi-read to capture both GFW-injected fakes and the real response,
 // returning the chronologically last (tail) response.
 func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+	if msg == nil {
+		return nil, errors.New("plain: nil query message")
+	}
+	if server == nil {
+		return nil, errors.New("plain: nil server config")
+	}
 	proxyDialer := c.getProxy(server)
 
 	// GFW only hijacks A/AAAA.  Skip spoofguard for other QTYPEs

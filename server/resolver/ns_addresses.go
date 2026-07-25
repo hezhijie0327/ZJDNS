@@ -6,6 +6,7 @@ import (
 	"strings"
 	"zjdns/cache"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/server/resolver/probe"
 
 	"codeberg.org/miekg/dns"
@@ -90,7 +91,7 @@ func (r *Recursive) getRootServers() []string {
 		if len(cached) == 0 {
 			// Cold start for this name: write + probe + read back.
 			cacheRootHint(r.cache, name, addrs)
-			go probe.ProbeNSAddrs(r.ctx, r.cache, addrs)
+			go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
 			cached = r.lookupNSAddrsFromCache(name, nil)
 		}
 		all = append(all, cached...)
@@ -131,7 +132,7 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) [
 		if refreshEntry != nil {
 			refreshEntry()
 		}
-		go probe.ProbeNSAddrs(r.ctx, r.cache, addrs)
+		go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
 	}
 
 	return addrs

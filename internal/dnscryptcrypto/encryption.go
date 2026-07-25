@@ -77,6 +77,26 @@ func PadWithin(packet []byte, minLen, maxLen int) ([]byte, error) {
 	return padded, nil
 }
 
+// encryptPadding computes the target wire query size and pads the plaintext
+// DNS packet so the encrypted query reaches that size.  Aligned with
+// dnscrypt-proxy's dynamic sizing:
+//
+//	minQuestionSize = max(MinQueryLen, QueryOverhead + len(packet))
+//	targetWire      = min(4096, roundup64(max(minQuestionSize, QueryOverhead) + 1))
+//
+// The +1 accounts for the 0x80 padding delimiter (ISO/IEC 7816-4).  MinQueryLen
+// is the minimum wire query size — matches dnscrypt-proxy's
+// questionSizeEstimator.MinQuestionSize().
+//
+// Ref: dnscrypt-proxy crypto.go Encrypt() — paddedLength formula
+func encryptPadding(packet []byte, minWireSize int) []byte {
+	minWire := max(
+		// +1 for 0x80 delimiter
+		minWireSize, QueryOverhead+len(packet)+1)
+	minWire = min((minWire+63)&^63, MaxDNSUDPPacketSize)
+	return Pad(packet, minWire-QueryOverhead)
+}
+
 // unpad removes ISO/IEC 7816-4 padding from the packet.
 func UnPad(packet []byte) (unpadded []byte, err error) {
 	for i := len(packet); ; {

@@ -22,6 +22,9 @@ type ipTrieNode struct {
 
 // insert adds a CIDR rule to the trie.
 func (t *ipTrie) insert(n *net.IPNet, tag string) {
+	if n == nil {
+		return
+	}
 	bits := ipToBits(n.IP)
 	ones, total := n.Mask.Size()
 

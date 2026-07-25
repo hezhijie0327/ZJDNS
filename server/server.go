@@ -30,6 +30,7 @@ import (
 	"zjdns/zone"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnshttp"
 	"golang.org/x/sync/errgroup"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -267,7 +268,7 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 		TagMatcher:       nil,
 		Resolver:         dnsResolver,
 		Prober:           prober,
-		PendingReqs:      handler.NewPendingRequests(),
+		PendingReqs:      handler.NewPendingRequests(ctx),
 		PendingRefrs:     handler.NewRefreshGroup(),
 		DNS64:            nil,
 		Closed:           func() bool { return isClosed() },
@@ -329,7 +330,7 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 		if cfg.Server.Features.KTLS != nil {
 			tlsCfg.KTLS = &tls.KTLSSettings{KernelTX: cfg.Server.Features.KTLS.KernelTX, KernelRX: cfg.Server.Features.KTLS.KernelRX}
 		}
-		tlsSrv, err := tls.New(h, &tlsCfg, config.DefaultBackgroundTimeout)
+		tlsSrv, err := tls.New(h, &tlsCfg)
 		if err != nil {
 			return fmt.Errorf("TLS server init: %w", err)
 		}
@@ -385,6 +386,11 @@ func (s *Server) Start() error {
 	if s.handler.IsClosed() {
 		return errors.New("server is closed")
 	}
+
+	// Set DoH message acceptance function globally before any protocol servers
+	// start. The individual protocol start functions previously set this, but
+	// since it's a global variable it must be set only once.
+	dnshttp.MsgAcceptFunc = zdnsutil.ServerDOHMsgAccept
 
 	errChan := make(chan error, 1)
 	serverCtx, serverCancel := context.WithCancelCause(s.ctx)

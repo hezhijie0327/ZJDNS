@@ -197,7 +197,11 @@ func (e *Evaluator) loadInline(tx *sql.Tx, rule *config.ZoneRule) (int, error) {
 		return 0, errors.New("zone rule: name is required")
 	}
 	if len(rule.Name)+1 > config.MaxDomainLength {
-		log.Warnf("ZONE: rule name too long, skipping")
+		truncated := rule.Name
+		if len(truncated) > 128 {
+			truncated = truncated[:128] + "..."
+		}
+		log.Warnf("ZONE: rule name too long, skipping %q", truncated)
 		return 0, nil
 	}
 

@@ -1,6 +1,7 @@
 package dnsutil
 
 import (
+	"errors"
 	"io"
 	"math/rand/v2"
 	"net"
@@ -8,6 +9,9 @@ import (
 
 	"codeberg.org/miekg/dns"
 )
+
+// errFrameTooLarge is returned when a TCP DNS frame exceeds dns.MaxMsgSize.
+var errFrameTooLarge = errors.New("dns: TCP frame exceeds maximum message size")
 
 // ReadTCPMsg reads a DNS message prefixed with a 2-byte big-endian length
 // from conn (RFC 1035 §4.2.2).  Shared by server and upstream TLCP/TLS stacks.
@@ -17,6 +21,9 @@ func ReadTCPMsg(conn net.Conn) (*dns.Msg, error) {
 		return nil, err
 	}
 	length := int(prefix[0])<<8 | int(prefix[1])
+	if length > dns.MaxMsgSize {
+		return nil, &net.OpError{Op: "read", Net: "tcp", Err: errFrameTooLarge}
+	}
 	buf := make([]byte, length)
 	if _, err := io.ReadFull(conn, buf); err != nil {
 		return nil, err

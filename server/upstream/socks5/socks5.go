@@ -179,6 +179,9 @@ func New(proxyURL string, timeout time.Duration) (*Dialer, error) {
 
 // SafeURL returns the proxy URL with password redacted for logging.
 func (d *Dialer) SafeURL() string {
+	if d == nil {
+		return ""
+	}
 	if d.password != "" {
 		return fmt.Sprintf("socks5://%s:***@%s", d.username, d.proxyAddr)
 	}

@@ -320,22 +320,18 @@ func (r *Recursive) validateOrRetry(ctx context.Context, response *dns.Msg, name
 	if err != nil {
 		log.Debugf("SECURITY: answer RRSIG verification failed for %s: %v", question.Name, err)
 
-		// RRSIGs missing — retry once; a different NS may have signed records.
 		if errors.Is(err, dnssec.ErrMissingRRSIG) {
 			if r.tryRRSIGRetry(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, verifiedKeys) {
 				return true
 			}
+			chain.lastEDECode = dns.ExtendedErrorRRSIGsMissing
+			return false
 		}
 
-		// Missing RRSIGs ≠ bogus signatures.
-		if errors.Is(err, dnssec.ErrMissingRRSIG) {
-			chain.lastEDECode = dns.ExtendedErrorRRSIGsMissing
-		} else {
-			chain.lastEDECode = dns.ExtendedErrorDNSBogus
-			if r.isZoneCut(response, currentDomain) {
-				log.Debugf("SECURITY: zone cut detected for %s — RRSIG signer differs from %s", question.Name, currentDomain)
-				chain.zoneCutDetected = true
-			}
+		chain.lastEDECode = dns.ExtendedErrorDNSBogus
+		if r.isZoneCut(response, currentDomain) {
+			log.Debugf("SECURITY: zone cut detected for %s — RRSIG signer differs from %s", question.Name, currentDomain)
+			chain.zoneCutDetected = true
 		}
 		return false
 	}

@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"zjdns/config"
 	"zjdns/edns"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server/resolver/dnssec"
@@ -99,6 +100,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	}
 
 	go func() {
+		defer zdnsutil.HandlePanic("UPSTREAM errgroup wait")
 		if err := g.Wait(); err != nil {
 			if errors.Is(err, ErrCIDRFilterRefused) {
 				select {

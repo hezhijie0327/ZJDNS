@@ -185,7 +185,7 @@ func (c *Client) buildState(
 		clientMagic:   selectedCert.ClientMagic,
 		esVersion:     esVersion,
 		expires:       time.Now().Add(config.DefaultDNSCryptCertificateCacheTTL),
-		minQueryLen:   256,
+		minQueryLen:   config.DefaultDNSCryptMinQueryLen,
 	}
 
 	if esVersion.IsPQ() && len(cert.pq.PqPublicKey) > 0 {

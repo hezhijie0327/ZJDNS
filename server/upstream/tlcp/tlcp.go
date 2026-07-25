@@ -2,6 +2,7 @@ package tlcp
 
 import (
 	"context"
+	"errors"
 	"net"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
@@ -14,6 +15,12 @@ import (
 
 // ExecuteTLCP performs a DoT-over-TLCP query.
 func (c *Client) ExecuteTLCP(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+	if msg == nil {
+		return nil, errors.New("tlcp: nil query message")
+	}
+	if server == nil {
+		return nil, errors.New("tlcp: nil server config")
+	}
 	tlcpCfg := c.tlcpClientConfig(server).Clone()
 	tlcpCfg.NextProtos = config.NextProtoDOT
 	response, err := c.exchangeOverTLCP(ctx, msg, server.Address, tlcpCfg, c.getProxy(server))

@@ -68,20 +68,6 @@ func NewQUIC(maxConns int) *QUIC {
 
 // Acquire gets a reusable QUIC connection, dialing a new one if needed.
 func (p *QUIC) Acquire(ctx context.Context, key string, dialFunc func(context.Context, string) (*quic.Conn, error)) (*QUICConn, error) {
-	// Snapshot the connection list under the lock, then evaluate liveness
-	// outside it.  isDead() does a non-blocking channel select on
-	// Context().Done() — cheap, but unnecessary to keep the pool-wide
-	// mutex held during it.
-	p.mu.Lock()
-	conns := p.conns[key]
-	// Snapshot connection list to filter dead ones outside the lock.
-	all := make([]*QUICConn, len(conns))
-	copy(all, conns)
-	p.mu.Unlock()
-
-	// Update the stored live list under the lock.  Re-read p.conns[key]
-	// to avoid TOCTOU: concurrent Put/Remove may have modified the list
-	// while we were outside the lock filtering dead connections.
 	p.mu.Lock()
 	live := p.conns[key][:0]
 	for _, pc := range p.conns[key] {

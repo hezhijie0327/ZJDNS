@@ -346,7 +346,7 @@ func (q *EncryptedQuery) Encrypt(
 	if q.IsTCP {
 		padded = PadTCP(packet)
 	} else {
-		padded = Pad(packet, q.MinQueryLen)
+		padded = encryptPadding(packet, q.MinQueryLen)
 	}
 	clientNonce = q.Nonce
 

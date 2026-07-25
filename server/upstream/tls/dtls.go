@@ -3,6 +3,7 @@ package tls
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"zjdns/config"
@@ -17,6 +18,12 @@ import (
 // ExecuteDTLS performs a DNS-over-DTLS query (RFC 8094).  DNS messages are
 // framed with a 2-byte big-endian length prefix, same as DoT (RFC 7858).
 func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+	if msg == nil {
+		return nil, errors.New("dtls: nil query message")
+	}
+	if server == nil {
+		return nil, errors.New("dtls: nil server config")
+	}
 	tlsConfig := c.stdTLSConfig(server)
 
 	host, port, err := net.SplitHostPort(server.Address)

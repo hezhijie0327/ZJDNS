@@ -269,7 +269,7 @@ func (c *socks5PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 // connected relay socket.
 func (c *socks5PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	udpAddr, ok := addr.(*net.UDPAddr)
-	if !ok {
+	if !ok || udpAddr == nil {
 		return 0, fmt.Errorf("socks5: expected *net.UDPAddr, got %T", addr)
 	}
 

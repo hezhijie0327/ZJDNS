@@ -61,7 +61,7 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
 	shouldAddEDNS := ecsOpt != nil || qctx.ClientRequestedDNSSEC || cookieStr != "" ||
 		qctx.EDE != nil || qctx.IsSecure || qctx.TCPKeepalive > 0 || len(qctx.Req.Pseudo) > 0
 
-	if shouldAddEDNS {
+	if shouldAddEDNS && m.edns != nil {
 		m.edns.ApplyToMessage(msg, ecsOpt, qctx.IsSecure, cookieStr, qctx.EDE, false, clientWantsPadding, qctx.TCPKeepalive)
 	}
 

@@ -5,6 +5,7 @@ package pool
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -98,6 +99,9 @@ func (c *Conn) SetSegmentation(segSize int, delay time.Duration) {
 }
 
 func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
+	if msg == nil {
+		return nil, errors.New("client: nil query message")
+	}
 	select {
 	case c.capacity <- struct{}{}:
 		c.inFlight.Add(1)

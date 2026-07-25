@@ -8,6 +8,7 @@ import (
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 	"zjdns/internal/ttl"
 
 	"codeberg.org/miekg/dns"
@@ -126,9 +127,15 @@ func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 		result, err = s.db.SQ.Exec(`DELETE FROM entries`)
 		if err == nil {
 			s.db.SetEntryCount(0)
+			if s.dnsL1Cap > 0 {
+				s.dnsL1 = lrumap.New[dnsL1Key, *Entry](s.dnsL1Cap)
+			}
 		}
 	case "latency":
 		result, err = s.db.SQ.Exec(`DELETE FROM ip_latency`)
+		if err == nil && s.latencyL1Cap > 0 {
+			s.latencyL1 = lrumap.New[string, int](s.latencyL1Cap)
+		}
 	case "zone":
 		result, err = s.db.SQ.Exec(`DELETE FROM zone_entries`)
 	case "ruleset":
@@ -268,6 +275,9 @@ func (s *SQLiteCache) Stats() []string {
 // sharing the same IP reuse the same row — latency is measured once, not
 // once per domain. qtype is inferred from the IP address format.
 func (s *SQLiteCache) UpdateLatency(ip string, latencyMS int) {
+	if latencyMS < 0 {
+		latencyMS = 0
+	}
 	if s.db.IsClosed() {
 		return
 	}

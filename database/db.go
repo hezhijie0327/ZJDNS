@@ -199,7 +199,7 @@ func (db *DB) QueryZoneWildcard(args []any) (*sql.Rows, error) {
 // Begin starts a new SQL transaction. Satisfies zone.ZoneStorage.
 // Begin starts a new SQL transaction. Identical to BeginTx — both exist to
 // satisfy different consumer interfaces (zone.ZoneStorage and ruleset.RuleSetStorage).
-func (db *DB) Begin() (*sql.Tx, error) { return db.SQ.Begin() }
+func (db *DB) Begin() (*sql.Tx, error) { return db.BeginTx() }
 
 // Exec executes a SQL statement. Satisfies zone.ZoneStorage.
 func (db *DB) Exec(query string, args ...any) (sql.Result, error) { return db.SQ.Exec(query, args...) }

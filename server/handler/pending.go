@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"time"
@@ -49,33 +50,39 @@ type pendingCall struct {
 const maxPendingEntries = 10000 // safety bound against unbounded growth
 
 // NewPendingRequests creates a PendingRequests ready for use.
-func NewPendingRequests() *PendingRequests {
+func NewPendingRequests(ctx ...context.Context) *PendingRequests {
 	p := &PendingRequests{
 		sets: make(map[PendingKey]*pendingCall),
 	}
+
+	cleanupCtx := context.Background()
+	if len(ctx) > 0 && ctx[0] != nil {
+		cleanupCtx = ctx[0]
+	}
+
 	// Periodic cleanup of orphaned entries from panicked/broken leaders.
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
-			p.mu.Lock()
-			if len(p.sets) > maxPendingEntries {
-				// Evict half the entries when over capacity. Under sustained load
-				// this may evict active entries that have not yet completed — the
-				// 60s cleanup interval combined with the caller-side timeout
-				// (config.DefaultServeExpiredClientTimeout) provides a safety
-				// window for in-flight operations to complete before eviction.
-				target := len(p.sets) / 2
-				n := 0
-				for k := range p.sets {
-					delete(p.sets, k)
-					n++
-					if n >= target {
-						break
+		for {
+			select {
+			case <-cleanupCtx.Done():
+				return
+			case <-ticker.C:
+				p.mu.Lock()
+				if len(p.sets) > maxPendingEntries {
+					target := len(p.sets) / 2
+					n := 0
+					for k := range p.sets {
+						delete(p.sets, k)
+						n++
+						if n >= target {
+							break
+						}
 					}
 				}
+				p.mu.Unlock()
 			}
-			p.mu.Unlock()
 		}
 	}()
 	return p

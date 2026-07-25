@@ -96,7 +96,9 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 	}
 
 	var n int
-	_ = e.db.SQLQueryRow("SELECT COUNT(*) FROM ruleset_entries").Scan(&n)
+	if err := e.db.SQLQueryRow("SELECT COUNT(*) FROM ruleset_entries").Scan(&n); err != nil {
+		log.Warnf("RULESET: count query: %v", err)
+	}
 	log.Infof("RULESET: %d rules loaded into %d tags", n, len(e.tags))
 
 	// Preload all CIDR rules into memory to avoid SQL queries on the hot path.

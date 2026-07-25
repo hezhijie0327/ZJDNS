@@ -61,6 +61,14 @@ const (
 	// EDNSSize is the overhead for DNSCrypt headers when calculating truncation.
 	EDNSSize = 64
 
+	// QueryOverhead is the wire-format overhead for a classical DNSCrypt query:
+	// client-magic (8) + public-key (32) + half-nonce (12) + tag (16).
+	QueryOverhead = ClientMagicSize + KeySize + NonceSize/2 + TagSize
+
+	// ResponseOverhead is the wire-format overhead for a DNSCrypt response:
+	// resolver-magic (8) + nonce (24) + tag (16).
+	ResponseOverhead = ResolverMagicSize + NonceSize + TagSize
+
 	// PQC public key, ciphertext, and certificate sizes for X-Wing PQ/T hybrid KEM.
 	PQPublicKeySize  = 1216
 	PQCiphertextSize = 1120

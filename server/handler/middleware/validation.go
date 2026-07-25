@@ -22,6 +22,11 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		if qctx.Req == nil || len(qctx.Req.Question) == 0 {
 			log.Debugf("QUERY: rejecting nil/empty question with FORMERR")
 			msg := pool.DefaultMessage.Get()
+			if qctx.Req != nil {
+				dnsutil.SetReply(msg, qctx.Req)
+			} else {
+				msg.Response = true
+			}
 			msg.Rcode = dns.RcodeFormatError
 			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorInvalidData, ExtraText: ""}
 			qctx.Res = msg
