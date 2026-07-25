@@ -32,13 +32,16 @@ type ianaKeyDigest struct {
 const (
 	trustAnchorFileName = "root-anchors.xml"
 	trustAnchorURL      = "https://data.iana.org/root-anchors/root-anchors.xml"
+
+	// dnsFlagRevoke is the DNSKEY REVOKE flag (RFC 5011 §2.1).
+	dnsFlagRevoke = 0x0080
 )
 
 var errNoValidAnchor = errors.New("no valid trust anchors found")
 
 // loadTrustAnchorsFromFile parses an IANA root-anchors.xml file and returns the
 // DNSKEY records for all valid KSK entries (those with PublicKey + Flags and
-// not yet expired).
+// not yet expired, and not revoked per RFC 5011 §2.1).
 func loadTrustAnchorsFromFile(path string) ([]*dns.DNSKEY, error) {
 	//nolint:gosec // path is derived from os.Executable(), not user input
 	data, err := os.ReadFile(path)
@@ -86,6 +89,10 @@ func loadTrustAnchorsFromFile(path string) ([]*dns.DNSKEY, error) {
 		}
 		if dnskey.Flags&dns.FlagSEP == 0 || dnskey.Flags&dns.FlagZONE == 0 {
 			log.Debugf("SECURITY: trust anchor key_tag=%d from file missing required DNSKEY flags (SEP/ZONE)", kd.KeyTag)
+			continue
+		}
+		if dnskey.Flags&dnsFlagRevoke != 0 {
+			log.Debugf("SECURITY: skipping revoked trust anchor key_tag=%d (RFC 5011 §2.1)", kd.KeyTag)
 			continue
 		}
 		keys = append(keys, dnskey)

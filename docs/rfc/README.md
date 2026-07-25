@@ -22,9 +22,15 @@ The DNSCrypt draft was downloaded from the IETF archive.
 | rfc2181.txt | Clarifications to the DNS Specification |
 | rfc4033.txt | DNS Security Introduction and Requirements |
 | rfc4034.txt | Resource Records for the DNS Security Extensions |
-| rfc4035.txt | Protocol Modifications for the DNS Security Extensions |
+| rfc4035.txt |
+| rfc4509.txt | Use of SHA-256 in DNS Resource Records (DS) |
+| rfc5011.txt | Automated Updates of DNSSEC Trust Anchors | Protocol Modifications for the DNS Security Extensions |
 | rfc5155.txt | DNS Security (DNSSEC) Hashed Authenticated Denial of Existence |
-| rfc5077.txt | Transport Layer Security (TLS) Session Resumption |
+| rfc5077.txt |
+| rfc8198.txt | Aggressive Use of NSEC/NSEC3 Caching |
+| rfc8499.txt | DNS Terminology |
+| rfc9077.txt | DNSSEC Trust Anchor Maintenance |
+ Transport Layer Security (TLS) Session Resumption |
 | rfc6125.txt | Domain-Based Application Service Identity (TLS cert verification) |
 | rfc6672.txt | DNAME Redirection in the DNS |
 | rfc6761.txt | Special-Use Domain Names |

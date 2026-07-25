@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.6.39-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.6.40-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -477,37 +477,6 @@ SELECT protocol, rcode, SUM(query_count) AS hits
 FROM query_stats WHERE result = 'hit'
 GROUP BY protocol, rcode ORDER BY hits DESC;
 ```
-
-## 支持的标准
-
-| RFC / 草案 | 标准 | 实现 |
-|------------|------|------|
-| [1928](https://www.rfc-editor.org/info/rfc1928) / [1929](https://www.rfc-editor.org/info/rfc1929) | SOCKS5 | TCP CONNECT + UDP ASSOCIATE |
-| [4033](https://www.rfc-editor.org/info/rfc4033) / [4034](https://www.rfc-editor.org/info/rfc4034) / [4035](https://www.rfc-editor.org/info/rfc4035) | DNSSEC | 信任链验证 + RRSIG |
-| [5155](https://www.rfc-editor.org/info/rfc5155) | NSEC3 | 已验证否定（DoS 防护：迭代次数上限 150） |
-| [6052](https://www.rfc-editor.org/info/rfc6052) | IPv6 Addressing of IPv4/IPv6 Translators | NAT64 前缀 64:ff9b::/96 |
-| [6147](https://www.rfc-editor.org/info/rfc6147) | DNS64 | AAAA 合成（IPv6-only/NAT64 网络） |
-| [6840](https://www.rfc-editor.org/info/rfc6840) | DNSSEC Clarifications | 特殊标签处理（Digest 类型、NXT 等） |
-| [6891](https://www.rfc-editor.org/info/rfc6891) | EDNS(0) | FORMERR 自动回退无 EDNS 重试 |
-| [7766](https://www.rfc-editor.org/info/rfc7766) | DNS over TCP | 连接池复用 + 流水线（最多 16 路并发） |
-| [7828](https://www.rfc-editor.org/info/rfc7828) | EDNS TCP Keepalive | 长连接空闲超时协商 |
-| [7830](https://www.rfc-editor.org/info/rfc7830) / [8467](https://www.rfc-editor.org/info/rfc8467) | EDNS Padding | 查询 128B / 响应 468B（TLS/QUIC/HTTPS 加密链接专用） |
-| [7858](https://www.rfc-editor.org/info/rfc7858) / [8310](https://www.rfc-editor.org/info/rfc8310) | DNS over TLS | TLS 1.3 + Strict/Opportunistic 隐私配置文件 |
-| [7871](https://www.rfc-editor.org/info/rfc7871) | EDNS Client Subnet | ECS 子网隐私控制 |
-| [8094](https://www.rfc-editor.org/info/rfc8094) | DNS over DTLS | DTLS 1.2+ 传输层，UDP 加密 DNS |
-| [8484](https://www.rfc-editor.org/info/rfc8484) | DNS over HTTPS | HTTPS (HTTP/2) |
-| [8767](https://www.rfc-editor.org/info/rfc8767) | Serving Stale | 过期缓存服务 + 后台预取 |
-| [8914](https://www.rfc-editor.org/info/rfc8914) | Extended DNS Errors | EDE 代码传递 |
-| [9000](https://www.rfc-editor.org/info/rfc9000) | QUIC | QUIC 传输层 |
-| [9018](https://www.rfc-editor.org/info/rfc9018) | DNS Cookies | SipHash-2-4 服务器 Cookie（时间戳 + 版本字段，互操作格式） |
-| [9114](https://www.rfc-editor.org/info/rfc9114) | HTTP/3 | HTTP3 传输层 |
-| [9156](https://www.rfc-editor.org/info/rfc9156) | QNAME Minimisation | 递归查询名最小化 |
-| [9250](https://www.rfc-editor.org/info/rfc9250) | DNS over QUIC | QUIC 协议映射 |
-| [9461](https://www.rfc-editor.org/info/rfc9461) / [9462](https://www.rfc-editor.org/info/rfc9462) | SVCB / DDR | 加密解析器自动发现 |
-| [draft-denis-dprive-dnscrypt-10](https://datatracker.ietf.org/doc/html/draft-denis-dprive-dnscrypt-10) | DNSCrypt v2 | XChacha20 AEAD + X-Wing PQ KEM |
-| [draft-denis-dns-stamps-02](https://datatracker.ietf.org/doc/html/draft-denis-dns-stamps-02) | DNS Stamp | sdns:// 戳记编解码，8 种协议类型 |
-| [GB/T 38636-2020](https://std.samr.gov.cn/gb/search/gbDetailed?id=A47A713B764314ABE05397BE0A0ABB25) | TLCP (国密 SSL) | SM2/SM3/SM4 密码套件 (ECC/ECDHE_SM4_GCM/CBC_SM3)，TLS/HTTPS 传输 |
-| [GM/T 0128-2023](https://std.samr.gov.cn/hb/search/stdHBDetailed?id=1BF26B7A9FF0FD76E06397BE0A0A81D8) | DTLCP (国密 DTLS) | SM2/SM3/SM4 over UDP，DTLCP 传输 |
 
 ## 关键依赖
 

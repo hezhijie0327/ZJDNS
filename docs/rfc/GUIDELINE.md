@@ -441,7 +441,37 @@ DNSKEY (自签名) → DS (父域授权) → DNSKEY (子域) → RRSIG (签名�
 ### 我们的实现
 - `server/resolver/dnssec/` 完整实现：签名验证、信任链、NSEC/NSEC3 否定回答
 - `dnssec_chain.go`：逐级 DS/DNSKEY/RRSIG 验证
-- `trust_anchor.go`：lazy-loaded 根信任锚
+- `trust_anchor.go`：lazy-loaded 根信任锚（静态，未实现 RFC 5011 自动化）
+
+---
+
+## RFC 4509 — SHA-256 in DS RRs
+
+**DNSSEC DS 摘要 MUST 支持 SHA-256（更新 RFC 4034）。**
+
+- `dnssec/crypto.go`：SHA-256 DS 验证（Go `crypto/sha256`）✓
+
+---
+
+## RFC 5011/9077 — Trust Anchor 自动化
+
+**DNSSEC 信任锚的自动化管理（RFC 9077 更新 5011）。**
+
+- ⚠ **已知差距**：§4 状态机（Add Hold-Down 30 天 + 事件驱动）是实现大功能。当前 `named.root` 静态加载已满足基本需求，REVOKE 位检查已实现
+
+---
+
+## RFC 8198 — Aggressive NSEC Caching
+
+**利用缓存的 NSEC/NSEC3 范围推导否定回答。**
+
+- ⚠ **已知差距**：miekg/dns 提供 NSEC/NSEC3 数据但不提供覆盖判断。需自行实现范围比较 + RRSIG 附带 + 通配符处理。之前尝试过但边界条件问题多，暂不实现
+
+---
+
+## RFC 8499 — DNS Terminology
+
+**DNS 标准术语参考。** ✓
 
 ---
 
