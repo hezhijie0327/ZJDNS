@@ -50,9 +50,9 @@ const (
 
 	DefaultTTL         = 10
 	DefaultStaleTTL    = 30
-	DefaultStaleMaxAge = 30 * 86400 // RFC 8767 §6 recommends ≤ 30 days
+	DefaultStaleMaxAge = 7 * 86400 // RFC 8767 §6: recommended cap of 604800 seconds
 
-	DefaultPrefetchThresholdPercent  = 40
+	DefaultPrefetchThresholdPercent  = 10
 	DefaultServeExpiredClientTimeout = 600 * time.Millisecond // RFC 8767 §5.2: short wait before serving stale
 	DefaultPrefetchThrottleInterval  = 3 * time.Second
 

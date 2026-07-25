@@ -218,11 +218,15 @@ func (m *CacheLookup) refreshCacheEntry(qname string, qtype, qclass uint16, ecsO
 	question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
 	qr := m.resolver.Query(m.refreshCtx, question, ecsOpt)
 	if qr.Err != nil {
+		log.Debugf("CACHE: refresh failed for %s (type=%d): %v", qname, qtype, qr.Err)
 		return qr.Err
 	}
-	if qr.Cacheable {
-		m.store.Set(qname, qtype, qclass, ecsOpt, false, qr.Answer, qr.Authority, qr.Additional, qr.Validated)
+	if !qr.Cacheable {
+		log.Debugf("CACHE: refresh skipped for %s (type=%d) — response not cacheable", qname, qtype)
+		return nil
 	}
+	m.store.Set(qname, qtype, qclass, ecsOpt, false, qr.Answer, qr.Authority, qr.Additional, qr.Validated)
+	log.Debugf("CACHE: refresh updated %s (type=%d, answer=%d)", qname, qtype, len(qr.Answer))
 	return nil
 }
 
