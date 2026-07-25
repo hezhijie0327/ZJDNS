@@ -16,7 +16,7 @@ import (
 // Invalid queries receive a REFUSED response with an EDE error code.
 type Validation struct{}
 
-// Wrap implements Middleware.
+// Wrap implements Wrapper.
 func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		if qctx.Req == nil || len(qctx.Req.Question) == 0 {

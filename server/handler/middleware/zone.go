@@ -21,7 +21,7 @@ type Zone struct {
 	cache      cache.Store
 }
 
-// Wrap implements Middleware.
+// Wrap implements Wrapper.
 func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		qd := qctx.Req.Question[0]

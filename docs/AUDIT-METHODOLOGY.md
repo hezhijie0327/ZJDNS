@@ -12,7 +12,7 @@
 
 ### 1.1 审计维度
 
-每个文件、每个包在以下 10 个维度接受审查：
+每个文件、每个包在以下 14 个维度接受审查：
 
 | 维度 | 关注点 |
 |------|--------|
@@ -26,6 +26,10 @@
 | **日志质量** | 完整性（关键路径有日志）、精准性（级别正确、信息充分）、不刷屏（info/warn 不在热路径重复打印） |
 | **文档质量** | 架构文档与代码一致、CLAUDE.md 类型引用准确、注释不过时/不误导、关键设计决策有记录、公开 API 有 godoc |
 | **参数校验** | 公开函数未检查 nil/空字符串/零值参数；构造后未验证字段有效性（如 `net.ParseIP("")` 返回 nil）；错误返回值被 `_` 丢弃导致后续代码基于零值继续执行；`func(_, name string)` 中 `_` 丢弃的参数是否存在应校验但未校验的值 |
+| **常量提取** | 魔法数字是否抽取为命名常量（含 `config/defaults.go`）；常量值是否符合 RFC/IETF 推荐（默认端口、超时、缓冲区大小）；同一常量是否跨包重复定义（应统一到一处） |
+| **RFC 一致性** | 实现是否偏离 RFC 规范；RFC 要求的边界条件/错误处理是否完整；新引入的 RFC 是否已在 `docs/rfc/` 存档；代码中的 RFC 注释引用是否正确（RFC 编号、章节号是否有效） |
+| **注释准确性** | 注释是否引用已删除/移动/重命名的函数、类型、字段；注释描述的行为是否与当前代码一致；TODO/FIXME/HACK 是否仍然有效还是已过期；注释中的行号引用是否已失效 |
+| **函数排序** | 构造函数 `New*` 是否紧跟类型定义；同一接收者的方法是否聚合在一起；新增函数是否随机插入在无关函数之间；文件内声明顺序是否符合 `type → const → var → func`（decorder） |
 
 ### 1.2 审计架构
 
@@ -41,7 +45,7 @@ Phase 1: 包级审计（7 agent 并行）
 ├── Handler audit:    server/handler/*
 └── Defense audit:    server/defense/*
 
-Phase 2: 交叉分析（9 agent 并行）
+Phase 2: 交叉分析（13 agent 并行）
 ├── CrossCut Locks:      全部 sync.Mutex / RWMutex / Once / atomic / channel / WaitGroup / Pool
 ├── CrossCut Memory:     goroutine 泄漏、无界增长、资源泄漏、池误用
 ├── CrossCut Panic:      nil 解引用、切片越界、空 map 写入、裸类型断言、死锁、除零
@@ -50,7 +54,11 @@ Phase 2: 交叉分析（9 agent 并行）
 ├── CrossCut Perf:       SQL N+1、热路径分配、索引缺失
 ├── CrossCut Arch:       导入分层验证、循环依赖风险
 ├── CrossCut Logging:    日志级别审计、info/warn 热路径刷屏、错误路径缺失日志、格式一致性
-└── CrossCut Docs:       全部 .md 文件与代码一致性、CLAUDE.md 准确性、注释是否过时、godoc 覆盖率
+├── CrossCut Docs:       全部 .md 文件与代码一致性、CLAUDE.md 准确性、注释是否过时、godoc 覆盖率
+├── CrossCut Constants:  魔法数字扫描、RFC 推荐值对比、跨包重复常量检测
+├── CrossCut RFC:        实现 vs RFC 规范逐条对照、docs/rfc/ 存档完整性、RFC 注释引用有效性
+├── CrossCut Comments:   注释引用符号存在性检查、注释行为描述 vs 代码实际行为、过时 TODO/FIXME
+└── CrossCut Ordering:   构造函数位置、方法聚合度、声明顺序（decorder）、随机插入检测
 
 Phase 3: 综合报告
 └── Synthesis: 汇总排序 → 主题分析 → 行动计划
@@ -251,6 +259,10 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 | **文档腐烂** | 架构文档描述已删除的类型/字段/中间件；CLAUDE.md 类型参考表过时；注释引用的行号/函数名已失效；新功能无文档 | 每次 PR 检查受影响的 .md 文件；`grep` 文档中的类型名/函数名确认仍存在；注释中用 `FindSymbol` 而非行号引用代码 |
 | **参数校验缺失** | 公开函数未检查 nil/空字符串/零值参数直接使用；构造后未验证字段有效性（如 `net.ParseIP("")` 返回 nil 后直接传入下游）；错误返回值被 `_` 丢弃，后续代码基于零值继续执行 | 每个公开函数入口处检查关键参数；`net.ParseIP` / `net.ParseCIDR` 结果立即判 nil；`_` 丢弃错误必须注释原因；构造函数返回前验证内部状态 |
 | **提交信息不规范** | 使用 `Round X audit`、`fix audit findings` 等笼统描述，无法从 `git log` 了解具体改了什么 | 主题行描述**具体修复内容**（"fix: acquire writeMu in TCP SERVFAIL path"），不是审计阶段；一个 commit 只含一类修复；跨维度修复分多次提交 |
+| **魔法数字** | 硬编码数值散落在业务逻辑中；默认值不符合 RFC 推荐；同一常量在多个包中独立定义 | `grep -nE '[0-9]{3,}'` 找长数字；与 RFC/IETF 标准值逐一对比；重复常量统一到 `config/defaults.go` 或所属包的最顶层 |
+| **RFC 偏离** | 实现时对规范理解有误；边缘条件被省略；RFC 更新后实现未跟进；新增 RFC 未存档到 `docs/rfc/` | 每个协议实现文件顶部标注 RFC 章节引用；实现前先 `cp rfc{number}.txt docs/rfc/`；审计时逐条核对 MUST/SHOULD/MAY 条款 |
+| **注释腐烂** | 代码移动/重命名/删除后注释未更新；注释引用的函数名/行号已失效；TODO 的触发条件已不存在但注释仍在；"临时方案"注释超过 6 个月未清理 | 每次重构后 `grep` 被移动符号的旧名确认无残留引用；注释中用函数名而非行号引用代码；每个 TODO 加截止日期，过期即处理 |
+| **函数散乱** | 新增方法时随意插入在文件末尾或两个无关函数之间；同一接收者的方法跨文件散落；构造函数不紧跟类型声明 | 新增方法时找到同一接收者的方法块再插入；同一接收者的方法按调用链/复杂度排序（公开在前，私有在后）；`New*` 紧跟在 `type Xxx struct` 之后 |
 
 ---
 
@@ -295,6 +307,10 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 10. **注释引用符号名，不引用行号**：行号在每次编辑后失效。注释中如果必须引用代码位置，使用函数名/类型名（可 grep），而非行号
 11. **`_` 丢弃的值必须注释类型和原因**：`result, _ := someFunc()` 必须注释 `// _ = error: <原因>`，防止被调用函数签名变更后 `_` 静默丢弃不同类型的值。不写注释的 `_` 在重构时是定时炸弹——函数返回值从 `(T, error)` 变为 `(T, Cleanup)` 时编译通过但语义全变
 12. **废弃参数应删除而非改名 `_`**：`func f(name, target string)` 中如果 `name` 不再使用，应将 `name` 从签名中删除并更新所有调用方，而不是改成 `func f(_, target string)`。`_` 参数只用于接口实现（无法改签名）和 callback（协议要求）。Standalone function 的 `_` 参数是 dead code
+13. **魔法数字必须抽取为命名常量**：任何数值字面量（超时、端口、缓冲区大小、重试次数）必须定义为 `config/defaults.go` 或所在包顶部的命名常量。常量值必须与 RFC/IETF 推荐值一致。同一常量只定义一次，跨包引用
+14. **新增 RFC 必须存档后再实现**：引入新协议或修改现有协议实现前，先将对应 RFC 文本放入 `docs/rfc/`（命名 `rfc{NUMBER}.txt`），阅读确认 MUST/SHOULD/MAY 条款，再编码。代码中引用 RFC 时注明具体章节号（如 `RFC 7873 §5.2`）
+15. **注释引用符号名而非行号**：行号在每次编辑后失效。注释中引用代码位置使用函数名/类型名（可 grep），而非行号。代码移动后立即 grep 旧符号名检查注释残留
+16. **构造函数紧跟类型定义**：`type Foo struct { ... }` 之后紧接 `func NewFoo(...) *Foo`，中间不插入其他类型/函数/常量。同一接收者的方法聚合在一个连续块中，不跨文件散落 |
 
 ### 6.2 避免的反模式
 
@@ -309,6 +325,12 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 9. **架构文档过时**：`ARCHITECTURE.md` 描述已删除的中间件/类型/表；类型引用表未随代码更新。每次重构后 grep 文档确认引用的符号仍存在
 10. **注释与代码矛盾**：注释说"Phase 3 会改回来"但 Phase 3 永远不会来；注释描述的行为与实际代码不一致。每个注释在所在函数修改后必须重新验证
 11. **公开 API 无 godoc**：导出的类型/函数/方法缺少文档注释，或 godoc 只重复函数名没有说明用途和参数含义
+12. **魔法数字散落**：`time.Second * 30`、`65535`、`4096` 等裸数值直接出现在业务逻辑中。应全部抽取为命名常量并统一在 `config/defaults.go`
+13. **常量值不符合 RFC**：如 DNS 端口写成 `5353` 而非 RFC 1035 规定的 `53`；缓冲区大小不遵循 RFC 6891 的 `1232`/`65535` 等。所有常量值必须可追溯到具体 RFC 章节
+14. **乱序插入**：在文件末尾或两个无关函数之间随意插入新增方法。应找到同一接收者的方法块，按 `公开 → 私有`、`简单 → 复杂` 的顺序插入
+15. **`New*` 不紧跟类型**：构造函数与类型定义之间被其他声明隔开。`type Foo struct` 之后第一个函数必须是 `NewFoo`
+16. **注释残留**：代码已删除/移动/重命名但旧注释还在原地；TODO 的截止日期已过但无人处理；注释说"临时方案"但已存在超过两个版本
+17. **新 RFC 未存档**：实现了新协议功能但 `docs/rfc/` 中没有对应 RFC 文本。先存档 RFC，再编码 |
 
 ### 6.3 持续改进
 
@@ -325,6 +347,10 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 - 每次审计包含专门的 CrossCut Logging 阶段：grep `log\.(Info|Warn)` 确认不在热路径，grep `log\.Error` 确认是可恢复还是不可恢复
 - 每次审计包含 CrossCut Docs 阶段：grep 全部 .md 文件中的类型名/函数名/字段名，与代码交叉验证是否仍存在
 - 每次审计包含 CrossCut Validation 阶段：grep `_, :=\|_ = ` 确认每个 `_` 丢弃的 error 有注释说明原因；grep `func.*_.*,\|\.(.*)` 确认裸类型断言；grep `net\.ParseIP\|net\.ParseCIDR` 确认结果判 nil；grep `func.*(_.*,\|func.*(_.*)` 排除接口/callback 后确认没有 standalone function 用 `_` 隐藏废弃参数
+- 每次审计包含 CrossCut Constants 阶段：grep 长数字字面量（`\d{3,}`）确认已抽取为命名常量；逐项对比常量值与 RFC 推荐值；`grep -rn 'const\|Default' config/defaults.go` 确认无跨包重复定义
+- 每次审计包含 CrossCut RFC 阶段：检查 `docs/rfc/` 目录确认所有协议实现有对应 RFC 存档；grep RFC 注释引用确认编号和章节号有效；逐条核对 MUST/SHOULD 条款覆盖率
+- 每次审计包含 CrossCut Comments 阶段：grep 注释中的函数名/类型名与 `go doc` 交叉验证仍存在；grep `TODO\|FIXME\|HACK\|临时` 确认每个有截止日期且未过期；检查被移动/删除代码附近的注释是否仍有残留引用
+- 每次审计包含 CrossCut Ordering 阶段：检查每个 `New*` 函数是否紧跟对应类型定义；检查同一接收者的方法是否聚合而非散落；检查声明顺序 `type → const → var → func`（`decorder` linter 已覆盖）；检查文件末尾是否有随机插入的新函数（无前置关联）
 
 ---
 

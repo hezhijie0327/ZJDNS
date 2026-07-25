@@ -18,7 +18,7 @@ type PTR struct {
 	store cache.Store
 }
 
-// Wrap implements Middleware.
+// Wrap implements Wrapper.
 func (m *PTR) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		// Only run on cache miss.

@@ -8,9 +8,9 @@ import (
 	"codeberg.org/miekg/dns"
 
 	// NOTE(DC-05): CLI imports server/protocol/dnscrypt directly for config
-	// generation.  Extracting key generation to internal/dnscrypttool would
-	// break this coupling, but requires exporting crypto internals first.
-	// Deferred until the dnscryptcrypto package stabilises.
+	// generation.  Key generation was extracted to internal/dnscryptcrypto,
+	// but GenerateDNSCryptConfig still lives in server/protocol/dnscrypt
+	// because it wires cert signing into the protocol package's config.
 	serverdnscrypt "zjdns/server/protocol/dnscrypt"
 )
 

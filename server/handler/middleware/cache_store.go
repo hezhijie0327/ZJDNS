@@ -24,7 +24,7 @@ type CacheStore struct {
 	resolver handler.Resolver
 }
 
-// Wrap implements Middleware.
+// Wrap implements Wrapper.
 func (m *CacheStore) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		err := next.ServeDNS(ctx, qctx)

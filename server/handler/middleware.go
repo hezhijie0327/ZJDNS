@@ -40,7 +40,7 @@ type ZoneEvaluator interface {
 	Evaluate(qname string, qtype, qclass uint16, matchedTags map[string]bool) zone.Result
 }
 
-// Middleware wraps a QueryHandler, returning a new QueryHandler that adds
+// Wrapper wraps a QueryHandler, returning a new QueryHandler that adds
 // pre- or post-processing logic.  Implementations should delegate to
 // next.ServeDNS when they choose not to short-circuit.
 type Wrapper interface {

@@ -19,7 +19,7 @@ type EDNS struct {
 	config *config.ServerConfig
 }
 
-// Wrap implements Middleware.
+// Wrap implements Wrapper.
 func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		req := qctx.Req

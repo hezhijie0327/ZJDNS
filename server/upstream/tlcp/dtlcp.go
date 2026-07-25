@@ -18,7 +18,8 @@ import (
 // UDP socket.
 //
 // NOTE: dtlcp.Dial requires a connected UDP socket which pion/dtls manages
-// differently than gotlcp. Track gotlcp upstream for a fix. the connected-socket issue.
+// differently than gotlcp. Track gotlcp upstream for a fix to the
+// connected-socket issue.
 func dialDTLCP(ctx context.Context, network, addr string, cfg *dtlcp.Config) (*dtlcp.Conn, error) {
 	remoteAddr, err := net.ResolveUDPAddr(network, addr)
 	if err != nil {

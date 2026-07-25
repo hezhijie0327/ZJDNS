@@ -20,7 +20,7 @@ type DNS64 struct {
 	pending     *handler.PendingRequests
 }
 
-// Wrap implements Middleware.
+// Wrap implements Wrapper.
 func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		// Let resolution complete first.

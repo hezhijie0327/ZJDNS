@@ -19,7 +19,7 @@ type Resolution struct {
 	pending  *handler.PendingRequests
 }
 
-// Wrap implements Middleware.  The next handler is ignored — this middleware
+// Wrap implements Wrapper.  The next handler is ignored — this middleware
 // is terminal.
 func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {

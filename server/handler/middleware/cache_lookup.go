@@ -32,7 +32,7 @@ type CacheLookup struct {
 	resolver         handler.Resolver
 }
 
-// Wrap implements Middleware.
+// Wrap implements Wrapper.
 func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		qd := qctx.Req.Question[0]
