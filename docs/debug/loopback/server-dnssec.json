@@ -2,8 +2,8 @@
   "server": {
     "log_level": "debug",
     "protocol": {
-      "udp": "12533",
-      "tcp": "12533"
+      "udp": "12733",
+      "tcp": "12733"
     },
     "features": {
       "dnssec_enforce": true,

@@ -5,7 +5,7 @@
   },
   "upstream": [
     {
-      "address": "https://sm2.doh.pub/dns-query",
+      "address": "https://106.55.91.174:443/dns-query",
       "protocol": "http-tlcp",
       "server_name": "sm2.doh.pub",
       "skip_tls_verify": true

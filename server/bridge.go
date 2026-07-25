@@ -65,8 +65,13 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 				pool.DefaultMessage.Put(msg)
 				return
 			}
-			// syscall from the internal ReadFrom (msg is already packed).
-			if _, err := w.Write(msg.Data); err != nil {
+			// WriteTo handles the protocol-specific framing:
+			//   UDP: WriteMsgUDP(data, oob, clientAddr) to the correct client
+			//   TCP: 2-byte big-endian length prefix + data
+			// Do NOT replace with w.Write(msg.Data) — for unconnected UDP
+			// sockets, Write lacks the destination address and fails with
+			// "destination address required".
+			if _, err := msg.WriteTo(w); err != nil {
 				log.Debugf("SERVER: TCP SERVFAIL write error for %s: %v", addr, err)
 			}
 			pool.DefaultMessage.Put(msg)
@@ -109,7 +114,10 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 					pool.DefaultMessage.Put(response)
 					return
 				}
-				if _, err := w.Write(response.Data); err != nil {
+				// Use WriteTo, not w.Write(response.Data).
+				// WriteTo adds the 2-byte TCP length prefix per RFC 1035 §4.2.2
+				// and handles the connected-UDP WriteMsgUDP path.
+				if _, err := response.WriteTo(w); err != nil {
 					log.Debugf("SERVER: TCP write error for %s: %v", addr, err)
 				}
 				pool.DefaultMessage.Put(response)
@@ -140,7 +148,12 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 			}
 		}
 
-		if _, err := w.Write(response.Data); err != nil {
+		// Use WriteTo, not w.Write(response.Data).
+		// WriteTo detects the underlying *net.UDPConn and calls
+		// WriteMsgUDP(data, oob, clientAddr) — required because the
+		// UDP socket is unconnected (ListenUDP, not DialUDP).
+		// w.Write() would fail with "destination address required".
+		if _, err := response.WriteTo(w); err != nil {
 			log.Debugf("SERVER: UDP write error for %s: %v", w.RemoteAddr().String(), err)
 		}
 		pool.DefaultMessage.Put(response)

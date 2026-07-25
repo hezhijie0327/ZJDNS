@@ -4,11 +4,11 @@
 
 ```
 docs/debug/
-├── testing.md              # this file
+├── DEBUG.md                # this file
 ├── loopback/               # ZJDNS ↔ ZJDNS protocol loopback tests
-│   ├── server.json         # server: UDP/TCP/TLS/QUIC/HTTPS + DTLS + self-signed TLS
-│   ├── server-dnssec.json  # server: dnssec_enforce=true
-│   ├── server-tlcp.json    # server: TLCP + HTTP over TLCP + DTLCP (self-signed SM2)
+│   ├── server.json         # server: all protocols + self-signed TLS + DNSCrypt + TLCP/DTLCP
+│   ├── server-dnssec.json  # server: dnssec_enforce=true, recursive mode
+│   ├── server-hijack.json   # server: poisonguard + splitguard, recursive mode
 │   ├── client-udp.json     # client: UDP → server
 │   ├── client-tcp.json     # client: TCP → server
 │   ├── client-tls.json     # client: TLS → server
@@ -16,14 +16,19 @@ docs/debug/
 │   ├── client-http3.json   # client: HTTP3 → server
 │   ├── client-quic.json    # client: QUIC → server
 │   ├── client-dtls.json    # client: DTLS → server
+│   ├── client-tlcp.json     # client: TLCP → server
 │   ├── client-http-tlcp.json  # client: HTTP over TLCP → server
-│   └── client-dtlcp.json   # client: DTLCP → server
+│   ├── client-dtlcp.json   # client: DTLCP → server
+│   ├── client-dnscrypt.json       # client: DNSCrypt (PQ preferred) → server
+│   └── client-dnscrypt-classic.json  # client: DNSCrypt (classic only) → server
 ├── routedns/               # ZJDNS ↔ RouteDNS tests
 │   └── dtls-client.toml    # RouteDNS DTLS client → ZJDNS DTLS server
+│                            #   Prerequisite: generate cert with
+│                            #   openssl req -x509 -newkey ec ... -out /tmp/zjdns-certs/cert.pem
+│                            #   and configure ZJDNS to use the same cert
 ├── dnscrypt/               # ZJDNS ↔ DNSCrypt-proxy tests
 │   ├── zjdns-server.json          # ZJDNS DNSCrypt server (dual-cert: classical + PQ)
 │   ├── proxy-pq.toml              # DNSCrypt-proxy client (pqdnscrypt=true, default)
-│   ├── 
 │   └── proxy-classic.toml         # DNSCrypt-proxy client (pqdnscrypt=false)
 ├── defense/                # Anti-pollution defense scenarios
 │   ├── spoofguard.json              # forwarding UDP + spoofguard (8.8.8.8)
@@ -39,52 +44,104 @@ docs/debug/
     └── dnspod-http-tlcp.json  # DNSpod via HTTP over TLCP (国密)
 ```
 
-## Prerequisites
+RouteDNS, DNSCrypt-proxy, and AdGuard DNS Proxy are external tools tested
+against ZJDNS. RouteDNS and DNSCrypt-proxy have config files in `routedns/`
+and `dnscrypt/` respectively; dnsproxy is CLI-only (flags inline).
 
-> [!IMPORTANT]
-> DNSCrypt-proxy and RouteDNS **must be built from source**.  Distribution packages
-> (Homebrew, etc.) may ship older versions that lack required features such as
-> `pqdnscrypt`.
+## Prerequisites
 
 ```bash
 # Build ZJDNS
 go build -o /tmp/zjdns ./cmd/zjdns
-
-# Build RouteDNS (for DTLS test) — must compile from source
-cd /path/to/routedns && go build -o /tmp/routedns ./cmd/routedns
-
-# Build DNSCrypt-proxy (for DNSCrypt test) — must compile from source
-cd /path/to/dnscrypt-proxy/dnscrypt-proxy && go build -o /tmp/dnscrypt-proxy .
 ```
 
-TLS certificates use the built-in `self_signed` feature — no external cert generation needed.
+### DNSCrypt-proxy (external)
+
+> [!IMPORTANT]
+> **Must be built from source.** Homebrew's `dnscrypt-proxy` (2.1.18) packages an
+> older Go compiler that lacks the X-Wing PQ KEM implementation. Only the
+> source build supports `pqdnscrypt`.
+
+```bash
+git clone https://github.com/dnscrypt/dnscrypt-proxy.git /tmp/dnscrypt-proxy
+cd /tmp/dnscrypt-proxy
+go build -o dnscrypt-proxy ./dnscrypt-proxy
+# Binary: /tmp/dnscrypt-proxy/dnscrypt-proxy
+```
+
+### RouteDNS (external)
+
+> [!IMPORTANT]
+> **Must be built from source.** No prebuilt binaries are distributed.
+
+```bash
+git clone https://github.com/folbricht/routedns.git /tmp/routedns
+cd /tmp/routedns
+go build -o routedns ./cmd/routedns
+# Binary: /tmp/routedns/routedns
+```
+
+RouteDNS DTLS **requires a pre-generated CA certificate**. ZJDNS uses
+`self_signed: true` which generates an in-memory cert each startup — RouteDNS
+cannot verify this without the matching CA cert on disk. See § RouteDNS DTLS
+Test below for setup instructions.
+
+### AdGuard DNS Proxy (external)
+
+```bash
+git clone https://github.com/AdguardTeam/dnsproxy.git /tmp/dnsproxy
+cd /tmp/dnsproxy
+go build -o dnsproxy .
+# Binary: /tmp/dnsproxy/dnsproxy
+```
+
+### TLS / TLCP Certificates
+
+ZJDNS loopback and upstream tests use `self_signed: true` and
+`skip_tls_verify: true` — no external cert generation needed.
+
+### macOS Notes
+
+- **Do not use port 5353** — reserved by mDNSResponder.
+- **dig may time out on UDP** when the server binds to multiple IPs
+  (127.0.0.1, ::1, external). This is a macOS kernel UDP-loopback quirk,
+  not a ZJDNS bug. Workaround: use TCP (`+tcp`) or query via a ZJDNS
+  forwarding client (see Loopback Tests below). Linux is unaffected.
 
 ## Loopback Tests (ZJDNS ↔ ZJDNS)
 
-Start the server (UDP, TCP, TLS, QUIC, HTTPS):
+Start the server once (all protocols):
 
 ```bash
 /tmp/zjdns -config docs/debug/loopback/server.json &
+sleep 3
 ```
 
-Test each client protocol:
+### Client Ports Reference
+
+| Client Config | Client Port | Protocol | Server Port |
+|---------------|:-----------:|----------|:-----------:|
+| `client-udp.json` | 10553 | UDP | 10533 |
+| `client-tcp.json` | 10653 | TCP | 10533 |
+| `client-tls.json` | 10753 | DoT | 10853 |
+| `client-https.json` | 10853 | DoH | 10443 |
+| `client-http3.json` | 13953 | DoH3 | 10444 |
+| `client-quic.json` | 10953 | DoQ | 10784 |
+| `client-dtls.json` | 14953 | DTLS | 10434 |
+| `client-tlcp.json` | 14553 | TLCP | 10850 |
+| `client-http-tlcp.json` | 13553 | TLCP DoH | 10440 |
+| `client-dtlcp.json` | 14653 | DTLCP | 8542 |
+| `client-dnscrypt.json` | 12444 | DNSCrypt (PQ) | 12443 |
+| `client-dnscrypt-classic.json` | 12445 | DNSCrypt (classic) | 12443 |
+
+### Quick Tests
 
 ```bash
-# Direct UDP/TCP (dig against server directly)
-dig @127.0.0.1 -p 10533 www.baidu.com A +short
+# Direct to server (TCP recommended on macOS — see Prerequisites)
 dig @127.0.0.1 -p 10533 www.baidu.com A +short +tcp
 
-# Via forwarding clients
-# Individual client tests
-# Ports: udp=10553 tcp=10653 tls=10753 https=10853 quic=10953 http3=13953 dtls=14953
-
-# HTTP3 loopback
-/tmp/zjdns -config docs/debug/loopback/client-http3.json &
-sleep 2
-dig @127.0.0.1 -p 13953 www.baidu.com A +short
-pkill -f "client-http3"
-
-# DTLS loopback
+# Via forwarding clients — start one client, query it, kill it
+# Example: DTLS
 /tmp/zjdns -config docs/debug/loopback/client-dtls.json &
 sleep 2
 dig @127.0.0.1 -p 14953 www.baidu.com A +short
@@ -100,11 +157,11 @@ pkill -f "client-dtls"
 sleep 2
 
 # Bogus signature → SERVFAIL
-dig @127.0.0.1 -p 12533 sigfail.ippacket.stream A +short
+dig @127.0.0.1 -p 12733 sigfail.ippacket.stream A +short
 # Expected: SERVFAIL (no answer)
 
 # Valid signature → NOERROR
-dig @127.0.0.1 -p 12533 sigok.ippacket.stream A +short
+dig @127.0.0.1 -p 12733 sigok.ippacket.stream A +short
 # Expected: valid A record
 
 pkill -f "server-dnssec"
@@ -192,62 +249,79 @@ pkill -f "recursive-defense"
 
 ## RouteDNS DTLS Test (ZJDNS ↔ RouteDNS)
 
-Start ZJDNS server with DTLS enabled:
+> [!IMPORTANT]
+> RouteDNS DTLS requires a CA certificate on disk. ZJDNS generates a new self-signed
+> cert in memory on every startup, so the cert must be extracted and saved before
+> RouteDNS can connect. Alternatively, configure ZJDNS with a fixed cert via
+> `certificate.tls.cert_file` / `certificate.tls.key_file`.
+
+### Setup (one-time)
+
+```bash
+# Generate a self-signed ECDSA cert that both ZJDNS and RouteDNS will use
+mkdir -p /tmp/zjdns-certs
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+  -keyout /tmp/zjdns-certs/key.pem -out /tmp/zjdns-certs/cert.pem \
+  -days 30 -nodes -subj "/CN=zjdns-test.local"
+```
+
+### Test
+
+Start ZJDNS with the fixed cert (requires a custom config that uses `cert_file`
+instead of `self_signed`), or use `self_signed` and extract the cert manually.
 
 ```bash
 /tmp/zjdns -config docs/debug/loopback/server.json &
-```
-
-Start RouteDNS as DTLS client:
-
-```bash
-/tmp/routedns docs/debug/routedns/dtls-client.toml &
-```
-
-Query through RouteDNS (UDP→DTLS→ZJDNS→recursive):
-
-```bash
+sleep 3
+/tmp/routedns/routedns docs/debug/routedns/dtls-client.toml &
+sleep 2
 dig @127.0.0.1 -p 12053 www.baidu.com A +short
 ```
 
 ## DNSCrypt Tests (ZJDNS ↔ DNSCrypt-proxy)
 
 The server always serves both classical (XChacha20Poly1305) and post-quantum
-(X-Wing KEM) certificates simultaneously. The client chooses which to use.
+(X-Wing KEM) certificates simultaneously. The proxy chooses which to use.
 
 ### Post-Quantum (pqdnscrypt=true, default)
 
 ```bash
 /tmp/zjdns -config docs/debug/dnscrypt/zjdns-server.json &
-/tmp/dnscrypt-proxy -config docs/debug/dnscrypt/proxy-pq.toml &
-sleep 4
+sleep 3
+/tmp/dnscrypt-proxy/dnscrypt-proxy -config docs/debug/dnscrypt/proxy-pq.toml &
+sleep 3
 dig @127.0.0.1 -p 13053 www.baidu.com A +short
-# Expected: uses X-Wing PQ key exchange
+# Expected log: "using the post-quantum X-Wing key exchange"
+pkill -f "dnscrypt-proxy"
 ```
 
 ### Classic (pqdnscrypt=false)
 
 ```bash
-/tmp/zjdns -config docs/debug/dnscrypt/zjdns-server.json &
-/tmp/dnscrypt-proxy -config docs/debug/dnscrypt/proxy-classic.toml &
+/tmp/dnscrypt-proxy/dnscrypt-proxy -config docs/debug/dnscrypt/proxy-classic.toml &
 sleep 3
 dig @127.0.0.1 -p 13153 www.baidu.com A +short
 # Expected: uses XChacha20-Poly1305 (classical only)
+pkill -f "dnscrypt-proxy"
 ```
 
 ### Loopback (ZJDNS ↔ ZJDNS)
 
+ZJDNS server has DNSCrypt enabled by default (`server.json`). Use the
+ZJDNS DNSCrypt forwarding clients:
+
 ```bash
 # PQ preferred (default)
-/tmp/zjdns -config docs/debug/loopback/server.json &
 /tmp/zjdns -config docs/debug/loopback/client-dnscrypt.json &
 sleep 2
 dig @127.0.0.1 -p 12444 www.baidu.com A +short
+pkill -f "client-dnscrypt"
 
 # Classical only
 /tmp/zjdns -config docs/debug/loopback/client-dnscrypt-classic.json &
 sleep 2
 dig @127.0.0.1 -p 12445 www.baidu.com A +short
+pkill -f "client-dnscrypt-classic"
 ```
 
 ## Upstream Protocol Tests
@@ -276,53 +350,93 @@ pkill -f "alidns-http3"
 
 ## TLCP / DTLCP (国密) Tests
 
+The main loopback server (`server.json`) has TLCP + DTLCP enabled alongside all
+other protocols. No separate server config needed.
+
 ### TLCP Loopback (ZJDNS ↔ ZJDNS)
 
 ```bash
-# Start TLCP server (TLCP TLS + TLCP HTTPS with self-signed SM2 certs)
-/tmp/zjdns -config docs/debug/loopback/server-tlcp.json &
-sleep 2
+/tmp/zjdns -config docs/debug/loopback/server.json &
+sleep 3
 
-# TLCP HTTPS loopback client
+# TLCP DoT
+/tmp/zjdns -config docs/debug/loopback/client-tlcp.json &
+sleep 2
+dig @127.0.0.1 -p 14553 www.baidu.com A +short
+pkill -f "client-tlcp"
+
+# TLCP DoH
 /tmp/zjdns -config docs/debug/loopback/client-http-tlcp.json &
 sleep 2
 dig @127.0.0.1 -p 13553 www.baidu.com A +short
-
-pkill -f "server-tlcp\|client-http-tlcp"
+pkill -f "client-http-tlcp"
 ```
 
 ### DTLCP Loopback (ZJDNS ↔ ZJDNS)
 
-Uses the same server as TLCP (server-tlcp.json has DTLCP enabled alongside TLCP).
-
 ```bash
-/tmp/zjdns -config docs/debug/loopback/server-tlcp.json &
-sleep 2
-
 /tmp/zjdns -config docs/debug/loopback/client-dtlcp.json &
 sleep 2
-dig @127.0.0.1 -p 14553 www.baidu.com A +short
-
-pkill -f "server-tlcp\|client-dtlcp"
+dig @127.0.0.1 -p 14653 www.baidu.com A +short
+pkill -f "client-dtlcp"
 ```
 
 ### DNSpod TLCP HTTPS (External Upstream)
+
+> [!NOTE]
+> Uses a direct IP address to avoid DNS resolution chicken-and-egg (TLCP
+> connection requires resolving the hostname, which requires DNS).
+> `server_name` still sends the correct SNI for the TLS handshake.
 
 ```bash
 /tmp/zjdns -config docs/debug/upstream/dnspod-http-tlcp.json &
 sleep 2
 dig @127.0.0.1 -p 15553 www.baidu.com A +short
-
 pkill -f "dnspod-http-tlcp"
 ```
 
 ### Quad9 (DNSCrypt)
+
+> [!NOTE]
+> Quad9 DNSCrypt (9.9.9.9:8443) may be unreachable from some networks
+> (e.g. GFW blocks non-standard ports). If certificate fetch fails with
+> "no valid dnscrypt certificate", the network blocks the connection.
 
 ```bash
 /tmp/zjdns -config docs/debug/upstream/quad9-dnscrypt.json &
 sleep 4
 dig @127.0.0.1 -p 11853 www.baidu.com A +short +time=5
 ```
+
+## AdGuard DNS Proxy DoH3 Test
+
+Test ZJDNS DoH3 interoperability with [AdGuard DNS Proxy](https://github.com/AdguardTeam/dnsproxy):
+
+```bash
+/tmp/zjdns -config docs/debug/loopback/server.json &
+sleep 3
+
+# dnsproxy: listen on UDP/TCP 53530, forward via DoH3 to ZJDNS
+# h3:// scheme selects HTTP/3 directly (no --http3 flag needed)
+# --insecure needed because ZJDNS uses a self-signed cert
+# -l / -p: separate listen IP and port (not host:port format)
+/tmp/dnsproxy/dnsproxy \
+  -l 0.0.0.0 \
+  -p 53530 \
+  -u h3://127.0.0.1:10444/dns-query \
+  --insecure \
+  > /tmp/dnsproxy.log 2>&1 &
+sleep 3
+
+dig @127.0.0.1 -p 53530 example.com A +short
+# Expected: valid A record
+
+pkill -f dnsproxy
+```
+
+> [!NOTE]
+> dnsproxy uses `h3://` scheme for HTTP/3 (not `https://` + `--http3` flag).
+> Listen address uses separate `-l` (IP) and `-p` (port) flags, not `host:port`.
 
 ## Debug Config
 
