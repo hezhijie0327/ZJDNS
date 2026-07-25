@@ -30,7 +30,7 @@ func (c *Client) proxyDialer(server *config.UpstreamServer) *socks5.Dialer {
 	if len(c.proxyDialers) >= config.DefaultTransportMax*2 {
 		for k, d := range c.proxyDialers {
 			if d != nil {
-				_ = d.Close()
+				zdnsutil.CloseWithLog(d, server.Proxy, "UPSTREAM")
 			}
 			delete(c.proxyDialers, k)
 			break

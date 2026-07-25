@@ -180,6 +180,7 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 func (c *Client) WarmUp(ctx context.Context, server *config.UpstreamServer) {
 	addr, providerName, publicKey, err := c.resolveStamp(server)
 	if err != nil {
+		log.Debugf("UPSTREAM: DNSCrypt WarmUp failed for %s: %v", server.Address, err)
 		return
 	}
 	_, _ = c.state(ctx, addr, providerName, publicKey, server)

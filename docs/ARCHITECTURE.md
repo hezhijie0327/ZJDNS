@@ -68,6 +68,7 @@ CREATE TABLE ptr_map (
     ttl      INTEGER NOT NULL,
     PRIMARY KEY (rdata_ip, entry_id, name)
 ) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_ptr_map_entry_id ON ptr_map(entry_id);
 
 -- Per-IP latency measurements. Keyed by rdata_ip only.
 CREATE TABLE ip_latency (
@@ -140,7 +141,7 @@ Full implementation with PQC support. Two crypto constructions: XWingPQ (default
 - **Classical (124B)**: `CertMagic(4) + ESVersion(2) + Minor(2) + Sig(64) + ResolverPk(32) + ClientMagic(8) + Serial(4) + TS-start(4) + TS-end(4)`
 - **PQ (1320B)**: Same header + `PqPublicKey(1216) + ClientMagic(8) + Serial(4) + TS-start(4) + TS-end(4) + Extensions(12)`
 - ClientMagic for PQ = SHA-256(PqPublicKey)[:8]
-- PqCertContext = HKDF("DNSCrypt-PQ-v1" + es-version + minor + resolver-pk + client-magic + serial + ts-start + ts-end + extensions)
+- PqCertContext = HKDF("DNSCrypt-PQ-v1" + es-version + minor + pq-public-key + client-magic + serial + ts-start + ts-end + extensions)
 
 ### Ticket Resumption
 

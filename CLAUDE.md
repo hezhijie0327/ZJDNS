@@ -159,9 +159,9 @@ go test -bench=. -short -benchtime=500ms ./... \
     --stamp-addr 9.9.9.9 --provider-name dns.quad9.net:443 --path /dns-query
 
 # Probe upstream
-./zjdns --probe --pipeline    tcp://8.8.8.8    # RFC 7766 pipelining
-./zjdns --probe --conn-reuse  tls://1.1.1.1    # RFC 1035 connection reuse
-./zjdns --probe --idle-timeout tls://1.1.1.1   # server idle timeout
+./zjdns --probe --pipeline    tcp://8.8.8.8:53    # RFC 7766 pipelining
+./zjdns --probe --conn-reuse  tls://1.1.1.1:853  # RFC 1035 connection reuse
+./zjdns --probe --idle-timeout tls://1.1.1.1:853 # server idle timeout
 
 # Pre-commit hook
 sh scripts/install-hook.sh                     # Linux / macOS

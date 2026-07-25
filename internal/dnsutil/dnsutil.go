@@ -198,7 +198,7 @@ func LogHandshake(info *HandshakeInfo) {
 		buf.WriteString(" alpn=")
 		buf.WriteString(info.ALPN)
 	}
-	log.Debugf("%s", buf.String())
+	log.Debugf("TLS: %s", buf.String())
 }
 
 // IsTemporaryError reports whether err is a temporary network error (timeout)
