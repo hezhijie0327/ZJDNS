@@ -173,6 +173,16 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			continue
 		}
 
+		// RFC 9156 §2.3: when a minimised name query returns NXDOMAIN,
+		// the intermediate label does not correspond to a delegation
+		// point.  Expose the full QNAME immediately instead of looping
+		// through non-existent subzones.
+		if qnameMinimise && !strings.EqualFold(queryQuestion.Name, qname) && response.Rcode == dns.RcodeNameError {
+			pool.DefaultMessage.Put(response)
+			minimiseSteps = config.DefaultQnameMinimiseCount
+			continue
+		}
+
 		if termRes := r.processAnswerWithDNSSEC(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain, &validated, ecsResponse); termRes != nil {
 			return *termRes
 		}
