@@ -527,3 +527,42 @@ func BenchmarkGetZoneCutSigner(b *testing.B) {
 		rr.getZoneCutSigner(msg, zone+".")
 	}
 }
+
+// ── rrsigKeyTagMatchesDS ──────────────────────────────────────────────────────
+
+func TestRrsigKeyTagMatchesDS(t *testing.T) {
+	ksk, _ := genTestKey("example.com", dns.FlagSEP|dns.FlagZONE)
+	ds := []*dns.DS{ksk.ToDS(dns.SHA256)}
+	rrsig := []*dns.RRSIG{{RRSIG: rdata.RRSIG{KeyTag: ksk.KeyTag()}}}
+	if !rrsigKeyTagMatchesDS(ds, rrsig) {
+		t.Error("should match when DS and RRSIG key tags are equal")
+	}
+}
+
+func TestRrsigKeyTagMatchesDS_NoMatch(t *testing.T) {
+	ksk, _ := genTestKey("example.com", dns.FlagSEP|dns.FlagZONE)
+	other, _ := genTestKey("other.example.com", dns.FlagSEP|dns.FlagZONE)
+	ds := []*dns.DS{ksk.ToDS(dns.SHA256)}
+	rrsig := []*dns.RRSIG{{RRSIG: rdata.RRSIG{KeyTag: other.KeyTag()}}}
+	if rrsigKeyTagMatchesDS(ds, rrsig) {
+		t.Error("should not match when key tags differ")
+	}
+}
+
+func TestRrsigKeyTagMatchesDS_EmptyRRSIGs(t *testing.T) {
+	ksk, _ := genTestKey("example.com", dns.FlagSEP|dns.FlagZONE)
+	ds := []*dns.DS{ksk.ToDS(dns.SHA256)}
+	if rrsigKeyTagMatchesDS(ds, nil) {
+		t.Error("should not match with nil RRSIGs")
+	}
+}
+
+func TestRrsigKeyTagMatchesDS_MultipleDS(t *testing.T) {
+	k1, _ := genTestKey("a.example.com", dns.FlagSEP|dns.FlagZONE)
+	k2, _ := genTestKey("b.example.com", dns.FlagSEP|dns.FlagZONE)
+	ds := []*dns.DS{k1.ToDS(dns.SHA256), k2.ToDS(dns.SHA256)}
+	rrsig := []*dns.RRSIG{{RRSIG: rdata.RRSIG{KeyTag: k2.KeyTag()}}}
+	if !rrsigKeyTagMatchesDS(ds, rrsig) {
+		t.Error("should match any DS key tag against RRSIG key tags")
+	}
+}

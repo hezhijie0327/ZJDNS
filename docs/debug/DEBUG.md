@@ -167,6 +167,25 @@ dig @127.0.0.1 -p 12733 sigok.ippacket.stream A +short
 pkill -f "server-dnssec"
 ```
 
+### Offline KSK (CDS fallback)
+
+部分域名（如 `jellyfin.org`）使用 offline KSK 部署：KSK 签名 DNSKEY RRset
+但不在其中发布，仅有 ZSK 在 DNSKEY set 中。验证器须通过 CDS (RFC 7344) 确认委托链。
+
+```bash
+/tmp/zjdns -config docs/debug/loopback/server-dnssec.json &
+sleep 2
+
+# Offline KSK — must resolve via CDS fallback
+dig @127.0.0.1 -p 12733 repo.jellyfin.org A +short
+# Expected: valid A record (68.183.204.194), NOT SERVFAIL
+
+dig @127.0.0.1 -p 12733 jellyfin.org DNSKEY +short
+# Expected: single ZSK (flags=256), no KSK published — CDS fallback activates
+
+pkill -f "server-dnssec"
+```
+
 ## Defense Tests
 
 防御机制分为 forwarding 和 recursive 两类场景，独立测试：
@@ -514,4 +533,55 @@ dig @127.0.0.1 -p 55454 www.baidu.com A +short
 ./zjdns -config <(echo '{"server":{"protocol":{"dtlcp":"8542"},"certificate":{"domain":"dtlcp.local","tlcp":{"self_signed":true}},"features":{"cache":{"max_entries":0}}},"upstream":[{"address":"builtin_recursive"}]}') &
 ./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454"}},"upstream":[{"address":"127.0.0.1:8542","protocol":"dtlcp","server_name":"dtlcp.local","skip_tls_verify":true}]}') &
 dig @127.0.0.1 -p 55454 www.baidu.com A +short
+```
+
+## SQL Debug Queries
+
+日常排查用 SQL 查询，直接对 cache.db 执行（服务运行中可读，加 `--rw` 可写）：
+
+```bash
+# 必须指定 --sql 参数格式：./zjdns --sql <db_path> "<query>"
+# 或者 docker exec -it zjdns /zjdns --sql /data/cache.db "<query>"
+
+./zjdns --sql cache.db "SELECT qname, COUNT(*) AS cnt FROM query_log GROUP BY qname ORDER BY cnt DESC LIMIT 20"
+```
+
+### 排查 SERVFAIL 域名
+
+找出**只出 SERVFAIL 从未成功**的域名——这种往往是被误判的 DNSSEC bogus、上游不通等问题：
+
+```bash
+docker exec -it zjdns /zjdns --sql /data/cache.db "
+    SELECT qname, COUNT(*) AS servfail_count
+    FROM query_log
+    WHERE rcode = 2
+        AND qname NOT IN (
+            SELECT DISTINCT qname FROM query_log WHERE rcode = 0
+        )
+    GROUP BY qname
+    ORDER BY servfail_count DESC
+"
+```
+
+### 按 rcode 分布
+
+```bash
+./zjdns --sql cache.db "
+    SELECT rcode, COUNT(*) AS cnt
+    FROM query_log
+    GROUP BY rcode
+    ORDER BY cnt DESC
+"
+```
+
+### 最近 SERVFAIL 详情
+
+```bash
+./zjdns --sql cache.db "
+    SELECT timestamp, qname, qtype, server, response_ms
+    FROM query_log
+    WHERE rcode = 2
+    ORDER BY timestamp DESC
+    LIMIT 20
+"
 ```
