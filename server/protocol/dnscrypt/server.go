@@ -321,7 +321,11 @@ func (s *Server) hasClientMagic(b []byte) bool {
 
 // buildCertTXTForCert serialises a single certificate into TXT chunks.
 func buildCertTXTForCert(cert *dnscryptcrypto.Certificate) []string {
-	certBytes, _ := cert.MarshalBinary()
+	certBytes, err := cert.MarshalBinary()
+	if err != nil {
+		log.Warnf("DNSCRYPT: marshal cert failed: %v", err)
+		return nil
+	}
 	escaped := escapeBackslash(certBytes)
 	const maxChunk = 255
 	var chunks []string

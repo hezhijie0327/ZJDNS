@@ -70,7 +70,15 @@ func NewMessage() *Message {
 // so callers that need a clean slate are covered; callers that pre-populate
 // fields before use can rely on the zero state.
 func (m *Message) Get() *dns.Msg {
-	return m.pool.Get().(*dns.Msg)
+	v := m.pool.Get()
+	if v == nil {
+		return &dns.Msg{}
+	}
+	msg, ok := v.(*dns.Msg)
+	if !ok {
+		return &dns.Msg{}
+	}
+	return msg
 }
 
 // Put returns a dns.Msg to the pool.
@@ -105,10 +113,13 @@ func NewBuffer(size, poolSize int) *Buffer {
 func (b *Buffer) Get() []byte {
 	bufPtr := b.pool.Get()
 	if bufPtr == nil {
-		b := make([]byte, b.size)
-		return b
+		return make([]byte, b.size)
 	}
-	return *bufPtr.(*[]byte)
+	buf, ok := bufPtr.(*[]byte)
+	if !ok {
+		return make([]byte, b.size)
+	}
+	return *buf
 }
 
 // Put returns a byte slice to the pool. The slice must have exactly the

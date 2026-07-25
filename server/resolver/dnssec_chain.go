@@ -59,7 +59,10 @@ func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, c
 
 				// Now verify the answer with the newly verified keys
 				if len(response.Answer) > 0 {
-					validated, _ := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
+					validated, valErr := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
+					if valErr != nil {
+						log.Debugf("SECURITY: response validation error for %s: %v", currentDomain, valErr)
+					}
 					return validated
 				}
 				return true
@@ -76,7 +79,10 @@ func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, c
 
 				// Now verify the answer with the newly verified keys
 				if len(response.Answer) > 0 {
-					validated, _ := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
+					validated, valErr := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
+					if valErr != nil {
+						log.Debugf("SECURITY: response validation error for %s: %v", currentDomain, valErr)
+					}
 					return validated
 				}
 				return true

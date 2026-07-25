@@ -285,6 +285,7 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 		synth, err := dns64.New(cfg.Server.Features.DNS64.Prefix)
 		if err != nil {
 			log.Warnf("DNS64: %v, using default prefix", err)
+			// DefaultDNS64Prefix is a constant; New only fails for invalid prefixes.
 			synth, _ = dns64.New(config.DefaultDNS64Prefix)
 		}
 		if synth != nil {

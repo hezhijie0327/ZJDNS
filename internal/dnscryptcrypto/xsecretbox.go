@@ -62,6 +62,8 @@ func XchachaSeal(out, nonce, message, key []byte) (res []byte) {
 	}
 
 	var firstBlock [XchachaBlockSize]byte
+	// key/nonce sizes already validated by panic checks above;
+	// NewUnauthenticatedCipher cannot fail with valid parameters.
 	cipher, _ := chacha20.NewUnauthenticatedCipher(key, nonce)
 	cipher.XORKeyStream(firstBlock[:], firstBlock[:])
 	var polyKey [XchachaKeySize]byte
@@ -107,6 +109,8 @@ func XchachaOpen(out, nonce, ciphertext, key []byte) (res []byte, err error) {
 	}
 
 	var firstBlock [XchachaBlockSize]byte
+	// key/nonce sizes already validated by panic checks above;
+	// NewUnauthenticatedCipher cannot fail with valid parameters.
 	cipher, _ := chacha20.NewUnauthenticatedCipher(key, nonce)
 	cipher.XORKeyStream(firstBlock[:], firstBlock[:])
 	var polyKey [XchachaKeySize]byte

@@ -24,7 +24,7 @@ func minimiseQNAME(originalQname, currentZone string, labelsToAdd int) string {
 		// Take the rightmost labelsToAdd labels using Prev
 		offset := len(fqOrig)
 		for range labelsToAdd {
-			offset, _ = dnsutil.Prev(fqOrig, offset)
+			offset, _ = dnsutil.Prev(fqOrig, offset) // safe: fqOrig is a valid FQDN, Prev walks backwards from end
 		}
 		return fqOrig[offset:]
 	}
@@ -38,7 +38,7 @@ func minimiseQNAME(originalQname, currentZone string, labelsToAdd int) string {
 	zoneLabels := dnsutil.Labels(fqZone)
 	offset := len(fqOrig)
 	for range zoneLabels {
-		offset, _ = dnsutil.Prev(fqOrig, offset)
+		offset, _ = dnsutil.Prev(fqOrig, offset) // safe: fqOrig is a valid FQDN, Prev walks backwards from end
 	}
 	remaining := fqOrig[:offset]
 	if remaining == "" {

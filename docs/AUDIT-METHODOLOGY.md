@@ -12,7 +12,7 @@
 
 ### 1.1 审计维度
 
-每个文件、每个包在以下 9 个维度接受审查：
+每个文件、每个包在以下 10 个维度接受审查：
 
 | 维度 | 关注点 |
 |------|--------|
@@ -25,6 +25,7 @@
 | **Panic 检测** | nil 解引用、切片越界、空 map 写入、裸类型断言、通道关闭、除零、use-after-Put |
 | **日志质量** | 完整性（关键路径有日志）、精准性（级别正确、信息充分）、不刷屏（info/warn 不在热路径重复打印） |
 | **文档质量** | 架构文档与代码一致、CLAUDE.md 类型引用准确、注释不过时/不误导、关键设计决策有记录、公开 API 有 godoc |
+| **参数校验** | 公开函数未检查 nil/空字符串/零值参数；构造后未验证字段有效性（如 `net.ParseIP("")` 返回 nil）；错误返回值被 `_` 丢弃导致后续代码基于零值继续执行；`func(_, name string)` 中 `_` 丢弃的参数是否存在应校验但未校验的值 |
 
 ### 1.2 审计架构
 
@@ -40,15 +41,16 @@ Phase 1: 包级审计（7 agent 并行）
 ├── Handler audit:    server/handler/*
 └── Defense audit:    server/defense/*
 
-Phase 2: 交叉分析（8 agent 并行）
-├── CrossCut Locks:    全部 sync.Mutex / RWMutex / Once / atomic / channel / WaitGroup / Pool
-├── CrossCut Memory:   goroutine 泄漏、无界增长、资源泄漏、池误用
-├── CrossCut Panic:    nil 解引用、切片越界、空 map 写入、裸类型断言、死锁、除零
-├── CrossCut DeadCode: 未用符号、重复代码、不必要接口
-├── CrossCut Perf:     SQL N+1、热路径分配、索引缺失
-├── CrossCut Arch:     导入分层验证、循环依赖风险
-├── CrossCut Logging:  日志级别审计、info/warn 热路径刷屏、错误路径缺失日志、格式一致性
-└── CrossCut Docs:     全部 .md 文件与代码一致性、CLAUDE.md 准确性、注释是否过时、godoc 覆盖率
+Phase 2: 交叉分析（9 agent 并行）
+├── CrossCut Locks:      全部 sync.Mutex / RWMutex / Once / atomic / channel / WaitGroup / Pool
+├── CrossCut Memory:     goroutine 泄漏、无界增长、资源泄漏、池误用
+├── CrossCut Panic:      nil 解引用、切片越界、空 map 写入、裸类型断言、死锁、除零
+├── CrossCut Validation: 公开函数参数未校验（nil/空字符串/零值）、错误被 _ 丢弃、构造函数未验证字段
+├── CrossCut DeadCode:   未用符号、重复代码、不必要接口
+├── CrossCut Perf:       SQL N+1、热路径分配、索引缺失
+├── CrossCut Arch:       导入分层验证、循环依赖风险
+├── CrossCut Logging:    日志级别审计、info/warn 热路径刷屏、错误路径缺失日志、格式一致性
+└── CrossCut Docs:       全部 .md 文件与代码一致性、CLAUDE.md 准确性、注释是否过时、godoc 覆盖率
 
 Phase 3: 综合报告
 └── Synthesis: 汇总排序 → 主题分析 → 行动计划
@@ -130,22 +132,69 @@ go test -short ./cache/...        # 缓存测试
 
 ### 3.4 提交规范
 
-```
-fix: <简短描述> (<审计引用>)
+**每次提交只包含一类修复**，不要将不同维度/不同包的修复混在一个 commit 中。
 
-<1-2 行说明问题和修复>
+**主题行格式**：
 
-Co-Authored-By: Claude <noreply@anthropic.com>
+```
+<type>: <具体描述> (<审计引用>)
 ```
 
-示例：
+- `type`: `fix`（修 bug）、`perf`（性能）、`refactor`（重构）、`docs`（文档）
+- `<具体描述>`：说明**修复了什么**，不是审计阶段。禁止 `Round X audit`、`fix audit findings` 等笼统描述
+- `<审计引用>`：可选，引用审计报告中的发现编号（如 `C1`、`H3`、`M7`）
+
+**Good（描述具体修复内容）**：
+
 ```
-fix: add missing SQL separator in stale cleanup (C1)
+fix: add SQL separator in stale entry cleanup (C1)
 
 Two DELETE statements concatenated without semicolon produced
 invalid SQL, silently breaking ip_latency/query_log cleanup.
 
 Co-Authored-By: Claude <noreply@anthropic.com>
+```
+
+```
+fix: acquire writeMu in TCP SERVFAIL path to prevent stream corruption (H1)
+
+The capacity overflow branch in handleDNSRequest wrote SERVFAIL
+directly to the TCP connection without acquiring writeMu, racing
+with pipelined response writes and corrupting the byte stream.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+```
+
+```
+fix: check discarded errors in TLCP self-signed cert generation (H1)
+
+rand.Int and smx509.ParseCertificate errors were silently discarded
+with _, causing nil-pointer dereference panics when entropy or DER
+parsing failed.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+```
+
+**Bad（禁止使用）**：
+
+```
+fix: Round 1 audit fixes           ← 太笼统，无法知道改了什么
+fix: fix audit findings             ← 同上
+fix: Round 1+2 audit — 11 HIGH fixes ← 数量没有意义，描述具体内容
+fix: various bug fixes              ← 无法 git bisect 定位
+```
+
+**多个修复分多次提交**：
+
+```
+git commit -m "fix: acquire writeMu in TCP SERVFAIL path (H1)"   ← 一个修复一个 commit
+git commit -m "fix: check nil synth before DNS64 log (H2)"       ← 另一个修复另一个 commit
+```
+
+**同一类修复（同一维度、同一根因）可以合并**：
+
+```
+git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 ```
 
 ---
@@ -156,9 +205,9 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 
 | 等级 | 定义 | 示例 |
 |------|------|------|
-| **CRITICAL** | 数据损坏、崩溃、panic、安全绕过、数据丢失 | SQL 静默失败、nil-map panic、池双重归还导致连接损坏 |
-| **HIGH** | 资源耗尽、goroutine 泄漏、竞态、缓存损坏、死锁 | 池泄漏导致 QPS 下降、goroutine 无界增长、浅拷贝共享底层数组、mutex 成功路径未解锁 |
-| **MEDIUM** | 维护性、边际正确性问题、次优分配、日志质量、文档质量 | 耦合违规、死代码、不必要的堆分配、配置验证缺失、info/warn 热路径刷屏、错误路径无日志、架构文档与代码不一致 |
+| **CRITICAL** | 数据损坏、崩溃、panic、安全绕过、数据丢失 | SQL 静默失败、nil-map panic、池双重归还导致连接损坏、参数 nil 未检查导致 panic |
+| **HIGH** | 资源耗尽、goroutine 泄漏、竞态、缓存损坏、死锁 | 池泄漏导致 QPS 下降、goroutine 无界增长、浅拷贝共享底层数组、mutex 成功路径未解锁、错误被 `_` 丢弃导致基于零值的错误逻辑 |
+| **MEDIUM** | 维护性、边际正确性问题、次优分配、日志质量、文档质量 | 耦合违规、死代码、不必要的堆分配、配置验证缺失、info/warn 热路径刷屏、错误路径无日志、架构文档与代码不一致、空字符串/零值参数未经校验传入深层调用 |
 | **LOW** | 文档、微优化、代码异味 | 误导性注释、重复逻辑、脆弱的假设注释、Debug 日志格式不一致 |
 
 ### 4.2 常见根因模式
@@ -177,6 +226,8 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 | **TODO 管理** | TODO 注释累积但不实现，变成虚假安全感 | 每个 TODO 要么实现、要么改为 NOTE 并说明原因、要么删除 |
 | **日志质量** | info/warn 在热路径重复打印刷屏；错误路径缺少上下文（无 qname/qtype/server）；日志级别误用（error 用于可恢复、debug 用于关键信号） | 每查询一条日志原则：info 仅用于状态变更，warn 仅用于可恢复异常且带采样，error 仅用于不可恢复；热路径日志全部 debug；每个日志含足够定位信息 |
 | **文档腐烂** | 架构文档描述已删除的类型/字段/中间件；CLAUDE.md 类型参考表过时；注释引用的行号/函数名已失效；新功能无文档 | 每次 PR 检查受影响的 .md 文件；`grep` 文档中的类型名/函数名确认仍存在；注释中用 `FindSymbol` 而非行号引用代码 |
+| **参数校验缺失** | 公开函数未检查 nil/空字符串/零值参数直接使用；构造后未验证字段有效性（如 `net.ParseIP("")` 返回 nil 后直接传入下游）；错误返回值被 `_` 丢弃，后续代码基于零值继续执行 | 每个公开函数入口处检查关键参数；`net.ParseIP` / `net.ParseCIDR` 结果立即判 nil；`_` 丢弃错误必须注释原因；构造函数返回前验证内部状态 |
+| **提交信息不规范** | 使用 `Round X audit`、`fix audit findings` 等笼统描述，无法从 `git log` 了解具体改了什么 | 主题行描述**具体修复内容**（"fix: acquire writeMu in TCP SERVFAIL path"），不是审计阶段；一个 commit 只含一类修复；跨维度修复分多次提交 |
 
 ---
 
@@ -218,13 +269,15 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 8. **禁止 info/warn 在热路径**：`log.Infof` / `log.Warnf` 不得出现在每次查询都会执行的代码路径中（如 ServeDNS、middleware Wrap、upstream Exchange）。每查询超过一条 info/warn 即为刷屏
 9. **文档与代码同步更新**：修改函数签名、删除类型/字段、新增/删除中间件时，检查 `docs/*.md` 和 `CLAUDE.md` 是否引用该符号；用 `git grep` 确认
 10. **注释引用符号名，不引用行号**：行号在每次编辑后失效。注释中如果必须引用代码位置，使用函数名/类型名（可 grep），而非行号
+11. **`_` 丢弃的值必须注释类型和原因**：`result, _ := someFunc()` 必须注释 `// _ = error: <原因>`，防止被调用函数签名变更后 `_` 静默丢弃不同类型的值。不写注释的 `_` 在重构时是定时炸弹——函数返回值从 `(T, error)` 变为 `(T, Cleanup)` 时编译通过但语义全变
+12. **废弃参数应删除而非改名 `_`**：`func f(name, target string)` 中如果 `name` 不再使用，应将 `name` 从签名中删除并更新所有调用方，而不是改成 `func f(_, target string)`。`_` 参数只用于接口实现（无法改签名）和 callback（协议要求）。Standalone function 的 `_` 参数是 dead code
 
 ### 6.2 避免的反模式
 
 1. **defer 在循环中**：defer 在函数返回前累积，循环中应使用显式清理
 2. **锁内释放再获取**：创建竞态窗口
 3. **nil-map 写入**：`sync.Map` 或关闭前清理所有条目再设 nil
-4. **`_` 丢弃错误**：特别是验证/解密错误，应至少 debug log
+4. **`_` 丢弃值不注释**：`_` 丢弃的值必须注释类型和原因（如 `// _ = error: DNSKEY query best-effort`）。不注释的 `_` 在函数签名重构时是定时炸弹——返回值从 `(T, error)` 变为 `(T, Cleanup)` 时编译通过，但 `_` 静默丢弃了 Cleanup 导致资源泄漏。裸类型断言 `v := x.(*T)` 应改用 comma-ok。**`func f(_, name string)` 将参数改名 `_` 而非从签名中删除——如果这不是接口实现，应直接删参并更新所有调用方**
 5. **info/warn 刷屏**：热路径上的 `log.Infof` / `log.Warnf` 在高 QPS 下产生海量日志，淹没真正重要的信号。所有每查询日志必须是 Debug 级别
 6. **日志缺少上下文**：`log.Warnf("resolve failed: %v", err)` 不包含 qname/qtype/server，无法定位问题
 7. **错误级别膨胀**：可恢复的错误（超时、单次查询失败）用 Warn，不可恢复的（配置错误、数据库损坏）用 Error。不要把每个 upstream 超时都打成 Error
@@ -241,6 +294,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 - 定期（季度）重新运行全审计流程
 - 每次审计包含专门的 CrossCut Logging 阶段：grep `log\.(Info|Warn)` 确认不在热路径，grep `log\.Error` 确认是可恢复还是不可恢复
 - 每次审计包含 CrossCut Docs 阶段：grep 全部 .md 文件中的类型名/函数名/字段名，与代码交叉验证是否仍存在
+- 每次审计包含 CrossCut Validation 阶段：grep `_, :=\|_ = ` 确认每个 `_` 丢弃的 error 有注释说明原因；grep `func.*_.*,\|\.(.*)` 确认裸类型断言；grep `net\.ParseIP\|net\.ParseCIDR` 确认结果判 nil；grep `func.*(_.*,\|func.*(_.*)` 排除接口/callback 后确认没有 standalone function 用 `_` 隐藏废弃参数
 
 ---
 
@@ -260,7 +314,8 @@ docs/audit/<YYYY-MM>-<主题>/
 ├── 08-logging.md         ← 日志质量审计（级别、刷屏、上下文）
 ├── 09-debug-coverage.md  ← Debug 日志覆盖率审计
 ├── 10-docs.md            ← 文档一致性审计（与代码交叉验证）
-├── 11-synthesis.md       ← 综合报告（排序、主题分析、行动计划）
+├── 11-validation.md      ← 参数校验审计（nil/空值/零值/_丢弃/裸断言）
+├── 12-synthesis.md       ← 综合报告（排序、主题分析、行动计划）
 └── 00-plan.md            ← 逐项修复计划 + 全覆盖清单
 ```
 

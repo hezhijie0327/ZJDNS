@@ -528,7 +528,10 @@ func parseMatchTagsText(text string) []matchTag {
 		return nil
 	}
 	parts := strings.Split(text, ",")
-	tags, _ := parseMatchTags(parts)
+	tags, err := parseMatchTags(parts)
+	if err != nil {
+		log.Warnf("ZONE: invalid match tags %q: %v", text, err)
+	}
 	return tags
 }
 

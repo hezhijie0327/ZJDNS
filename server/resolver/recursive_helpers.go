@@ -110,7 +110,11 @@ func (r *Recursive) validateNODATAWithNSEC(response *dns.Msg, ctx context.Contex
 		r.ensureZoneDNSKEYs(ctx, nameservers, currentDomain, chain)
 	}
 	if len(chain.zoneDNSKEYs) > 0 {
-		if nsecValidated, _ := r.resolver.validator.Crypto.IsResponseValid(response, currentDomain, chain.zoneDNSKEYs); nsecValidated {
+		nsecValidated, valErr := r.resolver.validator.Crypto.IsResponseValid(response, currentDomain, chain.zoneDNSKEYs)
+		if valErr != nil {
+			log.Debugf("SECURITY: NSEC validation error for %s: %v", currentDomain, valErr)
+		}
+		if nsecValidated {
 			return true
 		}
 	}

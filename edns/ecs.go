@@ -143,6 +143,7 @@ func (h *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, err
 		return h.detectVia(forceIPv6, false), nil
 	}
 	if _, ipNet, err := net.ParseCIDR(subnet); err == nil {
+		// Mask.Size() always succeeds for a successfully parsed CIDR.
 		prefix, _ := ipNet.Mask.Size()
 		family := uint16(dnsutil.IPv4Family)
 		if ipNet.IP.To4() == nil {

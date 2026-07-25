@@ -132,7 +132,10 @@ func (rc *ResolverConfig) NewPQCert(serial, notBefore, notAfter uint32) (cert *d
 	// (matching the official encrypted-dns-server derivation).
 	copy(cert.ClientMagic[:], pk[72:72+dnscryptcrypto.ClientMagicSize])
 
-	binCert, _ := cert.MarshalBinary()
+	binCert, err := cert.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("marshal cert: %w", err)
+	}
 	cert.PqCertContext = dnscryptcrypto.PQCertContext(binCert)
 
 	privateKey, err := dnscryptcrypto.HexDecodeKey(rc.PrivateKey)

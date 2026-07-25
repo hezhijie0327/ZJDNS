@@ -136,9 +136,11 @@ func addrToNetip(ip net.IP) netip.Addr {
 		return netip.Addr{}
 	}
 	if ip4 := ip.To4(); ip4 != nil {
+		// AddrFromSlice cannot fail for a validated 4-byte IPv4 slice.
 		addr, _ := netip.AddrFromSlice(ip4)
 		return addr
 	}
+	// AddrFromSlice cannot fail for a validated 16-byte IPv6 slice.
 	addr, _ := netip.AddrFromSlice(ip)
 	return addr
 }
