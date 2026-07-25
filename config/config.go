@@ -118,8 +118,7 @@ type DatabaseSettings struct {
 	CacheSizeMB int    `json:"cache_size_mb,omitzero"` // SQLite cache_size PRAGMA
 }
 
-// CacheSettings configures DNS response cache size, stale serving, and bounded
-// memory caches for hot-path acceleration.
+// CacheSettings configures DNS response cache size and stale serving.
 type CacheSettings struct {
 	MaxEntries  int  `json:"max_entries,omitzero"`
 	PreferStale bool `json:"prefer_stale,omitzero"`

@@ -39,8 +39,6 @@ const (
 	DefaultCacheMaxOpenConns = 4 // SQLite WAL: single writer, readers served concurrently
 	DefaultCacheMaxIdleConns = 2
 
-	DefaultMemoryCacheRuleset = 5000 // bounded memory cache for ruleset domain matches (0 = disabled)
-
 	DefaultQueryJournalRetention = 3 * 86400     // seconds — auto-cleanup window for query_stats + query_log
 	DefaultPruneInterval         = 1 * time.Hour // interval between PruneQueryJournal runs
 	DefaultPruneBatchSize        = 10000         // rows per iteration during prune
@@ -152,16 +150,17 @@ const (
 
 	DefaultAsyncStatsBufferSize = 64 // async stats writer channel capacity
 
-	DefaultTransportMax        = 64
-	DefaultTLSSessionCacheSize = 256
-	DefaultHTTPTLCPClientMax   = 64 // max cached TLCP DoH HTTP clients
-	DefaultMaxIdleConns        = 100
-	DefaultMaxIdleConnsPerHost = 8
-	DefaultDOTWriteChannelSize = 64
-	DefaultDOHMaxRequestSize   = 8192 // max DoH request body size
+	DefaultTransportMax          = 64
+	DefaultTLSSessionCacheSize   = 128
+	DefaultDTLCPSessionCacheSize = 128
+	DefaultHTTPTLCPClientMax     = 64 // max cached TLCP DoH HTTP clients
+	DefaultMaxIdleConns          = 100
+	DefaultMaxIdleConnsPerHost   = 8
+	DefaultDOTWriteChannelSize   = 64
+	DefaultDOHMaxRequestSize     = 8192 // max DoH request body size
 
 	DefaultTokenStoreCapacity     = 32  // QUIC LRU token store capacity per key
-	DefaultTokenStoreMaxEntries   = 100 // QUIC LRU token store max total entries
+	DefaultTokenStoreMaxEntries   = 128 // QUIC LRU token store max total entries
 	DefaultSecureTransportRetries = 2   // DoH/DoH3 recreate-and-retry attempts
 )
 
