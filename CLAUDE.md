@@ -222,7 +222,7 @@ zjdns/
 ├── cache/              ← DNS response cache (Store interface, SQLiteCache, AsyncStatsWriter)
 ├── ruleset/            ← CIDR + domain tag matching (binary radix trie)
 ├── zone/               ← DNS zone rules (Evaluator, zone-file import)
-├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, lrumap, ...
+├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, ...
 └── server/
     ├── handler/        ← query pipeline adapter + QueryContext
     │   └── middleware/ ← 9 composable middleware + AssembleChain
@@ -302,7 +302,6 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Stats/Close |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL |
 | `AsyncStatsWriter` | `cache` | Background goroutine: non-blocking channel → batched SQLite writes |
-| `Map[K, V]` | `internal/lrumap` | Generic concurrent-safe bounded map with LRU eviction; used by all 4 memory caches |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `QueryContext` | `server/handler` | Mutable struct carrying all request state through the middleware chain |
 | `QueryHandler` | `server/handler` | Interface: `ServeDNS(ctx, qctx) error` |

@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.6.23-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.6.24-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -84,24 +84,7 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT   # 获取 DNSCrypt 证�
 - **驱逐策略**：TTL 惰性过期 + 条数上限最旧淘汰，`ON DELETE CASCADE` 清理 `ptr_map`；无 FK 表（`ip_latency`、`query_log`）通过 `DefaultStaleMaxAge` 时间窗口清理
 - **写入优化**：`Set()` 的 CPU 密集步骤（TTL 计算、zstd 压缩）在 `writeMu` 外执行；驱逐在 `writeMu` 内运行以防止 TOCTOU
 - **异步统计写入**：`query_stats` / `query_log` 通过 `AsyncStatsWriter` 异步写入（带缓冲 channel + 后台 goroutine），热路径上 non-blocking send，满则丢弃（best-effort）
-- **有界内存缓存**：热路径上叠加 `lrumap` 有界 LRU 内存缓存（自动淘汰），SQLite 仍为权威数据源，内存缓存为透明 L1 加速层：
-
-  | 缓存 | 数据 | 默认条目 | 说明 |
-  |------|------|---------|------|
-  | Zone | `(qname,qtype,qclass)` → 预解析 RR | 10,000 | 无 tag 条件精确匹配跳 SQLite |
-  | DNS L1 | `(qname,qtype,qclass,ecs,dnssec)` → `*Entry` | 10,000 | 热点缓存命中跳 SQLite GET |
-  | IP Latency | `ip` → `latency_ms` | 5,000 | 跳过 `ip_latency` 表批量查询 |
-  | Ruleset | `tld+1` → `map[tag]bool` | 5,000 | 热点域名匹配跳 SQLite |
-
-  ```json
-  { "features": { "cache": { "memory": {
-      "zone_entries": 10000,
-      "dns_l1_entries": 10000,
-      "latency_entries": 5000,
-      "ruleset_entries": 5000
-  } } } }
-  ```
-  各项设为 `0` 即禁用对应缓存。
+- **统一缓存层**：所有缓存数据存储在 SQLite，WAL + mmap 提供内存级读取速度
 
 ### DNS 解析
 

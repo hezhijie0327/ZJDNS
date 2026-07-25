@@ -10,7 +10,6 @@ import (
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
-	"zjdns/internal/lrumap"
 	"zjdns/internal/pool"
 	"zjdns/internal/ttl"
 
@@ -20,26 +19,12 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
-// dnsL1Key is the cache key for the DNS L1 memory cache.
-type dnsL1Key struct {
-	qname     string
-	qtype     uint16
-	qclass    uint16
-	ecsAddr   string
-	ecsPrefix int
-	dnssecOK  bool
-}
-
 // SQLiteCache is a DNS response cache backed by a SQLite database managed by
 // the database package. It implements the Store interface.
 type SQLiteCache struct {
-	db           *database.DB
-	evictCount   atomic.Int64
-	asyncWriter  *AsyncStatsWriter
-	dnsL1        *lrumap.Map[dnsL1Key, *Entry] // bounded memory L1 for hot entries
-	dnsL1Cap     int                           // capacity preserved for L1 reset on FlushDB
-	latencyL1    *lrumap.Map[string, int]      // bounded memory cache for IP latency
-	latencyL1Cap int                           // capacity preserved for L1 reset on FlushDB
+	db          *database.DB
+	evictCount  atomic.Int64
+	asyncWriter *AsyncStatsWriter
 }
 
 const (
@@ -63,20 +48,11 @@ var latencyArgsPool = sync.Pool{
 
 // New creates a cache backed by the given database. The caller is responsible
 // for opening the database via database.Open() before calling New.
-func New(db *database.DB, dnsL1Entries, ipLatencyEntries int) *SQLiteCache {
-	c := &SQLiteCache{
-		db:           db,
-		asyncWriter:  NewAsyncStatsWriter(db, config.DefaultAsyncStatsBufferSize),
-		dnsL1Cap:     dnsL1Entries,
-		latencyL1Cap: ipLatencyEntries,
+func New(db *database.DB) *SQLiteCache {
+	return &SQLiteCache{
+		db:          db,
+		asyncWriter: NewAsyncStatsWriter(db, config.DefaultAsyncStatsBufferSize),
 	}
-	if dnsL1Entries > 0 {
-		c.dnsL1 = lrumap.New[dnsL1Key, *Entry](dnsL1Entries)
-	}
-	if ipLatencyEntries > 0 {
-		c.latencyL1 = lrumap.New[string, int](ipLatencyEntries)
-	}
-	return c
 }
 
 // Close shuts down the async stats writer and then closes the database.
@@ -102,36 +78,6 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 
 	qname = dnsutil.Canonical(qname)
 	ecsAddr, ecsPrefix := ecsParams(ecs)
-
-	// Check bounded memory L1 cache before hitting SQLite.
-	if s.dnsL1 != nil {
-		l1Key := dnsL1Key{qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecOK}
-		if entry, ok := s.dnsL1.Get(l1Key); ok {
-			if !ttl.IsExpired(entry.Timestamp, entry.TTL) {
-				// Shallow-copy entry to re-sort by latest latency
-				// without mutating the cached *Entry.
-				if len(entry.Answer) > 1 {
-					// Deep-copy entry so latency re-sort and caller
-					// mutations (e.g. restoreDomain) do not race with
-					// concurrent readers of the shared L1 cache entry.
-					e := *entry
-					e.Answer = cloneRRs(entry.Answer)
-					e.Authority = cloneRRs(entry.Authority)
-					e.Additional = cloneRRs(entry.Additional)
-					s.sortAnswerByLatency(&e)
-					return &e, true, false
-				}
-				// Single-answer: deep-copy slices to prevent caller mutation.
-				e := *entry
-				e.Answer = cloneRRs(entry.Answer)
-				e.Authority = cloneRRs(entry.Authority)
-				e.Additional = cloneRRs(entry.Additional)
-				return &e, true, false
-			}
-			// Expired in L1 — fall through to SQLite.
-		}
-	}
-
 	var id int64
 	var ts int64
 	var entryTTL int
@@ -200,20 +146,6 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	s.sortAnswerByLatency(entry)
 
 	isExpired := ttl.IsExpired(ts, entryTTL)
-
-	// Populate L1 memory cache for future queries (only if fresh).
-	// Clone RR slices before storing — entry.Answer/Authority/Additional alias
-	// msg's backing arrays.  After defer pool.DefaultMessage.Put(msg) fires,
-	// the pooled message may be reused by another goroutine, whose Unpack()
-	// would overwrite those arrays and race with L1 cache readers.
-	if s.dnsL1 != nil && !isExpired {
-		e := *entry
-		e.Answer = cloneRRs(entry.Answer)
-		e.Authority = cloneRRs(entry.Authority)
-		e.Additional = cloneRRs(entry.Additional)
-		s.dnsL1.Set(dnsL1Key{qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecOK}, &e)
-	}
-
 	return entry, true, isExpired
 }
 
@@ -287,24 +219,8 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 		ips = ips[:maxLatencyLookupIPs]
 	}
 
-	// Check bounded memory L1 cache first.
+	// Query SQLite for latency data.
 	latencies := make(map[string]int, min(len(ips), maxLatencyLookupIPs))
-	misses := ips
-	if s.latencyL1 != nil {
-		misses = nil
-		for _, ip := range ips {
-			if lat, ok := s.latencyL1.Get(ip); ok {
-				latencies[ip] = lat
-			} else {
-				misses = append(misses, ip)
-			}
-		}
-		if len(misses) == 0 {
-			return latencies
-		}
-	}
-
-	// Query SQLite for cache misses.
 	argsPtr, ok := latencyArgsPool.Get().(*[maxLatencyLookupIPs]any)
 	if !ok {
 		a := [maxLatencyLookupIPs]any{}
@@ -317,8 +233,8 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 		latencyArgsPool.Put(argsPtr)
 	}()
 	for i := range maxLatencyLookupIPs {
-		if i < len(misses) {
-			argsPtr[i] = misses[i]
+		if i < len(ips) {
+			argsPtr[i] = ips[i]
 		} else {
 			argsPtr[i] = ""
 		}
@@ -326,7 +242,7 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 
 	rows, err := s.db.StmtIPLatency.Query(argsPtr[:]...)
 	if err != nil {
-		return latencies // return L1 hits even if SQLite fails
+		return latencies
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -335,9 +251,6 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 		var lat int
 		if err := rows.Scan(&ip, &lat); err == nil {
 			latencies[ip] = lat
-			if s.latencyL1 != nil {
-				s.latencyL1.Set(ip, lat)
-			}
 		}
 	}
 	return latencies
@@ -424,20 +337,6 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	}
 	if txErr != nil {
 		return 0
-	}
-
-	// Populate L1 memory cache so subsequent Get() calls skip SQLite.
-	// No need to pre-sort here — L1 hit path re-sorts with latest latency.
-	if entryID != 0 && s.dnsL1 != nil {
-		s.dnsL1.Set(dnsL1Key{qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecOK}, &Entry{
-			ID:         entryID,
-			Answer:     answer,
-			Authority:  authority,
-			Additional: additional,
-			Timestamp:  now,
-			TTL:        entryTTL,
-			Validated:  validated,
-		})
 	}
 
 	// evictIfNeeded re-syncs the entry count from the DB via SELECT COUNT(*)

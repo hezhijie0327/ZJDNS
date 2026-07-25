@@ -15,7 +15,6 @@ import (
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
-	"zjdns/internal/lrumap"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -29,13 +28,6 @@ import (
 type matchTag struct {
 	tag    string // bare tag name (without !)
 	negate bool   // true if !tag
-}
-
-// exactKey is the cache key for exact-match zone rules without tag conditions.
-type exactKey struct {
-	qname  string
-	qtype  uint16
-	qclass uint16
 }
 
 // Result holds the outcome of a zone rule evaluation.
@@ -76,9 +68,6 @@ type Evaluator struct {
 	ruleCount  atomic.Int64
 	dynamics   map[string]*dynamicEntry // qname → dynamic content
 	bypassTags map[string]struct{}      // tags that bypass all zone rules
-
-	exactCache    *lrumap.Map[exactKey, Result] // bounded memory cache for untagged exact matches
-	exactCacheCap int                           // capacity for cache recreation on reload
 }
 
 // ---------------------------------------------------------------------------
@@ -99,16 +88,11 @@ var wildcardArgsPool = sync.Pool{New: func() any { a := make([]any, maxWildcardL
 // New creates an Evaluator backed by the given database.
 // The caller is responsible for opening the database via database.Open()
 // before calling New.
-func New(db *database.DB, cacheEntries int) *Evaluator {
-	ev := &Evaluator{
+func New(db *database.DB) *Evaluator {
+	return &Evaluator{
 		db:       db,
 		dynamics: make(map[string]*dynamicEntry),
 	}
-	if cacheEntries > 0 {
-		ev.exactCache = lrumap.New[exactKey, Result](cacheEntries)
-		ev.exactCacheCap = cacheEntries
-	}
-	return ev
 }
 
 // Close releases SQLite resources.
@@ -150,11 +134,8 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 	if _, err := e.db.Exec(`DELETE FROM zone_entries`); err != nil {
 		return fmt.Errorf("zone: clear: %w", err)
 	}
-	// Clear dynamic content registrations and memory cache.
+	// Clear dynamic content registrations.
 	e.dynamics = make(map[string]*dynamicEntry)
-	if e.exactCache != nil {
-		e.exactCache = lrumap.New[exactKey, Result](e.exactCacheCap)
-	}
 
 	tx, err := e.db.Begin()
 	if err != nil {
@@ -282,29 +263,15 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 		return e.evalDynamic(qname, qtype, qclass, de)
 	}
 
-	// 2. Check bounded memory cache for untagged exact matches.
-	if e.exactCache != nil && len(matchedTags) == 0 {
-		key := exactKey{qname, qtype, qclass}
-		if r, ok := e.exactCache.Get(key); ok {
-			return r
-		}
-	}
-
 	loadedAt := e.loadedAt.Load()
 
 	// 3. Exact composite key lookup.
 	if r := e.queryExact(qname, qtype, qclass, matchedTags, loadedAt); r.Matched {
-		if e.exactCache != nil && r.cachable && len(matchedTags) == 0 {
-			e.exactCache.Set(exactKey{qname, qtype, qclass}, r)
-		}
 		return r
 	}
 
 	// 4. Sentinel key (rcode-only rules).
 	if r := e.queryExact(qname, 0, 0, matchedTags, loadedAt); r.Matched {
-		if e.exactCache != nil && r.cachable && len(matchedTags) == 0 {
-			e.exactCache.Set(exactKey{qname, qtype, qclass}, r)
-		}
 		return r
 	}
 
@@ -313,13 +280,6 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 	// suffix and the concrete qtype match (over qtype=0 sentinel) win.
 	r := e.queryWildcardBatch(qname, qtype, qclass, matchedTags, loadedAt)
 
-	// Cache negative results for untagged queries to skip repeated SQLite
-	// lookups for domains that have no zone rules.  Cleared automatically
-	// on LoadRules() via exactCache recreation.
-	if !r.Matched && e.exactCache != nil && len(matchedTags) == 0 {
-		r.cachable = true
-		e.exactCache.Set(exactKey{qname, qtype, qclass}, r)
-	}
 	return r
 }
 

@@ -386,7 +386,7 @@ func testCache() cache.Store {
 	if err != nil {
 		panic(err)
 	}
-	return cache.New(db, 0, 0)
+	return cache.New(db)
 }
 
 func TestFullDNSSECChain(t *testing.T) {

@@ -92,12 +92,6 @@ func buildBenchServer(b *testing.B) *server.Server {
 				DNSSECEnforce: false,
 				Cache: config.CacheSettings{
 					MaxEntries: config.DefaultMaxCacheEntries,
-					Memory: config.CacheMemorySettings{
-						Zone:    config.DefaultMemoryCacheZone,
-						DNSL1:   config.DefaultMemoryCacheDNSL1,
-						Latency: config.DefaultMemoryCacheLatency,
-						Ruleset: config.DefaultMemoryCacheRuleset,
-					},
 				},
 			},
 		},

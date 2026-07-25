@@ -16,7 +16,7 @@ func TestEvaluator_LoadRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	if z.HasRules() {
 		t.Error("new Evaluator should have no rules")
 	}
@@ -37,7 +37,7 @@ func TestEvaluator_Evaluate_Answer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "static.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
@@ -69,7 +69,7 @@ func TestEvaluator_Evaluate_NoMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
@@ -95,7 +95,7 @@ func TestEvaluator_Evaluate_NXDOMAIN(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "blocked.com", Rcode: dns.RcodeNameError},
 	})
@@ -123,7 +123,7 @@ func TestEvaluator_Evaluate_AuthorityAndAdditional(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name: "test.example.com",
@@ -162,7 +162,7 @@ func TestEvaluator_Evaluate_MultipleTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name: "multi.example.com",
@@ -206,7 +206,7 @@ func TestEvaluator_Wildcard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "*.wild.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
@@ -238,7 +238,7 @@ func TestEvaluator_Wildcard_TypeFilter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "*.wild.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
@@ -258,7 +258,7 @@ func TestEvaluator_ExactWinsOverWildcard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "*.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "1.1.1.1", TTL: 300}}},
 		{Name: "specific.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "2.2.2.2", TTL: 300}}},
@@ -282,7 +282,7 @@ func TestEvaluator_NoRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil)
 	if result.Matched {
 		t.Error("empty evaluator should not match")
@@ -294,7 +294,7 @@ func TestEvaluator_CreatedAt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
@@ -313,7 +313,7 @@ func TestEvaluator_RcodeOnlyWithRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name:  "mixed.example.com",
@@ -362,7 +362,7 @@ func TestEvaluator_FileImport_Basic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{{File: path}})
 	if err != nil {
 		t.Fatalf("LoadRules: %v", err)
@@ -400,7 +400,7 @@ func TestEvaluator_FileImport_Wildcard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{{File: path}})
 	if err != nil {
 		t.Fatalf("LoadRules: %v", err)
@@ -427,7 +427,7 @@ func TestEvaluator_FileImport_Comments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{{File: path}})
 	if err != nil {
 		t.Fatalf("LoadRules: %v", err)
@@ -454,7 +454,7 @@ func TestEvaluator_FileImport_AuthorityAndAdditional(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{{File: path}})
 	if err != nil {
 		t.Fatalf("LoadRules: %v", err)
@@ -484,7 +484,7 @@ func TestEvaluator_MatchTags_PositiveMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "vpn.example.com", Match: []string{"corp"}, Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 		{Name: "vpn.example.com", Match: []string{"guest"}, Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.2", TTL: 300}}},
@@ -525,7 +525,7 @@ func TestEvaluator_MatchTags_Negate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name:  "vpn.example.com",
@@ -581,7 +581,7 @@ func TestEvaluator_MatchTags_MixedSameQType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name:  "vpn.example.com",
@@ -672,7 +672,7 @@ func TestEvaluator_MatchTags_MultiAnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name:  "internal.example.com",
@@ -717,7 +717,7 @@ func TestEvaluator_MatchTags_Wildcard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name:  "*.corp.example.com",
@@ -766,7 +766,7 @@ func TestEvaluator_MatchTags_NoTagsMatchesAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "public.example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "1.1.1.1", TTL: 300}}},
 	})
@@ -793,7 +793,7 @@ func TestEvaluator_Bypass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	z.SetBypassTags([]string{"gateway"})
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "vpn.example.com", Match: []string{"corp"}, Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
@@ -833,7 +833,7 @@ func TestEvaluator_TTLCyclical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
 	})
@@ -876,7 +876,7 @@ func TestEvaluator_MatchScore_Priority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name:  "svc.example.com",
@@ -1020,7 +1020,7 @@ func TestEvaluator_MatchTags_SubnetPriority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	z := New(db, 0)
+	z := New(db)
 	err = z.LoadRules([]config.ZoneRule{
 		{
 			Name:  "vpn.zhijie.online",
@@ -1101,163 +1101,5 @@ func TestEvaluator_MatchTags_SubnetPriority(t *testing.T) {
 	a = result.Answer[0].(*dns.A)
 	if a.A.String() != "127.0.0.1" {
 		t.Errorf("nil-matchedTags client: A = %s, want 127.0.0.1", a.A.String())
-	}
-}
-
-// ── Exact Cache ────────────────────────────────────────────────────────────────
-
-func testEvaluatorWithCache(t *testing.T, cacheEntries int, rules []config.ZoneRule) *Evaluator {
-	t.Helper()
-	db, err := database.Open("", 0, database.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	z := New(db, cacheEntries)
-	if err := z.LoadRules(rules); err != nil {
-		t.Fatal(err)
-	}
-	return z
-}
-
-func TestZoneCache_ExactHit(t *testing.T) {
-	z := testEvaluatorWithCache(t, 100, []config.ZoneRule{
-		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
-	})
-
-	// First call: SQLite → populate cache.
-	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil)
-	if !result.Matched {
-		t.Fatal("first call: expected match")
-	}
-
-	// Second call: should hit the exact cache.
-	result2 := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil)
-	if !result2.Matched {
-		t.Fatal("second call (cache hit): expected match")
-	}
-	if len(result2.Answer) != 1 {
-		t.Errorf("cache hit answer len = %d, want 1", len(result2.Answer))
-	}
-	a := result2.Answer[0].(*dns.A)
-	if a.A.String() != "10.0.0.1" {
-		t.Errorf("cache hit A = %s, want 10.0.0.1", a.A.String())
-	}
-}
-
-func TestZoneCache_DifferentQType_Miss(t *testing.T) {
-	z := testEvaluatorWithCache(t, 100, []config.ZoneRule{
-		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
-	})
-
-	// Query A → populate cache.
-	z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil)
-
-	// Query AAAA → different qtype, should miss cache and miss rule.
-	result := z.Evaluate("example.com.", dns.TypeAAAA, dns.ClassINET, nil)
-	if result.Matched {
-		t.Error("AAAA query should not match A-only rule")
-	}
-}
-
-func TestZoneCache_SkippedWithTags(t *testing.T) {
-	z := testEvaluatorWithCache(t, 100, []config.ZoneRule{
-		{Name: "vpn.example.com", Match: []string{"corp"}, Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
-	})
-
-	if z.exactCache == nil {
-		t.Fatal("exactCache should be non-nil")
-	}
-
-	// Query with matchedTags → should NOT use or populate cache.
-	result := z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true})
-	if !result.Matched {
-		t.Fatal("expected match")
-	}
-
-	// Cache should still be empty (tagged queries bypass).
-	if z.exactCache.Len() != 0 {
-		t.Errorf("cache should be empty after tagged query, got %d entries", z.exactCache.Len())
-	}
-}
-
-func TestZoneCache_LoadRulesResets(t *testing.T) {
-	z := testEvaluatorWithCache(t, 100, []config.ZoneRule{
-		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
-	})
-
-	// Populate cache.
-	z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil)
-	if z.exactCache.Len() == 0 {
-		t.Fatal("cache should be non-empty after query")
-	}
-
-	// Reload rules — cache should reset.
-	err := z.LoadRules([]config.ZoneRule{
-		{Name: "other.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.2", TTL: 300}}},
-	})
-	if err != nil {
-		t.Fatalf("LoadRules: %v", err)
-	}
-	if z.exactCache.Len() != 0 {
-		t.Errorf("cache should be empty after LoadRules, got %d entries", z.exactCache.Len())
-	}
-}
-
-func TestZoneCache_SentinelRule(t *testing.T) {
-	z := testEvaluatorWithCache(t, 100, []config.ZoneRule{
-		{Name: "blocked.com", Rcode: dns.RcodeNameError},
-	})
-
-	// Sentinel rule matches all qtypes.
-	result := z.Evaluate("blocked.com.", dns.TypeA, dns.ClassINET, nil)
-	if !result.Matched || result.Rcode != dns.RcodeNameError {
-		t.Fatal("expected NXDOMAIN match")
-	}
-
-	// Different qtype — still matches (sentinel), cached under its own qtype.
-	result = z.Evaluate("blocked.com.", dns.TypeAAAA, dns.ClassINET, nil)
-	if !result.Matched || result.Rcode != dns.RcodeNameError {
-		t.Fatal("sentinel should match AAAA too")
-	}
-}
-
-func TestZoneCache_Disabled(t *testing.T) {
-	z := testEvaluatorWithCache(t, 0, []config.ZoneRule{
-		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
-	})
-
-	if z.exactCache != nil {
-		t.Error("exactCache should be nil when size=0")
-	}
-
-	// Should work via SQLite.
-	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil)
-	if !result.Matched {
-		t.Fatal("expected match with cache disabled")
-	}
-}
-
-func TestZoneCache_CachableFlag(t *testing.T) {
-	z := testEvaluatorWithCache(t, 100, []config.ZoneRule{
-		{Name: "tagged.example.com", Match: []string{"corp"}, Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
-	})
-
-	// Query with tags → rule is not cachable (score != 0).
-	result := z.Evaluate("tagged.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true})
-	if !result.Matched {
-		t.Fatal("expected match")
-	}
-
-	// Same query without tags → no-match (need corp tag).
-	result = z.Evaluate("tagged.example.com.", dns.TypeA, dns.ClassINET, nil)
-	if result.Matched {
-		t.Error("should not match without required tag")
-	}
-
-	// Re-query without tags → still no match (not cached since first query was tagged).
-	result = z.Evaluate("tagged.example.com.", dns.TypeA, dns.ClassINET, nil)
-	if result.Matched {
-		t.Error("should still not match — tagged results are never cached")
 	}
 }
