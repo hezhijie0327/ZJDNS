@@ -65,6 +65,20 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 				pool.DefaultMessage.Put(msg)
 				return
 			}
+			// Acquire writeMu to serialize writes and prevent TCP stream
+			// corruption when pipelined queries race with the SERVFAIL path.
+			writeTimer := time.NewTimer(config.DefaultDNSQueryTimeout)
+			select {
+			case entry.writeMu <- struct{}{}:
+				if !writeTimer.Stop() {
+					<-writeTimer.C
+				}
+				defer func() { <-entry.writeMu }()
+			case <-writeTimer.C:
+				log.Debugf("SERVER: TCP SERVFAIL write lock timeout for %s", addr)
+				pool.DefaultMessage.Put(msg)
+				return
+			}
 			// WriteTo handles the protocol-specific framing:
 			//   UDP: WriteMsgUDP(data, oob, clientAddr) to the correct client
 			//   TCP: 2-byte big-endian length prefix + data

@@ -65,11 +65,12 @@ func NewPendingRequests() *PendingRequests {
 				// 60s cleanup interval combined with the caller-side timeout
 				// (config.DefaultServeExpiredClientTimeout) provides a safety
 				// window for in-flight operations to complete before eviction.
+				target := len(p.sets) / 2
 				n := 0
 				for k := range p.sets {
 					delete(p.sets, k)
 					n++
-					if n >= len(p.sets)/2 {
+					if n >= target {
 						break
 					}
 				}

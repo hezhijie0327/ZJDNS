@@ -129,7 +129,7 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	}
 	if qctx.EDE == nil && m.resolver != nil {
 		if upstreamEDE := m.resolver.UpstreamEDEOption(); upstreamEDE != nil {
-			qctx.EDE = upstreamEDE
+			qctx.EDE = &dns.EDE{InfoCode: upstreamEDE.InfoCode, ExtraText: upstreamEDE.ExtraText}
 			log.Debugf("UPSTREAM: passing through EDE %d (%s) from upstream", upstreamEDE.InfoCode, dns.ExtendedErrorToString[upstreamEDE.InfoCode])
 		}
 	}

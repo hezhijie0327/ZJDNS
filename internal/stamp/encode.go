@@ -180,11 +180,14 @@ func validatePort(port string) error {
 
 func validateAddrAndHostname(addr, hostname string) error {
 	if addr != "" {
-		ip := addr
-		if strings.HasPrefix(ip, "[") && strings.HasSuffix(ip, "]") {
-			ip = ip[1 : len(ip)-1]
-		} else if strings.ContainsRune(ip, ':') {
-			return errors.New("stamp: invalid IP address")
+		// Strip optional port suffix before bracket/IP validation.
+		ip, _ := splitOptionalPort(addr)
+		if ip != "" {
+			if strings.HasPrefix(ip, "[") && strings.HasSuffix(ip, "]") {
+				ip = ip[1 : len(ip)-1]
+			} else if strings.ContainsRune(ip, ':') {
+				return errors.New("stamp: invalid IP address")
+			}
 		}
 		if net.ParseIP(ip) == nil {
 			return ErrInvalidIP

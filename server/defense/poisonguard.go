@@ -163,8 +163,8 @@ func (d *Detector) classifyTLD(zone, name string) Verdict {
 	return VerdictClean
 }
 
-func (d *Detector) isRootServerGlue(domain string, rrType uint16) bool {
-	if rrType != dns.TypeA && rrType != dns.TypeAAAA {
+func (d *Detector) isRootServerGlue(domain string, rrtype uint16) bool {
+	if rrtype != dns.TypeA && rrtype != dns.TypeAAAA {
 		return false
 	}
 	return dnsutil.IsBelow(dnsutil.Fqdn(rootServersDomain), dnsutil.Fqdn(domain))

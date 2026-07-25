@@ -180,10 +180,6 @@ func ElapsedMS(startNs int64) int64 {
 	return (log.NowUnixNano() - startNs) / int64(time.Millisecond)
 }
 
-// BuildQueryMsg constructs an outbound DNS query message for the resolver.
-// It is a standalone function (not a method) so it can be used before the
-// Handler is created.
-
 // BuildQueryMsg constructs a DNS query message for upstream/recursive resolution.
 func BuildQueryMsg(ednsH *edns.Handler, question Question, ecs *edns.ECSOption, recursionDesired, isSecureConnection bool) *dns.Msg {
 	msg := pool.DefaultMessage.Get()

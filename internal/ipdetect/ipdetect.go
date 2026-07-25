@@ -63,6 +63,9 @@ func (d *Detector) detect(forceIPv6 bool) net.IP {
 	if err != nil {
 		return nil
 	}
+	if resp == nil {
+		return nil
+	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)

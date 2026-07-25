@@ -21,11 +21,11 @@ func ExecuteDoHRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient
 	msg.ID = 0
 
 	err := msg.Pack()
-	buf := append([]byte{}, msg.Data...) // copy to break aliasing with pooled msg.Data
 	if err != nil {
 		msg.ID = originalID
 		return nil, fmt.Errorf("pack: %w", err)
 	}
+	buf := append([]byte{}, msg.Data...) // copy to break aliasing with pooled msg.Data
 
 	// Build the DoH GET URL manually — dnshttp.NewRequest appends /dns-query
 	// unconditionally, but ZJDNS URLs already include the full path.  Also

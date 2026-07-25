@@ -287,8 +287,10 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 			log.Warnf("DNS64: %v, using default prefix", err)
 			synth, _ = dns64.New(config.DefaultDNS64Prefix)
 		}
-		deps.DNS64 = synth
-		log.Infof("DNS64: enabled with prefix %s", synth.Prefix())
+		if synth != nil {
+			deps.DNS64 = synth
+			log.Infof("DNS64: enabled with prefix %s", synth.Prefix())
+		}
 	}
 
 	chain := middleware.AssembleChain(deps)

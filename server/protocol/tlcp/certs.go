@@ -34,9 +34,21 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 	}
 
 	serialLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	caSerial, _ := rand.Int(rand.Reader, serialLimit)
-	signSerial, _ := rand.Int(rand.Reader, serialLimit)
-	encSerial, _ := rand.Int(rand.Reader, serialLimit)
+	caSerial, err := rand.Int(rand.Reader, serialLimit)
+	if err != nil {
+		err = fmt.Errorf("generate CA serial: %w", err)
+		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
+	}
+	signSerial, err := rand.Int(rand.Reader, serialLimit)
+	if err != nil {
+		err = fmt.Errorf("generate sign serial: %w", err)
+		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
+	}
+	encSerial, err := rand.Int(rand.Reader, serialLimit)
+	if err != nil {
+		err = fmt.Errorf("generate enc serial: %w", err)
+		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
+	}
 
 	caTemplate := &smx509.Certificate{
 		SerialNumber: caSerial,
@@ -68,7 +80,11 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 		err = fmt.Errorf("create CA cert: %w", err)
 		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
 	}
-	caCert, _ := smx509.ParseCertificate(caDER)
+	caCert, err := smx509.ParseCertificate(caDER)
+	if err != nil {
+		err = fmt.Errorf("parse CA cert: %w", err)
+		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
+	}
 
 	signSerial.Set(signSerial)
 	signTmpl := serverTemplate()

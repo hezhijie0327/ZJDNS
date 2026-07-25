@@ -134,22 +134,7 @@ func (t *ipTrie) matchTag(ip net.IP, tag string) bool {
 
 // hasTag reports whether any rule in the trie uses the given tag.
 func (t *ipTrie) hasTag(tag string) bool {
-	return t.root.hasTag(tag)
-}
-
-// hasTag recursively searches the node and its children for the given tag.
-// Recursion depth is bounded at 128 (max IPv4/IPv6 bits), so no stack overflow risk.
-func (n *ipTrieNode) hasTag(tag string) bool {
-	if slices.Contains(n.tags, tag) {
-		return true
-	}
-	if n.child0 != nil && n.child0.hasTag(tag) {
-		return true
-	}
-	if n.child1 != nil && n.child1.hasTag(tag) {
-		return true
-	}
-	return false
+	return t.tagSet[tag]
 }
 
 // reset clears the trie for rebuilding.

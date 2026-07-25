@@ -128,7 +128,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	pool.DefaultMessage.Put(req)
 
 	if err := s.respondDOH(w, response); err != nil {
-		log.Errorf("TLS: DoH response failed: %v", err)
+		log.Debugf("TLS: DoH response failed for %s: %v", r.URL.String(), err)
 	}
 	if response != nil {
 		pool.DefaultMessage.Put(response)

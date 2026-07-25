@@ -477,14 +477,11 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 		pool.DefaultMessage.Put(reply)
 		return nil, fmt.Errorf("packing handshake response: %w", err)
 	}
-	// NOTE(M14): DANGER -- res aliases pooled reply.Data (pool.DefaultMessage).
-	// After pool.DefaultMessage.Put(reply), reply.Data's backing memory is
-	// zeroed and available for reuse by another goroutine. This works ONLY
-	// because handleHandshake returns res synchronously and the caller
-	// writes it out before any concurrent pool.DefaultMessage.Get() can
-	// reuse the buffer. Any refactoring that introduces async between Put
-	// and the caller's use of res will cause data corruption.
-	res = reply.Data
+	// NOTE(M14): res must be a copy of reply.Data, not an alias.  After
+	// pool.DefaultMessage.Put(reply), reply.Data's backing memory is zeroed
+	// and available for reuse by another goroutine.
+	res = make([]byte, len(reply.Data))
+	copy(res, reply.Data)
 	pool.DefaultMessage.Put(reply)
 	return res, nil
 }

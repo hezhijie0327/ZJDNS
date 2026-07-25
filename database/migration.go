@@ -291,19 +291,19 @@ func migrateV3_4_19(db *DB) error {
 	return nil
 }
 
-// migrateV3_3_5 normalizes protocol identifiers stored in request_log and
-// entry_hit_counters to match canonical config field names (dot->tls, doq->quic,
-// doh->https, doh3->http3, dod->dtls, doh-tlcp->http-tlcp). Each UPDATE is
-// idempotent — already-migrated rows are unaffected.
+// migrateV3_4_18 adds last_hit_time column to entry_hit_counters for time-based
+// aging. Idempotent: uses PRAGMA table_info to check if the column already exists.
 func migrateV3_4_18(db *DB) error {
 	// Add last_hit_time to entry_hit_counters for time-based aging.
 	// Idempotent: ALTER TABLE ADD COLUMN is a no-op if column already exists
 	// (SQLite ignores duplicate column names in ALTER TABLE, but for safety
 	// we check via PRAGMA first).
 	var hasColumn bool
-	_ = db.SQ.QueryRow(
+	if err := db.SQ.QueryRow(
 		"SELECT COUNT(*) FROM pragma_table_info('entry_hit_counters') WHERE name='last_hit_time'",
-	).Scan(&hasColumn)
+	).Scan(&hasColumn); err != nil {
+		return fmt.Errorf("check last_hit_time column: %w", err)
+	}
 	if !hasColumn {
 		if _, err := db.SQ.Exec(
 			`ALTER TABLE entry_hit_counters ADD COLUMN last_hit_time INTEGER NOT NULL DEFAULT 0`,

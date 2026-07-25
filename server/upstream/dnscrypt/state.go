@@ -108,7 +108,7 @@ func (c *Client) state(
 	certQuery := &dns.Msg{}
 	certQuery.RecursionDesired = true
 	txtRR := new(dns.TXT)
-	txtRR.Hdr = dns.Header{Name: providerName, Class: dns.ClassINET, TTL: 0}
+	txtRR.Hdr = dns.Header{Name: providerName, Class: dns.ClassINET}
 	certQuery.Question = []dns.RR{txtRR}
 	err := certQuery.Pack()
 	if err != nil {

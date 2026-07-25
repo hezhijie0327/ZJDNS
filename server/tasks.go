@@ -266,11 +266,11 @@ func (s *Server) shutdownServer() {
 		zdnsutil.CloseWithLog(cacheStore, "Cache store", "SERVER")
 	}
 
-	log.DefaultTimeCache.Stop()
-
 	if s.shutdown != nil {
 		close(s.shutdown)
 	}
 
 	log.Infof("SERVER: Shutdown complete")
+
+	log.DefaultTimeCache.Stop()
 }

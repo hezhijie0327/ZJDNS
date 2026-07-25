@@ -332,13 +332,21 @@ func (p *ConnPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc f
 	liveConns := make([]*Conn, 0, len(conns))
 	var leastLoaded *Conn
 	leastCount := math.MaxInt
-	for _, c := range conns {
+	for i, c := range conns {
 		if c.IsDead() {
 			continue
 		}
 		liveConns = append(liveConns, c)
 		inFlight := int(c.inFlight.Load())
 		if !c.IsFull() {
+			// Append remaining alive connections from conns[i+1:]
+			// to prevent leaking tracked connections and their
+			// readLoop goroutines.
+			for j := i + 1; j < len(conns); j++ {
+				if !conns[j].IsDead() {
+					liveConns = append(liveConns, conns[j])
+				}
+			}
 			p.conns[key] = liveConns
 			p.mu.Unlock()
 			// TOCTOU: readLoop may close c after Unlock.  Benign — Exchange

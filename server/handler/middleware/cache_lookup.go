@@ -125,7 +125,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 	var qr *resolver.QueryResult
 	var refreshFinished atomic.Bool
 
-	go func() {
+	m.refreshGroup.Go(func() error {
 		defer close(done)
 		defer func() {
 			if refreshFinished.CompareAndSwap(false, true) {
@@ -138,7 +138,8 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 		defer cancel()
 		question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
 		qr = m.resolver.Query(refreshCtx, question, ecsOpt)
-	}()
+		return nil
+	})
 
 	timer := time.NewTimer(config.DefaultServeExpiredClientTimeout)
 	defer timer.Stop()

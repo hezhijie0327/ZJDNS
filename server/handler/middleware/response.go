@@ -39,7 +39,7 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
 
 	// Parse ECS if EDNS didn't run (early short-circuit).
 	ecsOpt := qctx.ECSOpt
-	if ecsOpt == nil {
+	if ecsOpt == nil && m.edns != nil {
 		ecsOpt = m.edns.ParseFromDNS(req)
 		if ecsOpt == nil && len(req.Question) > 0 {
 			ecsOpt = m.edns.ECSForQType(dns.RRToType(req.Question[0]))

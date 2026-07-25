@@ -359,9 +359,9 @@ func (r *Recursive) tryRRSIGRetry(ctx context.Context, response *dns.Msg, namese
 	}
 
 	log.Debugf("SECURITY: RRSIG retry succeeded for %s", question.Name)
-	response.Answer = retryResp.Answer
-	response.Ns = retryResp.Ns
-	response.Extra = retryResp.Extra
+	response.Answer = append([]dns.RR(nil), retryResp.Answer...)
+	response.Ns = append([]dns.RR(nil), retryResp.Ns...)
+	response.Extra = append([]dns.RR(nil), retryResp.Extra...)
 	return true
 }
 

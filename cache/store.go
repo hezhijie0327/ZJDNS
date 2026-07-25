@@ -405,11 +405,12 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 				}
 			}
 		}
-		if txErr != nil && entryID == 0 {
+		if txErr != nil {
+			entryID = 0
 			log.Warnf("CACHE: insert entry failed: %v", txErr)
 		}
 	}
-	if txErr != nil && entryID == 0 {
+	if txErr != nil {
 		return 0
 	}
 

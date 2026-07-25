@@ -57,9 +57,11 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 	}
 
 	// Clear any stale DNSSEC EDE code from a previous CNAME hop or recursive
-	// call. Without this, a DNSSEC failure in one hop can leak through a
-	// successful validation in the next hop, causing false "bogus" verdicts.
-	r.lastDNSSECEDECode.Store(0)
+	// call. Only the top-level resolve owns the shared atomic — inner calls
+	// (NS address resolution, TCP fallback) run concurrently and must not race.
+	if depth == 0 {
+		r.lastDNSSECEDECode.Store(0)
+	}
 
 	qname := dnsutil.Fqdn(question.Name)
 	question.Name = qname

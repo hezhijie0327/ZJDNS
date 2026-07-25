@@ -72,8 +72,6 @@ func (r *Recursive) applyQnameMinimisation(question Question, qname, currentDoma
 	return question, minimiseSteps
 }
 
-// NOTE(M10): len(response.Answer)==0 branch is unreachable — callers filter
-// non-empty answers before invoking this function. Retained as defensive check.
 // checkLameDelegation detects lame delegations where NS records point back
 // to the same zone but the response is not authoritative (AA flag not set).
 // Returns a terminal result for the caller to return, or nil if not lame.

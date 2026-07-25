@@ -169,6 +169,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	// before sending a result, so the errgroup naturally accounts for that.
 	errgroupDone := make(chan struct{})
 	go func() {
+		defer zdnsutil.HandlePanic("Query nameservers wait")
 		defer close(errgroupDone)
 		if err := g.Wait(); err != nil {
 			log.Debugf("RECURSION: NS query errgroup: %v", err)
