@@ -108,7 +108,7 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 // handleUDPPacket processes a single UDP datagram.
 func (s *Server) handleUDPPacket(ctx context.Context, b []byte, addr *net.UDPAddr, udpConn *net.UDPConn) {
 	if !s.hasClientMagic(b[:dnscryptcrypto.ClientMagicSize]) && !bytes.Equal(b[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:]) {
-		reply, err := s.handleHandshake(b)
+		reply, err := s.handleHandshake(b, true)
 		if err != nil {
 			log.Debugf("DNSCRYPT: handshake failed: %v", err)
 			return

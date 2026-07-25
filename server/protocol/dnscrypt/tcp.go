@@ -114,7 +114,7 @@ func (s *Server) handleTCPMsg(ctx context.Context, b []byte, conn net.Conn) erro
 
 	// dnscryptcrypto.Certificate handshake or encrypted query?
 	if !s.hasClientMagic(b[:dnscryptcrypto.ClientMagicSize]) && !bytes.Equal(b[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:]) {
-		reply, err := s.handleHandshake(b)
+		reply, err := s.handleHandshake(b, false)
 		if err != nil {
 			return fmt.Errorf("handshake: %w", err)
 		}

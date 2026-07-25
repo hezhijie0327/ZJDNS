@@ -24,8 +24,13 @@ func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP boo
 	}
 	packet := m.Data
 
+	maxWireLen := 0
+	if isUDP {
+		maxWireLen = q.ClientQueryLen
+	}
+
 	if q.ESVersion.IsPQ() {
-		return s.encryptPQ(packet, q, r, isUDP)
+		return s.encryptPQ(packet, q, r, isUDP, maxWireLen)
 	}
 
 	curr := s.current()
@@ -33,12 +38,12 @@ func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP boo
 	if err != nil {
 		return nil, fmt.Errorf("computing shared key: %w", err)
 	}
-	return r.Encrypt(packet, sharedKey, isUDP)
+	return r.Encrypt(packet, sharedKey, isUDP, maxWireLen)
 }
 
 // encryptPQ encrypts a DNS response for a PQ query.  For initial queries it
 // issues a resumption ticket in the response control block.
-func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *dnscryptcrypto.EncryptedResponse, isUDP bool) ([]byte, error) {
+func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *dnscryptcrypto.EncryptedResponse, isUDP bool, maxWireLen int) ([]byte, error) {
 	var sharedKey [dnscryptcrypto.SharedKeySize]byte
 	curr := s.current()
 
@@ -82,7 +87,7 @@ func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *d
 		log.Debugf("DNSCRYPT: PQ resumed response")
 	}
 
-	return r.Encrypt(packet, sharedKey, isUDP)
+	return r.Encrypt(packet, sharedKey, isUDP, maxWireLen)
 }
 
 // decrypt tries to decrypt the query: PQ resumed → PQ ciphertext → classical.
@@ -105,9 +110,10 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.Encrypte
 		if bytes.Equal(b[:dnscryptcrypto.ClientMagicSize], k.pair.PQ.ClientMagic[:]) {
 			log.Debugf("DNSCRYPT: PQ initial query")
 			query = &dnscryptcrypto.EncryptedQuery{
-				ESVersion:     dnscryptcrypto.XWingPQ,
-				ClientMagic:   k.pair.PQ.ClientMagic,
-				PQCertContext: k.pair.PQ.PqCertContext,
+				ESVersion:      dnscryptcrypto.XWingPQ,
+				ClientMagic:    k.pair.PQ.ClientMagic,
+				PQCertContext:  k.pair.PQ.PqCertContext,
+				ClientQueryLen: len(b),
 			}
 			var resolverSk [dnscryptcrypto.KeySize]byte
 			copy(resolverSk[:], k.pair.PQ.PqPrivateKey)
@@ -128,8 +134,9 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.Encrypte
 		if bytes.Equal(b[:dnscryptcrypto.ClientMagicSize], k.pair.Classical.ClientMagic[:]) {
 			log.Debugf("DNSCRYPT: classical query")
 			query = &dnscryptcrypto.EncryptedQuery{
-				ESVersion:   dnscryptcrypto.XChacha20Poly1305,
-				ClientMagic: k.pair.Classical.ClientMagic,
+				ESVersion:      dnscryptcrypto.XChacha20Poly1305,
+				ClientMagic:    k.pair.Classical.ClientMagic,
+				ClientQueryLen: len(b),
 			}
 			decrypted, decErr := query.Decrypt(b, k.pair.Classical.ResolverSk)
 			if decErr == nil {
@@ -193,9 +200,10 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *dnscryptcrypto
 	}
 
 	query = &dnscryptcrypto.EncryptedQuery{
-		ESVersion:   dnscryptcrypto.XWingPQ,
-		ClientMagic: matchedPair.PQ.ClientMagic,
-		SharedKey:   sharedKey,
+		ESVersion:      dnscryptcrypto.XWingPQ,
+		ClientMagic:    matchedPair.PQ.ClientMagic,
+		SharedKey:      sharedKey,
+		ClientQueryLen: len(b),
 	}
 	copy(query.Nonce[:dnscryptcrypto.NonceSize/2], nonceHalf)
 	query.PQTicket = ticket

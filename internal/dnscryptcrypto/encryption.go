@@ -56,6 +56,22 @@ func CryptoRandIntn(n int) int {
 	return int(uint64(b[0])|uint64(b[1])<<8) % n //nolint:gosec // G115: n <= 256, result fits in int
 }
 
+// PadWithin is like Pad but never exceeds maxLen.  When the padded packet
+// would exceed maxLen, the padding shrinks down to the lone 0x80 delimiter.
+// Returns ErrNoRoomForPadding when even the delimiter would not fit — the
+// caller should either withhold optional data (e.g. a PQ ticket) or truncate
+// the DNS response.
+func PadWithin(packet []byte, minLen, maxLen int) ([]byte, error) {
+	if len(packet) >= maxLen {
+		return nil, ErrNoRoomForPadding
+	}
+	padded := Pad(packet, minLen)
+	if len(padded) > maxLen {
+		padded = padded[:maxLen]
+	}
+	return padded, nil
+}
+
 // unpad removes ISO/IEC 7816-4 padding from the packet.
 func UnPad(packet []byte) (unpadded []byte, err error) {
 	for i := len(packet); ; {

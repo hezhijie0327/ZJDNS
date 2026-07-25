@@ -61,6 +61,11 @@ type EncryptedQuery struct {
 	// multiple of 64.  Per §5.4.2, escalated by 64 on each TC response.
 	MinQueryLen int
 
+	// ClientQueryLen is the wire size of the client query.  Over UDP the
+	// encrypted response must not be larger than this value (§10.3).  Set
+	// by the server during decryption.  Zero means unlimited (TCP).
+	ClientQueryLen int
+
 	// IsTCP indicates the query will be sent over TCP (§5.4.3 random padding).
 	IsTCP bool
 }
@@ -94,10 +99,15 @@ type EncryptedResponse struct {
 
 // encrypt encrypts the DNS response packet and returns the wire-format
 // response.  r.ESVersion and r.Nonce must be set beforehand.
+//
+// maxWireLen is the UDP anti-amplification budget (§10.3): the wire response
+// (ResolverMagic + Nonce + encrypted) must not exceed this value.  Zero means
+// unlimited (TCP).
 func (r *EncryptedResponse) Encrypt(
 	packet []byte,
 	sharedKey [SharedKeySize]byte,
 	isUDP bool,
+	maxWireLen int,
 ) (response []byte, err error) {
 	// The resolver nonce (bytes 12-23) is fully random, per §7.2 of
 	// draft-denis-dprive-dnscrypt-10.
@@ -108,36 +118,130 @@ func (r *EncryptedResponse) Encrypt(
 	response = append(response, ResolverMagic...)
 	response = append(response, r.Nonce[:]...)
 
-	// For PQ responses, always prepend a 2-byte control-length prefix before the
-	// DNS payload (even when there is no control block).  The client always
-	// reads these two bytes to locate the control block; without them DNS header
-	// bytes would be misinterpreted as the control length.
 	if r.ESVersion.IsPQ() {
-		controlLen := make([]byte, 2)
-		binary.BigEndian.PutUint16(controlLen, uint16(len(r.PQControl))) //nolint:gosec // G115: bounded
-		paddedPayload := make([]byte, 0, 2+len(r.PQControl)+len(packet))
-		paddedPayload = append(paddedPayload, controlLen...)
-		paddedPayload = append(paddedPayload, r.PQControl...)
-		paddedPayload = append(paddedPayload, packet...)
-		packet = paddedPayload
+		return r.encryptPQResponse(packet, sharedKey, isUDP, maxWireLen, response)
 	}
 
-	// UDP responses get a 256-byte minimum to match client expectations;
-	// TCP responses only align to 64 bytes.
+	// Classical path: align to 64 bytes, pad to 256 over UDP for amplification
+	// protection.  Shrink padding when the response otherwise exceeds the UDP
+	// budget.
 	respMinLen := 0
 	if isUDP {
 		respMinLen = MinUDPQuestionSize
 	}
-	padded := Pad(packet, respMinLen)
-	serverNonce := r.Nonce
+	var padded []byte
+	if maxWireLen > 0 {
+		maxPlaintext := maxWireLen - ResolverMagicSize - NonceSize - TagSize
+		if maxPlaintext < len(packet)+1 {
+			return nil, ErrResponseTooLarge
+		}
+		padded, err = PadWithin(packet, respMinLen, maxPlaintext)
+		if err != nil {
+			return nil, fmt.Errorf("padding classical response: %w", err)
+		}
+	} else {
+		padded = Pad(packet, respMinLen)
+	}
 
 	switch r.ESVersion {
 	case XChacha20Poly1305, XWingPQ:
-		response = XchachaSeal(response, serverNonce[:], padded, sharedKey[:])
+		response = XchachaSeal(response, r.Nonce[:], padded, sharedKey[:])
 	default:
 		return nil, ErrESVersion
 	}
 
+	return response, nil
+}
+
+// encryptPQResponse handles the PQ encrypted-response path with UDP budget
+// awareness.  When the control block (resumption ticket) prevents the response
+// from fitting in maxWireLen, it is withheld — the ticket is an optimisation
+// and should never cause the DNS payload to be dropped.
+func (r *EncryptedResponse) encryptPQResponse(
+	packet []byte,
+	sharedKey [SharedKeySize]byte,
+	isUDP bool,
+	maxWireLen int,
+	response []byte,
+) ([]byte, error) {
+	// Build the plaintext: <control-len>(2) <control> <dns-payload>.  The
+	// control-len field is always present for PQ responses — even when
+	// zero-length — so the client has a stable offset to the DNS payload.
+	buildPlaintext := func(withControl bool) []byte {
+		controlLen := make([]byte, 2)
+		if withControl && len(r.PQControl) > 0 {
+			binary.BigEndian.PutUint16(controlLen, uint16(len(r.PQControl))) //nolint:gosec // G115: bounded
+		}
+		payload := make([]byte, 0, 2+len(r.PQControl)+len(packet))
+		payload = append(payload, controlLen...)
+		if withControl {
+			payload = append(payload, r.PQControl...)
+		}
+		payload = append(payload, packet...)
+		return payload
+	}
+
+	respMinLen := 0
+	if isUDP {
+		respMinLen = MinUDPQuestionSize
+	}
+
+	if maxWireLen > 0 {
+		// Maximum plaintext bytes after accounting for the AEAD tag and the
+		// unencrypted response header (ResolverMagic + Nonce).
+		maxPlaintext := maxWireLen - ResolverMagicSize - NonceSize - TagSize
+
+		// First, try with the control block.  When the ticket is small (or
+		// the budget is roomy) the response fits with the preferred padding.
+		payload := buildPlaintext(len(r.PQControl) > 0)
+		if len(payload)+1 <= maxPlaintext {
+			padded, err := PadWithin(payload, respMinLen, maxPlaintext)
+			if err == nil {
+				switch r.ESVersion {
+				case XWingPQ:
+					response = XchachaSeal(response, r.Nonce[:], padded, sharedKey[:])
+					return response, nil
+				default:
+					return nil, ErrESVersion
+				}
+			}
+		}
+
+		// Control block does not fit — withhold it so the DNS response is
+		// delivered.  The ticket is only an optimisation; the client does a
+		// fresh key exchange next time.
+		if len(r.PQControl) > 0 {
+			payload = buildPlaintext(false)
+			if len(payload)+1 <= maxPlaintext {
+				padded, err := PadWithin(payload, respMinLen, maxPlaintext)
+				if err == nil {
+					r.PQControl = nil // already withheld
+					switch r.ESVersion {
+					case XWingPQ:
+						response = XchachaSeal(response, r.Nonce[:], padded, sharedKey[:])
+						return response, nil
+					default:
+						return nil, ErrESVersion
+					}
+				}
+			}
+		}
+
+		// Even without a ticket the response is too large for the UDP budget.
+		// The DNS layer above may truncate the payload before calling us.
+		return nil, fmt.Errorf("PQ response plaintext %d bytes exceeds UDP budget %d: %w",
+			len(payload), maxPlaintext, ErrResponseTooLarge)
+	}
+
+	// TCP: no budget constraint.
+	payload := buildPlaintext(len(r.PQControl) > 0)
+	padded := Pad(payload, respMinLen)
+	switch r.ESVersion {
+	case XWingPQ:
+		response = XchachaSeal(response, r.Nonce[:], padded, sharedKey[:])
+	default:
+		return nil, ErrESVersion
+	}
 	return response, nil
 }
 
@@ -227,7 +331,11 @@ func (q *EncryptedQuery) Encrypt(
 	}
 
 	if q.ESVersion.IsPQ() {
-		return q.EncryptPQ(packet, sharedKey)
+		query, clientNonce, err = q.EncryptPQ(packet, sharedKey)
+		if err == nil && !q.IsTCP && len(query) > MaxDNSUDPPacketSize {
+			err = ErrQueryTooLarge
+		}
+		return query, clientNonce, err
 	}
 
 	query = append(query, q.ClientMagic[:]...)

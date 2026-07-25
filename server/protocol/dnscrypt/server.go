@@ -336,6 +336,23 @@ func buildCertTXTForCert(cert *dnscryptcrypto.Certificate) []string {
 	return chunks
 }
 
+// certTXTWireSize returns the predicted wire size of the TXT RR produced by
+// buildCertTXTForCert.  The estimate matches what miekg/dns writes when the
+// name is compressed to a pointer (0xc00c), which is the case for all
+// certificate TXT records in a handshake response.
+func certTXTWireSize(cert *dnscryptcrypto.Certificate) int {
+	certBytes, err := cert.MarshalBinary()
+	if err != nil {
+		return 0
+	}
+	escaped := escapeBackslash(certBytes)
+	nChunks := (len(escaped) + 254) / 255
+	// RR header (pointer compressed name): type(2) + class(2) + ttl(4) + rdlength(2)
+	// Rdata: 1-byte length prefix per chunk + chunk data
+	rdataLen := nChunks + len(escaped)
+	return 12 + rdataLen
+}
+
 // remainingTTL returns the seconds until this key's certificates expire, floored at 0.
 func (k *keyEntry) remainingTTL() uint32 {
 	d := time.Until(k.createdAt.Add(config.DefaultDNSCryptCertificateTTL + config.DefaultDNSCryptKeyOverlap))
@@ -424,7 +441,7 @@ func escapeBackslash(b []byte) []byte {
 	return out
 }
 
-func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
+func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
 	m := pool.DefaultMessage.Get()
 	defer func() {
 		if m != nil {
@@ -449,14 +466,72 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 		return nil, dnscryptcrypto.ErrInvalidQuery
 	}
 
+	// Snapshot the key window under the read lock — the per-entry created-at
+	// timestamp is immutable after rotation, so remainingTTL stays correct.
+	s.mu.RLock()
+	keys := s.keys
+	s.mu.RUnlock()
+
+	// Pre-compute which PQ certs fit over UDP.  Classical certs are always
+	// included; PQ certs (~1.3 KB each) are only included when the client
+	// padded the query large enough (§10.3 anti-amplification).
+	pqFits := make([]bool, len(keys))
+	if isUDP {
+		// Pack a temporary classical-only response to measure the wire size.
+		// Use m (still alive — not yet returned to the pool) for SetReply.
+		tmp := pool.DefaultMessage.Get()
+		dnsutil.SetReply(tmp, m)
+		for _, k := range keys {
+			txt := &dns.TXT{
+				Hdr: dns.Header{
+					Name:  q.Header().Name,
+					TTL:   k.remainingTTL(),
+					Class: dns.ClassINET,
+				},
+				TXT: rdata.TXT{
+					Txt: buildCertTXTForCert(k.pair.Classical),
+				},
+			}
+			tmp.Answer = append(tmp.Answer, txt)
+		}
+		tmp.Authoritative = true
+		tmp.RecursionAvailable = true
+		if packErr := tmp.Pack(); packErr != nil {
+			pool.DefaultMessage.Put(tmp)
+			return nil, fmt.Errorf("packing handshake response: %w", packErr)
+		}
+		baseSize := len(tmp.Data)
+		pool.DefaultMessage.Put(tmp)
+		for i, k := range keys {
+			pqFits[i] = baseSize+certTXTWireSize(k.pair.PQ) <= len(b)
+		}
+	} else {
+		for i := range keys {
+			pqFits[i] = true
+		}
+	}
+
+	// Build the actual reply.
 	reply := pool.DefaultMessage.Get()
 	dnsutil.SetReply(reply, m)
 	pool.DefaultMessage.Put(m)
 	m = nil // prevent defer from double-Put
-	s.mu.RLock()
-	for _, k := range s.keys {
+
+	// Build answer in per-window order: Classical[i] then PQ[i] (if it fits).
+	for i, k := range keys {
 		remainingTTL := k.remainingTTL()
-		for _, cert := range []*dnscryptcrypto.Certificate{k.pair.Classical, k.pair.PQ} {
+		txt := &dns.TXT{
+			Hdr: dns.Header{
+				Name:  q.Header().Name,
+				TTL:   remainingTTL,
+				Class: dns.ClassINET,
+			},
+			TXT: rdata.TXT{
+				Txt: buildCertTXTForCert(k.pair.Classical),
+			},
+		}
+		reply.Answer = append(reply.Answer, txt)
+		if pqFits[i] {
 			txt := &dns.TXT{
 				Hdr: dns.Header{
 					Name:  q.Header().Name,
@@ -464,17 +539,18 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 					Class: dns.ClassINET,
 				},
 				TXT: rdata.TXT{
-					Txt: buildCertTXTForCert(cert),
+					Txt: buildCertTXTForCert(k.pair.PQ),
 				},
 			}
 			reply.Answer = append(reply.Answer, txt)
 		}
 	}
-	s.mu.RUnlock()
+
 	reply.Authoritative = true
 	reply.RecursionAvailable = true
 
-	log.Debugf("DNSCRYPT: handshake response — %d cert window(s) (%d TXT records)", len(s.keys), len(reply.Answer))
+	log.Debugf("DNSCRYPT: handshake response — %d cert window(s) (%d TXT records)%s",
+		len(keys), len(reply.Answer), map[bool]string{true: " (UDP)", false: ""}[isUDP])
 
 	err = reply.Pack()
 	if err != nil {

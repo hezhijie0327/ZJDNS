@@ -128,7 +128,7 @@ func TestHandshakeTTL(t *testing.T) {
 
 	// Case 1: single fresh window → 2 certs (Classical + PQ), TTL ≈ 25h.
 	// Proves TTL is certificate-validity-based, not the old static DefaultTTL=10.
-	res, err := srv.handleHandshake(query)
+	res, err := srv.handleHandshake(query, false)
 	if err != nil {
 		t.Fatalf("handleHandshake: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestHandshakeTTL(t *testing.T) {
 	srv.keys[1].createdAt = time.Now().Add(-23 * time.Hour)
 	srv.mu.Unlock()
 
-	res, err = srv.handleHandshake(query)
+	res, err = srv.handleHandshake(query, false)
 	if err != nil {
 		t.Fatalf("handleHandshake multi-window: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestHandshakeTTL(t *testing.T) {
 	srv.keys = srv.keys[:1]
 	srv.mu.Unlock()
 
-	res, err = srv.handleHandshake(query)
+	res, err = srv.handleHandshake(query, false)
 	if err != nil {
 		t.Fatalf("handleHandshake after purge: %v", err)
 	}

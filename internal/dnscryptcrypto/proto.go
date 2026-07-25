@@ -23,6 +23,11 @@ const (
 	// queries.
 	MinUDPQuestionSize = 256
 
+	// MaxDNSUDPPacketSize is the largest UDP datagram worth sending over the
+	// public internet.  Matches dnscrypt-proxy and the common EDNS0 buffer of
+	// 4096 bytes.
+	MaxDNSUDPPacketSize = 4096
+
 	// MinDNSPacketSize is the minimum possible DNS packet size.
 	MinDNSPacketSize = 12 + 5
 
@@ -117,6 +122,8 @@ var (
 	ErrPQInvalidProfileExt  = errors.New("dnscrypt: invalid PQ profile extension")
 	ErrPQInvalidTicket      = errors.New("dnscrypt: invalid PQ resumption ticket")
 	ErrPQTicketExpired      = errors.New("dnscrypt: PQ resumption ticket expired")
+	ErrNoRoomForPadding     = errors.New("dnscrypt: no room for padding delimiter")
+	ErrResponseTooLarge     = errors.New("dnscrypt: response too large for UDP budget")
 )
 
 // IsPQ reports whether the CryptoConstruction uses post-quantum key exchange.

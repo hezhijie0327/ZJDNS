@@ -203,6 +203,12 @@ func PQPad(packet []byte, floor int) []byte {
 	return padded
 }
 
+// PQResumedOverhead returns the number of unencrypted header bytes in a resumed
+// PQ query: PQResumeMagic(8) + ticket-len(2) + ticket + nonce/2(12) + Tag(16).
+func PQResumedOverhead(ticketLen int) int {
+	return PQResumeMagicLen + PQTicketLenSize + ticketLen + NonceSize/2 + TagSize
+}
+
 // ---------------------------------------------------------------------------
 // Ticket plaintext encoding (server-side)
 // ---------------------------------------------------------------------------
