@@ -90,10 +90,8 @@ const (
 	DefaultQUICKeepAlive         = 20 * time.Second // QUIC keep-alive period
 	DefaultQUICClientIdleTimeout = 60 * time.Second // client QUIC idle (must exceed KeepAlive)
 	DefaultQUICServerIdleTimeout = 30 * time.Second // server QUIC idle (RFC 9000 default)
-	DefaultQUICAddrCacheTTL      = 30 * time.Minute // QUIC address cache sweep cutoff
-
-	DefaultTCPPoolIdleTimeout = 120 * time.Second // TCP/DoT pool connection idle
-	DefaultTCPKeepAlivePeriod = 30 * time.Second  // TCP keep-alive probe interval
+	DefaultTCPPoolIdleTimeout    = 60 * time.Second // TCP/DoT pool connection idle
+	DefaultTCPKeepAlivePeriod    = 30 * time.Second // TCP keep-alive probe interval
 
 	DefaultHTTPServerIdleTimeout  = 60 * time.Second // HTTP keep-alive idle
 	DefaultHTTPServerWriteTimeout = 10 * time.Second // HTTP response write
@@ -172,6 +170,7 @@ const (
 
 	DefaultTokenStoreCapacity     = 32  // QUIC LRU token store capacity per key
 	DefaultTokenStoreMaxEntries   = 128 // QUIC LRU token store max total entries
+	DefaultQUICAddrCacheSize      = 128 // RFC 9000: address validation token cache (LRU entries)
 	DefaultSecureTransportRetries = 2   // DoH/DoH3 recreate-and-retry attempts
 )
 

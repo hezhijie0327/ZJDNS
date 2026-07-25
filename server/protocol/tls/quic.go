@@ -12,6 +12,7 @@ import (
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
@@ -25,7 +26,7 @@ func (s *Server) startDOQServer() error {
 		return fmt.Errorf("DoQ address resolution: %w", err)
 	}
 
-	s.doqValidator = newQUICAddrValidator()
+	addrCache := lrumap.New[string, time.Time](config.DefaultQUICAddrCacheSize)
 
 	quicTLSConfig := s.QUICTLSConfig().Clone()
 	quicTLSConfig.NextProtos = config.NextProtoDOQ
@@ -54,7 +55,7 @@ func (s *Server) startDOQServer() error {
 
 		transport := &quic.Transport{
 			Conn:                conn,
-			VerifySourceAddress: s.doqValidator.requiresValidation,
+			VerifySourceAddress: makeAddrValidator(addrCache),
 		}
 		s.doqTransports = append(s.doqTransports, transport)
 

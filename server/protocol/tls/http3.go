@@ -9,6 +9,7 @@ import (
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -20,7 +21,7 @@ func (s *Server) startDOH3Server(port string) error {
 		return fmt.Errorf("DoH3 address resolution: %w", err)
 	}
 
-	s.h3Validator = newQUICAddrValidator()
+	addrCache := lrumap.New[string, time.Time](config.DefaultQUICAddrCacheSize)
 
 	tlsConfig := s.QUICTLSConfig().Clone()
 	tlsConfig.NextProtos = config.NextProtoDOH3
@@ -51,7 +52,7 @@ func (s *Server) startDOH3Server(port string) error {
 
 		transport := &quic.Transport{
 			Conn:                conn,
-			VerifySourceAddress: s.h3Validator.requiresValidation,
+			VerifySourceAddress: makeAddrValidator(addrCache),
 		}
 		s.h3Transports = append(s.h3Transports, transport)
 

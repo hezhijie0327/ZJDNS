@@ -70,7 +70,7 @@ Client ← [2字节长度][DNS响应] ← Server  (按序)
 
 ### 我们的实现
 - ConnPool 管线化连接池：`server/upstream/pool/tcp.go`
-- `DefaultTCPPoolIdleTimeout = 120s`（客户端侧，减少重连）
+- `DefaultTCPPoolIdleTimeout = 60s`（客户端侧，减少重连）
 
 ---
 
@@ -375,7 +375,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 - `DefaultQUICClientIdleTimeout = 60s`
 - `DefaultQUICKeepAlive = 20s` ✓
 - `DefaultQUICAddrCacheTTL = 30min`
-- 地址验证器：`server/protocol/tls/addr_validator.go`（capped at 100K）
+- 地址验证器：`server/protocol/tls/addr_validator.go` — LRU cache, 128 entries ✓
 
 ---
 

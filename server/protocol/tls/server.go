@@ -60,14 +60,12 @@ type Server struct {
 	doqConns       []*net.UDPConn
 	doqTransports  []*quic.Transport
 	doqListeners   []*quic.EarlyListener
-	doqValidator   *quicAddrValidator
 	dohServers     []*eHTTP.Server
 	h3Server       *http3.Server
 	httpsListeners []net.Listener
 	h3Conns        []*net.UDPConn
 	h3Transports   []*quic.Transport
 	h3Listeners    []*quic.EarlyListener
-	h3Validator    *quicAddrValidator
 	stdCert        stdtls.Certificate // for DTLS server
 	dtlsListeners  []net.Listener
 }
@@ -300,9 +298,6 @@ func (s *Server) Shutdown() error {
 			zdnsutil.CloseWithLog(c, "DoQ socket", "TLS")
 		}
 	}
-	if s.doqValidator != nil {
-		s.doqValidator.close()
-	}
 	if s.h3Server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 		defer cancel()
@@ -334,9 +329,6 @@ func (s *Server) Shutdown() error {
 		if c != nil {
 			zdnsutil.CloseWithLog(c, "DoH3 socket", "TLS")
 		}
-	}
-	if s.h3Validator != nil {
-		s.h3Validator.close()
 	}
 	for _, l := range s.dtlsListeners {
 		if l != nil {

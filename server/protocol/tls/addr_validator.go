@@ -2,83 +2,29 @@ package tls
 
 import (
 	"net"
-	"sync"
 	"time"
-	"zjdns/config"
+	"zjdns/internal/lrumap"
 )
 
-// maxSeenEntries limits the quicAddrValidator seen map to prevent memory
-// exhaustion from spoofed source IPs.
-// quicAddrValidator caches recently-seen client addresses so the server can
-// skip QUIC Retry address validation on reconnection. Without this, quic-go
-// sends a Retry packet for every new source address — which frequently gets
-// dropped by NAT/firewall, breaking cross-network QUIC connectivity.
-type quicAddrValidator struct {
-	mu     sync.RWMutex
-	seen   map[string]time.Time
-	closed chan struct{}
-	once   sync.Once
-}
-
-const maxSeenEntries = 100000
-
-func newQUICAddrValidator() *quicAddrValidator {
-	v := &quicAddrValidator{
-		seen:   make(map[string]time.Time),
-		closed: make(chan struct{}),
-	}
-	go v.sweepLoop()
-	return v
-}
-
-func (v *quicAddrValidator) requiresValidation(addr net.Addr) bool {
-	udpAddr, ok := addr.(*net.UDPAddr)
-	if !ok {
+// makeAddrValidator returns a VerifySourceAddress callback backed by an LRU
+// cache of recently-seen client IPs. If the client IP is found in the cache,
+// address validation (QUIC Retry) is skipped, avoiding connectivity issues
+// caused by NAT/firewall dropping Retry packets.
+//
+// The cache is bounded per RFC 9000 (128 entries). LRU eviction ensures the
+// most recently active clients remain cached while inactive entries are
+// naturally aged out.
+func makeAddrValidator(cache *lrumap.Map[string, time.Time]) func(net.Addr) bool {
+	return func(addr net.Addr) bool {
+		udpAddr, ok := addr.(*net.UDPAddr)
+		if !ok {
+			return true
+		}
+		key := udpAddr.IP.String()
+		if _, exists := cache.Get(key); exists {
+			return false
+		}
+		cache.Set(key, time.Now())
 		return true
 	}
-	key := udpAddr.IP.String()
-
-	v.mu.RLock()
-	_, exists := v.seen[key]
-	v.mu.RUnlock()
-
-	if exists {
-		return false
-	}
-
-	v.mu.Lock()
-	// Check again under write lock; skip insertion when the map is full
-	// (graceful degradation to always-validate mode).
-	if _, exists := v.seen[key]; !exists && len(v.seen) < maxSeenEntries {
-		v.seen[key] = time.Now()
-	}
-	v.mu.Unlock()
-
-	return true
-}
-
-func (v *quicAddrValidator) sweepLoop() {
-	ticker := time.NewTicker(config.DefaultQUICServerIdleTimeout)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			cutoff := time.Now().Add(-config.DefaultQUICAddrCacheTTL)
-			v.mu.Lock()
-			for ip, t := range v.seen {
-				if t.Before(cutoff) {
-					delete(v.seen, ip)
-				}
-			}
-			v.mu.Unlock()
-		case <-v.closed:
-			return
-		}
-	}
-}
-
-func (v *quicAddrValidator) close() {
-	v.once.Do(func() {
-		close(v.closed)
-	})
 }
