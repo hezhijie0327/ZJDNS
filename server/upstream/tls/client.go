@@ -14,6 +14,7 @@ import (
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 	"zjdns/server/upstream/pool"
 	socks5 "zjdns/server/upstream/socks5"
 
@@ -34,6 +35,9 @@ type Client struct {
 	quicPool *pool.QUIC
 
 	sessionCache eTLS.ClientSessionCache
+
+	quicSessionCache tls.ClientSessionCache
+	dtlsSessions     *lrumap.DTLSSessionStore
 
 	quicConfigs   map[string]*quic.Config
 	quicConfigsMu sync.Mutex
@@ -58,21 +62,25 @@ func New(
 	dotPool *pool.ConnPool,
 	quicPool *pool.QUIC,
 	sessionCache eTLS.ClientSessionCache,
+	quicSessionCache tls.ClientSessionCache,
+	dtlsSessions *lrumap.DTLSSessionStore,
 	getProxy func(*config.UpstreamServer) *socks5.Dialer,
 	timeout time.Duration,
 ) *Client {
 	return &Client{
-		tlsClient:      tlsClient,
-		dohClient:      dohClient,
-		doh3Client:     doh3Client,
-		dotPool:        dotPool,
-		quicPool:       quicPool,
-		sessionCache:   sessionCache,
-		quicConfigs:    make(map[string]*quic.Config),
-		dohTransports:  make(map[string]*http.Client),
-		doh3Transports: make(map[string]*http.Client),
-		getProxy:       getProxy,
-		timeout:        timeout,
+		tlsClient:        tlsClient,
+		dohClient:        dohClient,
+		doh3Client:       doh3Client,
+		dotPool:          dotPool,
+		quicPool:         quicPool,
+		sessionCache:     sessionCache,
+		quicSessionCache: quicSessionCache,
+		dtlsSessions:     dtlsSessions,
+		quicConfigs:      make(map[string]*quic.Config),
+		dohTransports:    make(map[string]*http.Client),
+		doh3Transports:   make(map[string]*http.Client),
+		getProxy:         getProxy,
+		timeout:          timeout,
 	}
 }
 
@@ -147,6 +155,7 @@ func (c *Client) stdTLSConfig(server *config.UpstreamServer) *tls.Config {
 		InsecureSkipVerify: server.SkipTLSVerify, //nolint:gosec // G402: user-configured TLS verification
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         server.ServerName,
+		ClientSessionCache: c.quicSessionCache,
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
 				Role:       "UPSTREAM",
@@ -155,6 +164,7 @@ func (c *Client) stdTLSConfig(server *config.UpstreamServer) *tls.Config {
 				Version:    cs.Version,
 				Cipher:     tls.CipherSuiteName(cs.CipherSuite),
 				Group:      cs.CurveID.String(),
+				Resumed:    cs.DidResume,
 			})
 			return nil
 		},

@@ -152,6 +152,7 @@ const (
 
 	DefaultTransportMax          = 64
 	DefaultTLSSessionCacheSize   = 128
+	DefaultDTLSSessionCacheSize  = 128
 	DefaultTLCPSessionCacheSize  = 128
 	DefaultDTLCPSessionCacheSize = 128
 	DefaultHTTPTLCPClientMax     = 64 // max cached TLCP DoH HTTP clients

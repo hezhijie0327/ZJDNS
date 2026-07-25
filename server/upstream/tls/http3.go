@@ -12,6 +12,7 @@ import (
 	"sync"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/log"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -179,7 +180,13 @@ func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 					}
 					return quic.Dial(ctx, pconn, remoteAddr, tlsCfg, cpy)
 				}
-				return quic.DialAddrEarly(ctx, host, tlsCfg, cpy)
+				conn, err := quic.DialAddrEarly(ctx, host, tlsCfg, cpy)
+				if err == nil {
+					log.Debugf("UPSTREAM: DoH3 negotiated for %s — cipher=%s resumed=%v 0-RTT=%v",
+						host, tls.CipherSuiteName(conn.ConnectionState().TLS.CipherSuite),
+						conn.ConnectionState().TLS.DidResume, conn.ConnectionState().Used0RTT)
+				}
+				return conn, err
 			},
 			DisableCompression: true,
 			TLSClientConfig:    tlsCfg,

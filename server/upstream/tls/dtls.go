@@ -39,6 +39,9 @@ func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.U
 	if tlsConfig.ServerName != "" {
 		dtlsOpts = append(dtlsOpts, dtls.WithServerName(tlsConfig.ServerName))
 	}
+	if c.dtlsSessions != nil {
+		dtlsOpts = append(dtlsOpts, dtls.WithSessionStore(c.dtlsSessions))
+	}
 	dtlsOpts = append(dtlsOpts, dtls.WithVerifyConnection(func(state *dtls.State) error {
 		zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
 			Role:       "UPSTREAM",

@@ -13,6 +13,7 @@ import (
 	"time"
 	"zjdns/config"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 	"zjdns/server/upstream/dnscrypt"
 	"zjdns/server/upstream/plain"
 	"zjdns/server/upstream/pool"
@@ -24,6 +25,7 @@ import (
 	tlsclient "zjdns/server/upstream/tls"
 
 	"codeberg.org/miekg/dns"
+	stdtls "crypto/tls"
 	eHTTP "gitlab.com/go-extension/http"
 	eTLS "gitlab.com/go-extension/tls"
 )
@@ -99,6 +101,8 @@ func New() *Client {
 
 	timeout := config.DefaultDNSQueryTimeout
 	sessionCache := eTLS.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize)
+	quicSessionCache := stdtls.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize)
+	dtlsSessions := lrumap.NewDTLSSessionStore(config.DefaultDTLSSessionCacheSize)
 	tcpPool := pool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe)
 	dotPool := pool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe)
 	quicPool := pool.NewQUIC(config.DefaultMaxConns)
@@ -109,7 +113,7 @@ func New() *Client {
 	}
 
 	c.plainClient = plain.New(udpClient, tcpClient, tcpPool, c.proxyDialer, timeout)
-	c.tlsClient = tlsclient.New(tlsDNSClient, dohClient, doh3Client, dotPool, quicPool, sessionCache, c.proxyDialer, timeout)
+	c.tlsClient = tlsclient.New(tlsDNSClient, dohClient, doh3Client, dotPool, quicPool, sessionCache, quicSessionCache, dtlsSessions, c.proxyDialer, timeout)
 	c.tlcpClient = tlcpclient.New(c.proxyDialer, timeout)
 	c.dnscryptClient = dnscrypt.New(c.proxyDialer)
 

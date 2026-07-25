@@ -2,6 +2,7 @@ package tls
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -45,7 +46,13 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 			}
 			return quic.Dial(timeoutCtx, pconn, remoteAddr, dialTLS, c.getQUICConfig("doq:"+key, tlsConfig.InsecureSkipVerify))
 		}
-		return quic.DialAddrEarly(timeoutCtx, addr, dialTLS, c.getQUICConfig("doq:"+key, tlsConfig.InsecureSkipVerify))
+		conn, err := quic.DialAddrEarly(timeoutCtx, addr, dialTLS, c.getQUICConfig("doq:"+key, tlsConfig.InsecureSkipVerify))
+		if err == nil {
+			log.Debugf("UPSTREAM: DoQ negotiated for %s — cipher=%s resumed=%v 0-RTT=%v",
+				addr, tls.CipherSuiteName(conn.ConnectionState().TLS.CipherSuite),
+				conn.ConnectionState().TLS.DidResume, conn.ConnectionState().Used0RTT)
+		}
+		return conn, err
 	}
 
 	if c.quicPool != nil {

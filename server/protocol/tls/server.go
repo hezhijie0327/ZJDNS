@@ -153,6 +153,7 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 				Version:    cs.Version,
 				Cipher:     stdtls.CipherSuiteName(cs.CipherSuite),
 				Group:      cs.CurveID.String(),
+				Resumed:    cs.DidResume,
 			})
 			return nil
 		},
@@ -372,6 +373,7 @@ func (s *Server) getConfigForClient(nextProtos []string) func(*eTLS.ClientHelloI
 				Version:    cs.Version,
 				Cipher:     eTLS.CipherSuiteName(cs.CipherSuite),
 				Group:      cs.CurveID.String(),
+				Resumed:    cs.DidResume,
 			})
 			return nil
 		}

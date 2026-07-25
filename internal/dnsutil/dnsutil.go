@@ -26,7 +26,7 @@ type HandshakeInfo struct {
 	Version    uint16 // protocol version codepoint (0 if unknown, e.g. DTLS)
 	Cipher     string // cipher suite name (e.g. "TLS_AES_256_GCM_SHA384", "ECC_SM4_GCM_SM3")
 	Group      string // key exchange group (e.g. "X25519", "SM2"; empty if N/A)
-	Resumed    bool   // session resumption (TLCP/DTLCP only)
+	Resumed    bool   // session resumption
 	ALPN       string // negotiated ALPN protocol (empty if none)
 }
 

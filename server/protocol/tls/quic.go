@@ -2,6 +2,7 @@ package tls
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -96,6 +97,10 @@ func (s *Server) handleDOQConnections(doqListener *quic.EarlyListener) {
 		if conn == nil {
 			continue
 		}
+
+		log.Debugf("TLS: DoQ connection from %s — cipher=%s resumed=%v 0-RTT=%v",
+			conn.RemoteAddr(), tls.CipherSuiteName(conn.ConnectionState().TLS.CipherSuite),
+			conn.ConnectionState().TLS.DidResume, conn.ConnectionState().Used0RTT)
 
 		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("DoQ connection handler")

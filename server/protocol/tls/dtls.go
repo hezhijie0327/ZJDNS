@@ -7,6 +7,7 @@ import (
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 	"zjdns/internal/pool"
 
 	"github.com/pion/dtls/v3"
@@ -28,6 +29,7 @@ func (s *Server) startDTLSServer() error {
 
 		listener, err := dtls.ListenWithOptions("udp", udpAddr,
 			dtls.WithCertificates(s.stdCert),
+			dtls.WithSessionStore(lrumap.NewDTLSSessionStore(config.DefaultDTLSSessionCacheSize)),
 			dtls.WithVerifyConnection(func(state *dtls.State) error {
 				zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
 					Role:       "TLS",
