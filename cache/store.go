@@ -107,26 +107,21 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 				// Shallow-copy entry to re-sort by latest latency
 				// without mutating the cached *Entry.
 				if len(entry.Answer) > 1 {
-					// Deep-copy Answer (for latency re-sort), Authority,
-					// and Additional so callers cannot mutate the cache.
+					// Deep-copy entry so latency re-sort and caller
+					// mutations (e.g. restoreDomain) do not race with
+					// concurrent readers of the shared L1 cache entry.
 					e := *entry
-					e.Answer = make([]dns.RR, len(entry.Answer))
-					copy(e.Answer, entry.Answer)
-					e.Authority = make([]dns.RR, len(entry.Authority))
-					copy(e.Authority, entry.Authority)
-					e.Additional = make([]dns.RR, len(entry.Additional))
-					copy(e.Additional, entry.Additional)
+					e.Answer = cloneRRs(entry.Answer)
+					e.Authority = cloneRRs(entry.Authority)
+					e.Additional = cloneRRs(entry.Additional)
 					s.sortAnswerByLatency(&e)
 					return &e, true, false
 				}
 				// Single-answer: deep-copy slices to prevent caller mutation.
 				e := *entry
-				e.Answer = make([]dns.RR, len(entry.Answer))
-				copy(e.Answer, entry.Answer)
-				e.Authority = make([]dns.RR, len(entry.Authority))
-				copy(e.Authority, entry.Authority)
-				e.Additional = make([]dns.RR, len(entry.Additional))
-				copy(e.Additional, entry.Additional)
+				e.Answer = cloneRRs(entry.Answer)
+				e.Authority = cloneRRs(entry.Authority)
+				e.Additional = cloneRRs(entry.Additional)
 				return &e, true, false
 			}
 			// Expired in L1 — fall through to SQLite.
@@ -142,10 +137,11 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, database.BoolToInt(dnssecOK),
 	).Scan(&id, &ts, &entryTTL, &validated, &msgWire)
 	if errors.Is(err, sql.ErrNoRows) {
+		log.Debugf("CACHE: miss for %s (type=%d)", qname, qtype)
 		return nil, false, false
 	}
 	if err != nil {
-		log.Warnf("CACHE: get query failed: %v", err)
+		log.Warnf("CACHE: get query failed for %s (type=%d): %v", qname, qtype, err)
 		return nil, false, false
 	}
 
@@ -157,7 +153,11 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	// Use a pooled buffer as the decompression destination to reduce
 	// per-cache-hit heap allocations (P3).  The buffer is returned to
 	// the pool after entry fields are extracted and msg.Data is cleared.
-	dbuf := decompressBufPool.Get().(*[]byte)
+	dbuf, ok := decompressBufPool.Get().(*[]byte)
+	if !ok {
+		b := make([]byte, 0, decompressBufCap)
+		dbuf = &b
+	}
 	wire, err := zdnsutil.DecompressTo(msgWire, *dbuf)
 	if err != nil {
 		clear(*dbuf)
@@ -195,12 +195,13 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	// sharing the same IP reuse the same row.
 	s.sortAnswerByLatency(entry)
 
-	// Populate L1 memory cache for future queries.
-	if s.dnsL1 != nil {
+	isExpired := ttl.IsExpired(ts, entryTTL)
+
+	// Populate L1 memory cache for future queries (only if fresh).
+	if s.dnsL1 != nil && !isExpired {
 		s.dnsL1.Set(dnsL1Key{qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecOK}, entry)
 	}
 
-	isExpired := ttl.IsExpired(ts, entryTTL)
 	return entry, true, isExpired
 }
 
@@ -216,10 +217,12 @@ func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
 		return
 	}
 
-	// Collect IPs from A/AAAA records in a single pass.
+	// Single pass: extract IP strings + collect for batch lookup.
+	rrToIP := make(map[dns.RR]string, len(entry.Answer))
 	ips := make([]string, 0, len(entry.Answer))
 	for _, rr := range entry.Answer {
 		if ip, ok := zdnsutil.ExtractIPString(rr); ok {
+			rrToIP[rr] = ip
 			ips = append(ips, ip)
 		}
 	}
@@ -233,11 +236,11 @@ func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
 		return
 	}
 
-	// In-place sort: non-A/AAAA before A/AAAA; A/AAAA sorted by latency.
-	// SortStableFunc avoids allocating temporary aRecs/other/result slices.
+	// In-place sort using pre-computed IP strings — avoids O(n log n)
+	// type-switch calls inside the comparator.
 	slices.SortStableFunc(entry.Answer, func(a, b dns.RR) int {
-		aIP, aIsAddr := zdnsutil.ExtractIPString(a)
-		bIP, bIsAddr := zdnsutil.ExtractIPString(b)
+		aIP, aIsAddr := rrToIP[a]
+		bIP, bIsAddr := rrToIP[b]
 		if aIsAddr != bIsAddr {
 			if !aIsAddr {
 				return -1
@@ -273,7 +276,7 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 	}
 
 	// Check bounded memory L1 cache first.
-	latencies := make(map[string]int, len(ips))
+	latencies := make(map[string]int, min(len(ips), maxLatencyLookupIPs))
 	misses := ips
 	if s.latencyL1 != nil {
 		misses = nil
@@ -290,7 +293,11 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 	}
 
 	// Query SQLite for cache misses.
-	argsPtr := latencyArgsPool.Get().(*[maxLatencyLookupIPs]any)
+	argsPtr, ok := latencyArgsPool.Get().(*[maxLatencyLookupIPs]any)
+	if !ok {
+		a := [maxLatencyLookupIPs]any{}
+		argsPtr = &a
+	}
 	defer func() {
 		for i := range maxLatencyLookupIPs {
 			argsPtr[i] = nil
@@ -443,9 +450,13 @@ func (s *SQLiteCache) evictIfNeeded() {
 		return
 	}
 
-	// Near or over the limit — resync from DB to correct any drift, then evict.
-	if err := s.db.SQ.QueryRow("SELECT COUNT(*) FROM entries").Scan(&count); err == nil {
-		s.db.SetEntryCount(count)
+	// Use the atomic entry counter for fast-path checks; resync from DB
+	// every 20 evictions to correct drift from concurrent writers.
+	count = s.db.EntryCount()
+	if count < 0 || s.evictCount.Load()%20 == 0 {
+		if err := s.db.SQ.QueryRow("SELECT COUNT(*) FROM entries").Scan(&count); err == nil {
+			s.db.SetEntryCount(count)
+		}
 	}
 
 	excess := count - maxEntries

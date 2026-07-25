@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"zjdns/config"
+	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server/handler"
 
@@ -19,6 +20,7 @@ type Validation struct{}
 func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		if qctx.Req == nil || len(qctx.Req.Question) == 0 {
+			log.Debugf("QUERY: rejecting nil/empty question with FORMERR")
 			msg := pool.DefaultMessage.Get()
 			msg.Rcode = dns.RcodeFormatError
 			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorInvalidData, ExtraText: ""}
@@ -39,6 +41,11 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		}
 
 		// Build REFUSED response with EDE.
+		if len(qname) > config.MaxDomainLength || !dnsutil.IsName(qname) {
+			log.Debugf("QUERY: rejecting invalid domain %q (len=%d) with REFUSED", qname, len(qname))
+		} else {
+			log.Debugf("QUERY: rejecting unsupported query type %s for %s with REFUSED", dns.TypeToString[qtype], qname)
+		}
 		msg := pool.DefaultMessage.Get()
 		dnsutil.SetReply(msg, qctx.Req)
 		msg.Rcode = dns.RcodeRefused

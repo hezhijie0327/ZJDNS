@@ -58,16 +58,36 @@
 ### 错误处理（8 个发现）
 - crypto/rand.Read 错误丢弃（5×M）、zone 文件插入错误静默丢失（M）
 
-## 修复计划
+## 修复状态
 
-### Sprint 1：CRITICAL + HIGH（4 个，立即修复）
-1. **C1**：DTLS 缓冲区 → 使用 `dns.MaxMsgSize` 或 `pool.UDPBufferSize`
-2. **H1**：陈旧清理时间戳 → 替换为 `log.NowUnix() - defaultStaleMaxAge`
-3. **H2**：PrefetchCooldown 有界 → 添加 LRU 驱逐或最大 map 大小
-4. **H3**：NXDOMAIN 池泄漏 → 在 CAS 失败后调用 `pool.DefaultMessage.Put()`
+### ✅ Sprint 1：CRITICAL + HIGH（4/4 已修复）
+| # | 状态 | 描述 |
+|---|------|------|
+| C1 | ✅ 已修复 | DTLS 缓冲区 → `pool.DefaultBuffer.Get()` + 边界检查 |
+| H1 | ✅ 已修复 | 陈旧清理时间戳 → `log.NowUnix() - defaultStaleMaxAge` |
+| H2 | ✅ 已修复 | PrefetchCooldown → `DefaultPrefetchCooldownMaxEntries=10000` + 驱逐 |
+| H3 | ✅ 已修复 | NXDOMAIN 池泄漏 → CAS 失败后 `pool.DefaultMessage.Put()` |
 
-### Sprint 2：MEDIUM（41 个）
-按模式分组：池纪律（4）、RR 别名（3）、错误丢弃（8）、锁（5）、死代码/未使用（5）、架构（6）、性能（5）、其他（5）
+### ✅ Sprint 2a：池/内存安全（3/4 已修复）
+| # | 状态 | 描述 |
+|---|------|------|
+| M1 | ✅ 已修复 | Pool.Buffer.Put → `cap(buf) == b.size` 拒绝过大缓冲区 |
+| M2 | ✅ 已修复 | DoT 写入器 → defer 中排空 writeCh 剩余条目 |
+| M3 | ✅ 已修复 | DNSCrypt nil-map → `c.cache == nil` 检查 |
 
-### Sprint 3：LOW（50 个）
-文档、微优化、代码异味、维护性
+### ✅ Sprint 2b：正确性修复（6/8 已修复）
+| # | 状态 | 描述 |
+|---|------|------|
+| M4 | ✅ 已修复 | 移除 refreshCacheEntry 未使用的 qctx 参数 |
+| M5 | ✅ 已修复 | CNAME 链耗尽 → `chainExhausted` 标志避免误报 |
+| M6 | ✅ 已修复 | RecordRequest → 局部变量 `qname`，不修改调用者 |
+| M7 | ✅ 已修复 | Zone 成功响应 → 移除 EDE ForgedAnswer |
+| M8 | ✅ 已修复 | Validation FORMERR → 添加 EDE InvalidData |
+| M9 | ✅ 已修复 | Zone insertRow 错误 → 记录日志 |
+
+### ⬜ 剩余：~32 MEDIUM + ~50 LOW
+剩余问题主要是文档优化、微优化、代码异味、架构建议（如 CLI 导入 server 协议、Resolver 兄弟包导入、TLCP 关闭不一致等），不影响正确性或安全性。
+
+### 提交
+`cc60c2b fix: Round 2 audit — CRITICAL + HIGH + selected MEDIUM fixes`
+15 个文件修改，174 行新增，29 行删除。

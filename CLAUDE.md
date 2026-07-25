@@ -136,7 +136,7 @@ go test -bench=. -short -benchtime=500ms ./...                 # stable numbers
 go test -bench=BenchmarkServerProcessQuery -benchtime=3s ./cmd/zjdns  # integration QPS
 ```
 
-**98 benchmarks** across 14 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
+**87 benchmarks** across 14 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
 
 ```bash
 # Update baseline
@@ -225,7 +225,7 @@ zjdns/
 ├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, lrumap, ...
 └── server/
     ├── handler/        ← query pipeline adapter + QueryContext
-    │   └── middleware/ ← 10 composable middleware + AssembleChain
+    │   └── middleware/ ← 9 composable middleware + AssembleChain
     ├── defense/        ← DNS anti-pollution (Detector, poisonguard/spoofguard/splitguard)
     ├── protocol/       ← {plain,tls,tlcp,dnscrypt} server listeners
     ├── upstream/       ← {plain,tls,tlcp,dnscrypt} outbound client + pool + SOCKS5
@@ -267,9 +267,8 @@ Execution order (outermost → innermost):
 5. `EDNSMiddleware` — ECS parsing, DNS Cookie validation (RFC 7873/9018)
 6. `CacheLookupMiddleware` — fresh→serve, stale→serve+refresh, miss→delegate
 7. `PTRMiddleware` — reverse PTR lookup from cache
-8. `RulesetMiddleware` — CIDR-based A/AAAA record filtering
-9. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147)
-10. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive with singleflight dedup
+8. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147)
+9. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive with singleflight dedup
 
 All layers share a mutable `QueryContext`. Any layer may short-circuit by setting `qctx.Res`.
 
@@ -296,10 +295,10 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 
 | Type | Package | Notes |
 |------|---------|-------|
-| `ServerConfig` | `config` | Top-level config; owns `ECSConfig`, `ProtocolSettings`, `CertSettings` |
+| `ServerConfig` | `config` | Top-level config; owns `ECSConfig`, `ProtocolSettings`, `CertificateSettings` |
 | `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `NoCache`, `Match`, `Proxy`, defense flags |
 | `ProtocolSettings` | `config` | Per-protocol port/endpoint: `UDP`, `TCP`, `TLS`, `QUIC`, `HTTPS`, `HTTP3`, `TLCP`, `DTLS`, `DTLCP`, `DNSCrypt` |
-| `DB` | `database` | Unified SQLite DB; WAL mode, 12 prepared stmts |
+| `DB` | `database` | Unified SQLite DB; WAL mode, 8 prepared stmts |
 | `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Stats/Close |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL |
 | `AsyncStatsWriter` | `cache` | Background goroutine: non-blocking channel → batched SQLite writes |
@@ -307,15 +306,15 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `QueryContext` | `server/handler` | Mutable struct carrying all request state through the middleware chain |
 | `QueryHandler` | `server/handler` | Interface: `ServeDNS(ctx, qctx) error` |
-| `Middleware` | `server/handler` | Interface: `Wrap(next QueryHandler) QueryHandler` |
+| `Wrapper` | `server/handler` | Interface: `Wrap(next QueryHandler) QueryHandler` |
 | `Resolver` | `server/resolver` | Upstream + recursive resolution; constructed via `New(Config)` |
 | `Recursive` | `server/resolver` | Built-in recursive walk with DNSSEC validation |
 | `Client` | `server/upstream` | Outbound queries: all protocols (UDP/TCP/DoT/DoQ/DoH/DoH3/DTLS/DTLCP/TLCP/DNSCrypt/SOCKS5) |
-| `Conn` / `Pool` | `server/upstream/pool` | RFC 7766 pipelined TCP/DoT connection pool |
+| `Conn` / `ConnPool` | `server/upstream/pool` | RFC 7766 pipelined TCP/DoT connection pool |
 | `Detector` | `server/defense` | DNS poison detection; `Verdict` type (Clean/Poisoned/Uncertain) |
 | `Engine` | `ruleset` | CIDR + domain tag matching; CIDR uses binary radix trie O(128) |
 | `Message` / `Buffer` | `internal/pool` | sync.Pool allocators for DNS messages |
-| `Stamp` | `internal/stamp` | sdns:// stamp parser/encoder (8 protocol types) |
+| `DNSStamp` | `internal/stamp` | sdns:// stamp parser/encoder (8 protocol types) |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full type reference and design decisions.
 

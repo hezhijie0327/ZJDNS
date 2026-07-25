@@ -193,6 +193,12 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 	defer icmpBufPool.Put(bufPtr)
 	buffer := *bufPtr
 	for {
+		// Check context cancellation on each iteration.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		n, peer, err := conn.ReadFrom(buffer)
 		if err != nil {
 			return err

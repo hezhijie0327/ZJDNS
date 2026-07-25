@@ -44,6 +44,7 @@ func (s *Server) startDTLSServer() error {
 
 		s.dtlsListeners = append(s.dtlsListeners, listener)
 		s.serverGroup.Go(func() error {
+			defer zdnsutil.HandlePanic("DTLS server")
 			s.handleDTLSConnections(listener)
 			return nil
 		})
@@ -106,7 +107,8 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 		// deadline fires, Read returns a timeout error and the connection
 		// is closed.  pion/dtls sends a fatal alert on close.
 		if err := conn.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
-			return
+			log.Debugf("TLS: DTLS SetReadDeadline error: %v", err)
+			continue
 		}
 
 		n, err := conn.Read(buf)

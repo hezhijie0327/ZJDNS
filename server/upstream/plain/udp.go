@@ -34,9 +34,12 @@ type spoofguardState struct {
 }
 
 // spoofguardBufPool reuses 4KB read buffers across spoofguard queries.
+// 4096 = standard DNS UDP max payload (RFC 6891 §6.2.5); responses larger
+// than 4096 bytes set TC=1 and are truncated, so 4096 is the correct upper
+// bound for a single UDP datagram.
 var spoofguardBufPool = sync.Pool{
 	New: func() any {
-		b := make([]byte, 4096) // NOTE(M21): UDP DNS responses >4096B are truncated; rare in practice
+		b := make([]byte, 4096)
 		return &b
 	},
 }
@@ -89,6 +92,7 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 		defer func() { _ = pconn.Close() }()
 		bufPtr := socks5.ReadPool.Get().(*[]byte)
 		buf = *bufPtr
+		// clear() before Put prevents data leakage between reuse cycles.
 		defer func() { clear(buf); socks5.ReadPool.Put(bufPtr) }()
 	} else {
 		var err error
@@ -102,6 +106,7 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 		}
 		bufPtr := spoofguardBufPool.Get().(*[]byte)
 		buf = *bufPtr
+		// clear() before Put prevents data leakage between reuse cycles.
 		defer func() { clear(buf); spoofguardBufPool.Put(bufPtr) }()
 	}
 

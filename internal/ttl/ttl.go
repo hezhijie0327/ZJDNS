@@ -10,7 +10,8 @@ import (
 )
 
 // NowUnix returns the current Unix timestamp. Override in tests for
-// deterministic results.
+// deterministic results.  This is an exported var so that test packages
+// can inject a fixed time — production code should use log.NowUnix() instead.
 var NowUnix = func() int64 { return time.Now().Unix() }
 
 // IsExpired reports whether the TTL has elapsed relative to timestamp.
@@ -28,6 +29,9 @@ func RemainingTTL(timestamp int64, ttlSeconds int, staleTTL uint32) uint32 {
 	}
 	// Cyclical stale countdown: staleTTL - (timeSinceExpiry % staleTTL).
 	timeSinceExpiry := -remaining
+	if staleTTL == 0 {
+		return 1
+	}
 	cycleRemaining := max(int64(staleTTL)-(timeSinceExpiry%int64(staleTTL)), 1)
 	return uint32(cycleRemaining) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
 }

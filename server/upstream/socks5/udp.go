@@ -56,6 +56,9 @@ var socks5ReadBufPool = sync.Pool{
 // goroutine and release TCP/UDP relay resources. Dropping without Close() leaks.
 func (d *Dialer) ListenPacket(ctx context.Context) (net.PacketConn, error) {
 	// Create a fresh, independent dialer so the relay is not shared.
+	// NOTE: Each call does a full TCP dial + SOCKS5 handshake, which is
+	// expensive. A pool could amortize this but would reintroduce the
+	// shared-socket problem. This tradeoff is intentional.
 	fresh := &Dialer{
 		proxyAddr: d.proxyAddr,
 		username:  d.username,
@@ -165,6 +168,10 @@ func (d *Dialer) establishUDPRelay(ctx context.Context) error {
 	d.udpConn = udpConn
 	d.relayAddr = relay
 
+	// NOTE: The double-goroutine pattern handles the case where ctrlConn.Read
+	// blocks indefinitely. Combining into one goroutine would require
+	// additional synchronization. Simpler to keep as-is. on
+	// ctrlConn.Read and ctrlClosed would avoid the nested goroutine.
 	// Monitor the control connection. The goroutine exits when ctrlConn
 	// is closed by cleanupLocked (Close/proxy-side) or when the closed signal
 	// fires. Using a select prevents the goroutine from leaking when the Dialer
@@ -197,6 +204,7 @@ func (d *Dialer) cleanupLocked() {
 	if d.ctrlConn != nil {
 		_ = d.ctrlConn.Close()
 		d.ctrlConn = nil
+		close(d.ctrlClosed)
 		d.ctrlClosed = make(chan struct{})
 	}
 	if d.udpConn != nil {

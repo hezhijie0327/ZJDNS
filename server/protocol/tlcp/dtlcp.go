@@ -94,7 +94,17 @@ func (l *dtlcpListener) Close() error {
 	for _, conn := range active {
 		_ = conn.Close()
 	}
-	return l.udpConn.Close()
+	err := l.udpConn.Close()
+
+	// Connections accepted between the snapshot above and udpConn.Close()
+	// were never closed. Re-acquire the lock and close any stragglers.
+	l.mu.Lock()
+	for _, conn := range l.active {
+		_ = conn.Close()
+	}
+	l.mu.Unlock()
+
+	return err
 }
 
 func (l *dtlcpListener) Addr() net.Addr {
@@ -152,7 +162,8 @@ func (b *bufferedPacketConn) Close() error {
 // socket via a bufferedPacketConn that returns the first datagram on the
 // first ReadFrom, then falls through to the real socket.
 //
-// TODO: Replace with dtlcp.Listen + Accept when upstream fixes net.Listen("udp").
+// NOTE: dtlcp.Listen does not support "udp" in Go. This custom listener is
+// the workaround. Track gotlcp upstream for a fix. net.Listen("udp").
 func acceptDTLCP(udpConn *net.UDPConn, firstPacket []byte, remoteAddr *net.UDPAddr, cfg *dtlcp.Config) (*dtlcp.Conn, error) {
 	bpc := &bufferedPacketConn{
 		UDPConn:    udpConn,
@@ -205,6 +216,7 @@ func (s *Server) startDTLCPServer() error {
 		listener := newDTLCPListener(udpConn, s.dtlcpConfig)
 		s.dtlcpListeners = append(s.dtlcpListeners, listener)
 		s.serverGroup.Go(func() error {
+			defer zdnsutil.HandlePanic("DTLCP server")
 			s.handleDTLCPConnections(listener)
 			return nil
 		})
@@ -264,7 +276,8 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 
 	for {
 		if err := conn.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
-			return
+			log.Debugf("TLCP: DTLCP SetReadDeadline error: %v", err)
+			continue
 		}
 
 		n, err := conn.Read(buf)

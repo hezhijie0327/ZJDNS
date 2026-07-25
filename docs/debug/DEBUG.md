@@ -380,7 +380,7 @@ dig @127.0.0.1 -p 15353 home.console.aliyun.com A
 # Stats + DB ops
 dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.db.clear.stats CH TXT +short
-./zjdns --sql cache.db "SELECT result, rcode, COUNT(*) FROM request_log GROUP BY result, rcode"
+./zjdns --sql cache.db "SELECT result, rcode, COUNT(*) FROM query_log GROUP BY result, rcode"
 ```
 
 ### TLCP (国密) Test

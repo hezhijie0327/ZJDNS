@@ -158,6 +158,19 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			}
 			qctx.Res = msg
 			qctx.CacheServed = false
+			m.store.RecordRequest(&cache.RequestRecord{
+				Qname: qctx.Qname, Qtype: qctx.Qtype, Qclass: qctx.Req.Question[0].Header().Class,
+				ECS: ecsOpt, DNSSECOK: qctx.ClientRequestedDNSSEC,
+				Protocol: qctx.Protocol, Result: "miss", Rcode: dns.RcodeSuccess,
+			})
+		} else {
+			// Refresh failed — serve stale response.
+			m.store.RecordRequest(&cache.RequestRecord{
+				Qname: qname, Qtype: qtype, Qclass: qclass,
+				ECS: ecsOpt, DNSSECOK: qctx.ClientRequestedDNSSEC,
+				Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
+				EntryID: entry.ID,
+			})
 		}
 	case <-timer.C:
 		// Stale response stays in qctx.Res.  Background refresh continues.

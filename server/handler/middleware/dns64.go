@@ -67,7 +67,6 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			qr.Answer, qr.Authority, qr.Additional = m.synthesizer.Synthesize(
 				qr.Answer, qr.Authority, qr.Additional,
 				aqr.Answer, aqr.Authority, aqr.Additional, qr.Validated)
-			qctx.DNS64Applied = true
 			log.Debugf("DNS64: synthesized %d AAAA records for %s", len(qr.Answer), qname)
 		}
 

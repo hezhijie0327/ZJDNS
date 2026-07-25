@@ -42,6 +42,7 @@ func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *d
 	var sharedKey [dnscryptcrypto.SharedKeySize]byte
 	curr := s.current()
 
+	var err error
 	if len(q.PQCiphertext) > 0 {
 		// Reuse the shared key from decrypt when available — the client
 		// reuses encapsulations and decryptPQInitial has already derived
@@ -50,11 +51,18 @@ func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *d
 			sharedKey = q.SharedKey
 		} else {
 			kemSS := dnscryptcrypto.PQDecapsulate(q.PQCiphertext, curr.PQ.PqPrivateKey)
-			sharedKey = dnscryptcrypto.PQDeriveSharedKey(kemSS, q.ClientMagic, curr.PQ.PqCertContext, q.PQCiphertext)
+			sharedKey, err = dnscryptcrypto.PQDeriveSharedKey(kemSS, q.ClientMagic, curr.PQ.PqCertContext, q.PQCiphertext)
+			if err != nil {
+				return nil, fmt.Errorf("deriving PQ shared key: %w", err)
+			}
 		}
 
 		// Issue a resumption ticket.
-		resumeSecret := dnscryptcrypto.PQResumeSecret(sharedKey, q.ClientMagic, q.Nonce[:dnscryptcrypto.NonceSize/2])
+		var resumeSecret [dnscryptcrypto.SharedKeySize]byte
+		resumeSecret, err := dnscryptcrypto.PQResumeSecret(sharedKey, q.ClientMagic, q.Nonce[:dnscryptcrypto.NonceSize/2])
+		if err != nil {
+			return nil, fmt.Errorf("deriving PQ resume secret: %w", err)
+		}
 		ticketExpiry := dnscryptcrypto.NowUnix32() + uint32(config.DefaultDNSCryptPQTicketLifetime/time.Second)
 		peHash := dnscryptcrypto.ProfileExtensionHash()
 		plaintext := dnscryptcrypto.EncodeTicketPlaintext(
@@ -65,7 +73,7 @@ func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *d
 		if _, randErr := rand.Read(nonce[:]); randErr != nil {
 			return nil, fmt.Errorf("generating ticket nonce: %w", randErr)
 		}
-		sealed := dnscryptcrypto.PQSealTicket(&s.ticketKey, &s.ticketKeyID, &nonce, plaintext)
+		sealed := dnscryptcrypto.PQSealTicket(s.ticketKey, s.ticketKeyID, nonce, plaintext)
 		r.PQControl = dnscryptcrypto.PQBuildControlBlock(sealed, uint32(config.DefaultDNSCryptPQTicketLifetime/time.Second))
 		log.Debugf("DNSCRYPT: PQ ticket issued (expires in %ds)", config.DefaultDNSCryptPQTicketLifetime/time.Second)
 	} else {
@@ -179,7 +187,10 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *dnscryptcrypto
 		return nil, nil, dnscryptcrypto.ErrPQInvalidTicket
 	}
 
-	sharedKey := dnscryptcrypto.PQResumedSharedKey(resumeSecret, matchedPair.PQ.ClientMagic, nonceHalf, ticket)
+	sharedKey, err := dnscryptcrypto.PQResumedSharedKey(resumeSecret, matchedPair.PQ.ClientMagic, nonceHalf, ticket)
+	if err != nil {
+		return nil, nil, fmt.Errorf("deriving PQ resumed shared key: %w", err)
+	}
 
 	query = &dnscryptcrypto.EncryptedQuery{
 		ESVersion:   dnscryptcrypto.XWingPQ,

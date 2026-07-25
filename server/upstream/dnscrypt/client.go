@@ -126,11 +126,17 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 		ticket, lifetime, parseErr := dnscryptcrypto.PQParseControlBlock(resp.PQControl)
 		if parseErr == nil && len(ticket) > 0 {
 			state.mu.Lock()
-			state.pqTicket = ticket
-			state.pqTicketExpiry = time.Now().Add(time.Duration(lifetime) * time.Second)
-			state.pqResumeSecret = dnscryptcrypto.PQResumeSecret(state.sharedKey, state.clientMagic, clientNonce[:dnscryptcrypto.NonceSize/2])
-			state.mu.Unlock()
-			log.Debugf("UPSTREAM: DNSCrypt PQ resumption ticket stored (expires in %ds)", lifetime)
+			pqResumeSecret, err := dnscryptcrypto.PQResumeSecret(state.sharedKey, state.clientMagic, clientNonce[:dnscryptcrypto.NonceSize/2])
+			if err != nil {
+				state.mu.Unlock()
+				log.Debugf("UPSTREAM: DNSCrypt PQ resume secret derivation failed: %v", err)
+			} else {
+				state.pqResumeSecret = pqResumeSecret
+				state.pqTicket = ticket
+				state.pqTicketExpiry = time.Now().Add(time.Duration(lifetime) * time.Second)
+				state.mu.Unlock()
+				log.Debugf("UPSTREAM: DNSCrypt PQ resumption ticket stored (expires in %ds)", lifetime)
+			}
 		}
 	}
 
@@ -142,13 +148,16 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 		pool.DefaultMessage.Put(response)
 		return nil, fmt.Errorf("unpacking dnscrypt response: %w", err)
 	}
+	response.Data = nil
 
 	if response.Truncated && !useTCP {
 		const maxQueryLen = 4096
+		state.mu.Lock()
 		if state.minQueryLen+64 <= maxQueryLen {
 			state.minQueryLen += 64
 			log.Debugf("UPSTREAM: DNSCrypt min-query-len escalated to %d after TC", state.minQueryLen)
 		}
+		state.mu.Unlock()
 	}
 
 	return response, nil

@@ -4,7 +4,7 @@ Detailed technical reference for ZJDNS. For working guidelines, see [CLAUDE.md](
 
 ## DB Schema
 
-The unified database (`database/`) contains ten SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
+The unified database (`database/`) contains eight SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
 
 ```sql
 -- DNS response cache. Uniqueness: (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok).
@@ -34,7 +34,7 @@ CREATE TABLE query_stats (
     protocol    TEXT NOT NULL,
     rcode       INTEGER NOT NULL DEFAULT 0,
     dnssec      TEXT NOT NULL DEFAULT '',  -- 'secure','insecure','bogus','' for hits
-    hijack      INTEGER NOT NULL DEFAULT 0,
+    poisoned      INTEGER NOT NULL DEFAULT 0,
     fallback    INTEGER NOT NULL DEFAULT 0,
     query_count INTEGER NOT NULL DEFAULT 0,
     total_ms    INTEGER NOT NULL DEFAULT 0,
@@ -54,7 +54,7 @@ CREATE TABLE query_log (
     rcode       INTEGER NOT NULL DEFAULT 0,
     response_ms INTEGER NOT NULL DEFAULT 0,
     server      TEXT NOT NULL DEFAULT '',
-    hijack      INTEGER NOT NULL DEFAULT 0,
+    poisoned      INTEGER NOT NULL DEFAULT 0,
     fallback    INTEGER NOT NULL DEFAULT 0,
     dnssec      TEXT NOT NULL DEFAULT ''
 );
@@ -157,8 +157,8 @@ Reuses SM2 certificate pair from TLCP. Wire format = DTLS (RFC 8094): 2-byte big
 
 ### Workarounds
 
-- **Server** (`server/protocol/tlcp/dtlcp.go`): `net.ListenUDP` + `acceptDTLCP()` feeds pre-read ClientHello through `dtlcp.Server`. TODO: replace with `dtlcp.Listen` when upstream fixes.
-- **Client** (`server/upstream/tlcp/dtlcp.go`): `net.ListenPacket` + `dtlcp.Client()` + `HandshakeContext()`. TODO: replace with `dtlcp.Dial`.
+- **Server** (`server/protocol/tlcp/dtlcp.go`): `net.ListenUDP` + `acceptDTLCP()` feeds pre-read ClientHello through `dtlcp.Server`. Will be replaced with `dtlcp.Listen` when upstream fixes the connected-socket issue.
+- **Client** (`server/upstream/tlcp/dtlcp.go`): `net.ListenPacket` + `dtlcp.Client()` + `HandshakeContext()`. Will be replaced with `dtlcp.Dial` when upstream fixes.
 - **Synchronous handling**: gotlcp shares one `*net.UDPConn` across all connections. Only one connection at a time until upstream provides per-connection isolation.
 - Windows: IPv4 localhost DTLCP handshake unreliable — use `[::1]`.
 - **Deadlock fix**: `dtlcpListener.Close()` collects connections under the lock, unlocks, THEN closes — `dtlcpConnWrapper.Close()` also acquires the same mutex.

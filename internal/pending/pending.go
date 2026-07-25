@@ -30,6 +30,9 @@ func NewGroup[K comparable]() *Group[K] {
 // Start registers an operation for key.  Returns true if the caller should
 // proceed (leader).  Returns false if an operation for this key is already in
 // flight; the caller should skip its work.
+//
+// Callers MUST use `defer g.Done(key)` immediately after Start(key) to
+// prevent key leakage if the goroutine panics.
 func (g *Group[K]) Start(key K) bool {
 	g.mu.Lock()
 	_, loaded := g.sets[key]

@@ -60,6 +60,11 @@ func NewPendingRequests() *PendingRequests {
 		for range ticker.C {
 			p.mu.Lock()
 			if len(p.sets) > maxPendingEntries {
+				// Evict half the entries when over capacity. Under sustained load
+				// this may evict active entries that have not yet completed — the
+				// 60s cleanup interval combined with the caller-side timeout
+				// (config.DefaultServeExpiredClientTimeout) provides a safety
+				// window for in-flight operations to complete before eviction.
 				n := 0
 				for k := range p.sets {
 					delete(p.sets, k)
@@ -113,7 +118,7 @@ func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.
 			<-timer.C
 		}
 	case <-timer.C:
-		log.Warnf("CACHE: pending-request follower timeout for %s", qname)
+		log.Debugf("CACHE: pending-request follower timeout for %s (type=%s)", qname, dns.TypeToString[qtype])
 		return &resolver.QueryResult{Err: errors.New("pending request timeout")}, true
 	}
 	return call.result, true

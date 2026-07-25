@@ -17,7 +17,8 @@ import (
 // dialDTLCP creates a DTLCP client connection to addr using an unconnected
 // UDP socket.
 //
-// TODO: Replace with dtlcp.Dial when upstream fixes the connected-socket issue.
+// NOTE: dtlcp.Dial requires a connected UDP socket which pion/dtls manages
+// differently than gotlcp. Track gotlcp upstream for a fix. the connected-socket issue.
 func dialDTLCP(ctx context.Context, network, addr string, cfg *dtlcp.Config) (*dtlcp.Conn, error) {
 	remoteAddr, err := net.ResolveUDPAddr(network, addr)
 	if err != nil {
@@ -65,7 +66,8 @@ func (c *Client) ExecuteDTLCP(ctx context.Context, msg *dns.Msg, server *config.
 		return nil, fmt.Errorf("dtlcp: write query: %w", err)
 	}
 
-	respBuf := make([]byte, 4096)
+	respBuf := pool.DefaultBuffer.Get()
+	defer pool.DefaultBuffer.Put(respBuf)
 	n, err := conn.Read(respBuf)
 	if err != nil {
 		return nil, fmt.Errorf("dtlcp: read response: %w", err)
@@ -77,14 +79,15 @@ func (c *Client) ExecuteDTLCP(ctx context.Context, msg *dns.Msg, server *config.
 	if int(respLen)+2 > n {
 		return nil, fmt.Errorf("dtlcp: response truncated: want %d + 2, got %d", respLen, n)
 	}
-	respBuf = respBuf[2 : 2+respLen]
+	msgBuf := respBuf[2 : 2+respLen]
 
 	response := pool.DefaultMessage.Get()
-	response.Data = respBuf
+	response.Data = msgBuf
 	if err := response.Unpack(); err != nil {
 		pool.DefaultMessage.Put(response)
 		return nil, fmt.Errorf("dtlcp: unpack response: %w", err)
 	}
+	response.Data = nil
 
 	log.Debugf("UPSTREAM: DTLCP query to %s succeeded", addr)
 	return response, nil

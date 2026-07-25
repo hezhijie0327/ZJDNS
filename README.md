@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.6.15-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.6.16-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -64,7 +64,7 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT   # 获取 DNSCrypt 证�
 
 ### 统一数据库
 
-基于 SQLite WAL 模式的统一关系型数据库（`database/`），九表设计，所有子系统共享同一 DB 连接：
+基于 SQLite WAL 模式的统一关系型数据库（`database/`），八表设计，所有子系统共享同一 DB 连接：
 
 | 表 | 说明 |
 |----|------|

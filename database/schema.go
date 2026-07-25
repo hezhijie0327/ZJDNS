@@ -32,6 +32,8 @@ func (db *DB) migrate() error {
 		-- ── Project version ───────────────────────────────────────────────────
 		-- Tracks the current project version. Base DDL starts at 0.0.0.
 		-- Pending migrations run in order via migration.go/runMigrations().
+		-- Version is set at build time via database.Version and is embedded into
+		-- the DDL so the schema is self-describing.
 
 		CREATE TABLE IF NOT EXISTS version (version TEXT NOT NULL);
 		INSERT OR IGNORE INTO version (rowid, version) VALUES (1, '` + Version + `');

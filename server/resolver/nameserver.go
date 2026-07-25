@@ -392,7 +392,6 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 
 	select {
 	case resultChan <- retryResult.Response:
-		cancel()
 	case <-ctx.Done():
 		pool.DefaultMessage.Put(retryResult.Response)
 	}

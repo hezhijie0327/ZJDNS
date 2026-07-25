@@ -232,6 +232,7 @@ func (m *Logger) Log(lvl Level, format string, args ...any) {
 		color = colorReset
 	}
 
+	// NOTE: Format(logTimeFormat) allocates a string — intentional for non-hot-path logging.
 	timestamp := DefaultTimeCache.Now().Format(logTimeFormat)
 
 	logLine := fmt.Sprintf("%s[%s]%s %s%-5s%s %s\n",

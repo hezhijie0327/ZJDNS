@@ -38,6 +38,9 @@ func (d *Detector) IPv4() net.IP { return d.detect(false) }
 // IPv6 returns the detected public IPv6 address.
 func (d *Detector) IPv6() net.IP { return d.detect(true) }
 
+// detect is startup-only — called during server init to discover public IPs.
+// It creates a fresh http.Transport per call; the deferred CloseIdleConnections
+// is acceptable because this runs once (or very rarely) on the startup path.
 func (d *Detector) detect(forceIPv6 bool) net.IP {
 	traceURL := d.TraceURL
 	if traceURL == "" {

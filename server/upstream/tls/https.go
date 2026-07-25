@@ -123,7 +123,11 @@ func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxy
 	defer c.dohTransportMu.Unlock()
 
 	if c.dohTransports == nil {
-		return &http.Client{Timeout: c.dohClient.Timeout, Transport: &eHTTP.CompatableTransport{Transport: c.dohClient.Transport.(*eHTTP.Transport)}}
+		tr, ok := c.dohClient.Transport.(*eHTTP.Transport)
+		if !ok {
+			return &http.Client{Timeout: c.dohClient.Timeout, Transport: &eHTTP.CompatableTransport{}}
+		}
+		return &http.Client{Timeout: c.dohClient.Timeout, Transport: &eHTTP.CompatableTransport{Transport: tr}}
 	}
 
 	key := transportKey(host, serverName, skipVerify, proxyURL)
@@ -143,7 +147,11 @@ func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxy
 		}
 	}
 
-	transport := c.dohClient.Transport.(*eHTTP.Transport).Clone()
+	tr, ok := c.dohClient.Transport.(*eHTTP.Transport)
+	if !ok {
+		return &http.Client{Timeout: c.dohClient.Timeout, Transport: &eHTTP.CompatableTransport{}}
+	}
+	transport := tr.Clone()
 	tlsCfg := tlsConfig.Clone()
 	tlsCfg.NextProtos = config.NextProtoDOH
 	tlsCfg.ServerName = serverName

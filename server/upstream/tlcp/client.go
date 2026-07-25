@@ -26,8 +26,9 @@ type Client struct {
 // New creates a Client for TLCP and DTLCP DNS queries.
 func New(getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Duration) *Client {
 	return &Client{
-		getProxy: getProxy,
-		timeout:  timeout,
+		getProxy:   getProxy,
+		timeout:    timeout,
+		httpClient: make(map[string]*http.Client),
 	}
 }
 

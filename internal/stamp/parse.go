@@ -59,6 +59,11 @@ func (s *DNSStamp) parseDNSCrypt(bin []byte) error {
 
 	// Address.
 	length := int(bin[pos])
+	// Uses >= (vs > for plain DNS) because DNSCrypt addresses may be
+	// zero-length in relay mode, but validation still requires at least
+	// one byte beyond the length octet to distinguish a present-but-empty
+	// address from a truncated stamp.  When binLen-pos == 1 the stamp is
+	// truncated — there aren't enough bytes for a valid DNSCrypt record.
 	if 1+length >= binLen-pos {
 		return errors.New("stamp: invalid DNSCrypt stamp")
 	}
@@ -152,7 +157,7 @@ func (s *DNSStamp) parseSecure(bin []byte, name string, hasPath, skipAddr bool) 
 
 	if hasPath {
 		length = int(bin[pos])
-		if length > binLen-pos {
+		if 1+length > binLen-pos {
 			return fmt.Errorf("stamp: invalid %s stamp", name)
 		}
 		pos++

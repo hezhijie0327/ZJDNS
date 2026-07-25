@@ -50,6 +50,11 @@ func ResolveBindAddrs(network, port string) ([]string, error) {
 
 // TryBind attempts to bind a listener of the given network to addr and
 // immediately closes it. Returns nil on success, the bind error otherwise.
+//
+// NOTE: This function is subject to TOCTOU (time-of-check-time-of-use) races
+// — the address may become unavailable between the check and the actual bind.
+// Callers should treat TryBind as a best-effort preflight and handle bind
+// failures at the actual listen step.
 func TryBind(network, addr string) error {
 	switch network {
 	case "tcp", "tcp4", "tcp6":

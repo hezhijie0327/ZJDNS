@@ -194,6 +194,12 @@ func probePipeline(addr string) error {
 	fmt.Println()
 
 	// Read responses — they may arrive out of order.
+	// NOTE: OOO detection uses sequential ID-to-index mapping because
+	// but the loop reads sequentially from conn so responses must arrive
+	// in the order they were sent. Out-of-order delivery only manifests
+	// if readDNSMsg reads a response for a later query while the conn has
+	// buffered an earlier one — unlikely in practice. Use a map[key]=bool
+	// or a bitmap to detect OOO by ID presence instead of order.
 	ooo := false
 	received := 0
 	start := time.Now()

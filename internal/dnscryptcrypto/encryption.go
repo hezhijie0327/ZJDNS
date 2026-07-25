@@ -35,8 +35,9 @@ func PadTCP(packet []byte) (padded []byte) {
 	// Pick a random padding length between 1 and 256 bytes (incl. 0x80).
 	padLen := 1 + CryptoRandIntn(256)
 	packet = append(packet, 0x80)
-	for i := 1; i < padLen; i++ {
-		packet = append(packet, 0)
+	if padLen > 1 {
+		padding := make([]byte, padLen-1)
+		packet = append(packet, padding...)
 	}
 	// Round up to multiple of 64.
 	for len(packet)&63 != 0 {
@@ -48,7 +49,9 @@ func PadTCP(packet []byte) (padded []byte) {
 // cryptoRandIntn returns a cryptographic random integer in [0, n).
 func CryptoRandIntn(n int) int {
 	var b [8]byte
-	_, _ = rand.Read(b[:])
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
 	// Simple rejection sampling; n <= 256 so bias is negligible.
 	return int(uint64(b[0])|uint64(b[1])<<8) % n //nolint:gosec // G115: n <= 256, result fits in int
 }

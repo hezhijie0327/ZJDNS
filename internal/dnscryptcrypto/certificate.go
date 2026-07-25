@@ -287,12 +287,6 @@ func (c *Certificate) Validate() (err error) {
 	return nil
 }
 
-// nowUnix32 returns the current Unix time as uint32.  The DNSCrypt protocol
-// uses 32-bit timestamps throughout (certificates, tickets), and Unix epoch
-// values fit in uint32 until year 2106.  All timestamp-to-uint32 conversions
-// in this package route through this function so the bounds reasoning lives
-// in one place.
-
 // IsDateValid checks that the certificate is currently within its validity
 // window.
 func (c *Certificate) IsDateValid() (ok bool) {

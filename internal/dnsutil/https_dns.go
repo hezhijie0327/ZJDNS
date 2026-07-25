@@ -21,7 +21,7 @@ func ExecuteDoHRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient
 	msg.ID = 0
 
 	err := msg.Pack()
-	buf := msg.Data
+	buf := append([]byte{}, msg.Data...) // copy to break aliasing with pooled msg.Data
 	if err != nil {
 		msg.ID = originalID
 		return nil, fmt.Errorf("pack: %w", err)

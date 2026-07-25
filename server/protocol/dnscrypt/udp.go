@@ -69,7 +69,9 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 		default:
 		}
 
-		_ = udpConn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
+		if err := udpConn.SetReadDeadline(time.Now().Add(defaultReadTimeout)); err != nil {
+			log.Debugf("DNSCRYPT: UDP SetReadDeadline error: %v", err)
+		}
 
 		n, addr, err := udpConn.ReadFromUDP(buf)
 		if err != nil {

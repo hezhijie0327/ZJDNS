@@ -31,6 +31,12 @@ type Dialer struct {
 	relayAddr  *net.UDPAddr  // proxy's UDP relay address
 	ctrlConn   net.Conn      // TCP control connection for UDP ASSOCIATE
 	ctrlClosed chan struct{} // closed when ctrlConn dies
+
+	// The above fields (udpConn, relayAddr, ctrlConn, ctrlClosed) are
+	// only used by establishUDPRelay and the monitor goroutine. They are never
+	// set on the base Dialer returned by New() -- each ListenPacket/DialUDP call
+	// creates a fresh clone that populates them. Retained on the struct for
+	// clarity; consider extracting into a separate udpRelay type.
 }
 
 // ---------------------------------------------------------------------------

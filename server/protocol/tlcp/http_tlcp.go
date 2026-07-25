@@ -67,6 +67,18 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate GET request size before delegation (same as TLS DoH handler).
+	if r.Method == http.MethodGet {
+		dnsParam := r.URL.Query().Get("dns")
+		if dnsParam == "" || len(dnsParam) > config.DefaultDOHMaxRequestSize {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+	}
+	if r.Method == http.MethodPost {
+		r.Body = http.MaxBytesReader(w, r.Body, config.DefaultDOHMaxRequestSize)
+	}
+
 	msg, err := dnshttp.Request(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

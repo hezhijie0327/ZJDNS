@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -61,12 +62,19 @@ func (s *Server) startDOTServer() error {
 func (s *Server) serveDOT(listener net.Listener) {
 	defer zdnsutil.HandlePanic("TLCP DoT server")
 	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
+
 		conn, err := listener.Accept()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
 			log.Debugf("TLCP: DoT accept error: %v", err)
+			time.Sleep(config.DefaultAcceptRetryDelay)
 			continue
 		}
 		s.serverGroup.Go(func() error { defer zdnsutil.HandlePanic("TLCP DoT handler"); s.handleDOTConn(conn); return nil })

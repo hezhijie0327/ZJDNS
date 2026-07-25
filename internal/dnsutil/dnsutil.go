@@ -64,6 +64,8 @@ func CloseWithLog(c io.Closer, name, prefix string) {
 }
 
 // HandlePanic recovers from a panic and logs the stack trace.
+// The 8KB stack buffer allocates on every call, but panics are rare events
+// so per-call allocation is acceptable.
 func HandlePanic(operation string) {
 	if r := recover(); r != nil {
 		buf := make([]byte, defaultPanicStackBufSize)

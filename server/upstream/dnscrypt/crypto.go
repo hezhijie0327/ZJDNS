@@ -17,7 +17,10 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 	// PQ: try resumed query first, fall back to fresh encapsulation.
 	if len(state.pqTicket) > 0 && time.Now().Before(state.pqTicketExpiry) {
 		q.Nonce = newNonce()
-		sharedKey := dnscryptcrypto.PQResumedSharedKey(state.pqResumeSecret, state.clientMagic, q.Nonce[:dnscryptcrypto.NonceSize/2], state.pqTicket)
+		sharedKey, err := dnscryptcrypto.PQResumedSharedKey(state.pqResumeSecret, state.clientMagic, q.Nonce[:dnscryptcrypto.NonceSize/2], state.pqTicket)
+		if err != nil {
+			return nil, dnscryptcrypto.Nonce{}, fmt.Errorf("deriving PQ resumed shared key: %w", err)
+		}
 		state.sharedKey = sharedKey
 		q.PQTicket = state.pqTicket
 		log.Debugf("UPSTREAM: DNSCrypt PQ resumed query to %s", state.serverAddress)
@@ -37,7 +40,10 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 	if encapErr != nil {
 		return nil, dnscryptcrypto.Nonce{}, fmt.Errorf("X-Wing encapsulate: %w", encapErr)
 	}
-	sharedKey := dnscryptcrypto.PQDeriveSharedKey(kemSS, state.clientMagic, state.pqCertContext, ct)
+	sharedKey, err := dnscryptcrypto.PQDeriveSharedKey(kemSS, state.clientMagic, state.pqCertContext, ct)
+	if err != nil {
+		return nil, dnscryptcrypto.Nonce{}, fmt.Errorf("deriving PQ shared key: %w", err)
+	}
 	state.sharedKey = sharedKey
 	state.pqCiphertext = ct
 	state.pqEncapsulatedKey = sharedKey

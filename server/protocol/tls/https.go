@@ -161,12 +161,11 @@ func (s *Server) respondDOH(w http.ResponseWriter, response *dns.Msg) error {
 		return nil
 	}
 
-	err := response.Pack()
-	bytes := response.Data
-	if err != nil {
+	if err := response.Pack(); err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return fmt.Errorf("pack response: %w", err)
 	}
+	bytes := response.Data
 
 	w.Header().Set("Content-Type", dnshttp.MimeType)
 	w.Header().Set("Cache-Control", "max-age=0")

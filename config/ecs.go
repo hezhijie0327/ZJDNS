@@ -123,6 +123,8 @@ func (c *ECSConfig) UnmarshalJSON(data []byte) error {
 	c.IPv4 = strings.TrimSpace(aux.IPv4)
 	c.IPv6 = strings.TrimSpace(aux.IPv6)
 	c.AutoDetectURL = strings.TrimSpace(aux.AutoDetectURL)
+	// Second unmarshal to detect absent prefer_ipv4 (config-load only, not hot path
+	// — double scan is acceptable for the negligible cost of config parsing).
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err

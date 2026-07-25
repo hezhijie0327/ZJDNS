@@ -53,14 +53,14 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 		// Evict if over threshold.
 		if len(c.httpClient) >= config.DefaultHTTPTLCPClientMax*2 {
 			for k := range c.httpClient {
+				if t, ok := c.httpClient[k].Transport.(*http.Transport); ok {
+					t.CloseIdleConnections()
+				}
 				delete(c.httpClient, k)
 				if len(c.httpClient) <= config.DefaultHTTPTLCPClientMax {
 					break
 				}
 			}
-		}
-		if c.httpClient == nil {
-			c.httpClient = make(map[string]*http.Client)
 		}
 		c.httpClient[key] = httpClient
 	}

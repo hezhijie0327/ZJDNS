@@ -49,21 +49,17 @@ type QueryContext struct {
 	Resolved         bool                  // true after Resolution ran
 	ResolutionError  bool                  // true when resolver.Query returned an error
 
-	// ── Post-resolution transforms ──
-
-	DNS64Applied bool // true when DNS64 synthesised AAAA records
-	CIDRFiltered bool // true when Ruleset filtered A/AAAA records
-
 	// ── Response: built stepwise through the chain ──
 
 	Res *dns.Msg // final response (nil until built); non-nil = short-circuit signal
 
 	// ── Coordination ──
 
-	Dropped      bool // true when ErrDrop was returned (no response will be sent)
-	OriginalName string
-	TCPKeepalive uint16
-	StartTime    int64 // log.NowUnixNano() — zero-alloc timestamp for response-time calculation
+	Dropped       bool   // true when ErrDrop was returned (no response will be sent)
+	OriginalName  string // original qname before zone rewrite (set by Zone)
+	RewrittenName string // rewritten qname after zone rewrite (set by Zone)
+	TCPKeepalive  uint16
+	StartTime     int64 // log.NowUnixNano() — zero-alloc timestamp for response-time calculation
 
 	// ── Pre-extracted question fields (set once in ServeDNS) ──
 

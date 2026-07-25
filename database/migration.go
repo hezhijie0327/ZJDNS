@@ -17,7 +17,10 @@ const minSupportedVersion = "3.0.0" // refuse to upgrade from anything older
 // Version is the current schema version, set by the caller before Open().
 // It should match the application version (e.g. "3.1.0"). Migrations tagged
 // with a version ≤ this will be skipped; migrations > this will be applied.
-var Version = "0.0.0" // set once during startup; not guarded for concurrent reads
+// The variable is set once during startup before any migration runs and is
+// never modified thereafter. Reads are not guarded by a mutex because there
+// are no concurrent writers — the setter always happens-before Open().
+var Version = "0.0.0"
 
 // migrations is the ordered list of schema migrations. Each entry must be
 // idempotent so it is safe to re-run on already-migrated databases.

@@ -2,7 +2,6 @@ package server
 
 import (
 	"fmt"
-	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -37,8 +36,19 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 
 	if _, isTCP := w.RemoteAddr().(*net.TCPAddr); isTCP {
 		addr := w.RemoteAddr().String()
+		// NOTE: Lazy init via LoadOrStore + capacityOnce.Do means the map
+		// entry exists before channels are ready. Concurrent readers of
+		// entry.capacity or entry.writeMu between LoadOrStore and the Do
+		// closure would see nil channels, causing a nil-send hang. This is
+		// safe because the entry is only read after the Do completes within
+		// the same request goroutine -- the first request creates the entry
+		// synchronously and all subsequent requests find a fully-initialized one.
 		entryI, _ := s.tcpWriteMu.LoadOrStore(addr, &tcpWriteEntry{})
-		entry := entryI.(*tcpWriteEntry)
+		entry, ok := entryI.(*tcpWriteEntry)
+		if !ok {
+			log.Errorf("SERVER: unexpected type in tcpWriteMu for %s: %T", addr, entryI)
+			return
+		}
 		entry.capacityOnce.Do(func() {
 			entry.capacity = make(chan struct{}, config.DefaultMaxPipe)
 			entry.writeMu = make(chan struct{}, 1)
@@ -55,7 +65,8 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 				pool.DefaultMessage.Put(msg)
 				return
 			}
-			if _, err := io.Copy(w, msg); err != nil {
+			// syscall from the internal ReadFrom (msg is already packed).
+			if _, err := w.Write(msg.Data); err != nil {
 				log.Debugf("SERVER: TCP SERVFAIL write error for %s: %v", addr, err)
 			}
 			pool.DefaultMessage.Put(msg)
@@ -98,7 +109,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 					pool.DefaultMessage.Put(response)
 					return
 				}
-				if _, err := io.Copy(w, response); err != nil {
+				if _, err := w.Write(response.Data); err != nil {
 					log.Debugf("SERVER: TCP write error for %s: %v", addr, err)
 				}
 				pool.DefaultMessage.Put(response)
@@ -129,7 +140,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 			}
 		}
 
-		if _, err := io.Copy(w, response); err != nil {
+		if _, err := w.Write(response.Data); err != nil {
 			log.Debugf("SERVER: UDP write error for %s: %v", w.RemoteAddr().String(), err)
 		}
 		pool.DefaultMessage.Put(response)

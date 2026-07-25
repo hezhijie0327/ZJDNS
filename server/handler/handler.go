@@ -162,8 +162,8 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	}
 
 	if qctx.Res != nil && log.IsDebug() {
-		qname := req.Question[0].Header().Name
-		qtype := dns.RRToType(req.Question[0])
+		qname := qctx.Qname
+		qtype := qctx.Qtype
 		log.Debugf("RESULT: %s %s | rcode=%s time=%v answer=%d authority=%d additional=%d ad=%t\n%s",
 			qname, dns.TypeToString[qtype], dns.RcodeToString[qctx.Res.Rcode],
 			time.Duration(log.NowUnixNano()-qctx.StartTime).Truncate(time.Microsecond), len(qctx.Res.Answer), len(qctx.Res.Ns),

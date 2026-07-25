@@ -4,11 +4,7 @@
 
 本文档定义了 ZJDNS 代码库的端到端审计与修复流程。每次审计均按此框架执行：从多维度并行审查，到按严重程度分 Sprint 修复，到质量门禁收尾。
 
-每次审计的详细发现和修复计划存档于 [`docs/audit/`](audit/)。历史审计记录：
-
-| 时间 | 发现数 | 提交 |
-|------|--------|------|
-| 2026-07 | 82（15C / 17H / 26M / 24L） | 10 |
+每次审计的详细发现和修复计划存档于 [`docs/audit/`](audit/)。
 
 ---
 
@@ -16,7 +12,7 @@
 
 ### 1.1 审计维度
 
-每个文件、每个包在以下 6 个维度接受审查：
+每个文件、每个包在以下 9 个维度接受审查：
 
 | 维度 | 关注点 |
 |------|--------|
@@ -26,6 +22,9 @@
 | **耦合度** | 导入分层违规、不必要依赖、接口放置 |
 | **架构设计** | God package、命名一致性、类型别名合理性 |
 | **性能** | QPS 瓶颈、SQL 模式、热路径分配 |
+| **Panic 检测** | nil 解引用、切片越界、空 map 写入、裸类型断言、通道关闭、除零、use-after-Put |
+| **日志质量** | 完整性（关键路径有日志）、精准性（级别正确、信息充分）、不刷屏（info/warn 不在热路径重复打印） |
+| **文档质量** | 架构文档与代码一致、CLAUDE.md 类型引用准确、注释不过时/不误导、关键设计决策有记录、公开 API 有 godoc |
 
 ### 1.2 审计架构
 
@@ -41,12 +40,15 @@ Phase 1: 包级审计（7 agent 并行）
 ├── Handler audit:    server/handler/*
 └── Defense audit:    server/defense/*
 
-Phase 2: 交叉分析（5 agent 并行）
+Phase 2: 交叉分析（8 agent 并行）
 ├── CrossCut Locks:    全部 sync.Mutex / RWMutex / Once / atomic / channel / WaitGroup / Pool
 ├── CrossCut Memory:   goroutine 泄漏、无界增长、资源泄漏、池误用
+├── CrossCut Panic:    nil 解引用、切片越界、空 map 写入、裸类型断言、死锁、除零
 ├── CrossCut DeadCode: 未用符号、重复代码、不必要接口
 ├── CrossCut Perf:     SQL N+1、热路径分配、索引缺失
-└── CrossCut Arch:     导入分层验证、循环依赖风险
+├── CrossCut Arch:     导入分层验证、循环依赖风险
+├── CrossCut Logging:  日志级别审计、info/warn 热路径刷屏、错误路径缺失日志、格式一致性
+└── CrossCut Docs:     全部 .md 文件与代码一致性、CLAUDE.md 准确性、注释是否过时、godoc 覆盖率
 
 Phase 3: 综合报告
 └── Synthesis: 汇总排序 → 主题分析 → 行动计划
@@ -155,9 +157,9 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 | 等级 | 定义 | 示例 |
 |------|------|------|
 | **CRITICAL** | 数据损坏、崩溃、panic、安全绕过、数据丢失 | SQL 静默失败、nil-map panic、池双重归还导致连接损坏 |
-| **HIGH** | 资源耗尽、goroutine 泄漏、竞态、缓存损坏 | 池泄漏导致 QPS 下降、goroutine 无界增长、浅拷贝共享底层数组 |
-| **MEDIUM** | 维护性、边际正确性问题、次优分配 | 耦合违规、死代码、不必要的堆分配、配置验证缺失 |
-| **LOW** | 文档、微优化、代码异味 | 误导性注释、重复逻辑、脆弱的假设注释 |
+| **HIGH** | 资源耗尽、goroutine 泄漏、竞态、缓存损坏、死锁 | 池泄漏导致 QPS 下降、goroutine 无界增长、浅拷贝共享底层数组、mutex 成功路径未解锁 |
+| **MEDIUM** | 维护性、边际正确性问题、次优分配、日志质量、文档质量 | 耦合违规、死代码、不必要的堆分配、配置验证缺失、info/warn 热路径刷屏、错误路径无日志、架构文档与代码不一致 |
+| **LOW** | 文档、微优化、代码异味 | 误导性注释、重复逻辑、脆弱的假设注释、Debug 日志格式不一致 |
 
 ### 4.2 常见根因模式
 
@@ -170,6 +172,11 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 | **防御算法** | 状态机缺少逃逸路径、过度拒绝合法响应 | 每个防御模块必须有 fuzz 测试和边界条件用例 |
 | **死代码/冗余** | 重构后遗留（中间件、迁移、未用字段） | `staticcheck -checks U1000` 集成 CI |
 | **SQL 正确性** | 字符串拼接无分隔符、语义歧义 | 使用 prepared statements；SQL 拼接统一通过 `strings.Join` |
+| **跨协议一致性** | 同类型 bug 在不同协议处理器中重复出现（DTLS/DTLCP 固定缓冲区） | 修复一个协议 bug 后，全局搜索相同模式到所有协议处理器 |
+| **Pool buffer 生命周期** | `response.Data` 指向已归还的 pool buffer（use-after-free） | `pool.Put` 前必须 `response.Data = nil`，参考 `tcp.go` 的 `resp.Data = nil` 模式 |
+| **TODO 管理** | TODO 注释累积但不实现，变成虚假安全感 | 每个 TODO 要么实现、要么改为 NOTE 并说明原因、要么删除 |
+| **日志质量** | info/warn 在热路径重复打印刷屏；错误路径缺少上下文（无 qname/qtype/server）；日志级别误用（error 用于可恢复、debug 用于关键信号） | 每查询一条日志原则：info 仅用于状态变更，warn 仅用于可恢复异常且带采样，error 仅用于不可恢复；热路径日志全部 debug；每个日志含足够定位信息 |
+| **文档腐烂** | 架构文档描述已删除的类型/字段/中间件；CLAUDE.md 类型参考表过时；注释引用的行号/函数名已失效；新功能无文档 | 每次 PR 检查受影响的 .md 文件；`grep` 文档中的类型名/函数名确认仍存在；注释中用 `FindSymbol` 而非行号引用代码 |
 
 ---
 
@@ -206,6 +213,11 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 3. **切片共享底层数组**：从 atomic pointer 获取的切片在修改前必须复制
 4. **多读循环必须检查 ctx.Done()**：每个 poll 迭代都应可取消
 5. **SQL 字符串拼接需要分隔符**：反引号字符串拼接不会自动添加空格或分号
+6. **每查询一条日志原则**：hot-path（每次查询都经过的路径）只用 Debug；Info 仅用于状态变更（启动/关闭/重载）；Warn 用于可恢复异常且应带采样或限流；Error 仅用于不可恢复
+7. **日志必须含定位信息**：错误/Warn 日志至少包含 qname/qtype/server/error 中与上下文相关的字段；不要打印"query failed"而没说哪个查询
+8. **禁止 info/warn 在热路径**：`log.Infof` / `log.Warnf` 不得出现在每次查询都会执行的代码路径中（如 ServeDNS、middleware Wrap、upstream Exchange）。每查询超过一条 info/warn 即为刷屏
+9. **文档与代码同步更新**：修改函数签名、删除类型/字段、新增/删除中间件时，检查 `docs/*.md` 和 `CLAUDE.md` 是否引用该符号；用 `git grep` 确认
+10. **注释引用符号名，不引用行号**：行号在每次编辑后失效。注释中如果必须引用代码位置，使用函数名/类型名（可 grep），而非行号
 
 ### 6.2 避免的反模式
 
@@ -213,6 +225,13 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 2. **锁内释放再获取**：创建竞态窗口
 3. **nil-map 写入**：`sync.Map` 或关闭前清理所有条目再设 nil
 4. **`_` 丢弃错误**：特别是验证/解密错误，应至少 debug log
+5. **info/warn 刷屏**：热路径上的 `log.Infof` / `log.Warnf` 在高 QPS 下产生海量日志，淹没真正重要的信号。所有每查询日志必须是 Debug 级别
+6. **日志缺少上下文**：`log.Warnf("resolve failed: %v", err)` 不包含 qname/qtype/server，无法定位问题
+7. **错误级别膨胀**：可恢复的错误（超时、单次查询失败）用 Warn，不可恢复的（配置错误、数据库损坏）用 Error。不要把每个 upstream 超时都打成 Error
+8. **格式不一致**：同一组件内混用 `log.Infof("TLS: ...")` 和 `log.Infof("[TLS] ...")` 和 `log.Infof("tls: ...")` — 应统一使用 23 个规范前缀
+9. **架构文档过时**：`ARCHITECTURE.md` 描述已删除的中间件/类型/表；类型引用表未随代码更新。每次重构后 grep 文档确认引用的符号仍存在
+10. **注释与代码矛盾**：注释说"Phase 3 会改回来"但 Phase 3 永远不会来；注释描述的行为与实际代码不一致。每个注释在所在函数修改后必须重新验证
+11. **公开 API 无 godoc**：导出的类型/函数/方法缺少文档注释，或 godoc 只重复函数名没有说明用途和参数含义
 
 ### 6.3 持续改进
 
@@ -220,6 +239,8 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 - 死代码检测集成到 CI（`staticcheck -checks U1000`）
 - 竞态检测器作为 CI 必需项（`go test -race`）
 - 定期（季度）重新运行全审计流程
+- 每次审计包含专门的 CrossCut Logging 阶段：grep `log\.(Info|Warn)` 确认不在热路径，grep `log\.Error` 确认是可恢复还是不可恢复
+- 每次审计包含 CrossCut Docs 阶段：grep 全部 .md 文件中的类型名/函数名/字段名，与代码交叉验证是否仍存在
 
 ---
 
@@ -236,9 +257,11 @@ docs/audit/<YYYY-MM>-<主题>/
 ├── 05-resolver.md       ← server/resolver/*
 ├── 06-handler.md        ← server/handler/*
 ├── 07-defense.md        ← server/defense/*
-├── 08-crosscutting.md   ← 交叉分析（锁、内存、死代码、SQL、架构）
-├── 09-synthesis.md      ← 综合报告（排序、主题分析、行动计划）
-└── PLAN.md              ← 逐项修复计划 + 全覆盖清单
+├── 08-logging.md         ← 日志质量审计（级别、刷屏、上下文）
+├── 09-debug-coverage.md  ← Debug 日志覆盖率审计
+├── 10-docs.md            ← 文档一致性审计（与代码交叉验证）
+├── 11-synthesis.md       ← 综合报告（排序、主题分析、行动计划）
+└── 00-plan.md            ← 逐项修复计划 + 全覆盖清单
 ```
 
 每轮审计结束后，更新上方 §概述 的历史记录表。

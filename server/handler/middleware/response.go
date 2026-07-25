@@ -59,7 +59,7 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
 	cookieStr := m.generateCookieStr(qctx.CookieOpt, qctx.ClientIP)
 
 	shouldAddEDNS := ecsOpt != nil || qctx.ClientRequestedDNSSEC || cookieStr != "" ||
-		qctx.EDE != nil || qctx.IsSecure || qctx.TCPKeepalive > 0
+		qctx.EDE != nil || qctx.IsSecure || qctx.TCPKeepalive > 0 || len(qctx.Req.Pseudo) > 0
 
 	if shouldAddEDNS {
 		m.edns.ApplyToMessage(msg, ecsOpt, qctx.IsSecure, cookieStr, qctx.EDE, false, clientWantsPadding, qctx.TCPKeepalive)
@@ -67,7 +67,10 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
 
 	// Restore original domain name if zone rule rewrote it.
 	if qctx.OriginalName != "" {
-		currentName := req.Question[0].Header().Name
+		currentName := qctx.RewrittenName
+		if currentName == "" {
+			currentName = req.Question[0].Header().Name
+		}
 		m.restoreDomain(msg, currentName, qctx.OriginalName)
 	}
 }
@@ -105,6 +108,14 @@ func (m *Response) generateCookieStr(cookieOpt *edns.CookieOption, clientIP net.
 	return edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
 }
 
+// restoreDomain rewrites owner names of RRs that exactly match currentName
+// back to originalName. It is called after zone wildcard rewrites.
+//
+// Limitation: only exact owner name matches are restored. Intermediate CNAME
+// targets in a wildcard chain (e.g., *.example.com → <random>.cdn.net) are
+// not matched, so their names remain in rewritten form. This is acceptable
+// because wildcard-rewritten responses rarely contain CNAME chains, and the
+// restored original name is sufficient for client-side validation.
 func (m *Response) restoreDomain(msg *dns.Msg, currentName, originalName string) {
 	if msg == nil || dns.EqualName(currentName, originalName) {
 		return

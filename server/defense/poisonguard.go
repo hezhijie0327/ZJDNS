@@ -35,10 +35,14 @@ const (
 	// record for www.google.com).
 	VerdictPoisoned
 
-	// VerdictUncertain means the zone *could* legitimately return // deprecated: no caller checks this verdict
+	// VerdictUncertain means the zone *could* legitimately return
 	// these records, but content analysis alone cannot distinguish a
 	// real authoritative answer from a GFW-injected one.  This is the
 	// authoritative-level blind spot.
+	//
+	// No caller checks VerdictUncertain (VerdictPoisoned is the only
+	// actionable signal). Retained as a placeholder for future
+	// multi-vantage-point analysis that could resolve this ambiguity.
 	VerdictUncertain
 )
 

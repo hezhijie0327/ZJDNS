@@ -87,6 +87,7 @@ func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.U
 		return nil, fmt.Errorf("dtls: unpack response: %w", err)
 	}
 
+	response.Data = nil // detach from pooled buffer before deferred Put
 	log.Debugf("UPSTREAM: DTLS query to %s succeeded", addr)
 	return response, nil
 }

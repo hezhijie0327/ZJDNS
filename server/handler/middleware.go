@@ -23,8 +23,8 @@ import (
 // discards the query silently.  Any other error produces a SERVFAIL.
 //
 // NOTE: Renamed from Handler to avoid collision with the existing Handler
-// struct.  Will be renamed back to Handler in Phase 3 when the old struct
-// is removed.
+// struct.  The rename is permanent — the name QueryHandler is kept for
+// clarity and to avoid ambiguity in the chain API.
 type QueryHandler interface {
 	ServeDNS(ctx context.Context, qctx *QueryContext) error
 }

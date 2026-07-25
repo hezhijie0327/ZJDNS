@@ -106,7 +106,7 @@ func (e *Engine) loadIPRules() {
 	if err != nil {
 		return
 	}
-	defer rows.Close() //nolint:errcheck // best-effort
+	defer func() { _ = rows.Close() }()
 
 	e.ipTrie.reset()
 	for rows.Next() {

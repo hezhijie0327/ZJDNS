@@ -65,8 +65,8 @@ func (s *Synthesizer) ExtractIPv4(ip6 netip.Addr) (netip.Addr, bool) {
 func (s *Synthesizer) IsSynthesized(ip6 netip.Addr) bool { return s.pref.Contains(ip6) }
 
 func (s *Synthesizer) Synthesize(
-	origAnswer, origAuthority, origAdditional, aAnswer, aAuthority, aAdditional []dns.RR,
-	origValidated bool,
+	_, origAuthority, _, aAnswer, aAuthority, aAdditional []dns.RR,
+	_ bool,
 ) (answer, authority, additional []dns.RR) {
 	ttl := minTTL(aAnswer, soaTTL(origAuthority))
 	answer = make([]dns.RR, 0, len(aAnswer))

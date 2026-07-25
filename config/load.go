@@ -52,6 +52,10 @@ func LoadConfig(configFile string) (*ServerConfig, error) {
 
 	addChaosRecord(cfg)
 
+	log.Debugf("CONFIG: upstream=%d fallback=%d recursive=%t dnssec_enforce=%t cache_entries=%d log_level=%s",
+		len(cfg.Upstream), len(cfg.Fallback), len(cfg.Upstream)+len(cfg.Fallback) == 0,
+		cfg.Server.Features.DNSSECEnforce,
+		cfg.Server.Features.Cache.MaxEntries, cfg.Server.LogLevel)
 	log.Infof("CONFIG: Configuration loaded successfully")
 	return cfg, nil
 }

@@ -234,6 +234,11 @@ func (s *Server) rotationLoop() {
 // Shutdown gracefully stops the DNSCrypt server.
 // NOTE(M16): WaitGroup swap between cancel and lock has a race window where
 // handler goroutines may add to the old wg. Benign in single-shutdown scenarios.
+// After l.mu.Unlock() at the cancel call, a concurrent serveUDP/serveTCP call
+// that reads s.wg between unlock and re-lock will Add to s.wg (now a fresh wg)
+// instead of prevWg, preventing Wait() from ever completing. This is a known
+// benign race: the rotated fresh wg is never waited on, and the goroutine that
+// incremented it will eventually exit via ctx cancellation.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	if !s.started {
@@ -472,8 +477,13 @@ func (s *Server) handleHandshake(b []byte) (res []byte, err error) {
 		pool.DefaultMessage.Put(reply)
 		return nil, fmt.Errorf("packing handshake response: %w", err)
 	}
-	// NOTE(M14): res aliases pooled reply.Data. Used synchronously before any
-	// concurrent pool.Get(); refactoring must not introduce async between Put and use.
+	// NOTE(M14): DANGER -- res aliases pooled reply.Data (pool.DefaultMessage).
+	// After pool.DefaultMessage.Put(reply), reply.Data's backing memory is
+	// zeroed and available for reuse by another goroutine. This works ONLY
+	// because handleHandshake returns res synchronously and the caller
+	// writes it out before any concurrent pool.DefaultMessage.Get() can
+	// reuse the buffer. Any refactoring that introduces async between Put
+	// and the caller's use of res will cause data corruption.
 	res = reply.Data
 	pool.DefaultMessage.Put(reply)
 	return res, nil

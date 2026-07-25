@@ -29,6 +29,7 @@ func New(cfg *config.ServerConfig) *Server {
 // Start binds UDP and TCP sockets and starts DNS listeners.  Each listener runs
 // in its own goroutine via the provided errgroup.
 func (s *Server) Start(g Group, ctx context.Context, handler dns.Handler) error {
+	log.Debugf("PLAIN: starting listeners (UDP=%s TCP=%s)", s.config.Server.Protocol.UDP, s.config.Server.Protocol.TCP)
 	if err := s.startUDP(g, ctx, handler); err != nil {
 		return err
 	}

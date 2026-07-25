@@ -88,6 +88,7 @@ func (m *EDNS) buildBadCookieResponse(req *dns.Msg, clientIP net.IP, cookieOpt *
 	serverCookie := m.edns.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 	cookieStr := edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
 
+	// ECS parsing on the bad-cookie response path.
 	ecsOpt := m.edns.ParseFromDNS(req)
 	m.edns.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil, false, edns.HasPaddingOption(req), 0)
 	return msg

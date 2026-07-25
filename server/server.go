@@ -251,6 +251,11 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 	prefetchCooldown := handler.NewPrefetchCooldown()
 	ctx := s.ctx
 
+	// isClosed is a forward-reference trick: the closure below captures the
+	// variable isClosed, not its value. After h is created, isClosed is
+	// updated to h.IsClosed so CacheLookup sees the real health check.
+	isClosed := func() bool { return false }
+
 	deps := &middleware.Dependencies{
 		Config:           cfg,
 		Cache:            cacheStore,
@@ -262,7 +267,7 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 		PendingReqs:      handler.NewPendingRequests(),
 		PendingRefrs:     handler.NewRefreshGroup(),
 		DNS64:            nil,
-		Closed:           func() bool { return false },
+		Closed:           func() bool { return isClosed() },
 		RefreshGroup:     cacheRefreshGroup,
 		RefreshCtx:       cacheRefreshCtx,
 		Ctx:              ctx,
@@ -292,7 +297,7 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 		chain, ednsH, cacheStore, prober, dnsResolver,
 		cacheRefreshGroup, prefetchCooldown, ctx,
 	)
-	deps.Closed = h.IsClosed
+	isClosed = h.IsClosed
 
 	return h
 }
@@ -383,20 +388,6 @@ func (s *Server) Start() error {
 
 	g, ctx := errgroup.WithContext(serverCtx)
 
-	if s.pprofServer != nil {
-		g.Go(func() error {
-			defer zdnsutil.HandlePanic("pprof server")
-			log.Infof("PPROF: pprof server started on port %s", s.config.Server.Pprof)
-			err := s.pprofServer.ListenAndServe()
-
-			if err != nil && err != http.ErrServerClosed {
-				return fmt.Errorf("pprof startup: %w", err)
-			}
-			<-ctx.Done()
-			return nil
-		})
-	}
-
 	if err := s.plain.Start(g, ctx, dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) })); err != nil {
 		return err
 	}
@@ -431,7 +422,24 @@ func (s *Server) Start() error {
 				return fmt.Errorf("TLCP startup: %w", err)
 			}
 			<-ctx.Done()
-			_ = s.tlcpServer.Shutdown()
+			return nil
+		})
+	}
+
+	// Pprof must be registered AFTER all error-returning init calls above.
+	// If plain.Start() or other inits fail, Start() returns before the
+	// coordinator goroutine calls g.Wait(), and the pprof goroutine would
+	// be orphaned in the errgroup.
+	if s.pprofServer != nil {
+		g.Go(func() error {
+			defer zdnsutil.HandlePanic("pprof server")
+			log.Infof("PPROF: pprof server started on port %s", s.config.Server.Pprof)
+			err := s.pprofServer.ListenAndServe()
+
+			if err != nil && err != http.ErrServerClosed {
+				return fmt.Errorf("pprof startup: %w", err)
+			}
+			<-ctx.Done()
 			return nil
 		})
 	}

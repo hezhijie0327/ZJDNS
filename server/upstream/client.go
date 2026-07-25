@@ -50,6 +50,8 @@ type Client struct {
 	proxyDialers map[string]*socks5.Dialer
 	proxyMu      sync.Mutex
 
+	skipVerifyWarned sync.Map // serverName → struct{}{}, dedup SkipTLSVerify warning
+
 	warmWg sync.WaitGroup // tracks in-flight WarmUpConnections goroutines
 }
 
@@ -71,6 +73,10 @@ func New() *Client {
 		WriteTimeout: config.DefaultDNSQueryTimeout,
 	}
 
+	// NOTE: All three clients alias the same *dns.Transport. This is safe
+	// because dns.Client only reads Transport config fields (Dialer, timeouts)
+	// and never mutates them. A future change to Transport on one client would
+	// affect all three -- clone the Transport if per-client divergence is needed.
 	udpClient := &dns.Client{Transport: defaultTransport}
 	tcpClient := &dns.Client{Transport: defaultTransport}
 	tlsDNSClient := &dns.Client{Transport: defaultTransport}
@@ -205,9 +211,12 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 
 func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, protocol string) (*dns.Msg, error) {
 	if server.SkipTLSVerify {
-		log.Warnf("UPSTREAM: TLS verification disabled for %s — connection is vulnerable to MITM attacks!", server.ServerName)
+		if _, loaded := c.skipVerifyWarned.LoadOrStore(server.ServerName, struct{}{}); !loaded {
+			log.Warnf("UPSTREAM: TLS verification disabled for %s — connection is vulnerable to MITM attacks!", server.ServerName)
+		}
 	}
 
+	log.Debugf("UPSTREAM: secure query to %s via %s", server.Address, protocol)
 	switch protocol {
 	case config.ProtoTLS:
 		return c.tlsClient.ExecuteTLS(ctx, msg, server)

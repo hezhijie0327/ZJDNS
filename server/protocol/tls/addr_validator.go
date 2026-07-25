@@ -7,6 +7,8 @@ import (
 	"zjdns/config"
 )
 
+// maxSeenEntries limits the quicAddrValidator seen map to prevent memory
+// exhaustion from spoofed source IPs.
 // quicAddrValidator caches recently-seen client addresses so the server can
 // skip QUIC Retry address validation on reconnection. Without this, quic-go
 // sends a Retry packet for every new source address — which frequently gets
@@ -17,6 +19,8 @@ type quicAddrValidator struct {
 	closed chan struct{}
 	once   sync.Once
 }
+
+const maxSeenEntries = 100000
 
 func newQUICAddrValidator() *quicAddrValidator {
 	v := &quicAddrValidator{
@@ -43,7 +47,11 @@ func (v *quicAddrValidator) requiresValidation(addr net.Addr) bool {
 	}
 
 	v.mu.Lock()
-	v.seen[key] = time.Now()
+	// Check again under write lock; skip insertion when the map is full
+	// (graceful degradation to always-validate mode).
+	if _, exists := v.seen[key]; !exists && len(v.seen) < maxSeenEntries {
+		v.seen[key] = time.Now()
+	}
 	v.mu.Unlock()
 
 	return true

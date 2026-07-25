@@ -88,7 +88,7 @@ func (s *Server) handleDOQConnections(doqListener *quic.EarlyListener) {
 			if s.ctx.Err() != nil {
 				return
 			}
-			log.Errorf("TLS: DoQ Accept error: %v", err)
+			log.Warnf("TLS: DoQ Accept error: %v", err)
 			time.Sleep(config.DefaultAcceptRetryDelay)
 			continue
 		}
@@ -114,11 +114,13 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultBackgroundTimeout)
 		defer cancel()
 		_ = conn.CloseWithError(pool.QUICCodeNoError, "")
+
 		done := make(chan struct{})
-		go func() {
-			<-conn.Context().Done()
+		stop := context.AfterFunc(conn.Context(), func() {
 			close(done)
-		}()
+		})
+		defer stop()
+
 		select {
 		case <-done:
 		case <-ctx.Done():

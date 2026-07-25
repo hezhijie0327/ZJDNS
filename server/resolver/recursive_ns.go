@@ -36,12 +36,17 @@ func (r *Recursive) resolveNextNameservers(
 	var result resolvedNSAddrs
 
 	// Try cache first — latency-sorted records from previous resolutions.
+	var cachedNSNames map[string]bool // track NS names satisfied by cache
 	if r.cache != nil {
 		for _, ns := range bestNSRecords {
 			nsName := dnsutil.Fqdn(ns.Ns)
 			cached := r.lookupNSAddrsFromCache(nsName, nil)
 			if len(cached) > 0 {
 				result.addrs = append(result.addrs, cached...)
+				if cachedNSNames == nil {
+					cachedNSNames = make(map[string]bool, len(bestNSRecords))
+				}
+				cachedNSNames[nsName] = true
 				if len(cached) > 1 && log.Default.Level() >= log.Debug {
 					rankParts := make([]string, 0, len(cached))
 					for i, addr := range cached {
@@ -56,24 +61,26 @@ func (r *Recursive) resolveNextNameservers(
 		}
 	}
 
-	// Fall back to glue records when cache doesn't cover all NS names.
+	// Fall back to glue records for NS names not satisfied by cache.
 	result.glue = make(map[string][]dns.RR) // NS name → A/AAAA glue records
-	if len(result.addrs) == 0 {
-		for _, ns := range bestNSRecords {
-			for _, rrec := range response.Extra {
-				ip, ok := extractGlueIP(rrec, ns.Ns)
-				if !ok {
-					continue
-				}
-				fqRrecName := dnsutil.Fqdn(rrec.Header().Name)
-				fqParDom := dnsutil.Fqdn(parentDomain)
-				if !dnsutil.IsBelow(fqParDom, fqRrecName) && fqParDom != "." {
-					continue
-				}
-				nsKey := dnsutil.Fqdn(rrec.Header().Name)
-				result.glue[nsKey] = append(result.glue[nsKey], rrec)
-				result.addrs = append(result.addrs, net.JoinHostPort(ip, config.DefaultUDPPort))
+	for _, ns := range bestNSRecords {
+		nsName := dnsutil.Fqdn(ns.Ns)
+		if cachedNSNames[nsName] {
+			continue // already have cached addresses for this NS
+		}
+		for _, rrec := range response.Extra {
+			ip, ok := extractGlueIP(rrec, ns.Ns)
+			if !ok {
+				continue
 			}
+			fqRrecName := dnsutil.Fqdn(rrec.Header().Name)
+			fqParDom := dnsutil.Fqdn(parentDomain)
+			if !dnsutil.IsBelow(fqParDom, fqRrecName) && fqParDom != "." {
+				continue
+			}
+			nsKey := dnsutil.Fqdn(rrec.Header().Name)
+			result.glue[nsKey] = append(result.glue[nsKey], rrec)
+			result.addrs = append(result.addrs, net.JoinHostPort(ip, config.DefaultUDPPort))
 		}
 	}
 

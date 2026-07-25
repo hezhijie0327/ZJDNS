@@ -24,7 +24,9 @@ func HexDecodeKey(str string) ([]byte, error) {
 // GenerateRandomKeyPair generates a new X25519 key pair.
 func GenerateRandomKeyPair() (secretKey, publicKey [KeySize]byte) {
 	var sk, pk x25519.Key
-	_, _ = rand.Read(sk[:])
+	if _, err := rand.Read(sk[:]); err != nil {
+		panic(err)
+	}
 	x25519.KeyGen(&pk, &sk)
 	secretKey = [KeySize]byte(sk)
 	publicKey = [KeySize]byte(pk)
@@ -42,7 +44,9 @@ func GenerateEd25519Keypair() (publicKey, privateKey []byte, err error) {
 
 // NowUnix32 returns the current Unix time as uint32.  The DNSCrypt protocol
 // uses 32-bit timestamps throughout (certificates, tickets), and Unix epoch
-// values fit in uint32 until year 2106.
+// values fit in uint32 until year 2106.  All timestamp-to-uint32 conversions
+// in this package route through this function so the bounds reasoning lives
+// in one place.
 func NowUnix32() uint32 {
 	return uint32(time.Now().Unix()) //nolint:gosec // G115: see doc comment
 }

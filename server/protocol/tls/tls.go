@@ -178,14 +178,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		}
 
 		buf := pool.DefaultBuffer.Get()
-		msgBuf := buf
-		heapAlloc := false
-		if cap(msgBuf) < int(msgLength) {
-			msgBuf = make([]byte, msgLength)
-			heapAlloc = true
-		} else {
-			msgBuf = msgBuf[:msgLength]
-		}
+		msgBuf := buf[:msgLength]
 		_, err = io.ReadFull(reader, msgBuf)
 		if err != nil {
 			pool.DefaultBuffer.Put(buf)
@@ -203,9 +196,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		// and the query worker calls req.Unpack() again during processing.
 		// Returning buf early would zero req.Data, corrupting the re-unpack.
 		// Instead, buf ownership transfers to the worker goroutine.
-		// Only return buf to the pool when msgBuf is a sub-slice of buf
-		// (not a heap allocation from the cap-buf-too-small path).
-		pooled := !heapAlloc
+		pooled := true
 
 		var clientIP net.IP
 		if addr := tlsConn.RemoteAddr(); addr != nil {

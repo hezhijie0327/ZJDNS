@@ -25,7 +25,7 @@ func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		// Guard against nil resolver.
 		if m.resolver == nil {
-			log.Warnf("RESOLVER: resolver not set — returning SERVFAIL")
+			log.Debugf("RESOLVER: resolver not set — returning SERVFAIL")
 			msg := handler.BuildResponseMsg(qctx.Req)
 			msg.Rcode = dns.RcodeServerFailure
 			qctx.Res = msg
@@ -45,6 +45,10 @@ func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// same query, wait for its result.
 		if m.pending != nil {
 			if qr, follower := m.pending.Join(qname, qtype, qclass, ecsOpt, dnssecOK); follower {
+				if qr == nil {
+					qctx.ResolutionError = true
+					return nil
+				}
 				qctx.ResolutionResult = qr
 				qctx.Resolved = true
 				if qr.Err != nil {

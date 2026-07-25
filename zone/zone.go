@@ -381,7 +381,11 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 	if len(suffixes) > maxWildcardLabels {
 		suffixes = suffixes[:maxWildcardLabels]
 	}
-	argsPtr := wildcardArgsPool.Get().(*[]any)
+	argsPtr, ok := wildcardArgsPool.Get().(*[]any)
+	if !ok {
+		a := make([]any, maxWildcardLabels+2)
+		argsPtr = &a
+	}
 	args := (*argsPtr)[:maxWildcardLabels+2]
 	defer func() { wildcardArgsPool.Put(argsPtr) }()
 	for i := range maxWildcardLabels {

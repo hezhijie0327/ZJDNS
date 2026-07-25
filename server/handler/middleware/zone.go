@@ -87,9 +87,14 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		}
 
 		// Zone rule matched but changed the domain (wildcard rewrite).
+		// qctx.RewrittenName is set so the Response middleware can restore
+		// original owner names in the response rdata sections without mutating
+		// the shared request message. Wildcard CNAME chains (where intermediate
+		// targets differ from the original query name) are not restored — this
+		// is an accepted limitation for zone rewrite.
 		if zoneResult.Domain != qname {
 			qctx.OriginalName = qname
-			qd.Header().Name = zoneResult.Domain
+			qctx.RewrittenName = zoneResult.Domain
 		}
 		return next.ServeDNS(ctx, qctx)
 	})

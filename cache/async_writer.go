@@ -48,6 +48,7 @@ func (w *AsyncStatsWriter) Record(r *RequestRecord) {
 	if w == nil {
 		return
 	}
+	defer func() { _ = recover() }()
 	select {
 	case w.ch <- *r:
 	default:
@@ -146,9 +147,10 @@ func (w *AsyncStatsWriter) run() {
 	}
 }
 
-// flush writes a batch of records to the database.  Errors are silently ignored
-// (stats are best-effort).  Individual writes are used rather than a transaction
-// to keep the background goroutine simple — WAL-mode serialisation is sufficient.
+// flush writes a batch of records to the database.  Errors are intentionally
+// discarded — stats are best-effort and must never block or fail the query path.
+// Individual writes are used rather than a transaction to keep the background
+// goroutine simple — WAL-mode serialisation is sufficient.
 func (w *AsyncStatsWriter) flush(batch []RequestRecord) {
 	if len(batch) == 0 || w.db.IsClosed() {
 		return
@@ -157,6 +159,7 @@ func (w *AsyncStatsWriter) flush(batch []RequestRecord) {
 		r := &batch[i]
 
 		// Always upsert into query_stats (per-day aggregated counters).
+		// Error discarded — stats are best-effort and non-critical.
 		_, _ = w.db.StmtQueryStats.Exec(
 			r.Result, r.Protocol, r.Rcode, r.DNSSECStatus,
 			database.BoolToInt(r.Poisoned), database.BoolToInt(r.Fallback),
@@ -164,6 +167,7 @@ func (w *AsyncStatsWriter) flush(batch []RequestRecord) {
 		)
 
 		// Non-hit results also go into query_log for the audit trail.
+		// Error discarded — stats are best-effort and non-critical.
 		if r.Result != "hit" {
 			_, _ = w.db.StmtQueryLog.Exec(
 				log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass),

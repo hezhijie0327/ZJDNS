@@ -62,10 +62,7 @@ func XchachaSeal(out, nonce, message, key []byte) (res []byte) {
 	}
 
 	var firstBlock [XchachaBlockSize]byte
-	cipher, err := chacha20.NewUnauthenticatedCipher(key, nonce)
-	if err != nil {
-		panic(err)
-	}
+	cipher, _ := chacha20.NewUnauthenticatedCipher(key, nonce)
 	cipher.XORKeyStream(firstBlock[:], firstBlock[:])
 	var polyKey [XchachaKeySize]byte
 	copy(polyKey[:], firstBlock[:XchachaKeySize])
@@ -110,10 +107,7 @@ func XchachaOpen(out, nonce, ciphertext, key []byte) (res []byte, err error) {
 	}
 
 	var firstBlock [XchachaBlockSize]byte
-	cipher, err := chacha20.NewUnauthenticatedCipher(key, nonce)
-	if err != nil {
-		panic(err)
-	}
+	cipher, _ := chacha20.NewUnauthenticatedCipher(key, nonce)
 	cipher.XORKeyStream(firstBlock[:], firstBlock[:])
 	var polyKey [XchachaKeySize]byte
 	copy(polyKey[:], firstBlock[:XchachaKeySize])

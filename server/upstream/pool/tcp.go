@@ -142,11 +142,16 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	}
 	// Detect trackingID collision after wrap-around (every 65536 queries).
 	// Advance past any in-flight ID to avoid orphaning the old query.
+	// Iteration limit is bounded: at most maxPipe in-flight IDs exist,
+	// so the loop will find a free slot within at most maxPipe iterations.
 	origTrackingID := trackingID
 	for c.inflight[trackingID] != nil {
 		trackingID = uint16(c.nextID.Add(1) & dnsIDMask)
 	}
 	if trackingID != origTrackingID {
+		if len(writeBuf) < zdnsutil.DNSFramePrefixLen+2 {
+			return nil, fmt.Errorf("client: writeBuf too small for trackingID update: %d bytes", len(writeBuf))
+		}
 		binary.BigEndian.PutUint16(writeBuf[zdnsutil.DNSFramePrefixLen:zdnsutil.DNSFramePrefixLen+2], trackingID)
 	}
 	c.inflight[trackingID] = &pending{resultCh: resultCh}
@@ -195,18 +200,18 @@ func (c *Conn) readLoop() {
 	defer zdnsutil.HandlePanic("client reader")
 	defer c.close()
 
-	lengthBuf := make([]byte, zdnsutil.DNSFramePrefixLen)
+	var lengthBuf [zdnsutil.DNSFramePrefixLen]byte
 
 	for {
 		_ = c.conn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 
-		if _, err := io.ReadFull(c.conn, lengthBuf); err != nil {
+		if _, err := io.ReadFull(c.conn, lengthBuf[:]); err != nil {
 			if err != io.EOF {
 				log.Debugf("TCPPOOL: read length error from %s: %v", c.addr, err)
 			}
 			return
 		}
-		msgLen := binary.BigEndian.Uint16(lengthBuf)
+		msgLen := binary.BigEndian.Uint16(lengthBuf[:])
 		if msgLen == 0 {
 			log.Debugf("TCPPOOL: invalid message length %d from %s", msgLen, c.addr)
 			return
@@ -218,6 +223,7 @@ func (c *Conn) readLoop() {
 		if pooled {
 			body = bodyBuf[:msgLen]
 		} else {
+			zpool.DefaultBuffer.Put(bodyBuf)
 			body = make([]byte, msgLen)
 		}
 		if _, err := io.ReadFull(c.conn, body); err != nil {
@@ -450,29 +456,36 @@ func (p *ConnPool) replaceDead(key string) *Conn {
 // call multiple times.
 func (p *ConnPool) Shutdown() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.closed = true
-	for key, conns := range p.conns {
-		for _, c := range conns {
-			c.close()
-		}
-		delete(p.conns, key)
+	// Collect connections outside the lock to avoid close() acquiring Conn.mu
+	// while holding p.mu, which creates an ABBA deadlock path with Remove().
+	var all []*Conn
+	for _, conns := range p.conns {
+		all = append(all, conns...)
+	}
+	p.conns = make(map[string][]*Conn)
+	p.mu.Unlock()
+
+	for _, c := range all {
+		c.close()
 	}
 }
 
 // Remove closes and removes a pipelined connection from the pool.
 func (p *ConnPool) Remove(target *Conn) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	conns := p.conns[target.addr]
 	for i, c := range conns {
-		if c == target {
-			p.conns[target.addr] = append(conns[:i], conns[i+1:]...)
-			if len(p.conns[target.addr]) == 0 {
-				delete(p.conns, target.addr)
-			}
-			target.close()
-			return
+		if c != target {
+			continue
 		}
+		p.conns[target.addr] = append(conns[:i], conns[i+1:]...)
+		if len(p.conns[target.addr]) == 0 {
+			delete(p.conns, target.addr)
+		}
+		p.mu.Unlock()
+		target.close()
+		return
 	}
+	p.mu.Unlock()
 }

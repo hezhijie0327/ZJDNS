@@ -147,12 +147,23 @@ func (s *Server) setupSignalHandling() {
 		case <-s.ctx.Done():
 		}
 	}()
+	// NOTE: This goroutine is not tracked in any errgroup or WaitGroup.
+	// It exits cleanly when sigChan receives or s.ctx is cancelled.
+	// If Wait() dependencies are added to shutdownServer, this goroutine
+	// must be tracked to avoid a shutdown hang.
 }
 
 func (s *Server) shutdownServer() {
 	s.handler.MarkClosed()
 
 	log.Infof("SERVER: Starting DNS server shutdown")
+
+	// NOTE: This function does NOT wait for the protocol server errgroup (g)
+	// created in Start(). That errgroup's goroutines (TLS, DNSCrypt, TLCP,
+	// plain listeners) exit when their contexts are cancelled below. The
+	// coordinator goroutine that calls g.Wait() is also orphaned — the
+	// shutdown path uses cancel-only signalling instead of a coordinated
+	// group wait.
 
 	if s.cancel != nil {
 		s.cancel(errors.New("server shutdown"))
@@ -189,6 +200,14 @@ func (s *Server) shutdownServer() {
 			log.Errorf("PPROF: pprof server shutdown failed: %v", err)
 		} else {
 			log.Infof("PPROF: pprof server shut down successfully")
+		}
+	}
+
+	if s.tlcpServer != nil {
+		if err := s.tlcpServer.Shutdown(); err != nil {
+			log.Errorf("TLCP: shutdown failed: %v", err)
+		} else {
+			log.Infof("TLCP: server shut down successfully")
 		}
 	}
 

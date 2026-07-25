@@ -37,10 +37,12 @@ func HKDFSHA256(salt, ikm, info []byte, outLen int) ([]byte, error) {
 	return out, nil
 }
 
-// PQProfileExtension returns a shared, pre-allocated PQ profile extension.
-// The payload is immutable — cached in pqProfileExt to avoid per-certificate alloc.
+// PQProfileExtension returns a copy of the pre-allocated PQ profile extension.
+// The original payload is immutable — cached in pqProfileExt to avoid per-certificate alloc.
 func PQProfileExtension() []byte {
-	return pqProfileExt
+	ext := make([]byte, len(pqProfileExt))
+	copy(ext, pqProfileExt)
+	return ext
 }
 
 func PQCertContext(binCert []byte) []byte {
@@ -61,7 +63,7 @@ func PQCertContext(binCert []byte) []byte {
 	return ctx
 }
 
-func PQDeriveSharedKey(kemSS []byte, clientMagic [8]byte, certContext, ct []byte) [SharedKeySize]byte {
+func PQDeriveSharedKey(kemSS []byte, clientMagic [8]byte, certContext, ct []byte) ([SharedKeySize]byte, error) {
 	salt := make([]byte, 0, 10)
 	salt = append(salt, PQESVersion[0], PQESVersion[1])
 	salt = append(salt, clientMagic[:]...)
@@ -69,24 +71,28 @@ func PQDeriveSharedKey(kemSS []byte, clientMagic [8]byte, certContext, ct []byte
 	info = append(info, certContext...)
 	info = append(info, ct...)
 	var key [SharedKeySize]byte
-	// hkdfSha256 on SHA-256 cannot fail in practice.
-	hkdfOut, _ := HKDFSHA256(salt, kemSS, info, SharedKeySize)
+	hkdfOut, err := HKDFSHA256(salt, kemSS, info, SharedKeySize)
+	if err != nil {
+		return [SharedKeySize]byte{}, err
+	}
 	copy(key[:], hkdfOut)
-	return key
+	return key, nil
 }
 
-func PQResumeSecret(sharedKey [SharedKeySize]byte, clientMagic [8]byte, clientNonce []byte) [SharedKeySize]byte {
+func PQResumeSecret(sharedKey [SharedKeySize]byte, clientMagic [8]byte, clientNonce []byte) ([SharedKeySize]byte, error) {
 	salt := make([]byte, 0, 8+len(clientNonce))
 	salt = append(salt, clientMagic[:]...)
 	salt = append(salt, clientNonce...)
 	var out [SharedKeySize]byte
-	// hkdfSha256 on SHA-256 cannot fail in practice.
-	hkdfOut, _ := HKDFSHA256(salt, sharedKey[:], []byte("DNSCrypt-PQ-resume-secret-v1"), SharedKeySize)
+	hkdfOut, err := HKDFSHA256(salt, sharedKey[:], []byte("DNSCrypt-PQ-resume-secret-v1"), SharedKeySize)
+	if err != nil {
+		return [SharedKeySize]byte{}, err
+	}
 	copy(out[:], hkdfOut)
-	return out
+	return out, nil
 }
 
-func PQResumedSharedKey(resumeSecret [SharedKeySize]byte, clientMagic [8]byte, clientNonce, ticket []byte) [SharedKeySize]byte {
+func PQResumedSharedKey(resumeSecret [SharedKeySize]byte, clientMagic [8]byte, clientNonce, ticket []byte) ([SharedKeySize]byte, error) {
 	salt := make([]byte, 0, 8+len(clientNonce))
 	salt = append(salt, clientMagic[:]...)
 	salt = append(salt, clientNonce...)
@@ -95,10 +101,12 @@ func PQResumedSharedKey(resumeSecret [SharedKeySize]byte, clientMagic [8]byte, c
 	info = append(info, "DNSCrypt-PQ-resumed-query-v1"...)
 	info = append(info, th[:]...)
 	var key [SharedKeySize]byte
-	// hkdfSha256 on SHA-256 cannot fail in practice.
-	hkdfOut, _ := HKDFSHA256(salt, resumeSecret[:], info, SharedKeySize)
+	hkdfOut, err := HKDFSHA256(salt, resumeSecret[:], info, SharedKeySize)
+	if err != nil {
+		return [SharedKeySize]byte{}, err
+	}
 	copy(key[:], hkdfOut)
-	return key
+	return key, nil
 }
 
 func PQEncapsulate(pk []byte) (kemSS, ct []byte, err error) {
@@ -127,7 +135,7 @@ func DerivePQKeys(classicalSk []byte) (pk, sk []byte) {
 // Ticket encryption (server-side)
 // ---------------------------------------------------------------------------
 
-func PQSealTicket(key *[XchachaKeySize]byte, keyID *[TicketKeyIDSize]byte, nonce *[XchachaNonceSize]byte, plaintext []byte) []byte {
+func PQSealTicket(key [XchachaKeySize]byte, keyID [TicketKeyIDSize]byte, nonce [XchachaNonceSize]byte, plaintext []byte) []byte {
 	ct := XchachaSeal(nil, nonce[:], plaintext, key[:])
 	out := make([]byte, TicketKeyIDSize+XchachaNonceSize+len(ct))
 	copy(out[:TicketKeyIDSize], keyID[:])

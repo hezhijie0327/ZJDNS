@@ -14,6 +14,9 @@ const paddingHeaderSize = 4
 // out (dig +nopadding / +noalignment). If the client sent no EDNS at all, we
 // default to padding for privacy.
 func HasPaddingOption(req *dns.Msg) bool {
+	if req == nil {
+		return false
+	}
 	if len(req.Pseudo) > 0 {
 		for _, o := range req.Pseudo {
 			if _, ok := o.(*dns.PADDING); ok {

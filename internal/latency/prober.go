@@ -84,6 +84,15 @@ func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) (sorted []ne
 			}
 			defer func() { <-p.sem }()
 
+			// Context may have been cancelled while waiting for the semaphore.
+			select {
+			case <-ctx.Done():
+				return
+			case <-p.ctx.Done():
+				return
+			default:
+			}
+
 			results[idx].latency = measureIPLatency(ctx, ips[idx], p.steps, p.httpPool)
 		}()
 	}

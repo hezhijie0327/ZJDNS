@@ -72,6 +72,9 @@ func (c *Client) ExecuteHTTP3(ctx context.Context, msg *dns.Msg, server *config.
 		client = c.createDOH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
 	}
 
+	// NOTE: The first request gets no retry because the initial
+	// connection establishment serves as an implicit retry., while cached clients
+	// do. Consider retrying on first failure as well for consistency.
 	resp, err := zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, client, http3.MethodGet0RTT)
 	if err == nil {
 		return resp, nil
@@ -142,6 +145,7 @@ func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 			if t, ok := c.doh3Transports[k].Transport.(*http3Transport); ok {
 				_ = t.Close()
 			}
+			// Transport closed via t.Close() above.
 			delete(c.doh3Transports, k)
 			break
 		}

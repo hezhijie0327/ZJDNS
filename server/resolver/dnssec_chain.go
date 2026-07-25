@@ -27,6 +27,9 @@ type dnssecChain struct {
 
 func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, chain *dnssecChain) bool {
 	crypto := r.resolver.validator.Crypto
+	if crypto == nil {
+		return false
+	}
 	// Extract DNSKEY records from the response
 	dnskeyRecords := dnssec.FindDNSKEYs(response.Answer)
 	dnskeyRecords = append(dnskeyRecords, dnssec.FindDNSKEYs(response.Extra)...)

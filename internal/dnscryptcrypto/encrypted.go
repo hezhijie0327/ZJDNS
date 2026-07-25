@@ -101,7 +101,9 @@ func (r *EncryptedResponse) Encrypt(
 ) (response []byte, err error) {
 	// The resolver nonce (bytes 12-23) is fully random, per §7.2 of
 	// draft-denis-dprive-dnscrypt-10.
-	_, _ = rand.Read(r.Nonce[NonceSize/2:])
+	if _, err := rand.Read(r.Nonce[NonceSize/2:]); err != nil {
+		return nil, fmt.Errorf("generating resolver nonce: %w", err)
+	}
 
 	response = append(response, ResolverMagic...)
 	response = append(response, r.Nonce[:]...)
@@ -219,7 +221,9 @@ func (q *EncryptedQuery) Encrypt(
 	// draft-denis-dprive-dnscrypt-10: clients SHOULD NOT include
 	// unencrypted timestamps or other stable client state in nonce values.
 	if q.Nonce == ([24]byte{}) {
-		_, _ = rand.Read(q.Nonce[:NonceSize/2])
+		if _, err := rand.Read(q.Nonce[:NonceSize/2]); err != nil {
+			return nil, Nonce{}, fmt.Errorf("generating client nonce: %w", err)
+		}
 	}
 
 	if q.ESVersion.IsPQ() {
@@ -368,7 +372,10 @@ func (q *EncryptedQuery) DecryptPQInitial(query, serverPrivateKey []byte) (packe
 
 	// Decapsulate X-Wing to get KEM shared secret.
 	kemSS := PQDecapsulate(ct, serverPrivateKey)
-	sharedKey := PQDeriveSharedKey(kemSS, q.ClientMagic, q.PQCertContext, ct)
+	sharedKey, err := PQDeriveSharedKey(kemSS, q.ClientMagic, q.PQCertContext, ct)
+	if err != nil {
+		return nil, fmt.Errorf("deriving PQ shared key: %w", err)
+	}
 	q.SharedKey = sharedKey
 
 	packet, err = q.DecryptPayload(encrypted, sharedKey)

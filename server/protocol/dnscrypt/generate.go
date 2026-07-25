@@ -58,7 +58,11 @@ func GenerateResolverConfig(providerName string, privateKey ed25519.PrivateKey) 
 		}
 	}
 	cfg.PrivateKey = dnscryptcrypto.HexEncodeKey(privateKey)
-	cfg.PublicKey = dnscryptcrypto.HexEncodeKey(privateKey.Public().(ed25519.PublicKey))
+	publicKey, ok := privateKey.Public().(ed25519.PublicKey)
+	if !ok {
+		return cfg, errors.New("invalid ed25519 public key type")
+	}
+	cfg.PublicKey = dnscryptcrypto.HexEncodeKey(publicKey)
 
 	sk, pk := dnscryptcrypto.GenerateRandomKeyPair()
 	cfg.ResolverSk = dnscryptcrypto.HexEncodeKey(sk[:])

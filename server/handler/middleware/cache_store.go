@@ -147,17 +147,19 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 	dnssecOK := qctx.ClientRequestedDNSSEC
 	queryErr := qr.Err
 
-	// Try stale cache fallback.
-	if entry, found, _ := m.store.Get(qname, qtype, qclass, ecsOpt, dnssecOK); found && entry.IsExpired() && entry.CanServeExpired(config.DefaultStaleMaxAge) {
-		log.Debugf("CACHE: serving expired cached result for %s, ttl_remaining=%d", qname, entry.RemainingTTL())
-		m.store.RecordRequest(&cache.RequestRecord{
-			Qname: qname, Qtype: qtype, Qclass: qclass,
-			ECS: ecsOpt, DNSSECOK: dnssecOK,
-			Protocol: qctx.Protocol, Result: "error", Rcode: dns.RcodeServerFailure,
-			ResponseTime: handler.ElapsedMS(qctx.StartTime),
-			EntryID:      entry.ID,
-		})
-		return m.buildFromCacheEntry(qctx, entry, true)
+	// Try cache fallback — fresh or stale.
+	if entry, found, isExpired := m.store.Get(qname, qtype, qclass, ecsOpt, dnssecOK); found {
+		if !isExpired || entry.CanServeExpired(config.DefaultStaleMaxAge) {
+			log.Debugf("CACHE: serving cached result for %s, ttl_remaining=%d", qname, entry.RemainingTTL())
+			m.store.RecordRequest(&cache.RequestRecord{
+				Qname: qname, Qtype: qtype, Qclass: qclass,
+				ECS: ecsOpt, DNSSECOK: dnssecOK,
+				Protocol: qctx.Protocol, Result: "error", Rcode: dns.RcodeServerFailure,
+				ResponseTime: handler.ElapsedMS(qctx.StartTime),
+				EntryID:      entry.ID,
+			})
+			return m.buildFromCacheEntry(qctx, entry, isExpired)
+		}
 	}
 
 	log.Debugf("RESULT: %s %s | rcode=SERVFAIL, no stale cache available", qname, dns.TypeToString[qtype])
