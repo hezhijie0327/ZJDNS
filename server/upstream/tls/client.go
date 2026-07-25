@@ -39,8 +39,7 @@ type Client struct {
 	quicSessionCache tls.ClientSessionCache
 	dtlsSessions     *lrumap.DTLSSessionStore
 
-	quicConfigs   map[string]*quic.Config
-	quicConfigsMu sync.Mutex
+	quicConfigs *lrumap.Map[string, *quic.Config]
 
 	dohTransports   map[string]*http.Client
 	dohTransportMu  sync.RWMutex
@@ -76,7 +75,7 @@ func New(
 		sessionCache:     sessionCache,
 		quicSessionCache: quicSessionCache,
 		dtlsSessions:     dtlsSessions,
-		quicConfigs:      make(map[string]*quic.Config),
+		quicConfigs:      lrumap.New[string, *quic.Config](config.DefaultQUICConfigCacheSize),
 		dohTransports:    make(map[string]*http.Client),
 		doh3Transports:   make(map[string]*http.Client),
 		getProxy:         getProxy,
@@ -172,19 +171,10 @@ func (c *Client) stdTLSConfig(server *config.UpstreamServer) *tls.Config {
 }
 
 // getQUICConfig returns a cached QUIC config for the given upstream key.
+// The cache is an LRU map bounded at DefaultQUICConfigCacheSize (128 entries).
 func (c *Client) getQUICConfig(key string, skipVerify bool) *quic.Config {
-	c.quicConfigsMu.Lock()
-	defer c.quicConfigsMu.Unlock()
-	if cfg, ok := c.quicConfigs[key]; ok {
+	if cfg, ok := c.quicConfigs.Get(key); ok {
 		return cfg
-	}
-	if len(c.quicConfigs) >= config.DefaultTransportMax*2 {
-		// Evict one entry when over threshold.  Under concurrent access the map
-		// may temporarily exceed the limit, which is acceptable.
-		for k := range c.quicConfigs {
-			delete(c.quicConfigs, k)
-			break
-		}
 	}
 	cfg := &quic.Config{
 		MaxIdleTimeout:        config.DefaultQUICClientIdleTimeout,
@@ -195,22 +185,20 @@ func (c *Client) getQUICConfig(key string, skipVerify bool) *quic.Config {
 		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
 		TokenStore:            quic.NewLRUTokenStore(config.DefaultTokenStoreCapacity, config.DefaultTokenStoreMaxEntries),
 	}
-	c.quicConfigs[key] = cfg
+	c.quicConfigs.Set(key, cfg)
 	return cfg
 }
 
 // resetQUICConfig recreates the TokenStore for the given upstream key on
 // 0-RTT rejection.
 func (c *Client) resetQUICConfig(key string) {
-	c.quicConfigsMu.Lock()
-	defer c.quicConfigsMu.Unlock()
-	cfg, ok := c.quicConfigs[key]
+	cfg, ok := c.quicConfigs.Get(key)
 	if !ok {
 		return
 	}
 	cfg = cfg.Clone()
 	cfg.TokenStore = quic.NewLRUTokenStore(config.DefaultTokenStoreCapacity, config.DefaultTokenStoreMaxEntries)
-	c.quicConfigs[key] = cfg
+	c.quicConfigs.Set(key, cfg)
 }
 
 // WarmUpTLS pre-establishes a pipelined DoT connection.

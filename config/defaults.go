@@ -158,6 +158,7 @@ const (
 	DefaultAsyncStatsBufferSize = 64 // async stats writer channel capacity
 
 	DefaultTransportMax          = 64
+	DefaultQUICConfigCacheSize   = 128 // max cached QUIC configs (LRU)
 	DefaultTLSSessionCacheSize   = 128
 	DefaultDTLSSessionCacheSize  = 128
 	DefaultTLCPSessionCacheSize  = 128
