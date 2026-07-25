@@ -3,6 +3,7 @@ package cache
 import (
 	"sync"
 	"time"
+	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
 )
@@ -120,7 +121,7 @@ func (w *AsyncStatsWriter) run() {
 
 	const batchSize = 64
 	batch := make([]RequestRecord, 0, batchSize)
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(config.DefaultAsyncFlushInterval)
 	defer ticker.Stop()
 
 	for {

@@ -495,7 +495,8 @@ func (s *SQLiteCache) evictOldest(toEvict int64) {
 // ── Set-path helpers ──────────────────────────────────────────────────────
 
 // minTTL returns the smallest positive TTL across all RR sections, falling
-// back to DefaultTTL when no TTLs are found.
+// back to DefaultTTL when no TTLs are found.  The result is capped at
+// config.DefaultMaxCacheableTTL to prevent unbounded caching (RFC 8767 §4).
 func minTTL(sections ...[]dns.RR) int {
 	minT := -1
 	for _, rrs := range sections {
@@ -509,6 +510,9 @@ func minTTL(sections ...[]dns.RR) int {
 	}
 	if minT <= 0 {
 		return config.DefaultTTL
+	}
+	if minT > config.DefaultMaxCacheableTTL {
+		return config.DefaultMaxCacheableTTL
 	}
 	return minT
 }

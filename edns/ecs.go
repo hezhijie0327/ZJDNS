@@ -18,7 +18,7 @@ type ECSOption = config.ECSOption
 // ECS prefix length constants.
 const (
 	DefaultECSv4Len = 24
-	DefaultECSv6Len = 64
+	DefaultECSv6Len = 56 // RFC 7871 §11.1: 56 bits recommended for IPv6
 	DefaultECSScope = 0
 )
 

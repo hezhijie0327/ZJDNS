@@ -191,6 +191,12 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 			}
 		}
 
+		// Validate privacy profile for encrypted protocols (RFC 8310 §5-6).
+		// Strict mode (default) rejects skip_tls_verify; opportunistic allows it.
+		if zdnsutil.IsSecureProtocol(protocol) && server.PrivacyProfile == PrivacyProfileStrict && server.SkipTLSVerify {
+			return fmt.Errorf("upstream server %d: privacy_profile=strict requires skip_tls_verify=false", i)
+		}
+
 		if server.Proxy != "" {
 			u, err := url.Parse(server.Proxy)
 			if err != nil {

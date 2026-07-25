@@ -90,6 +90,11 @@ func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnectio
 	}
 
 	// Set EDNS flags directly on the message header (v2 API).
+	// UDPSize = 1232 follows DNS Flag Day 2020 recommendation: all modern
+	// DNS servers and clients MUST support EDNS with at least 1232 bytes.
+	// Per RFC 6891 §6.2.5, the responder's UDPSize reflects its own maximum
+	// payload size; the transport layer (UDP datagram size) enforces the
+	// minimum of the two endpoints.
 	msg.UDPSize = pool.UDPBufferSize
 	msg.Security = true
 

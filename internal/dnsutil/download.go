@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	downloadTimeout    = 30 * time.Second
-	otherWritePermMask = 0o022 // group/other write — root data files must be owner-writable only
+	downloadTimeout    = 30 * time.Second // matches config.DefaultRootDownloadTimeout
+	otherWritePermMask = 0o022            // group/other write — root data files must be owner-writable only
 )
 
 var downloadClient = &http.Client{Timeout: downloadTimeout}

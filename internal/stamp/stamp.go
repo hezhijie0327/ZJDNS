@@ -67,6 +67,8 @@ const (
 const stampPrefix = "sdns://"
 
 // Default ports for protocols that omit the port in stamps.
+// These match config.DefaultHTTPSPort / DefaultTLSPort / DefaultUDPPort
+// but are integer-typed for binary stamp parsing (internal/ cannot import config/).
 const (
 	DefaultHTTPSPort = 443
 	DefaultTLSPort   = 853

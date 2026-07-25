@@ -83,7 +83,7 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 
 func (m *EDNS) buildBadCookieResponse(req *dns.Msg, clientIP net.IP, cookieOpt *edns.CookieOption) *dns.Msg {
 	msg := handler.BuildResponseMsg(req)
-	msg.Rcode = dns.RcodeFormatError
+	msg.Rcode = dns.RcodeBadCookie
 
 	serverCookie := m.edns.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 	cookieStr := edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)

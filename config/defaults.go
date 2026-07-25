@@ -16,7 +16,7 @@ const (
 	DefaultQUICPort  = "853"  // DoQ (RFC 9250)
 	DefaultHTTPSPort = "443"  // DoH (RFC 8484)
 	DefaultHTTP3Port = "443"  // DoH3
-	DefaultDTLSPort  = "8853" // DoD (RFC 8094)
+	DefaultDTLSPort  = "8853" // DTLS (RFC 8094 specifies 853; 8853 is widely deployed)
 
 	DefaultTLCPPort     = "9853" // TLCP (GB/T 38636-2020) DoT
 	DefaultHTTPTLCPPort = "9443" // TLCP (GB/T 38636-2020) DoH
@@ -45,7 +45,10 @@ const (
 
 	DefaultTTL         = 10
 	DefaultStaleTTL    = 30
-	DefaultStaleMaxAge = 7 * 86400 // RFC 8767 §6: recommended cap of 604800 seconds
+	DefaultStaleMaxAge = 3 * 86400 // RFC 8767 §6: stale retention window (1–3 days recommended)
+
+	// DefaultMaxCacheableTTL caps the TTL of incoming records per RFC 8767 §4.
+	DefaultMaxCacheableTTL = 7 * 86400 // RFC 8767 §4: SHOULD cap at 604800 seconds (7 days)
 
 	DefaultPrefetchThresholdPercent  = 10
 	DefaultServeExpiredClientTimeout = 600 * time.Millisecond // RFC 8767 §5.2: short wait before serving stale
@@ -63,7 +66,7 @@ const (
 
 const (
 	// RFC 8767 §4.2: timeout SHOULD default to less than 10 seconds.
-	DefaultDNSQueryTimeout = 10 * time.Second // single DNS query / dial / per-message I/O
+	DefaultDNSQueryTimeout = 9 * time.Second // single DNS query / dial / per-message I/O
 
 	// DefaultPoisonProbeTimeout bounds the TLD hijack probe query.
 	// The probe detects GFW-injected A/AAAA records at the delegation
@@ -107,6 +110,9 @@ const (
 	DefaultBackgroundTimeout         = 10 * time.Second // bounded wait for background tasks
 	DefaultBackgroundShutdownTimeout = 30 * time.Second // bounded wait during shutdown (matches recursive timeout)
 	DefaultShutdownTimeout           = 15 * time.Second // graceful shutdown deadline
+
+	DefaultPendingCleanupInterval = 60 * time.Second // singleflight orphan-entry cleanup ticker
+	DefaultPendingFollowerTimeout = 60 * time.Second // singleflight follower poll timeout (after leader completion)
 )
 
 // =============================================================================
@@ -126,11 +132,14 @@ const (
 
 const (
 	DefaultAcceptRetryDelay      = 100 * time.Millisecond // DoT/DoQ accept retry sleep
+	DefaultAsyncFlushInterval    = 100 * time.Millisecond // async stats writer flush ticker
 	DefaultSweepInterval         = 5 * time.Minute        // periodic cleanup sweep
 	DefaultTCPWriteMuStaleCutoff = 2 * time.Minute        // stale TCP write mutex cutoff
 
-	DefaultCookieSecretRotationInterval = 30 * time.Minute
+	DefaultCookieSecretRotationInterval = 24 * time.Hour // RFC 7873 §7.1: default lifetime 1 day
 	DefaultECSRefreshInterval           = 15 * time.Minute
+
+	DefaultRootDownloadTimeout = 30 * time.Second // root hints file download timeout
 )
 
 // =============================================================================
@@ -171,7 +180,9 @@ const (
 // =============================================================================
 
 const (
-	MaxDomainLength = 253
+	MaxDomainLength   = 253
+	MaxDNSMessageSize = 65535 // DNS wire format max message size (uint16 length prefix)
+	MaxPortNumber     = 65535 // TCP/UDP max port number
 
 	DefaultMaxCNAMEChain     = 16
 	DefaultMaxRecursionDepth = 16
@@ -208,10 +219,22 @@ const (
 // =============================================================================
 
 const (
+	// PrivacyProfileStrict requires TLS with PKIX certificate verification
+	// (RFC 8310 §6). This is the default for encrypted upstreams.
+	PrivacyProfileStrict = "strict"
+
+	// PrivacyProfileOpportunistic encrypts DNS queries but allows
+	// unauthenticated TLS (SkipTLSVerify), providing protection against
+	// passive eavesdropping but not active MITM (RFC 8310 §5).
+	PrivacyProfileOpportunistic = "opportunistic"
+
 	DefaultLatencyProbeTimeout     = 100 * time.Millisecond
 	DefaultNSProbeTimeout          = 5 * time.Second // timeout for NS/root latency probing
 	DefaultLatencyProbeMinInterval = 60              // min interval between probes for the same IP (seconds)
 	DefaultRootCacheTTL            = 3600            // root server cache entry TTL (seconds)
+
+	DefaultIPDetectDialTimeout  = 2 * time.Second // IP detection: per-address dial timeout
+	DefaultIPDetectTotalTimeout = 3 * time.Second // IP detection: total detection window
 
 	DefaultProbePortDNS   = 53
 	DefaultProbePortHTTP  = 80

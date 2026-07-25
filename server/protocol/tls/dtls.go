@@ -2,6 +2,7 @@ package tls
 
 import (
 	"encoding/binary"
+	"errors"
 	"net"
 	"time"
 	"zjdns/config"
@@ -115,13 +116,22 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 
 		n, err := conn.Read(buf)
 		if err != nil {
+			// Idle timeout — close connection per RFC 8094 §3.3 (pion/dtls
+			// sends a fatal alert on close).  Do NOT treat timeouts as
+			// temporary — that would keep idle connections alive forever.
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				return
+			}
 			if !zdnsutil.IsTemporaryError(err) {
 				return
 			}
 			continue
 		}
 
-		// Parse 2-byte length prefix (RFC 8094 §5.2).
+		// Parse 2-byte length prefix (TCP DNS framing, RFC 1035 §4.2.2).
+		// DTLS records provide datagram boundaries — the inner prefix
+		// mirrors DoT framing and is not required by RFC 8094.
 		if n < 2 {
 			continue
 		}
@@ -153,7 +163,7 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 
 		// Write response with 2-byte length prefix in a single Write.
 		respLen := len(response.Data)
-		if respLen > 65535 {
+		if respLen > config.MaxDNSMessageSize {
 			log.Debugf("TLS: DTLS response too large (%d bytes)", respLen)
 			pool.DefaultMessage.Put(response)
 			continue

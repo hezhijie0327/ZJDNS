@@ -13,27 +13,41 @@ The DNSCrypt draft was downloaded from the IETF archive.
 
 | File | Title |
 |------|-------|
+| rfc768.txt | User Datagram Protocol |
+| rfc1034.txt | Domain Names - Concepts and Facilities |
+| rfc1035.txt | Domain Names - Implementation and Specification |
 | rfc1928.txt | SOCKS Protocol Version 5 |
 | rfc1929.txt | Username/Password Authentication for SOCKS5 |
+| rfc1982.txt | Serial Number Arithmetic |
+| rfc2181.txt | Clarifications to the DNS Specification |
 | rfc4033.txt | DNS Security Introduction and Requirements |
 | rfc4034.txt | Resource Records for the DNS Security Extensions |
 | rfc4035.txt | Protocol Modifications for the DNS Security Extensions |
 | rfc5155.txt | DNS Security (DNSSEC) Hashed Authenticated Denial of Existence |
+| rfc5077.txt | Transport Layer Security (TLS) Session Resumption |
+| rfc6125.txt | Domain-Based Application Service Identity (TLS cert verification) |
+| rfc6672.txt | DNAME Redirection in the DNS |
+| rfc6761.txt | Special-Use Domain Names |
 | rfc6052.txt | IPv6 Addressing of IPv4/IPv6 Translators |
 | rfc6147.txt | DNS64: DNS Extensions for Network Address Translation from IPv6 Clients to IPv4 Servers |
+| rfc6604.txt | xNAME RCODE and Status Bits Clarification |
 | rfc6840.txt | Clarifications and Implementation Notes for DNS Security (DNSSEC) |
 | rfc6891.txt | Extension Mechanisms for DNS (EDNS(0)) |
+| rfc7344.txt | Automating DNSSEC Delegation Trust Maintenance |
 | rfc7766.txt | DNS Transport over TCP - Implementation Requirements |
 | rfc7828.txt | The edns-tcp-keepalive EDNS0 Option |
 | rfc7830.txt | The EDNS(0) Padding Option |
 | rfc7858.txt | Specification for DNS over Transport Layer Security (TLS) |
 | rfc7871.txt | Client Subnet in DNS Queries |
+| rfc7873.txt | Domain Name System (DNS) Cookies |
 | rfc8094.txt | DNS over Datagram Transport Layer Security (DTLS) |
 | rfc8310.txt | Usage Profiles for DNS over TLS and DNS over DTLS |
 | rfc8467.txt | Padding Policies for Extension Mechanisms for DNS (EDNS(0)) |
+| rfc8446.txt | The Transport Layer Security (TLS) Protocol Version 1.3 |
 | rfc8484.txt | DNS Queries over HTTPS (DoH) |
 | rfc8767.txt | Serving Stale Data to Improve DNS Resiliency |
 | rfc8914.txt | Extended DNS Errors |
+| rfc9103.txt | DNS over TLS Operational Considerations |
 | rfc9000.txt | QUIC: A UDP-Based Multiplexed and Secure Transport |
 | rfc9018.txt | Interoperable DNS Server Cookies |
 | rfc9114.txt | HTTP/3 |

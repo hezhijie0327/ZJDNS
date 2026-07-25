@@ -122,10 +122,11 @@ func (c *CookieGenerator) GenerateServerCookie(clientIP net.IP, clientCookie []b
 	ts := timeNow()
 	serverCookie := make([]byte, DefaultCookieServerLen)
 	serverCookie[0] = cookieVersion
-	// bytes 1-3 are zero (reserved)
+	// bytes 1-3 are zero (reserved) — we set them as the generator
 	binary.BigEndian.PutUint32(serverCookie[4:8], ts)
 
-	sig := rfc9018MAC(&key, clientCookie, ts, clientIP)
+	var reserved [3]byte // zero
+	sig := rfc9018MAC(&key, clientCookie, reserved, ts, clientIP)
 	copy(serverCookie[cookieSigOffset:], sig[:])
 
 	return serverCookie
@@ -169,6 +170,11 @@ func (c *CookieGenerator) IsServerCookieValid(clientIP net.IP, clientCookie, ser
 	var sig [8]byte
 	copy(sig[:], serverCookie[cookieSigOffset:])
 
+	// Extract received reserved bytes for inclusion in hash
+	// per RFC 9018 §4.2 — use the received value, not zero.
+	var reserved [3]byte
+	copy(reserved[:], serverCookie[1:4])
+
 	// Try every known secret: current, previous, older.
 	secrets := [][]byte{sp.current, sp.previous, sp.older}
 	for i, secret := range secrets {
@@ -178,7 +184,7 @@ func (c *CookieGenerator) IsServerCookieValid(clientIP net.IP, clientCookie, ser
 		var key [cookieSecretSize]byte
 		copy(key[:], secret)
 
-		expect := rfc9018MAC(&key, clientCookie, ts, clientIP)
+		expect := rfc9018MAC(&key, clientCookie, reserved, ts, clientIP)
 		if sig == expect {
 			if i > 0 || needsRenew {
 				// Validated with a staging/old secret or needs a
@@ -198,8 +204,10 @@ func (c *CookieGenerator) IsServerCookieValid(clientIP net.IP, clientCookie, ser
 //
 //	clientCookie (8) | version (1) | reserved (3) | timestamp (4) | clientIP (4 or 16)
 //
-// IPv4 addresses use the 4-byte wire form; IPv6 use the full 16 bytes.
-func rfc9018MAC(key *[16]byte, clientCookie []byte, timestamp uint32, clientIP net.IP) [8]byte {
+// RFC 9018 §4.4: IPv4 addresses use the 4-byte wire form;
+// IPv6 use the full 16 bytes.  Distinct lengths prevent
+// cross-address-family substitution attacks.
+func rfc9018MAC(key *[16]byte, clientCookie []byte, reserved [3]byte, timestamp uint32, clientIP net.IP) [8]byte {
 	var buf [36]byte // buf is at most 8+1+3+4+16 = 32 bytes
 	n := copy(buf[:], clientCookie[:8])
 	buf[n] = cookieVersion
@@ -207,14 +215,20 @@ func rfc9018MAC(key *[16]byte, clientCookie []byte, timestamp uint32, clientIP n
 	binary.BigEndian.PutUint32(buf[n:], timestamp)
 	n += 4
 
-	ip := clientIP.To16()
+	ipLen := 16
+	ip := clientIP.To4()
 	if ip == nil {
-		ip = net.IPv4zero.To16()
+		ip = clientIP.To16()
+		if ip == nil {
+			ip = net.IPv4zero.To4()
+		}
+	} else {
+		ipLen = 4
 	}
-	copy(buf[n:], ip) // 16 bytes
+	copy(buf[n:], ip) // 4 or 16 bytes
 
 	var mac [8]byte
-	sum := siphash.Sum64(key, buf[:n+16])
+	sum := siphash.Sum64(key, buf[:n+ipLen])
 	binary.BigEndian.PutUint64(mac[:], sum)
 	return mac
 }

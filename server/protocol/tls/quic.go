@@ -201,6 +201,13 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		return
 	}
 
+	// RFC 9250 §4.3.3: non-zero Message ID is a protocol error.
+	if req.ID != 0 {
+		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "non-zero DNS message ID")
+		pool.DefaultMessage.Put(req)
+		return
+	}
+
 	clientIP := zdnsutil.ClientIPFromAddr(conn.RemoteAddr())
 	response := s.handler.ServeDNS(req, clientIP, true, config.ProtoQUIC)
 	pool.DefaultMessage.Put(req)

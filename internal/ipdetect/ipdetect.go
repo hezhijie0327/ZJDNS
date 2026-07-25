@@ -17,8 +17,8 @@ type Detector struct {
 }
 
 const (
-	ipDetectDialTimeout = 2 * time.Second
-	ipDetectTimeout     = 3 * time.Second
+	ipDetectDialTimeout = 2 * time.Second // matches config.DefaultIPDetectDialTimeout
+	ipDetectTimeout     = 3 * time.Second // matches config.DefaultIPDetectTotalTimeout
 )
 
 // DefaultTraceURL is the default endpoint used for public IP detection.

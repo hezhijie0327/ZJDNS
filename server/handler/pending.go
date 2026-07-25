@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"time"
+	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pending"
@@ -62,7 +63,7 @@ func NewPendingRequests(ctx ...context.Context) *PendingRequests {
 
 	// Periodic cleanup of orphaned entries from panicked/broken leaders.
 	go func() {
-		ticker := time.NewTicker(60 * time.Second)
+		ticker := time.NewTicker(config.DefaultPendingCleanupInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -117,9 +118,9 @@ func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.
 	// Follower: wait for leader to finish.  Safety timeout prevents
 	// indefinite blocking if the leader panics and Done is never called.
 	log.Debugf("CACHE: pending-request dedup — waiting for in-flight query of %s (type=%s)", qname, dns.TypeToString[qtype])
-	// NOTE(L20): 60s follower timeout is not configurable. Ok for most deployments;
-	// high-latency upstreams may need a longer timeout.
-	timer := time.NewTimer(60 * time.Second)
+	// NOTE(L20): follower timeout uses config.DefaultPendingFollowerTimeout.
+	// Ok for most deployments; high-latency upstreams may need a longer timeout.
+	timer := time.NewTimer(config.DefaultPendingFollowerTimeout)
 	select {
 	case <-call.done:
 		if !timer.Stop() {

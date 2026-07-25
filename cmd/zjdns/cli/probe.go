@@ -25,8 +25,8 @@ const (
 	probeIdleReadTimeout     = 30 * time.Second
 	probePipelineNumQueries  = 5
 	probeConnReuseNumQueries = 3
-	defaultTCPPort           = 53
-	defaultTLSPort           = 853
+	defaultProbePort         = 53  // matches config.DefaultUDPPort
+	defaultProbeTLSPort      = 853 // matches config.DefaultTLSPort
 )
 
 // runProbe dispatches to the requested probe type.
@@ -61,11 +61,11 @@ func dialProbeTarget(addr string) (net.Conn, error) {
 
 	switch protocol {
 	case "tcp":
-		host = tryAddPort(host, defaultTCPPort)
+		host = tryAddPort(host, defaultProbePort)
 		return net.Dial("tcp", host)
 
 	case "tls":
-		host = tryAddPort(host, defaultTLSPort)
+		host = tryAddPort(host, defaultProbeTLSPort)
 		serverName, _, _ := net.SplitHostPort(host)
 		tlsCfg := &eTLS.Config{
 			MinVersion:         eTLS.VersionTLS12,

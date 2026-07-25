@@ -262,7 +262,7 @@ func (s *Server) handleDTLCPConnections(listener net.Listener) {
 
 // handleDTLCPConnection reads DNS-over-DTLCP queries.  Each DTLCP record
 // carries one framed DNS message: a 2-byte big-endian length prefix followed
-// by the DNS payload, same as DNS-over-DTLS (RFC 8094 §5.2).
+// by the DNS payload, same as DNS-over-DTLS (TCP framing, RFC 1035 §4.2.2).
 func (s *Server) handleDTLCPConnection(conn net.Conn) {
 	defer zdnsutil.CloseWithLog(conn, "TLCP DTLCP connection", "TLCP")
 
@@ -288,7 +288,7 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 			continue
 		}
 
-		// Parse 2-byte length prefix (RFC 8094 §5.2).
+		// Parse 2-byte length prefix (TCP DNS framing, RFC 1035 §4.2.2).
 		if n < 2 {
 			continue
 		}
@@ -320,13 +320,13 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 
 		// Write response with 2-byte length prefix in a single Write.
 		respLen := len(response.Data)
-		if respLen > 65535 {
+		if respLen > config.MaxDNSMessageSize {
 			log.Debugf("TLCP: DTLCP response too large (%d bytes)", respLen)
 			pool.DefaultMessage.Put(response)
 			continue
 		}
 		resp := make([]byte, 2+respLen)
-		binary.BigEndian.PutUint16(resp[:2], uint16(respLen)) //nolint:gosec // G115: DNS response length < 65535 (UDP datagram limit)
+		binary.BigEndian.PutUint16(resp[:2], uint16(respLen)) //nolint:gosec // G115: DNS response length bounded by MaxDNSMessageSize
 		copy(resp[2:], response.Data)
 
 		if _, err := conn.Write(resp); err != nil {
