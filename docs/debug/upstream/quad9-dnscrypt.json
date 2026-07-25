@@ -6,10 +6,16 @@
   },
   "upstream": [
     {
-      "address": "9.9.9.9:8443",
-      "protocol": "dnscrypt",
-      "server_name": "2.dnscrypt-cert.quad9.net",
-      "public_key": "67c847b8c87505d1863061063664366fda62f4637b33b9f0eba9e784834f0dc1"
+      "address": "sdns://AQMAAAAAAAAADDkuOS45Ljk6ODQ0MyBnyEe4yHWM0SAkVUO-dWdG3zTfHYTAC4xHA2jfgh2GPhkyLmRuc2NyeXB0LWNlcnQucXVhZDkubmV0",
+      "protocol": "dnscrypt"
+    },
+    {
+      "address": "sdns://AQMAAAAAAAAAEjE0OS4xMTIuMTEyLjk6ODQ0MyBnyEe4yHWM0SAkVUO-dWdG3zTfHYTAC4xHA2jfgh2GPhkyLmRuc2NyeXB0LWNlcnQucXVhZDkubmV0",
+      "protocol": "dnscrypt"
+    },
+    {
+      "address": "sdns://AQMAAAAAAAAAFDE0OS4xMTIuMTEyLjExMjo4NDQzIGfIR7jIdYzRICRVQ751Z0bfNN8dhMALjEcDaN-CHYY-GTIuZG5zY3J5cHQtY2VydC5xdWFkOS5uZXQ",
+      "protocol": "dnscrypt"
     }
   ]
 }
