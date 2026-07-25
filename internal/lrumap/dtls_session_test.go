@@ -27,9 +27,12 @@ func TestDTLSSessionStore_SetGet(t *testing.T) {
 
 func TestDTLSSessionStore_GetMiss(t *testing.T) {
 	s := NewDTLSSessionStore(10)
-	_, err := s.Get([]byte("nonexistent"))
-	if err == nil {
-		t.Error("Get should return an error for missing key")
+	sess, err := s.Get([]byte("nonexistent"))
+	if err != nil {
+		t.Errorf("Get should not return an error for missing key (got: %v)", err)
+	}
+	if sess.ID != nil {
+		t.Error("Get should return zero-value session for missing key")
 	}
 }
 
@@ -46,9 +49,12 @@ func TestDTLSSessionStore_Del(t *testing.T) {
 		t.Fatalf("Del: %v", err)
 	}
 
-	_, err := s.Get(key)
-	if err == nil {
-		t.Error("Get should return an error after Del")
+	sess2, err := s.Get(key)
+	if err != nil {
+		t.Errorf("Get should not return an error after Del (got: %v)", err)
+	}
+	if sess2.ID != nil {
+		t.Error("Get should return zero-value session after Del")
 	}
 }
 
@@ -83,17 +89,17 @@ func TestDTLSSessionStore_Eviction(t *testing.T) {
 		}
 	}
 
-	// First two keys should be evicted.
-	if _, err := s.Get([]byte("a")); err == nil {
+	// First two keys should be evicted (nil ID returned).
+	if sess, _ := s.Get([]byte("a")); sess.ID != nil {
 		t.Error("key 'a' should have been evicted")
 	}
-	if _, err := s.Get([]byte("b")); err == nil {
+	if sess, _ := s.Get([]byte("b")); sess.ID != nil {
 		t.Error("key 'b' should have been evicted")
 	}
 	// Last three should be present.
 	for _, k := range []byte{'c', 'd', 'e'} {
-		if _, err := s.Get([]byte{k}); err != nil {
-			t.Errorf("key %q should still be present", k)
+		if sess, err := s.Get([]byte{k}); err != nil || sess.ID == nil {
+			t.Errorf("key %q should still be present (err=%v, id=%v)", k, err, sess.ID)
 		}
 	}
 }

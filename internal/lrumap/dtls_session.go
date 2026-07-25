@@ -1,7 +1,7 @@
 package lrumap
 
 import (
-	"errors"
+	"zjdns/internal/log"
 
 	"github.com/pion/dtls/v3"
 )
@@ -20,16 +20,19 @@ func NewDTLSSessionStore(capacity int) *DTLSSessionStore {
 // Set saves a DTLS session. For clients, key is the server name; for servers,
 // key is the session ID.
 func (s *DTLSSessionStore) Set(key []byte, sess dtls.Session) error {
+	log.Debugf("UPSTREAM: DTLS session stored (id=%x)", sess.ID)
 	s.cache.Set(string(key), sess)
 	return nil
 }
 
-// Get fetches a DTLS session. Returns an error if the session is not found.
+// Get fetches a DTLS session. Returns a zero-value Session with no error when
+// the session is not found, so pion/dtls falls back to a full handshake.
 func (s *DTLSSessionStore) Get(key []byte) (dtls.Session, error) {
 	sess, ok := s.cache.Get(string(key))
 	if !ok {
-		return dtls.Session{}, errors.New("dtls: session not found")
+		return dtls.Session{}, nil // pion/dtls treats error as fatal; nil session = full handshake
 	}
+	log.Debugf("UPSTREAM: DTLS session resumed (id=%x)", sess.ID)
 	return sess, nil
 }
 
