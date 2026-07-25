@@ -195,6 +195,10 @@ func (c *Client) buildState(
 
 	cacheKey := addr + "|" + providerName
 	c.cacheMu.Lock()
+	if c.cache == nil {
+		c.cacheMu.Unlock()
+		return nil, errors.New("dnscrypt client closed")
+	}
 	c.cache[cacheKey] = state
 	if len(c.cache) >= config.DefaultTransportMax*2 {
 		// Evict one entry when over threshold.  Under concurrent access the map

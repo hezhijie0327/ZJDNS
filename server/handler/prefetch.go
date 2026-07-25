@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"sort"
 	"sync"
+	"zjdns/config"
 )
 
 // PrefetchCooldown tracks per-cache-key timestamps to rate-limit cache
@@ -49,8 +51,9 @@ func (pc *PrefetchCooldown) ShouldStart(key string, now, cooldownNanos int64) bo
 	return true
 }
 
-// Cleanup removes entries that have aged past the cooldown window.
-// Entries where now - timestamp > cooldownNanos are safe to evict.
+// Cleanup removes entries that have aged past the cooldown window, and
+// evicts the oldest half when the map exceeds DefaultPrefetchCooldownMaxEntries
+// to prevent unbounded growth under sustained diverse-query load.
 func (pc *PrefetchCooldown) Cleanup(now, cooldownNanos int64) {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
@@ -58,6 +61,24 @@ func (pc *PrefetchCooldown) Cleanup(now, cooldownNanos int64) {
 	for k, v := range pc.data {
 		if now-v > cooldownNanos {
 			delete(pc.data, k)
+		}
+	}
+
+	maxEntries := config.DefaultPrefetchCooldownMaxEntries
+	if len(pc.data) > maxEntries {
+		// Sort by timestamp ascending; evict oldest half.
+		type entry struct {
+			key string
+			ts  int64
+		}
+		entries := make([]entry, 0, len(pc.data))
+		for k, v := range pc.data {
+			entries = append(entries, entry{k, v})
+		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].ts < entries[j].ts })
+		evict := len(entries) - maxEntries/2
+		for i := range evict {
+			delete(pc.data, entries[i].key)
 		}
 	}
 }

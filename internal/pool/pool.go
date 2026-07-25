@@ -111,12 +111,14 @@ func (b *Buffer) Get() []byte {
 	return *bufPtr.(*[]byte)
 }
 
-// Put returns a byte slice to the pool. The slice is normalized to full
-// capacity before clearing to ensure the next Get returns the full buffer.
+// Put returns a byte slice to the pool. The slice must have exactly the
+// expected capacity (b.size) — buffers that grew via append are discarded
+// to maintain the pool's uniform-size invariant. The slice is normalized
+// to full capacity and zeroed before returning.
 func (b *Buffer) Put(buf []byte) {
-	if buf != nil && cap(buf) >= b.size {
-		buf = buf[:cap(buf)]
-		clear(buf[:cap(buf)])
+	if buf != nil && cap(buf) == b.size {
+		buf = buf[:b.size]
+		clear(buf)
 		b.pool.Put(&buf)
 	}
 }

@@ -21,6 +21,7 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		if qctx.Req == nil || len(qctx.Req.Question) == 0 {
 			msg := pool.DefaultMessage.Get()
 			msg.Rcode = dns.RcodeFormatError
+			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorInvalidData, ExtraText: ""}
 			qctx.Res = msg
 			return nil
 		}

@@ -125,8 +125,25 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 
 	var wg sync.WaitGroup
 	defer func() {
-		connCancel()   // signal workers to stop
-		wg.Wait()      // wait for workers to finish
+		connCancel() // signal workers to stop
+		wg.Wait()    // wait for workers to finish
+
+		// Drain any remaining write tasks — the writer goroutine may
+		// have exited early on a write error, leaving pooled buffers
+		// in the channel. Return those buffers to the pool.
+		draining := true
+		for draining {
+			select {
+			case task, ok := <-writeCh:
+				if !ok {
+					draining = false
+				} else if task.pooled {
+					pool.DefaultBuffer.Put(task.data)
+				}
+			default:
+				draining = false
+			}
+		}
 		close(writeCh) // now close writer channel
 		<-writerDone   // wait for writer to drain
 	}()

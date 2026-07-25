@@ -68,7 +68,7 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				m.tryStartRefresh(qname, qtype, qclass, ecsOpt) {
 				m.refreshGroup.Go(func() error {
 					defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
-					return m.refreshCacheEntry(qctx, qname, qtype, qclass, ecsOpt)
+					return m.refreshCacheEntry(qname, qtype, qclass, ecsOpt)
 				})
 			}
 			return nil
@@ -88,7 +88,7 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				if m.tryStartRefresh(qname, qtype, qclass, ecsOpt) {
 					m.refreshGroup.Go(func() error {
 						defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
-						return m.refreshCacheEntry(qctx, qname, qtype, qclass, ecsOpt)
+						return m.refreshCacheEntry(qname, qtype, qclass, ecsOpt)
 					})
 				}
 				m.store.RecordRequest(&cache.RequestRecord{
@@ -198,7 +198,7 @@ func (m *CacheLookup) buildResponse(qctx *handler.QueryContext, entry *cache.Ent
 
 // refreshCacheEntry performs a full resolution cycle and updates the cache.
 // Used for background prefetch and stale-entry refresh.
-func (m *CacheLookup) refreshCacheEntry(qctx *handler.QueryContext, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption) error {
+func (m *CacheLookup) refreshCacheEntry(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption) error {
 	question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
 	qr := m.resolver.Query(m.refreshCtx, question, ecsOpt)
 	if qr.Err != nil {

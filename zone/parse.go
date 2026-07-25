@@ -58,14 +58,20 @@ func (e *Evaluator) loadFile(tx *sql.Tx, parent *config.ZoneRule) (int, error) {
 				aw := packRRs(curRawName, g.records)
 				auth := packRRs(curRawName, curAuth)
 				addl := packRRs(curRawName, curAddl)
-				_ = e.insertRow(tx, curDomain, g.qtype, g.qclass, curRcode, aw, auth, addl, curTags, curWildcard)
-				count++
+				if err := e.insertRow(tx, curDomain, g.qtype, g.qclass, curRcode, aw, auth, addl, curTags, curWildcard); err != nil {
+					log.Warnf("ZONE: insert row failed: %v", err)
+				} else {
+					count++
+				}
 			}
 		} else if curRcode != dns.RcodeSuccess {
 			auth := packRRs(curRawName, curAuth)
 			addl := packRRs(curRawName, curAddl)
-			_ = e.insertRow(tx, curDomain, 0, 0, curRcode, nil, auth, addl, curTags, curWildcard)
-			count++
+			if err := e.insertRow(tx, curDomain, 0, 0, curRcode, nil, auth, addl, curTags, curWildcard); err != nil {
+				log.Warnf("ZONE: insert row failed: %v", err)
+			} else {
+				count++
+			}
 		}
 	}
 

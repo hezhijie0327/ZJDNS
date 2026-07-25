@@ -510,12 +510,16 @@ func (s *SQLiteCache) evictOldest(toEvict int64) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Common cutoff: now minus staleMaxAge — used by all cleanup
+	// statements below to identify rows past the retention window.
+	staleCutoff := log.NowUnix() - defaultStaleMaxAge
+
 	// Clean up stale rows from tables with no FK cascade to entries.
-	// All three use the same staleMaxAge cutoff — batched into a single Exec.
+	// All three use the same staleCutoff — batched into a single Exec.
 	if _, err := tx.Exec(
 		`DELETE FROM ip_latency WHERE last_probe_time > 0 AND last_probe_time < ?; `+
 			`DELETE FROM query_log WHERE timestamp < ?`,
-		defaultStaleMaxAge, defaultStaleMaxAge,
+		staleCutoff, staleCutoff,
 	); err != nil {
 		log.Debugf("CACHE: stale cleanup failed (non-fatal): %v", err)
 	}
@@ -525,7 +529,6 @@ func (s *SQLiteCache) evictOldest(toEvict int64) {
 	// can no longer serve stale and are worthless. idx_entries_expires
 	// enables an index-assisted range scan for the WHERE filter.
 	// Phase 2 — if still over limit, evict the oldest entries regardless.
-	staleCutoff := log.NowUnix() - defaultStaleMaxAge
 	result, err := tx.Exec(
 		`DELETE FROM entries WHERE id IN (
 			SELECT id FROM entries WHERE expires_at < ?

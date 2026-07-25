@@ -65,7 +65,8 @@ func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.U
 		return nil, fmt.Errorf("dtls: write query: %w", err)
 	}
 
-	respBuf := make([]byte, 4096)
+	respBuf := pool.DefaultBuffer.Get()
+	defer pool.DefaultBuffer.Put(respBuf)
 	n, err := conn.Read(respBuf)
 	if err != nil {
 		return nil, fmt.Errorf("dtls: read response: %w", err)
@@ -74,10 +75,13 @@ func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.U
 		return nil, fmt.Errorf("dtls: response too short (%d bytes)", n)
 	}
 	respLen := binary.BigEndian.Uint16(respBuf[:2])
-	respBuf = respBuf[2 : 2+respLen]
+	if int(respLen)+2 > n {
+		return nil, fmt.Errorf("dtls: short read: want %d + 2, got %d", respLen, n)
+	}
+	msgBuf := respBuf[2 : 2+respLen]
 
 	response := pool.DefaultMessage.Get()
-	response.Data = respBuf
+	response.Data = msgBuf
 	if err := response.Unpack(); err != nil {
 		pool.DefaultMessage.Put(response)
 		return nil, fmt.Errorf("dtls: unpack response: %w", err)

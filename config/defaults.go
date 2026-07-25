@@ -55,6 +55,11 @@ const (
 	DefaultPrefetchThresholdPercent  = 40
 	DefaultServeExpiredClientTimeout = 600 * time.Millisecond // RFC 8767 §5.2: short wait before serving stale
 	DefaultPrefetchThrottleInterval  = 3 * time.Second
+
+	// DefaultPrefetchCooldownMaxEntries caps the PrefetchCooldown map size.
+	// When exceeded, the oldest half of entries are evicted to prevent
+	// unbounded growth under sustained diverse-query load.
+	DefaultPrefetchCooldownMaxEntries = 10000
 )
 
 // =============================================================================

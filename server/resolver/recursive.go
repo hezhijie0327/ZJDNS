@@ -275,8 +275,9 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 
 	currentQuestion := question
 	visitedCNAMEs := make(map[string]bool)
-	cnameDepth := 0
+	var cnameDepth int
 
+	chainExhausted := true
 	for cnameDepth = range config.DefaultMaxCNAMEChain {
 		select {
 		case <-ctx.Done():
@@ -338,6 +339,7 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 		}
 
 		if hasTargetType || currentQuestion.Qtype == dns.TypeCNAME || nextCNAME == nil {
+			chainExhausted = false
 			break
 		}
 
@@ -349,7 +351,7 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 		log.Debugf("RECURSION: CNAME chain: %s → %s", currentName, nextCNAME.Target)
 	}
 
-	if cnameDepth >= config.DefaultMaxCNAMEChain-1 {
+	if chainExhausted {
 		log.Warnf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, dnsutil.Canonical(question.Name))
 	}
 	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Poisoned: poisonOccurred}

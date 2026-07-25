@@ -140,7 +140,9 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 						}
 					}
 
-					nxdomainMsg.CompareAndSwap(nil, result.Response)
+					if !nxdomainMsg.CompareAndSwap(nil, result.Response) {
+						pool.DefaultMessage.Put(result.Response)
+					}
 					return nil
 				}
 

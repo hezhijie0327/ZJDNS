@@ -28,9 +28,13 @@ func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 	if r == nil {
 		return
 	}
-	r.Qname = dnsutil.Canonical(r.Qname)
+	qname := dnsutil.Canonical(r.Qname)
 	if s.asyncWriter != nil {
-		s.asyncWriter.Record(r)
+		// Send a copy with the canonicalized qname so the caller's
+		// original record is not mutated as a side effect.
+		rec := *r
+		rec.Qname = qname
+		s.asyncWriter.Record(&rec)
 		return
 	}
 
@@ -42,7 +46,7 @@ func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 		database.BoolToInt(r.Poisoned), database.BoolToInt(r.Fallback), r.ResponseTime)
 	if r.Result != "hit" {
 		_, _ = s.db.StmtQueryLog.Exec(
-			log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass),
+			log.NowUnix(), qname, int(r.Qtype), int(r.Qclass),
 			r.Protocol, r.Result, r.Rcode, r.ResponseTime, r.Server,
 			database.BoolToInt(r.Poisoned), database.BoolToInt(r.Fallback), r.DNSSECStatus,
 		)
