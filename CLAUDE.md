@@ -136,7 +136,7 @@ go test -bench=. -short -benchtime=500ms ./...                 # stable numbers
 go test -bench=BenchmarkServerProcessQuery -benchtime=3s ./cmd/zjdns  # integration QPS
 ```
 
-**100 benchmarks** across 14 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
+**99 benchmarks** across 14 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
 
 ```bash
 # Update baseline
@@ -336,4 +336,5 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECUR
 | [docs/audit/](docs/audit/) | Per-audit detailed findings and fix plans |
 | [docs/debug/DEBUG.md](docs/debug/DEBUG.md) | Debug config, test domains, TLCP/DTLCP E2E tests |
 | [docs/benchmark/BENCHMARK.md](docs/benchmark/BENCHMARK.md) | Benchmark & E2E test guide (dnsperf, DNSCrypt, defense) |
-| [docs/rfc/](docs/rfc/) | Mirrored RFCs and drafts |
+| [docs/rfc/](docs/rfc/) | Mirrored RFCs and drafts (50 total) |
+| [docs/rfc/GUIDELINE.md](docs/rfc/GUIDELINE.md) | RFC 精华指南 — 每个 RFC 的关键常量、协议流程、合规状态 |
