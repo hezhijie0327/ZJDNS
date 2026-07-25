@@ -336,19 +336,21 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 			msgWire,
 		).Scan(&entryID); txErr == nil {
 
-			// Populate ptr_map for reverse (PTR) lookups.
-			if txErr = insertPtrMap(tx, entryID, answer); txErr == nil {
-				if txErr = insertPtrMap(tx, entryID, authority); txErr == nil {
-					txErr = insertPtrMap(tx, entryID, additional)
-				}
+			// Populate ptr_map for reverse (PTR) lookups — best-effort:
+			// a failure here must not abort the transaction, because the
+			// cached entry is more valuable than reverse-lookup data.
+			allRRs := make([]dns.RR, 0, len(answer)+len(authority)+len(additional))
+			allRRs = append(allRRs, answer...)
+			allRRs = append(allRRs, authority...)
+			allRRs = append(allRRs, additional...)
+			if err := insertPtrMap(tx, entryID, allRRs); err != nil {
+				log.Warnf("CACHE: insert ptr_map failed (non-fatal): %v", err)
 			}
 
-			if txErr == nil {
-				if txErr = tx.Commit(); txErr == nil {
-					s.db.AddEntryCount(1)
-				} else {
-					log.Warnf("CACHE: commit tx failed: %v", txErr)
-				}
+			if txErr = tx.Commit(); txErr == nil {
+				s.db.AddEntryCount(1)
+			} else {
+				log.Warnf("CACHE: commit tx failed: %v", txErr)
 			}
 		}
 		if txErr != nil {
