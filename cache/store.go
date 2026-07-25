@@ -198,8 +198,16 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	isExpired := ttl.IsExpired(ts, entryTTL)
 
 	// Populate L1 memory cache for future queries (only if fresh).
+	// Clone RR slices before storing — entry.Answer/Authority/Additional alias
+	// msg's backing arrays.  After defer pool.DefaultMessage.Put(msg) fires,
+	// the pooled message may be reused by another goroutine, whose Unpack()
+	// would overwrite those arrays and race with L1 cache readers.
 	if s.dnsL1 != nil && !isExpired {
-		s.dnsL1.Set(dnsL1Key{qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecOK}, entry)
+		e := *entry
+		e.Answer = cloneRRs(entry.Answer)
+		e.Authority = cloneRRs(entry.Authority)
+		e.Additional = cloneRRs(entry.Additional)
+		s.dnsL1.Set(dnsL1Key{qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecOK}, &e)
 	}
 
 	return entry, true, isExpired
@@ -469,7 +477,7 @@ func (s *SQLiteCache) evictIfNeeded() {
 
 	// Throttle PRAGMA optimize to every 10th eviction to avoid per-eviction overhead.
 	if s.evictCount.Add(1)%10 == 0 {
-		_, _ = s.db.SQ.Exec("PRAGMA optimize")
+		_, _ = s.db.SQ.Exec("PRAGMA optimize") // _, _ = result, error: PRAGMA optimize is best-effort
 	}
 }
 

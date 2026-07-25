@@ -395,8 +395,8 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 			args[i] = ""
 		}
 	}
-	args[maxWildcardLabels] = qtype
-	args[maxWildcardLabels+1] = qclass
+	args[maxWildcardLabels] = int(qtype)
+	args[maxWildcardLabels+1] = int(qclass)
 
 	rows, err := e.db.QueryZoneWildcard(args)
 	if err != nil {

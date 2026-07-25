@@ -68,7 +68,8 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				m.tryStartRefresh(qname, qtype, qclass, ecsOpt) {
 				m.refreshGroup.Go(func() error {
 					defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
-					return m.refreshCacheEntry(qname, qtype, qclass, ecsOpt)
+					_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt) // error logged inside
+					return nil                                            // prevent errgroup context cancellation cascade
 				})
 			}
 			return nil
@@ -88,7 +89,8 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				if m.tryStartRefresh(qname, qtype, qclass, ecsOpt) {
 					m.refreshGroup.Go(func() error {
 						defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
-						return m.refreshCacheEntry(qname, qtype, qclass, ecsOpt)
+						_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt) // error logged inside
+						return nil                                            // prevent errgroup context cancellation cascade
 					})
 				}
 				m.store.RecordRequest(&cache.RequestRecord{

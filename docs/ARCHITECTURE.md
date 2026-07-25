@@ -38,7 +38,7 @@ CREATE TABLE query_stats (
     fallback    INTEGER NOT NULL DEFAULT 0,
     query_count INTEGER NOT NULL DEFAULT 0,
     total_ms    INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (stat_day, result, protocol, rcode, dnssec, hijack, fallback)
+    PRIMARY KEY (stat_day, result, protocol, rcode, dnssec, poisoned, fallback)
 ) WITHOUT ROWID;
 
 -- Query log: per-event audit trail for non-hit queries.  qname/qtype/qclass
@@ -98,12 +98,12 @@ CREATE TABLE zone_entries (
 
 - **Cache hit path**: `Get()` decompresses zstd + `Msg.Unpack()` (~0.5ms).
 - **RecordRequest**: All results → `query_stats` (per-day upsert, ~500 row sliding window). Non-hit events also → `query_log` (audit trail with denormalized qname/qtype/qclass, no JOIN needed).
-- **Stats aggregation**: `Stats()` uses a single scan of `query_stats` with CASE expressions (result + protocol + rcode + dnssec + hijack + fallback distributions computed inline). ~500 rows regardless of query volume.
+- **Stats aggregation**: `Stats()` uses a single scan of `query_stats` with CASE expressions (result + protocol + rcode + dnssec + poisoned + fallback distributions computed inline). ~500 rows regardless of query volume.
 - **Pruning**: `PruneQueryJournal` runs at `config.DefaultPruneInterval`, deleting `query_stats` rows past `config.DefaultQueryJournalRetention` (PK prefix seek) and `query_log` rows via batched delete (`config.DefaultPruneBatchSize` rows per iteration, using `idx_query_log_ts`). Fallback cleanup via `config.DefaultStaleMaxAge` in `evictOldest`.
 - **Eviction**: On `Set()` when count > maxEntries. Prefers past serve-stale, then oldest. `ON DELETE CASCADE` for ptr_map. Stale ip_latency + query_log rows pruned during eviction.
 - **NS latency cache**: NS/Root addresses as TypeA/TypeAAAA entries. Latency probed via `ProbeNSAddrs`, reordered by `sortAnswerByLatency` at `Get()` time.
 - **IP latency**: Per-IP keyed. `INSERT OR REPLACE` writes latency_ms + last_probe_time. All domains sharing a CDN IP reuse the same row.
-- **Dynamic queries**: `Store.Stats()` returns 10 TXT records (overview, hits, errors, rcodes, hijack/fallback, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.db.clear` / `zjdns.db.clear.{cache,stats,querylog,latency,zone,ruleset}`.
+- **Dynamic queries**: `Store.Stats()` returns 10 TXT records (overview, hits, errors, rcodes, poisoned/fallback, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.db.clear` / `zjdns.db.clear.{cache,stats,querylog,latency,zone,ruleset}`.
 
 ## DNSCrypt v2
 

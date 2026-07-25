@@ -54,7 +54,7 @@ func ExecuteDoHRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient
 		msg.ID = originalID
 		return nil, fmt.Errorf("do request: %w", err)
 	}
-	defer func() { _ = httpResp.Body.Close() }()
+	defer func() { _ = httpResp.Body.Close() }() // _ = error: body close after read, best-effort
 
 	if httpResp.StatusCode != http.StatusOK {
 		msg.ID = originalID

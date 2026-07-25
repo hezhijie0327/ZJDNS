@@ -71,7 +71,7 @@ func (s *Server) startDOH3Server(port string) error {
 					if s.ctx.Err() != nil {
 						return nil
 					}
-					log.Errorf("TLS: DoH3 Accept error: %v", err)
+					log.Debugf("TLS: DoH3 Accept error: %v", err)
 					time.Sleep(config.DefaultAcceptRetryDelay)
 					continue
 				}

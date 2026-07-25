@@ -88,7 +88,7 @@ func (s *Server) handleDOQConnections(doqListener *quic.EarlyListener) {
 			if s.ctx.Err() != nil {
 				return
 			}
-			log.Warnf("TLS: DoQ Accept error: %v", err)
+			log.Debugf("TLS: DoQ Accept error: %v", err)
 			time.Sleep(config.DefaultAcceptRetryDelay)
 			continue
 		}

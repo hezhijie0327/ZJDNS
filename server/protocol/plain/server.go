@@ -23,6 +23,9 @@ type Server struct {
 
 // New creates a Server for plain DNS listeners.
 func New(cfg *config.ServerConfig) *Server {
+	if cfg == nil {
+		return &Server{config: config.NewDefaultServerConfig()}
+	}
 	return &Server{config: cfg}
 }
 

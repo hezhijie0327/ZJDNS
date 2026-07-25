@@ -53,14 +53,14 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 		ESVersion:   state.esVersion,
 		ClientMagic: state.clientMagic,
 		ClientPk:    state.publicKey,
-		MinQueryLen: state.minQueryLen,
 		IsTCP:       useTCP,
 	}
 	if state.esVersion.IsPQ() {
 		q.PQCertContext = state.pqCertContext
 	}
 	state.mu.Lock()
-	encrypted, clientNonce, err := prepareQuery(state, q, msg.Data)
+	q.MinQueryLen = state.minQueryLen
+	encrypted, clientNonce, sharedKey, err := prepareQuery(state, q, msg.Data)
 	state.mu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("encrypting dnscrypt query: %w", err)
@@ -117,7 +117,7 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 	resp := &dnscryptcrypto.EncryptedResponse{
 		ESVersion: state.esVersion,
 	}
-	decrypted, err := dnscryptcrypto.DecryptResponse(resp, respPayload, state.sharedKey, clientNonce)
+	decrypted, err := dnscryptcrypto.DecryptResponse(resp, respPayload, sharedKey, clientNonce)
 	if err != nil {
 		return nil, fmt.Errorf("decrypting dnscrypt response: %w", err)
 	}

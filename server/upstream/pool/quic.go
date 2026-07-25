@@ -176,6 +176,11 @@ func (p *QUIC) Put(key string, conn *quic.Conn) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if p.closed {
+		_ = conn.CloseWithError(zpool.QUICCodeNoError, "pool closed")
+		return
+	}
+
 	// Dedup: if this connection is already in the pool, drop it.
 	for _, existing := range p.conns[key] {
 		if existing.Conn == conn {

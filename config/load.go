@@ -141,7 +141,7 @@ func resolveStamp(server *UpstreamServer, index int, category string) error {
 	// PublicKey: for DNSCrypt, populate from stamp if not explicitly set.
 	if s.Proto == zstamp.ProtoDNSCrypt {
 		if server.PublicKey == "" && len(s.PublicKey) > 0 {
-			server.PublicKey = hexEncodePublicKey(s.PublicKey)
+			server.PublicKey = hex.EncodeToString(s.PublicKey)
 		}
 	}
 
@@ -168,12 +168,6 @@ func protocolMatchesStamp(userProto string, stampProto zstamp.ProtoType) bool {
 	default:
 		return false
 	}
-}
-
-// hexEncodePublicKey encodes a DNSCrypt Ed25519 public key as an uppercase hex
-// string, matching the format used in server/dnscrypt for consistency.
-func hexEncodePublicKey(b []byte) string {
-	return hex.EncodeToString(b)
 }
 
 func shouldEnableDDR(cfg *ServerConfig) bool {

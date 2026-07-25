@@ -64,7 +64,7 @@ func (s *Server) handleDOTConnections(dotListener net.Listener) {
 			if s.ctx.Err() != nil {
 				return
 			}
-			log.Warnf("TLS: DoT Accept failed: %v (type=%T)", err, err)
+			log.Debugf("TLS: DoT Accept failed: %v (type=%T)", err, err)
 			time.Sleep(config.DefaultAcceptRetryDelay)
 			continue
 		}

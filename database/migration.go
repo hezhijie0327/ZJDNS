@@ -221,9 +221,11 @@ func migrateV3_2_0(db *DB) error {
 
 func migrateV3_1_0(db *DB) error {
 	var count int
-	_ = db.SQ.QueryRow(
+	if err := db.SQ.QueryRow(
 		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_version'",
-	).Scan(&count)
+	).Scan(&count); err != nil {
+		return fmt.Errorf("check schema_version existence: %w", err)
+	}
 	if count > 0 {
 		if _, err := db.SQ.Exec(`DROP TABLE schema_version`); err != nil {
 			return err
@@ -235,7 +237,9 @@ func migrateV3_1_0(db *DB) error {
 // runMigrations applies any pending incremental migrations.
 func (db *DB) runMigrations() error {
 	var applied string
-	_ = db.SQ.QueryRow("SELECT version FROM version").Scan(&applied)
+	if err := db.SQ.QueryRow("SELECT version FROM version").Scan(&applied); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
 
 	// "0.0.0" is the sentinel set by base DDL for fresh databases — treat as
 	// current and let runMigrations apply any pending migrations on top.

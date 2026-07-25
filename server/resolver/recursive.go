@@ -52,7 +52,7 @@ func (r *Recursive) DNSSECEDECode() uint16 {
 // records are used to authenticate the child zone's DNSKEYs.
 func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.ECSOption, depth int, forceTCP bool) QueryResult {
 	if depth > config.DefaultMaxRecursionDepth {
-		log.Warnf("RECURSION: depth exceeded (depth=%d, max=%d) for %s", depth, config.DefaultMaxRecursionDepth, question.Name)
+		log.Debugf("RECURSION: depth exceeded (depth=%d, max=%d) for %s", depth, config.DefaultMaxRecursionDepth, question.Name)
 		return QueryResult{Cacheable: true, Err: fmt.Errorf("recursion depth exceeded: %d", depth)}
 	}
 
@@ -289,7 +289,7 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 
 		currentName := dnsutil.Canonical(currentQuestion.Name)
 		if visitedCNAMEs[currentName] {
-			log.Warnf("RECURSION: CNAME loop detected for %s", currentName)
+			log.Debugf("RECURSION: CNAME loop detected for %s", currentName)
 			return QueryResult{Cacheable: true, Err: fmt.Errorf("CNAME loop detected: %s", currentName)}
 		}
 		visitedCNAMEs[currentName] = true
@@ -354,7 +354,7 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	}
 
 	if chainExhausted {
-		log.Warnf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, dnsutil.Canonical(question.Name))
+		log.Debugf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, dnsutil.Canonical(question.Name))
 	}
 	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Poisoned: poisonOccurred}
 }

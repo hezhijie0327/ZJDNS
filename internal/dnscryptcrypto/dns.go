@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -38,7 +39,7 @@ func DNSSize(proto string, r *dns.Msg) int {
 			break
 		}
 	}
-	if proto != "udp" {
+	if !strings.EqualFold(proto, "udp") {
 		return dns.MaxMsgSize
 	}
 	if size < dns.MinMsgSize {

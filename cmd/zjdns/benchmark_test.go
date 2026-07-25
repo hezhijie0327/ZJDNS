@@ -127,7 +127,9 @@ func BenchmarkServerProcessQuery(b *testing.B) {
 
 	// Warm up cache.
 	for range 100 {
-		_ = srv.ServeDNS(req, net.IPv4(127, 0, 0, 1), false, "UDP")
+		if resp := srv.ServeDNS(req, net.IPv4(127, 0, 0, 1), false, "UDP"); resp != nil {
+			pool.DefaultMessage.Put(resp)
+		}
 	}
 
 	b.ResetTimer()
@@ -201,11 +203,15 @@ func BenchmarkServerDNSRequest_MultipleTypes(b *testing.B) {
 
 	// Warm cache.
 	for range 10 {
-		_ = srv.ServeDNS(reqs[0], net.IPv4(127, 0, 0, 1), false, "UDP")
+		if resp := srv.ServeDNS(reqs[0], net.IPv4(127, 0, 0, 1), false, "UDP"); resp != nil {
+			pool.DefaultMessage.Put(resp)
+		}
 	}
 
 	b.ResetTimer()
 	for b.Loop() {
-		_ = srv.ServeDNS(reqs[b.N%len(reqs)].Copy(), net.IPv4(127, 0, 0, 1), false, "UDP")
+		if resp := srv.ServeDNS(reqs[b.N%len(reqs)].Copy(), net.IPv4(127, 0, 0, 1), false, "UDP"); resp != nil {
+			pool.DefaultMessage.Put(resp)
+		}
 	}
 }

@@ -64,6 +64,9 @@ type Server struct {
 // setup, cache, zone rules, the resolver, the middleware chain, and all
 // protocol listeners are constructed and connected.
 func New(cfg *config.ServerConfig) (*Server, error) {
+	if cfg == nil {
+		return nil, errors.New("server: nil config")
+	}
 	ctx, cancel := context.WithCancelCause(context.Background())
 	backgroundGroup, backgroundCtx := errgroup.WithContext(ctx)
 	cacheRefreshGroup, cacheRefreshCtx := errgroup.WithContext(ctx)

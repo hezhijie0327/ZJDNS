@@ -48,7 +48,11 @@ func (w *AsyncStatsWriter) Record(r *RequestRecord) {
 	if w == nil {
 		return
 	}
-	defer func() { _ = recover() }()
+	defer func() {
+		if p := recover(); p != nil {
+			log.Errorf("CACHE: async writer panic: %v", p)
+		}
+	}()
 	select {
 	case w.ch <- *r:
 	default:
@@ -160,7 +164,7 @@ func (w *AsyncStatsWriter) flush(batch []RequestRecord) {
 
 		// Always upsert into query_stats (per-day aggregated counters).
 		// Error discarded — stats are best-effort and non-critical.
-		_, _ = w.db.StmtQueryStats.Exec(
+		_, _ = w.db.StmtQueryStats.Exec( // _, _ = result, error: background stats write, non-critical
 			r.Result, r.Protocol, r.Rcode, r.DNSSECStatus,
 			database.BoolToInt(r.Poisoned), database.BoolToInt(r.Fallback),
 			r.ResponseTime,
@@ -169,7 +173,7 @@ func (w *AsyncStatsWriter) flush(batch []RequestRecord) {
 		// Non-hit results also go into query_log for the audit trail.
 		// Error discarded — stats are best-effort and non-critical.
 		if r.Result != "hit" {
-			_, _ = w.db.StmtQueryLog.Exec(
+			_, _ = w.db.StmtQueryLog.Exec( // _, _ = result, error: background stats write, non-critical
 				log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass),
 				r.Protocol, r.Result, r.Rcode, r.ResponseTime, r.Server,
 				database.BoolToInt(r.Poisoned), database.BoolToInt(r.Fallback),

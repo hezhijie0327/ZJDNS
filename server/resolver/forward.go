@@ -106,7 +106,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 				default:
 				}
 			} else {
-				log.Warnf("UPSTREAM: errgroup for %s: %v", question.Name, err)
+				log.Debugf("UPSTREAM: errgroup for %s: %v", question.Name, err)
 			}
 		}
 		close(resultChan)

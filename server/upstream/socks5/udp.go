@@ -243,7 +243,10 @@ func (d *Dialer) DialUDP(ctx context.Context, targetAddr string) (net.Conn, erro
 // ReadFrom reads a datagram from the relay, strips the SOCKS5 UDP header,
 // and returns the payload with the real source address.
 func (c *socks5PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
-	buf := socks5ReadBufPool.Get().(*[]byte)
+	buf, ok := socks5ReadBufPool.Get().(*[]byte)
+	if !ok {
+		return 0, nil, errors.New("socks5 read buffer pool type error")
+	}
 	defer func() { clear(*buf); socks5ReadBufPool.Put(buf) }()
 
 	nr, err := c.conn.Read((*buf))
@@ -278,7 +281,10 @@ func (c *socks5PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 
 	var buf []byte
 	if totalLen <= 1500 {
-		bp := socks5WritePool.Get().(*[]byte)
+		bp, ok := socks5WritePool.Get().(*[]byte)
+		if !ok {
+			return 0, errors.New("socks5 write pool type error")
+		}
 		buf = (*bp)[:totalLen]
 		defer socks5WritePool.Put(bp)
 	} else {
@@ -317,7 +323,10 @@ func (c *socks5PacketConn) SetWriteDeadline(t time.Time) error {
 }
 
 func (c *socks5UDPConn) Read(p []byte) (n int, err error) {
-	buf := socks5ReadBufPool.Get().(*[]byte)
+	buf, ok := socks5ReadBufPool.Get().(*[]byte)
+	if !ok {
+		return 0, errors.New("socks5 read buffer pool type error")
+	}
 	defer func() { clear(*buf); socks5ReadBufPool.Put(buf) }()
 
 	nr, err := c.conn.Read((*buf))
@@ -344,7 +353,10 @@ func (c *socks5UDPConn) Write(p []byte) (n int, err error) {
 
 	var buf []byte
 	if totalLen <= 1500 {
-		bp := socks5WritePool.Get().(*[]byte)
+		bp, ok := socks5WritePool.Get().(*[]byte)
+		if !ok {
+			return 0, errors.New("socks5 write pool type error")
+		}
 		buf = (*bp)[:totalLen]
 		defer socks5WritePool.Put(bp)
 	} else {

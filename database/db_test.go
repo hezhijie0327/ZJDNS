@@ -63,8 +63,6 @@ func TestPreparedStatements(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	stmts := []interface{ IsClosed() bool }{} // just check they're non-nil
-	_ = stmts
 	if db.StmtEntry == nil {
 		t.Error("StmtEntry is nil")
 	}

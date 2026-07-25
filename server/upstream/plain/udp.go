@@ -90,7 +90,10 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 			return nil, err
 		}
 		defer func() { _ = pconn.Close() }()
-		bufPtr := socks5.ReadPool.Get().(*[]byte)
+		bufPtr, ok := socks5.ReadPool.Get().(*[]byte)
+		if !ok {
+			return nil, errors.New("socks5 read pool type error")
+		}
 		buf = *bufPtr
 		// clear() before Put prevents data leakage between reuse cycles.
 		defer func() { clear(buf); socks5.ReadPool.Put(bufPtr) }()
@@ -104,7 +107,10 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 		if _, err := conn.Write(msg.Data); err != nil {
 			return nil, err
 		}
-		bufPtr := spoofguardBufPool.Get().(*[]byte)
+		bufPtr, ok := spoofguardBufPool.Get().(*[]byte)
+		if !ok {
+			return nil, errors.New("spoofguard buffer pool type error")
+		}
 		buf = *bufPtr
 		// clear() before Put prevents data leakage between reuse cycles.
 		defer func() { clear(buf); spoofguardBufPool.Put(bufPtr) }()
@@ -194,7 +200,10 @@ func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr str
 	}
 	defer func() { _ = pconn.Close() }()
 
-	respBuf := socks5.ReadPool.Get().(*[]byte)
+	respBuf, ok := socks5.ReadPool.Get().(*[]byte)
+	if !ok {
+		return nil, errors.New("socks5 read pool type error")
+	}
 	defer func() { clear(*respBuf); socks5.ReadPool.Put(respBuf) }()
 
 	n, _, readErr := pconn.ReadFrom(*respBuf)

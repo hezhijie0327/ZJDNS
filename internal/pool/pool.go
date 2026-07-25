@@ -93,6 +93,9 @@ func (m *Message) Put(msg *dns.Msg) {
 // of buffers. Buffers are stored as *[]byte pointers to avoid interface-boxing
 // allocations on every Put (see staticcheck SA6002).
 func NewBuffer(size, poolSize int) *Buffer {
+	if poolSize < 0 {
+		poolSize = 0
+	}
 	bufPool := &Buffer{
 		size: size,
 		pool: sync.Pool{

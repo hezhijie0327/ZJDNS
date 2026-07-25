@@ -62,7 +62,7 @@ func DownloadFile(url, path string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() { _ = resp.Body.Close() }() // _ = error: body close after read, best-effort
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)

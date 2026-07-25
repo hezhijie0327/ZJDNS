@@ -37,12 +37,11 @@ func HKDFSHA256(salt, ikm, info []byte, outLen int) ([]byte, error) {
 	return out, nil
 }
 
-// PQProfileExtension returns a copy of the pre-allocated PQ profile extension.
-// The original payload is immutable — cached in pqProfileExt to avoid per-certificate alloc.
+// PQProfileExtension returns the pre-built PQ profile extension payload.
+// The returned slice shares storage with pqProfileExt, which is immutable —
+// the init-time closure allocates once and never mutates.
 func PQProfileExtension() []byte {
-	ext := make([]byte, len(pqProfileExt))
-	copy(ext, pqProfileExt)
-	return ext
+	return pqProfileExt // immutable, safe to share
 }
 
 func PQCertContext(binCert []byte) []byte {

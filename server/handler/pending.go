@@ -168,7 +168,9 @@ func cloneRRs(rrs []dns.RR) []dns.RR {
 	}
 	out := make([]dns.RR, len(rrs))
 	for i, rr := range rrs {
-		out[i] = rr.Clone()
+		if rr != nil {
+			out[i] = rr.Clone()
+		}
 	}
 	return out
 }

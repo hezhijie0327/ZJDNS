@@ -36,7 +36,6 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	limit := min(len(nameservers), config.DefaultMaxConcurrentNS)
 	g.SetLimit(limit)
 
-	var activeConnections atomic.Int32
 	var poisonRejected atomic.Bool
 	var nxdomainMsg atomic.Pointer[dns.Msg] // NXDOMAIN stored as secondary — never wins race against NOERROR
 	normalizedQname := dnsutil.Canonical(question.Name)
@@ -57,8 +56,6 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("Query nameserver")
-			activeConnections.Add(1)
-			defer activeConnections.Add(-1)
 
 			select {
 			case <-queryCtx.Done():
@@ -265,7 +262,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			go func() {
 				defer zdnsutil.HandlePanic("Resolve NS A")
 				defer wg.Done()
-				ansARecords, _ = r.resolveNSAddrType(queryCtx, nsName, dns.TypeA, depth+1, forceTCP, &nsAddrs, &addrMu)
+				ansARecords, _ = r.resolveNSAddrType(queryCtx, nsName, dns.TypeA, depth+1, forceTCP, &nsAddrs, &addrMu) // addrs captured via nsAddrs pointer
 			}()
 
 			go func() {

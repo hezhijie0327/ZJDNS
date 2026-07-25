@@ -46,8 +46,13 @@ func PadTCP(packet []byte) (padded []byte) {
 	return packet
 }
 
-// cryptoRandIntn returns a cryptographic random integer in [0, n).
+// CryptoRandIntn returns a cryptographic random integer in [0, n).
+// n must be a power of 2 and ≤ 256.  The function uses a simple mask (not
+// rejection sampling), so non-power-of-2 n would produce biased output.
 func CryptoRandIntn(n int) int {
+	if n <= 0 || n > 256 || n&(n-1) != 0 {
+		panic("CryptoRandIntn: n must be a power of 2 ≤ 256")
+	}
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		panic(err)

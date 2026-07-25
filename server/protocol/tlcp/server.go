@@ -42,6 +42,9 @@ type Server struct {
 // New creates a TLCP Server, loading or generating SM2 certificate pairs.
 // dotPort, dohPort, dohEndpoint, and dtlcpPort come from the protocol config section.
 func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, dtlcpPort string) (*Server, error) {
+	if certificateCfg == nil {
+		return nil, errors.New("tlcp: nil certificate config")
+	}
 	var signCert, encCert tlcp.Certificate
 	var dtlcpSignCert, dtlcpEncCert dtlcp.Certificate
 	var err error

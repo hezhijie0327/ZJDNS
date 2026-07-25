@@ -9,9 +9,12 @@ import (
 )
 
 // prepareQuery handles both classical and PQ query encryption.
-func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte) (encrypted []byte, clientNonce dnscryptcrypto.Nonce, err error) {
+// Returns the shared key used for encryption so the caller can decrypt
+// the response without reading state.sharedKey outside the lock.
+func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte) (encrypted []byte, clientNonce dnscryptcrypto.Nonce, sharedKey [dnscryptcrypto.SharedKeySize]byte, err error) {
 	if !state.esVersion.IsPQ() {
-		return dnscryptcrypto.EncryptQuery(q, packet, state.sharedKey)
+		enc, nonce, err := dnscryptcrypto.EncryptQuery(q, packet, state.sharedKey)
+		return enc, nonce, state.sharedKey, err
 	}
 
 	// PQ: try resumed query first, fall back to fresh encapsulation.
@@ -19,12 +22,13 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 		q.Nonce = newNonce()
 		sharedKey, err := dnscryptcrypto.PQResumedSharedKey(state.pqResumeSecret, state.clientMagic, q.Nonce[:dnscryptcrypto.NonceSize/2], state.pqTicket)
 		if err != nil {
-			return nil, dnscryptcrypto.Nonce{}, fmt.Errorf("deriving PQ resumed shared key: %w", err)
+			return nil, dnscryptcrypto.Nonce{}, [dnscryptcrypto.SharedKeySize]byte{}, fmt.Errorf("deriving PQ resumed shared key: %w", err)
 		}
 		state.sharedKey = sharedKey
 		q.PQTicket = state.pqTicket
 		log.Debugf("UPSTREAM: DNSCrypt PQ resumed query to %s", state.serverAddress)
-		return dnscryptcrypto.EncryptQuery(q, packet, sharedKey)
+		enc, nonce, err := dnscryptcrypto.EncryptQuery(q, packet, sharedKey)
+		return enc, nonce, sharedKey, err
 	}
 
 	// Try cached encapsulation first to avoid expensive X-Wing KEM.
@@ -32,29 +36,31 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 		state.sharedKey = state.pqEncapsulatedKey
 		q.PQCiphertext = state.pqCiphertext
 		log.Debugf("UPSTREAM: DNSCrypt PQ query (cached encapsulation) to %s", state.serverAddress)
-		return dnscryptcrypto.EncryptQuery(q, packet, state.sharedKey)
+		enc, nonce, err := dnscryptcrypto.EncryptQuery(q, packet, state.sharedKey)
+		return enc, nonce, state.sharedKey, err
 	}
 
 	// Fresh PQ query: encapsulate X-Wing.
 	kemSS, ct, encapErr := dnscryptcrypto.PQEncapsulate(state.pqPublicKey)
 	if encapErr != nil {
-		return nil, dnscryptcrypto.Nonce{}, fmt.Errorf("X-Wing encapsulate: %w", encapErr)
+		return nil, dnscryptcrypto.Nonce{}, [dnscryptcrypto.SharedKeySize]byte{}, fmt.Errorf("X-Wing encapsulate: %w", encapErr)
 	}
-	sharedKey, err := dnscryptcrypto.PQDeriveSharedKey(kemSS, state.clientMagic, state.pqCertContext, ct)
+	derivedKey, err := dnscryptcrypto.PQDeriveSharedKey(kemSS, state.clientMagic, state.pqCertContext, ct)
 	if err != nil {
-		return nil, dnscryptcrypto.Nonce{}, fmt.Errorf("deriving PQ shared key: %w", err)
+		return nil, dnscryptcrypto.Nonce{}, [dnscryptcrypto.SharedKeySize]byte{}, fmt.Errorf("deriving PQ shared key: %w", err)
 	}
-	state.sharedKey = sharedKey
+	state.sharedKey = derivedKey
 	state.pqCiphertext = ct
-	state.pqEncapsulatedKey = sharedKey
+	state.pqEncapsulatedKey = derivedKey
 	q.PQCiphertext = ct
 	log.Debugf("UPSTREAM: DNSCrypt PQ query (fresh X-Wing encapsulation) to %s", state.serverAddress)
-	return dnscryptcrypto.EncryptQuery(q, packet, sharedKey)
+	enc, nonce, err := dnscryptcrypto.EncryptQuery(q, packet, derivedKey)
+	return enc, nonce, derivedKey, err
 }
 
 // newNonce generates a fresh 24-byte client nonce.
 func newNonce() dnscryptcrypto.Nonce {
 	var n dnscryptcrypto.Nonce
-	_, _ = rand.Read(n[:dnscryptcrypto.NonceSize/2])
+	_, _ = rand.Read(n[:dnscryptcrypto.NonceSize/2]) // crypto/rand.Read never fails on modern kernels
 	return n
 }

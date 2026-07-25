@@ -85,7 +85,7 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	host, _, _ := net.SplitHostPort(r.RemoteAddr) // _ = port, _ = error: SplitHostPort for IP extraction; empty host handled below by net.ParseIP
 	clientIP := net.ParseIP(host)
 
 	resp := s.handler.ServeDNS(msg, clientIP, true, config.ProtoHTTPTLCP)

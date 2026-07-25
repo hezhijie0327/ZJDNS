@@ -98,6 +98,9 @@ func (d *debugListener) Accept() (net.Conn, error) {
 // New creates a new TLS Server with the given DNS handler and configuration,
 // loading or generating the TLS certificate as specified.
 func New(dnsHandler edns.DNSHandler, cfg *Config, operationTimeout time.Duration) (*Server, error) {
+	if cfg == nil {
+		return nil, errors.New("tls: nil config")
+	}
 	var eCert eTLS.Certificate
 	var sCert stdtls.Certificate
 	var err error

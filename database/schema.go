@@ -34,9 +34,19 @@ func (db *DB) migrate() error {
 		-- Pending migrations run in order via migration.go/runMigrations().
 		-- Version is set at build time via database.Version and is embedded into
 		-- the DDL so the schema is self-describing.
-
 		CREATE TABLE IF NOT EXISTS version (version TEXT NOT NULL);
-		INSERT OR IGNORE INTO version (rowid, version) VALUES (1, '` + Version + `');
+		`)
+	if err != nil {
+		return fmt.Errorf("create version table: %w", err)
+	}
+	if _, err := db.SQ.Exec(
+		`INSERT OR IGNORE INTO version (rowid, version) VALUES (1, ?)`,
+		Version,
+	); err != nil {
+		return fmt.Errorf("insert version: %w", err)
+	}
+
+	_, err = db.SQ.Exec(`
 
 		-- ── Query statistics ──────────────────────────────────────────────────
 		-- Per-day aggregated counters for all query results (hit/miss/stale/

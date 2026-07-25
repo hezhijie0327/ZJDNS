@@ -7,11 +7,10 @@ import (
 
 	"codeberg.org/miekg/dns"
 
-	// TODO(DC-05): Extract key generation to internal/dnscrypttool to break the
-	// CLI -> server/protocol/dnscrypt coupling. GenerateDNSCryptConfig shares
-	// DNSCrypt key generation internals; moving it would require exporting
-	// crypto internals. Plan: create internal/dnscrypttool with key generation
-	// only and have both CLI and server/protocol/dnscrypt import it.
+	// NOTE(DC-05): CLI imports server/protocol/dnscrypt directly for config
+	// generation.  Extracting key generation to internal/dnscrypttool would
+	// break this coupling, but requires exporting crypto internals first.
+	// Deferred until the dnscryptcrypto package stabilises.
 	serverdnscrypt "zjdns/server/protocol/dnscrypt"
 )
 

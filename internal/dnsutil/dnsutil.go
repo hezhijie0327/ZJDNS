@@ -43,6 +43,7 @@ var dangerousPrefixes = []string{"/etc/", "/proc/", "/sys/", "/dev/", "/run/"}
 // Accepts both canonical names (tls, quic, https, http3) and user-facing
 // aliases (dot, doq, doh, doh3).  Strings are hardcoded because this
 // internal package cannot import config for the Proto* constants.
+// NOTE: When adding a new secure protocol, add it to this switch statement.
 func IsSecureProtocol(protocol string) bool {
 	switch protocol {
 	case "tls", "quic", "https", "http3", "dtls", "tlcp", "http-tlcp", "dtlcp":
@@ -164,6 +165,9 @@ func ExtractIPString(rr dns.RR) (string, bool) {
 // Called once per handshake — path is not hot, but we pre-size the buffer and
 // avoid strconv allocations to keep it cheap.
 func LogHandshake(info *HandshakeInfo) {
+	if info == nil {
+		return
+	}
 	if !log.IsDebug() {
 		return
 	}

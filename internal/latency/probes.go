@@ -119,10 +119,10 @@ func probeUDP(ctx context.Context, ip net.IP, port int) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = conn.Close() }()
+	defer func() { _ = conn.Close() }() // _ = error: best-effort cleanup close
 
 	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
+		_ = conn.SetDeadline(deadline) // _ = error: deadline advisory, benign on closed conn // _ = error: deadline advisory, benign on closed conn
 	}
 
 	// Send a single-byte datagram — valid per RFC 768 §3.1 and
@@ -189,7 +189,10 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 		return err
 	}
 
-	bufPtr := icmpBufPool.Get().(*[]byte)
+	bufPtr, ok := icmpBufPool.Get().(*[]byte)
+	if !ok {
+		return errors.New("icmpBufPool.Get returned unexpected type")
+	}
 	defer icmpBufPool.Put(bufPtr)
 	buffer := *bufPtr
 	for {

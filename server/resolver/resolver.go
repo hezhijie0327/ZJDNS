@@ -157,6 +157,9 @@ func (u *upstreamSet) store(s []*config.UpstreamServer) {
 
 // New creates a new Resolver from the given Config.
 func New(cfg *Config) *Resolver {
+	if cfg == nil {
+		return nil
+	}
 	r := &Resolver{
 		queryClient:   cfg.QueryClient,
 		edns:          cfg.EDNS,

@@ -200,6 +200,9 @@ func extractPrefix(msg string) string {
 // Log logs a message at the specified level, respecting both the level
 // threshold and any component filter.
 func (m *Logger) Log(lvl Level, format string, args ...any) {
+	if format == "" {
+		return
+	}
 	if lvl < Error {
 		lvl = Error
 	} else if lvl > Debug {
@@ -240,7 +243,7 @@ func (m *Logger) Log(lvl Level, format string, args ...any) {
 		color, levelStr, colorReset,
 		message)
 
-	_, _ = fmt.Fprint(m.writer, logLine)
+	_, _ = fmt.Fprint(m.writer, logLine) // _, _ = bytes, error: stdout write failures are non-recoverable
 }
 
 // Error logs an error-level message.

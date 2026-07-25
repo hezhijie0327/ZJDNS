@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.6.18-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.6.19-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -555,7 +555,7 @@ go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X mai
 
 ### Benchmark
 
-98 个 benchmark 按两级组织：
+100 个 benchmark 按两级组织：
 
 | 层级 | 位置 | 说明 |
 |------|------|------|

@@ -279,7 +279,7 @@ func (s *SQLiteCache) UpdateLatency(ip string, latencyMS int) {
 	if parsedIP.To4() != nil {
 		qtype = dns.TypeA
 	}
-	_, _ = s.db.StmtInsertLatency.Exec(ip, qtype, latencyMS)
+	_, _ = s.db.StmtInsertLatency.Exec(ip, qtype, latencyMS) // _, _ = result, error: latency write is best-effort, not query-critical
 }
 
 // LatencyLastProbe returns the last probe time for an IP. Returns (0, false)
