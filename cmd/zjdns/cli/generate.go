@@ -79,8 +79,6 @@ func generateExampleConfig() string {
 
 	// ── zone / ruleset ──────────────────────────────────────────────────────
 
-	cfg.Zone.BypassTags = []string{"gateway"}
-
 	cfg.Zone.Rules = []config.ZoneRule{
 		{Name: "blocked.com", Rcode: dns.RcodeNameError},
 		{Name: "static.example.com", Answer: []config.ZoneRecord{

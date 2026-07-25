@@ -151,9 +151,6 @@ func (s *Server) initZoneAndRulesets(cfg *config.ServerConfig, cacheStore cache.
 		if err := zoneEvaluator.LoadRules(cfg.Zone.Rules); err != nil {
 			return nil, fmt.Errorf("load zone rules: %w", err)
 		}
-		if len(cfg.Zone.BypassTags) > 0 {
-			zoneEvaluator.SetBypassTags(cfg.Zone.BypassTags)
-		}
 	}
 
 	var engine *ruleset.Engine

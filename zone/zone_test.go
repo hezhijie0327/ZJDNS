@@ -787,47 +787,6 @@ func TestEvaluator_MatchTags_NoTagsMatchesAll(t *testing.T) {
 	}
 }
 
-// TestEvaluator_Bypass verifies that bypass tags skip zone evaluation entirely.
-func TestEvaluator_Bypass(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	z := New(db)
-	z.SetBypassTags([]string{"gateway"})
-	err = z.LoadRules([]config.ZoneRule{
-		{Name: "vpn.example.com", Match: []string{"corp"}, Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
-	})
-	if err != nil {
-		t.Fatalf("LoadRules: %v", err)
-	}
-
-	// Bypass is checked externally by the handler before calling Evaluate.
-	// Evaluate itself does not check bypass — it's the caller's responsibility.
-	// Verify Evaluate still matches when bypass tags are present (caller's job to skip).
-	result := z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true, "corp": true})
-	if !result.Matched {
-		t.Error("corp+gateway client: expected match (Evaluate doesn't check bypass)")
-	}
-
-	// Client without bypass tag should match normally.
-	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true})
-	if !result.Matched {
-		t.Error("corp-only client: expected match")
-	}
-
-	// Bypass() method test.
-	if !z.Bypass(map[string]bool{"gateway": true}) {
-		t.Error("Bypass should return true for gateway tag")
-	}
-	if z.Bypass(map[string]bool{"corp": true}) {
-		t.Error("Bypass should return false for non-bypass tag")
-	}
-	if z.Bypass(map[string]bool{}) {
-		t.Error("Bypass should return false for empty tags")
-	}
-}
-
 func TestEvaluator_TTLCyclical(t *testing.T) {
 	db, err := database.Open("", 0, database.Options{})
 	if err != nil {

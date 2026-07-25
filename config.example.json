@@ -218,8 +218,7 @@
           }
         ]
       }
-    ],
-    "bypass_tags": ["gateway"]
+    ]
   },
   "ruleset": [
     {

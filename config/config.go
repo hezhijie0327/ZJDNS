@@ -144,8 +144,7 @@ type UpstreamServer struct {
 
 // ZoneConfig wraps zone rules and global zone settings.
 type ZoneConfig struct {
-	Rules      []ZoneRule `json:"rules"`
-	BypassTags []string   `json:"bypass_tags,omitzero"`
+	Rules []ZoneRule `json:"rules"`
 }
 
 // ZoneRule defines a DNS zone rule for constructing synthetic responses.
