@@ -182,6 +182,10 @@ func BuildQueryMsg(ednsH *edns.Handler, question Question, ecs *edns.ECSOption, 
 
 	dnsutil.SetQuestion(msg, dnsutil.Fqdn(question.Name), question.Qtype)
 	msg.RecursionDesired = recursionDesired
+	// RFC 6840 §5.9: a validating resolver SHOULD set CD on every
+	// upstream query so the upstream returns DNSSEC proofs even for
+	// bogus data, letting us validate independently.
+	msg.CheckingDisabled = true
 
 	if ednsH != nil {
 		ednsH.ApplyToMessage(msg, ecs, isSecureConnection, "", nil, true, true, 0)

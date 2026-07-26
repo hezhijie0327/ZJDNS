@@ -13,6 +13,7 @@ import (
 	zstamp "zjdns/internal/stamp"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // certPair holds the best PQ and classical certificates from a server.
@@ -92,18 +93,17 @@ func (c *Client) state(
 	publicKey []byte,
 	server *config.UpstreamServer,
 ) (*State, error) {
+	providerName = dnsutil.Fqdn(providerName)
 	cacheKey := addr + "|" + providerName
 
 	c.cacheMu.RLock()
 	if state, ok := c.cache[cacheKey]; ok && time.Now().Before(state.expires) {
 		c.cacheMu.RUnlock()
+		log.Debugf("UPSTREAM: DNSCrypt cert cache hit for %s", cacheKey)
 		return state, nil
 	}
 	c.cacheMu.RUnlock()
-
-	if !strings.HasSuffix(providerName, ".") {
-		providerName += "."
-	}
+	log.Debugf("UPSTREAM: DNSCrypt cert cache miss for %s", cacheKey)
 
 	certQuery := &dns.Msg{}
 	certQuery.RecursionDesired = true

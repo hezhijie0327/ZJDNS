@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"zjdns/config"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -14,6 +15,11 @@ import (
 // proves the non-existence of the queried name or type.
 func (c *CryptoValidator) verifyNSEC(authSigs []*dns.RRSIG, nsecs []*dns.NSEC, verifiedDNSKEYs []*dns.DNSKEY, normalizedQname string, qtype uint16, denialType string) bool {
 	for _, nsec := range nsecs {
+		// RFC 6840 §4.1: ancestor delegation NSEC MUST NOT
+		// prove non-existence below that zone cut.
+		if isAncestorDelegation(nsec) {
+			continue
+		}
 		rrsigs := FindRRSIGs(authSigs, nsec.Header().Name, dns.TypeNSEC)
 		if !c.verifyNSECRecord(nsec, rrsigs, verifiedDNSKEYs, normalizedQname, qtype, denialType) {
 			continue
@@ -58,6 +64,11 @@ func matchesNSECDenial(nsec *dns.NSEC, normalizedQname string, qtype uint16, den
 		if owner != normalizedQname {
 			return false
 		}
+		// RFC 6840 §4.3: CNAME bit set means a CNAME exists
+		// at this name — NODATA is false.
+		if slices.Contains(nsec.TypeBitMap, dns.TypeCNAME) {
+			return false
+		}
 		return !slices.Contains(nsec.TypeBitMap, qtype)
 	}
 	return false
@@ -67,6 +78,11 @@ func matchesNSECDenial(nsec *dns.NSEC, normalizedQname string, qtype uint16, den
 // proves the non-existence of the queried name or type.
 func (c *CryptoValidator) verifyNSEC3(authSigs []*dns.RRSIG, nsec3s []*dns.NSEC3, verifiedDNSKEYs []*dns.DNSKEY, normalizedQname string, qtype uint16, denialType string) bool {
 	for _, nsec3 := range nsec3s {
+		// RFC 6840 §4.1: ancestor delegation NSEC3 MUST NOT
+		// prove non-existence below that zone cut.
+		if isAncestorDelegationNSEC3(nsec3) {
+			continue
+		}
 		rrsigs := FindRRSIGs(authSigs, nsec3.Header().Name, dns.TypeNSEC3)
 		if !c.verifyNSEC3Record(nsec3, rrsigs, verifiedDNSKEYs, normalizedQname, qtype, denialType) {
 			continue
@@ -112,6 +128,10 @@ func matchesNSEC3Denial(nsec3 *dns.NSEC3, hashedQname string, qtype uint16, deni
 		if owner != hashedQname {
 			return false
 		}
+		// RFC 6840 §4.3: same CNAME check as NSEC.
+		if slices.Contains(nsec3.TypeBitMap, dns.TypeCNAME) {
+			return false
+		}
 		return !slices.Contains(nsec3.TypeBitMap, qtype)
 	}
 	return false
@@ -147,6 +167,11 @@ func (c *CryptoValidator) isDenialOfExistenceValid(response *dns.Msg, qname stri
 
 	nsec3s := findNSEC3(response.Ns)
 	if valid := c.verifyNSEC3(authSigs, nsec3s, verifiedDNSKEYs, normalizedQname, qtype, denialType); valid {
+		// RFC 5155 §9.2: Opt-Out NSEC3 proofs suppress AD bit.
+		if hasOptOutInProof(nsec3s) {
+			return false, fmt.Errorf("NSEC3 Opt-Out proof for %s of %s — AD bit suppressed (RFC 5155 §9.2)", denialType, qname)
+		}
+
 		return true, nil
 	}
 	if len(nsec3s) > 0 {
@@ -162,4 +187,84 @@ func (c *CryptoValidator) isNXDOMAINValid(response *dns.Msg, qname string, qtype
 
 func (c *CryptoValidator) isNODATAValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
 	return c.isDenialOfExistenceValid(response, qname, qtype, verifiedDNSKEYs, "NODATA")
+}
+
+// isAncestorDelegation checks whether an NSEC record is an ancestor
+// delegation record per RFC 6840 §4.1.  An NSEC with NS=1, SOA=0, and
+// signer shorter than the owner name represents a delegation point from
+// an ancestor zone — it MUST NOT be used to prove non-existence below
+// that zone cut.
+func isAncestorDelegation(nsec *dns.NSEC) bool {
+	hasNS := slices.Contains(nsec.TypeBitMap, dns.TypeNS)
+	hasSOA := slices.Contains(nsec.TypeBitMap, dns.TypeSOA)
+	return hasNS && !hasSOA
+}
+
+// isAncestorDelegationNSEC3 checks whether an NSEC3 record acts as a
+// delegation cover per RFC 6840 §4.1.  An NSEC3 with NS=1, SOA=0 acts
+// as an ancestor delegation — it MUST NOT prove non-existence below
+// the zone cut.
+func isAncestorDelegationNSEC3(nsec3 *dns.NSEC3) bool {
+	hasNS := slices.Contains(nsec3.TypeBitMap, dns.TypeNS)
+	hasSOA := slices.Contains(nsec3.TypeBitMap, dns.TypeSOA)
+	return hasNS && !hasSOA
+}
+
+// hasOptOutInProof returns true if any NSEC3 in the proof set has Opt-Out.
+func hasOptOutInProof(nsec3s []*dns.NSEC3) bool {
+	for _, n := range nsec3s {
+		if n.Flags&uint8(0x01) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// CapValidatedTTL applies the RFC 4035 §5.3.3 TTL cap to validated RRsets.
+// The TTL of each authenticated RRset MUST not exceed the minimum of:
+//  1. The RRset's TTL as received
+//  2. The RRSIG's TTL as received
+//  3. The RRSIG's Original TTL field
+//  4. The RRSIG's Signature Expiration minus current time
+//
+// This function iterates over all sections and applies the cap by mapping
+// each RRSIG to its covered RRset.  RRsets without matching RRSIGs are
+// left unchanged.
+func CapValidatedTTL(answer, authority, additional []dns.RR) {
+	now := uint32(log.NowUnix()) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+	for _, sections := range [][]dns.RR{answer, authority, additional} {
+		rrsigMap := map[string][]*dns.RRSIG{}
+		for _, rr := range sections {
+			if sig, ok := rr.(*dns.RRSIG); ok {
+				k := sig.Header().Name + "/" + dns.TypeToString[sig.TypeCovered]
+				rrsigMap[k] = append(rrsigMap[k], sig)
+			}
+		}
+		for _, rr := range sections {
+			if _, isRRSIG := rr.(*dns.RRSIG); isRRSIG {
+				continue
+			}
+			hdr := rr.Header()
+			k := hdr.Name + "/" + dns.TypeToString[dns.RRToType(rr)]
+			sigs := rrsigMap[k]
+			if len(sigs) == 0 {
+				continue
+			}
+			minTTL := hdr.TTL
+			for _, sig := range sigs {
+				if sig.Header().TTL < minTTL {
+					minTTL = sig.Header().TTL
+				}
+				if sig.OrigTTL < minTTL {
+					minTTL = sig.OrigTTL
+				}
+				if sig.Expiration > now {
+					if r := sig.Expiration - now; r < minTTL {
+						minTTL = r
+					}
+				}
+			}
+			hdr.TTL = minTTL
+		}
+	}
 }

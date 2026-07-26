@@ -10,6 +10,7 @@ import (
 	"zjdns/internal/log"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
+	"zjdns/server/resolver/dnssec"
 
 	"codeberg.org/miekg/dns"
 )
@@ -97,6 +98,11 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	// Cache population.
 	var entryID int64
 	if cacheable {
+		// RFC 4035 §5.3.3: cap TTL of authenticated RRsets.
+		if validated {
+			dnssec.CapValidatedTTL(qr.Answer, qr.Authority, qr.Additional)
+		}
+
 		log.Debugf("CACHE: populating cache for %s", qname)
 		entryID = m.store.Set(qname, qtype, qclass, ecsOpt, dnssecOK, qr.Answer, qr.Authority, qr.Additional, validated)
 	}

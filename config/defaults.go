@@ -164,7 +164,7 @@ const (
 	DefaultMaxIdleConns          = 100
 	DefaultMaxIdleConnsPerHost   = 8
 	DefaultDOTWriteChannelSize   = 64
-	DefaultDOHMaxRequestSize     = 8192 // max DoH request body size
+	DefaultDOHMaxRequestSize     = 65535 // max DoH request body size (RFC 8484 §6)
 
 	DefaultTokenStoreCapacity     = 32  // QUIC LRU token store capacity per key
 	DefaultTokenStoreMaxEntries   = 128 // QUIC LRU token store max total entries

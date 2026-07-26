@@ -155,14 +155,16 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 		}
 
 		if useTCP && protocol == config.ProtoDNSCrypt {
-			if queryCtx.Err() == nil {
-				result.Response, result.Error = c.dnscryptClient.Execute(queryCtx, msg, server, true)
-				if result.Error == nil {
-					protocol = config.ProtoDNSCryptTCP
-					log.Debugf("UPSTREAM: DNSCrypt TCP fallback succeeded for %s", qname)
-				} else {
-					log.Debugf("UPSTREAM: DNSCrypt TCP fallback failed for %s: %v", qname, result.Error)
-				}
+			// Use a fresh context for the TCP fallback — the UDP
+			// attempt may have exhausted the original deadline.
+			tcpCtx, tcpCancel := context.WithTimeout(ctx, c.timeout)
+			defer tcpCancel()
+			result.Response, result.Error = c.dnscryptClient.Execute(tcpCtx, msg, server, true)
+			if result.Error == nil {
+				protocol = config.ProtoDNSCryptTCP
+				log.Debugf("UPSTREAM: DNSCrypt TCP fallback succeeded for %s", qname)
+			} else {
+				log.Debugf("UPSTREAM: DNSCrypt TCP fallback failed for %s: %v", qname, result.Error)
 			}
 		} else if result.Error != nil {
 			log.Debugf("UPSTREAM: DNSCrypt query failed for %s via %s: %v", qname, server.Address, result.Error)
@@ -185,20 +187,21 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 		result.Protocol = server.Protocol
 
 		if c.needsTCPFallback(result, protocol) {
-			if queryCtx.Err() != nil {
-				return result
-			}
-
 			if result.Response != nil && result.Response.Truncated {
 				log.Debugf("UPSTREAM: UDP response truncated for %s, falling back to TCP for %s", qname, server.Address)
 			} else {
 				log.Debugf("UPSTREAM: UDP query failed for %s, falling back to TCP for %s: %v", qname, server.Address, result.Error)
 			}
 
+			// Use a fresh context — the UDP attempt may have
+			// exhausted the original deadline.
+			tcpCtx, tcpCancel := context.WithTimeout(ctx, c.timeout)
+			defer tcpCancel()
+
 			tcpServer := *server
 			tcpServer.Protocol = config.ProtoTCP
 
-			if tcpResp, tcpErr := c.plainClient.ExecuteTCP(queryCtx, msg, &tcpServer); tcpErr == nil {
+			if tcpResp, tcpErr := c.plainClient.ExecuteTCP(tcpCtx, msg, &tcpServer); tcpErr == nil {
 				result.Response = tcpResp
 				result.Error = nil
 				result.Protocol = config.ProtoTCP
@@ -238,13 +241,27 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 	case config.ProtoHTTP3:
 		return c.tlsClient.ExecuteHTTP3(ctx, msg, server)
 	case config.ProtoDTLS:
-		return c.tlsClient.ExecuteDTLS(ctx, msg, server)
+		resp, err := c.tlsClient.ExecuteDTLS(ctx, msg, server)
+		if err == nil {
+			return resp, nil
+		}
+		// RFC 8094 §3.3: large DNS responses that exceed the
+		// Path MTU are silently dropped by the server.  Fall
+		// back to TLS when DTLS fails.
+		log.Debugf("UPSTREAM: DTLS query failed for %s, falling back to TLS: %v", server.Address, err)
+		return c.tlsClient.ExecuteTLS(ctx, msg, server)
 	case config.ProtoTLCP:
 		return c.tlcpClient.ExecuteTLCP(ctx, msg, server)
 	case config.ProtoHTTPTLCP:
 		return c.tlcpClient.ExecuteHTTPTLCP(ctx, msg, server)
 	case config.ProtoDTLCP:
-		return c.tlcpClient.ExecuteDTLCP(ctx, msg, server)
+		resp, err := c.tlcpClient.ExecuteDTLCP(ctx, msg, server)
+		if err == nil {
+			return resp, nil
+		}
+		// Same PMTU limitation as DTLS — fall back to TLCP.
+		log.Debugf("UPSTREAM: DTLCP query failed for %s, falling back to TLCP: %v", server.Address, err)
+		return c.tlcpClient.ExecuteTLCP(ctx, msg, server)
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}

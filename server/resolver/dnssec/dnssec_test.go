@@ -495,3 +495,79 @@ func TestIsResponseValid_MixedRRsetWithForeignRRSIG(t *testing.T) {
 		t.Error("should not claim validated when one RRset's RRSIG can't be verified")
 	}
 }
+
+// ── RFC 6840 §4.3: CNAME bit check ──────────────────────────────────────────
+
+func TestMatchesNSECDenial_CNAMEBitSet(t *testing.T) {
+	nsec := &dns.NSEC{
+		Hdr:  dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
+		NSEC: rdata.NSEC{NextDomain: "other.example.com.", TypeBitMap: []uint16{dns.TypeCNAME, dns.TypeRRSIG, dns.TypeNSEC}},
+	}
+	if matchesNSECDenial(nsec, "example.com.", dns.TypeA, "NODATA") {
+		t.Fatal("CNAME bit set: NODATA must be false")
+	}
+	nsec.TypeBitMap = []uint16{dns.TypeRRSIG, dns.TypeNSEC}
+	if !matchesNSECDenial(nsec, "example.com.", dns.TypeA, "NODATA") {
+		t.Fatal("no CNAME bit: NODATA should be true for absent TypeA")
+	}
+}
+
+// ── RFC 6840 §4.1: ancestor delegation ──────────────────────────────────────
+
+func TestIsAncestorDelegation(t *testing.T) {
+	ancestor := &dns.NSEC{
+		Hdr:  dns.Header{Name: "com.", Class: dns.ClassINET, TTL: 300},
+		NSEC: rdata.NSEC{NextDomain: "other.com.", TypeBitMap: []uint16{dns.TypeNS}},
+	}
+	if !isAncestorDelegation(ancestor) {
+		t.Fatal("NS=1 SOA=0: should be ancestor delegation")
+	}
+	apex := &dns.NSEC{
+		Hdr:  dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
+		NSEC: rdata.NSEC{NextDomain: "www.example.com.", TypeBitMap: []uint16{dns.TypeNS, dns.TypeSOA, dns.TypeRRSIG, dns.TypeNSEC}},
+	}
+	if isAncestorDelegation(apex) {
+		t.Fatal("NS=1 SOA=1: should NOT be ancestor delegation")
+	}
+}
+
+// ── RFC 5155 §9.2: Opt-Out AD bit ───────────────────────────────────────────
+
+func TestHasOptOutInProof(t *testing.T) {
+	noOptOut := []*dns.NSEC3{
+		{Hdr: dns.Header{Name: "abc.com.", Class: dns.ClassINET, TTL: 300}, NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0}},
+	}
+	if hasOptOutInProof(noOptOut) {
+		t.Fatal("no Opt-Out: should return false")
+	}
+	withOptOut := []*dns.NSEC3{
+		{Hdr: dns.Header{Name: "abc.com.", Class: dns.ClassINET, TTL: 300}, NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 1}},
+	}
+	if !hasOptOutInProof(withOptOut) {
+		t.Fatal("Opt-Out flag set: should return true")
+	}
+}
+
+// ── RFC 4035 §5.3.3: TTL cap ────────────────────────────────────────────────
+
+func TestCapValidatedTTL(t *testing.T) {
+	farFuture := uint32(time.Now().Add(24 * time.Hour).Unix()) //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+	a := &dns.A{
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600},
+		A:   rdata.A{Addr: netip.MustParseAddr("1.2.3.4")},
+	}
+	sig := &dns.RRSIG{
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
+		RRSIG: rdata.RRSIG{
+			TypeCovered: dns.TypeA, Algorithm: dns.RSASHA256,
+			OrigTTL: 600, Expiration: farFuture,
+			Inception: uint32(time.Now().Add(-1 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+			KeyTag:    12345, SignerName: "example.com.",
+		},
+	}
+	answer := []dns.RR{a, sig}
+	CapValidatedTTL(answer, nil, nil)
+	if a.Header().TTL != 300 {
+		t.Fatalf("min(3600,300,600,farFuture)=300, got %d", a.Header().TTL)
+	}
+}

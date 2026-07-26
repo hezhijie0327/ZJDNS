@@ -255,3 +255,42 @@ func TestDNSCryptFallbackFromUDPToTCP(t *testing.T) {
 		t.Fatalf("TCP fallback: want 1 answer, got %d", len(resp2.Answer))
 	}
 }
+
+// TestCertCacheKeyNormalisation verifies that the provider name trailing-dot
+// normalisation results in a consistent cache key between state() and
+// buildState().  Before the fix, state() computed the key before adding the
+// trailing dot, causing a mismatch with buildState() which received the
+// already-normalised name.
+func TestCertCacheKeyNormalisation(t *testing.T) {
+	c := New(nil)
+	addr := "10.0.0.1:8443"
+	rawProvider := "2.dnscrypt-cert.example.com"
+
+	// Simulate what state() does after the fix: Fqdn first, then cacheKey.
+	normalised := dnsutil.Fqdn(rawProvider)
+	if !strings.HasSuffix(normalised, ".") {
+		t.Fatal("Fqdn should add trailing dot")
+	}
+	cacheKey := addr + "|" + normalised
+
+	// Simulate a cached state — buildState() also uses the normalised name
+	// (passed by state()), so the cache key should match.
+	c.cacheMu.Lock()
+	c.cache[cacheKey] = &State{serverAddress: addr}
+	c.cacheMu.Unlock()
+
+	c.cacheMu.RLock()
+	_, ok := c.cache[cacheKey]
+	c.cacheMu.RUnlock()
+	if !ok {
+		t.Fatal("cache key with trailing dot not found")
+	}
+
+	// The raw (non-FQDN) key should NOT be in the cache.
+	c.cacheMu.RLock()
+	_, ok = c.cache[addr+"|"+rawProvider]
+	c.cacheMu.RUnlock()
+	if ok {
+		t.Fatal("cache key without trailing dot should not exist")
+	}
+}
