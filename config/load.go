@@ -206,7 +206,7 @@ func addDDRRecords(cfg *ServerConfig) {
 		zoneDirectRecords = append(zoneDirectRecords, ZoneRecord{Type: dns.TypeAAAA, Content: ddr.IPv6})
 	}
 	if len(zoneDirectRecords) > 0 {
-		cfg.Zone.Rules = append(cfg.Zone.Rules, ZoneRule{Name: domain, Answer: zoneDirectRecords})
+		cfg.Zone = append(cfg.Zone, ZoneRule{Name: domain, Answer: zoneDirectRecords})
 	}
 
 	ddrNames := []string{"_dns.resolver.arpa", "_dns." + domain}
@@ -241,7 +241,7 @@ func addDDRRecords(cfg *ServerConfig) {
 	}
 
 	for _, name := range ddrNames {
-		cfg.Zone.Rules = append(cfg.Zone.Rules, ZoneRule{Name: name, Answer: zoneServiceRecords, Additional: zoneAdditional})
+		cfg.Zone = append(cfg.Zone, ZoneRule{Name: name, Answer: zoneServiceRecords, Additional: zoneAdditional})
 	}
 
 	log.Infof("CONFIG: DDR enabled for domain %s (IPv4: %s, IPv6: %s)",
@@ -264,7 +264,7 @@ func addChaosRecord(cfg *ServerConfig) {
 		"version.bind":   version,
 	}
 	for name, value := range chaosRecords {
-		cfg.Zone.Rules = append(cfg.Zone.Rules, ZoneRule{
+		cfg.Zone = append(cfg.Zone, ZoneRule{
 			Name: name,
 			Answer: []ZoneRecord{{
 				Type:    dns.TypeTXT,
@@ -284,7 +284,7 @@ func addChaosRecord(cfg *ServerConfig) {
 		DefaultProjectName + ".db.clear.zone",
 		DefaultProjectName + ".db.clear.ruleset",
 	} {
-		cfg.Zone.Rules = append(cfg.Zone.Rules, ZoneRule{
+		cfg.Zone = append(cfg.Zone, ZoneRule{
 			Name:   name,
 			Answer: []ZoneRecord{{Type: dns.TypeTXT, Class: dns.ClassCHAOS, TTL: 0, Content: ""}},
 		})

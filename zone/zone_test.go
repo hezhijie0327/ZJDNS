@@ -1062,3 +1062,204 @@ func TestEvaluator_MatchTags_SubnetPriority(t *testing.T) {
 		t.Errorf("nil-matchedTags client: A = %s, want 127.0.0.1", a.A.String())
 	}
 }
+
+// TestEvaluator_BypassRule verifies that a rule with only Match (no Name/File)
+// acts as a global bypass: matching clients skip all zone rules.
+func TestEvaluator_BypassRule(t *testing.T) {
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	z := New(db)
+	err = z.LoadRules([]config.ZoneRule{
+		{Match: []string{"gateway"}},
+		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// gateway client → bypassed.
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true})
+	if result.Matched {
+		t.Error("gateway client: expected bypass (no match)")
+	}
+
+	// non-gateway client → matches zone rule.
+	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	if !result.Matched {
+		t.Fatal("non-gateway client: expected match")
+	}
+	a := result.Answer[0].(*dns.A)
+	if a.A.String() != "10.0.0.1" {
+		t.Errorf("non-gateway client: A = %s, want 10.0.0.1", a.A.String())
+	}
+}
+
+// TestEvaluator_BypassRule_Negate verifies bypass with !tag.
+func TestEvaluator_BypassRule_Negate(t *testing.T) {
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	z := New(db)
+	err = z.LoadRules([]config.ZoneRule{
+		{Match: []string{"!gateway"}},
+		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// gateway client → not bypassed, matches zone rule.
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true})
+	if !result.Matched {
+		t.Fatal("gateway client: expected match")
+	}
+
+	// non-gateway client → bypassed.
+	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	if result.Matched {
+		t.Error("non-gateway client: expected bypass (no match)")
+	}
+}
+
+// TestEvaluator_BypassOnly verifies bypass rules work with no content rules.
+func TestEvaluator_BypassOnly(t *testing.T) {
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	z := New(db)
+	err = z.LoadRules([]config.ZoneRule{
+		{Match: []string{"gateway"}},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true})
+	if result.Matched {
+		t.Error("gateway client: expected bypass")
+	}
+
+	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	if result.Matched {
+		t.Error("non-gateway client: expected no match (no rules)")
+	}
+}
+
+// TestEvaluator_BypassMulti verifies multiple bypass rules.
+func TestEvaluator_BypassMulti(t *testing.T) {
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	z := New(db)
+	err = z.LoadRules([]config.ZoneRule{
+		{Match: []string{"gateway"}},
+		{Match: []string{"guest"}},
+		{Name: "example.com", Answer: []config.ZoneRecord{{Type: dns.TypeA, Content: "10.0.0.1", TTL: 300}}},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// gateway client → bypassed.
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true})
+	if result.Matched {
+		t.Error("gateway client: expected bypass")
+	}
+
+	// guest client → bypassed.
+	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"guest": true})
+	if result.Matched {
+		t.Error("guest client: expected bypass")
+	}
+
+	// normal client → matches zone rule.
+	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	if !result.Matched {
+		t.Fatal("normal client: expected match")
+	}
+}
+
+// TestEvaluator_BypassWithFile verifies that global bypass rules work
+// alongside zone file rules.
+func TestEvaluator_BypassWithFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "zone.txt")
+	content := ".example.com\n  1  10.0.0.1  300\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	z := New(db)
+	err = z.LoadRules([]config.ZoneRule{
+		{Match: []string{"gateway"}},
+		{File: path},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// gateway client → bypassed, skips file entries entirely.
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true})
+	if result.Matched {
+		t.Error("gateway client: expected bypass")
+	}
+
+	// non-gateway client → matches file entry.
+	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	if !result.Matched {
+		t.Fatal("non-gateway client: expected match from zone file")
+	}
+	a := result.Answer[0].(*dns.A)
+	if a.A.String() != "10.0.0.1" {
+		t.Errorf("non-gateway client: A = %s, want 10.0.0.1", a.A.String())
+	}
+}
+
+// TestEvaluator_FileMatchNegate verifies that parent.Match with !tag on a
+// file rule acts as file-level bypass: tagged clients skip the whole file.
+func TestEvaluator_FileMatchNegate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "zone.txt")
+	content := ".example.com\n  1  10.0.0.1  300\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	z := New(db)
+	err = z.LoadRules([]config.ZoneRule{{
+		File:  path,
+		Match: []string{"!gateway"},
+	}})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// gateway client → !gateway rejects → falls through.
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true})
+	if result.Matched {
+		t.Error("gateway client: expected no match (!gateway)")
+	}
+
+	// non-gateway client → matches file entry.
+	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	if !result.Matched {
+		t.Fatal("non-gateway client: expected match from zone file")
+	}
+	a := result.Answer[0].(*dns.A)
+	if a.A.String() != "10.0.0.1" {
+		t.Errorf("non-gateway client: A = %s, want 10.0.0.1", a.A.String())
+	}
+}

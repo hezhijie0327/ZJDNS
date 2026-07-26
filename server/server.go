@@ -145,10 +145,10 @@ func (s *Server) initEDNS(cfg *config.ServerConfig) (*edns.Handler, error) {
 // from config.  Returns the ruleset engine (nil if none configured) and any
 // fatal error from loading.
 func (s *Server) initZoneAndRulesets(cfg *config.ServerConfig, cacheStore cache.Store, zoneEvaluator *zone.Evaluator, db *database.DB) (*ruleset.Engine, error) {
-	wireZoneDynamicContent(cacheStore, cfg.Zone.Rules)
+	wireZoneDynamicContent(cacheStore, cfg.Zone)
 
-	if len(cfg.Zone.Rules) > 0 {
-		if err := zoneEvaluator.LoadRules(cfg.Zone.Rules); err != nil {
+	if len(cfg.Zone) > 0 {
+		if err := zoneEvaluator.LoadRules(cfg.Zone); err != nil {
 			return nil, fmt.Errorf("load zone rules: %w", err)
 		}
 	}

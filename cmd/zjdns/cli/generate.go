@@ -79,7 +79,8 @@ func generateExampleConfig() string {
 
 	// ── zone / ruleset ──────────────────────────────────────────────────────
 
-	cfg.Zone.Rules = []config.ZoneRule{
+	cfg.Zone = []config.ZoneRule{
+		{Match: []string{"gateway"}}, // bypass: gateway-tagged clients skip zone entirely
 		{Name: "blocked.com", Rcode: dns.RcodeNameError},
 		{Name: "static.example.com", Answer: []config.ZoneRecord{
 			{Type: dns.TypeA, TTL: 300, Content: "10.0.0.1"},

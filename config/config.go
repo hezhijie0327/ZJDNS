@@ -6,7 +6,7 @@ type ServerConfig struct {
 	Server   ServerSettings   `json:"server"`
 	Upstream []UpstreamServer `json:"upstream,omitzero"`
 	Fallback []UpstreamServer `json:"fallback,omitzero"`
-	Zone     ZoneConfig       `json:"zone,omitzero"`
+	Zone     []ZoneRule       `json:"zone,omitzero"`
 	RuleSet  []RuleSet        `json:"ruleset,omitzero"`
 }
 
@@ -142,16 +142,11 @@ type UpstreamServer struct {
 	Splitguard     bool     `json:"splitguard,omitzero"`
 }
 
-// ZoneConfig wraps zone rules and global zone settings.
-type ZoneConfig struct {
-	Rules []ZoneRule `json:"rules"`
-}
-
 // ZoneRule defines a DNS zone rule for constructing synthetic responses.
 // Matches on (QNAME, QTYPE, QCLASS) and returns ANSWER + AUTHORITY +
 // ADDITIONAL + RCODE.  Client filtering uses CIDR match tags.
 type ZoneRule struct {
-	Name       string       `json:"name"`
+	Name       string       `json:"name,omitzero"`
 	File       string       `json:"file,omitzero"`
 	Match      []string     `json:"match,omitzero"`
 	Rcode      int          `json:"rcode,omitzero"`

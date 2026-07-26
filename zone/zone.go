@@ -67,6 +67,7 @@ type Evaluator struct {
 	loadedAt  atomic.Int64
 	ruleCount atomic.Int64
 	dynamics  map[string]*dynamicEntry // qname → dynamic content
+	bypass    [][]matchTag             // global bypass rules (only Match, no Name/File)
 }
 
 // ---------------------------------------------------------------------------
@@ -119,9 +120,31 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 		return fmt.Errorf("zone: begin tx: %w", err)
 	}
 
-	total := int64(0)
+	// Collect global bypass rules: only Match, no Name/File/Answer/DynamicContent.
+	var bypass [][]matchTag
+	var content []config.ZoneRule
 	for i := range rules {
-		rule := &rules[i]
+		r := &rules[i]
+		if r.Name == "" && r.File == "" && len(r.Answer) == 0 &&
+			len(r.Authority) == 0 && len(r.Additional) == 0 &&
+			r.DynamicContent == nil && len(r.Match) > 0 {
+			tags, err := parseMatchTags(r.Match)
+			if err != nil {
+				return fmt.Errorf("zone bypass rule: %w", err)
+			}
+			bypass = append(bypass, tags)
+			continue
+		}
+		content = append(content, *r)
+	}
+	e.bypass = bypass
+	if len(bypass) > 0 {
+		log.Infof("ZONE: %d bypass rule(s) loaded", len(bypass))
+	}
+
+	total := int64(0)
+	for i := range content {
+		rule := &content[i]
 		if rule.File != "" {
 			n, err := e.loadFile(tx, rule)
 			if err != nil {
@@ -229,7 +252,18 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 	if len(qname) > config.MaxDomainLength {
 		return Result{Rcode: dns.RcodeSuccess}
 	}
-	if e.ruleCount.Load() == 0 {
+
+	// 0. Check global bypass rules — if any matches, skip zone entirely.
+	for i, tags := range e.bypass {
+		score := matchScore(tags, matchedTags)
+		log.Debugf("ZONE: bypass[%d] tags=%v client_tags=%v score=%d", i, tags, matchedTags, score)
+		if score > 0 {
+			log.Debugf("ZONE: bypass matched, skipping zone for %s", qname)
+			return Result{Rcode: dns.RcodeSuccess}
+		}
+	}
+
+	if e.ruleCount.Load() == 0 && len(e.bypass) == 0 {
 		return Result{Rcode: dns.RcodeSuccess}
 	}
 

@@ -161,65 +161,66 @@
       "splitguard": true
     }
   ],
-  "zone": {
-    "rules": [
-      {
-        "name": "blocked.com",
-        "rcode": 3
-      },
-      {
-        "name": "static.example.com",
-        "answer": [
-          {
-            "type": 1,
-            "ttl": 300,
-            "content": "10.0.0.1"
-          },
-          {
-            "type": 28,
-            "ttl": 3600,
-            "content": "::1"
-          }
-        ]
-      },
-      {
-        "name": "*.cdn.example.com",
-        "match": ["corp-net", "!guest"],
-        "answer": [
-          {
-            "type": 1,
-            "ttl": 300,
-            "content": "10.0.0.1"
-          }
-        ]
-      },
-      {
-        "name": "example.com",
-        "answer": [
-          {
-            "type": 1,
-            "ttl": 300,
-            "content": "10.0.0.1"
-          }
-        ],
-        "authority": [
-          {
-            "type": 6,
-            "ttl": 3600,
-            "content": "ns1.example.com. admin.example.com. 1 3600 900 86400 3600"
-          }
-        ],
-        "additional": [
-          {
-            "name": "ns1.example.com",
-            "type": 1,
-            "ttl": 3600,
-            "content": "10.0.0.2"
-          }
-        ]
-      }
-    ]
-  },
+  "zone": [
+    {
+      "match": ["gateway"]
+    },
+    {
+      "name": "blocked.com",
+      "rcode": 3
+    },
+    {
+      "name": "static.example.com",
+      "answer": [
+        {
+          "type": 1,
+          "ttl": 300,
+          "content": "10.0.0.1"
+        },
+        {
+          "type": 28,
+          "ttl": 3600,
+          "content": "::1"
+        }
+      ]
+    },
+    {
+      "name": "*.cdn.example.com",
+      "match": ["corp-net", "!guest"],
+      "answer": [
+        {
+          "type": 1,
+          "ttl": 300,
+          "content": "10.0.0.1"
+        }
+      ]
+    },
+    {
+      "name": "example.com",
+      "answer": [
+        {
+          "type": 1,
+          "ttl": 300,
+          "content": "10.0.0.1"
+        }
+      ],
+      "authority": [
+        {
+          "type": 6,
+          "ttl": 3600,
+          "content": "ns1.example.com. admin.example.com. 1 3600 900 86400 3600"
+        }
+      ],
+      "additional": [
+        {
+          "name": "ns1.example.com",
+          "type": 1,
+          "ttl": 3600,
+          "content": "10.0.0.2"
+        }
+      ]
+    }
+  ],
   "ruleset": [
     {
       "tag": "corp-net",
