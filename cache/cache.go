@@ -23,7 +23,6 @@ type RequestRecord struct {
 	Rcode        int               // DNS response code
 	Server       string            // upstream server identifier
 	Poisoned     bool              // true when DNS poison was detected
-	Fallback     bool              // true if resolved via fallback upstream
 	DNSSECStatus string            // 'secure','insecure','bogus', or ''
 	EntryID      int64             // pre-resolved entry ID from Get()/Set(); 0 = no cache entry (zone/error)
 }

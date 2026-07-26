@@ -76,9 +76,6 @@ const (
 
 	DefaultRecursiveResolveTimeout = 30 * time.Second // full recursive resolution
 
-	// DefaultFallbackTimeout is how long the resolver waits for the primary
-	// upstream before switching to the concurrent fallback result.
-	DefaultFallbackTimeout = 5 * time.Second
 )
 
 // =============================================================================

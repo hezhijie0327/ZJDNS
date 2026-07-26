@@ -52,8 +52,8 @@ func LoadConfig(configFile string) (*ServerConfig, error) {
 
 	addChaosRecord(cfg)
 
-	log.Debugf("CONFIG: upstream=%d fallback=%d recursive=%t dnssec_enforce=%t cache_entries=%d log_level=%s",
-		len(cfg.Upstream), len(cfg.Fallback), len(cfg.Upstream)+len(cfg.Fallback) == 0,
+	log.Debugf("CONFIG: upstream=%d recursive=%t dnssec_enforce=%t cache_entries=%d log_level=%s",
+		len(cfg.Upstream), len(cfg.Upstream) == 0,
 		cfg.Server.Features.DNSSECEnforce,
 		cfg.Server.Features.Cache.MaxEntries, cfg.Server.LogLevel)
 	log.Infof("CONFIG: Configuration loaded successfully")
@@ -85,17 +85,12 @@ func NewDefaultServerConfig() *ServerConfig {
 	return cfg
 }
 
-// normalizeStamps resolves sdns:// addresses in upstream and fallback server
-// configs, populating protocol, address, server_name, and public_key from the
-// stamp.  Servers without an sdns:// address are left unchanged.
+// normalizeStamps resolves sdns:// addresses in upstream server configs,
+// populating protocol, address, server_name, and public_key from the stamp.
+// Servers without an sdns:// address are left unchanged.
 func normalizeStamps(cfg *ServerConfig) error {
 	for i := range cfg.Upstream {
 		if err := resolveStamp(&cfg.Upstream[i], i, "upstream"); err != nil {
-			return err
-		}
-	}
-	for i := range cfg.Fallback {
-		if err := resolveStamp(&cfg.Fallback[i], i, "fallback"); err != nil {
 			return err
 		}
 	}

@@ -106,7 +106,7 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 		Qname: qname, Qtype: qtype, Qclass: qclass,
 		ECS: ecsOpt, DNSSECOK: dnssecOK,
 		Protocol: qctx.Protocol, Result: "miss", ResponseTime: handler.ElapsedMS(qctx.StartTime),
-		Rcode: dns.RcodeSuccess, Server: qr.Server, Poisoned: qr.Poisoned, Fallback: qr.Fallback,
+		Rcode: dns.RcodeSuccess, Server: qr.Server, Poisoned: qr.Poisoned,
 		DNSSECStatus: dnssecStatus,
 		EntryID:      entryID,
 	})

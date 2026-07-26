@@ -42,6 +42,7 @@ var migrations = []migration{
 	{"3.4.19", "query-stats-sliding-window", migrateV3_4_19},
 	{"3.4.24", "fqdn-canonical-form", migrateV3_4_24},
 	{"3.5.0", "rename-hijack-to-poisoned", migrateV3_5_0},
+	{"3.7.1", "remove-upstream-fallback", migrateV3_7_1},
 }
 
 // compareSemver compares two semantic version strings (major.minor.patch).
@@ -405,5 +406,57 @@ func migrateV3_5_0(db *DB) error {
 			}
 		}
 	}
+	return nil
+}
+
+func migrateV3_7_1(db *DB) error {
+	// Drop the fallback column from query_stats and query_log.
+	// query_stats is WITHOUT ROWID with fallback in the PK, so it must be
+	// rebuilt. query_log can use ALTER TABLE DROP COLUMN.
+
+	// ── query_stats: rebuild without fallback ──
+	var hasFallback bool
+	if err := db.SQ.QueryRow(
+		"SELECT COUNT(*) FROM pragma_table_info('query_stats') WHERE name='fallback'",
+	).Scan(&hasFallback); err != nil {
+		return fmt.Errorf("check fallback in query_stats: %w", err)
+	}
+	if hasFallback {
+		if _, err := db.SQ.Exec(`
+			CREATE TABLE IF NOT EXISTS query_stats_new (
+				stat_day    INTEGER NOT NULL,
+				result      TEXT NOT NULL,
+				protocol    TEXT NOT NULL,
+				rcode       INTEGER NOT NULL DEFAULT 0,
+				dnssec      TEXT NOT NULL DEFAULT '',
+				poisoned    INTEGER NOT NULL DEFAULT 0,
+				query_count INTEGER NOT NULL DEFAULT 0,
+				total_ms    INTEGER NOT NULL DEFAULT 0,
+				PRIMARY KEY (stat_day, result, protocol, rcode, dnssec, poisoned)
+			) WITHOUT ROWID;
+			INSERT INTO query_stats_new
+				SELECT stat_day, result, protocol, rcode, dnssec, poisoned,
+					SUM(query_count), SUM(total_ms)
+				FROM query_stats
+				GROUP BY stat_day, result, protocol, rcode, dnssec, poisoned;
+			DROP TABLE query_stats;
+			ALTER TABLE query_stats_new RENAME TO query_stats;
+		`); err != nil {
+			return fmt.Errorf("rebuild query_stats without fallback: %w", err)
+		}
+	}
+
+	// ── query_log: simple column drop ──
+	if err := db.SQ.QueryRow(
+		"SELECT COUNT(*) FROM pragma_table_info('query_log') WHERE name='fallback'",
+	).Scan(&hasFallback); err != nil {
+		return fmt.Errorf("check fallback in query_log: %w", err)
+	}
+	if hasFallback {
+		if _, err := db.SQ.Exec(`ALTER TABLE query_log DROP COLUMN fallback`); err != nil {
+			return fmt.Errorf("drop fallback from query_log: %w", err)
+		}
+	}
+
 	return nil
 }

@@ -181,20 +181,14 @@ func SetRootFilesDir(dir string) {
 	zdnsutil.SetRootFilesDir(dir)
 }
 
-// isRecursiveMode reports whether any upstream or fallback server uses the
-// built-in recursive resolver, or whether no servers are configured (pure
-// recursive mode).
+// isRecursiveMode reports whether any upstream server uses the built-in
+// recursive resolver, or whether no servers are configured (pure recursive mode).
 func isRecursiveMode(cfg *config.ServerConfig) bool {
-	if len(cfg.Upstream) == 0 && len(cfg.Fallback) == 0 {
+	if len(cfg.Upstream) == 0 {
 		return true
 	}
 	for i := range cfg.Upstream {
 		if cfg.Upstream[i].IsRecursive() {
-			return true
-		}
-	}
-	for i := range cfg.Fallback {
-		if cfg.Fallback[i].IsRecursive() {
 			return true
 		}
 	}
@@ -228,13 +222,10 @@ func (s *Server) initDNSResolver(cfg *config.ServerConfig, queryClient *upstream
 // warmUpConnections pre-establishes transport connections to all configured
 // secure upstream servers.
 func (s *Server) warmUpConnections(cfg *config.ServerConfig, queryClient *upstream.Client) {
-	if len(cfg.Upstream) == 0 && len(cfg.Fallback) == 0 {
+	if len(cfg.Upstream) == 0 {
 		return
 	}
-	allServers := make([]config.UpstreamServer, 0, len(cfg.Upstream)+len(cfg.Fallback))
-	allServers = append(allServers, cfg.Upstream...)
-	allServers = append(allServers, cfg.Fallback...)
-	queryClient.WarmUpConnections(allServers)
+	queryClient.WarmUpConnections(cfg.Upstream)
 }
 
 // initHandler builds the middleware chain and returns the assembled handler.
@@ -476,9 +467,8 @@ func (s *Server) Start() error {
 
 func (s *Server) displayInfo() {
 	up := s.handler.UpstreamServers()
-	fb := s.handler.FallbackServers()
 
-	if len(up) == 0 && len(fb) == 0 {
+	if len(up) == 0 {
 		log.Infof("RECURSION: Recursive mode")
 		return
 	}
@@ -486,14 +476,7 @@ func (s *Server) displayInfo() {
 	for _, server := range up {
 		s.logServer("UPSTREAM", server)
 	}
-	if len(fb) > 0 {
-		for _, server := range fb {
-			s.logServer("FALLBACK", server)
-		}
-		log.Infof("UPSTREAM: %d upstream + %d fallback servers", len(up), len(fb))
-	} else {
-		log.Infof("UPSTREAM: %d servers", len(up))
-	}
+	log.Infof("UPSTREAM: %d servers", len(up))
 	s.displayExtras()
 }
 

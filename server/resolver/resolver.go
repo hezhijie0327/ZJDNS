@@ -8,12 +8,9 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"sync/atomic"
-	"time"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
-	zdnsutil "zjdns/internal/dnsutil"
-	"zjdns/internal/log"
 	"zjdns/server/defense"
 	"zjdns/server/resolver/dnssec"
 	"zjdns/server/upstream"
@@ -44,7 +41,6 @@ type QueryResult struct {
 	Cacheable  bool
 	ECS        *edns.ECSOption
 	Server     string
-	Fallback   bool
 	Poisoned   bool
 	Err        error
 }
@@ -64,15 +60,14 @@ type upstreamSet struct {
 	servers atomic.Pointer[[]*config.UpstreamServer]
 }
 
-// Resolver handles DNS query resolution by dispatching to upstream servers,
-// recursive resolution, or fallback servers as configured.
+// Resolver handles DNS query resolution by dispatching to upstream servers or
+// built-in recursive resolution.
 type Resolver struct {
 	queryClient     UpstreamClient
 	edns            *edns.Handler
 	crd             CIDRMatcher
 	buildMsg        BuildQueryFunc
 	upstream        *upstreamSet
-	fallback        *upstreamSet
 	recursive       *Recursive
 	cname           *CNAME
 	validator       *Validator
@@ -167,7 +162,6 @@ func New(cfg *Config) *Resolver {
 		buildMsg:      cfg.BuildMsg,
 		DNSSECEnforce: cfg.DNSSECEnforce,
 		upstream:      &upstreamSet{},
-		fallback:      &upstreamSet{},
 		cache:         cfg.Cache,
 	}
 	r.recursive = &Recursive{
@@ -180,8 +174,8 @@ func New(cfg *Config) *Resolver {
 	return r
 }
 
-// ConfigureServers initializes the primary and fallback upstream server lists.
-func (r *Resolver) ConfigureServers(servers, fallback []config.UpstreamServer) {
+// ConfigureServers initializes the upstream server list.
+func (r *Resolver) ConfigureServers(servers []config.UpstreamServer) {
 	active := make([]*config.UpstreamServer, 0, len(servers))
 	for i := range servers {
 		s := &servers[i]
@@ -199,24 +193,6 @@ func (r *Resolver) ConfigureServers(servers, fallback []config.UpstreamServer) {
 		active = append(active, s)
 	}
 	r.upstream.store(active)
-
-	fb := make([]*config.UpstreamServer, 0, len(fallback))
-	for i := range fallback {
-		s := &fallback[i]
-		if s.Protocol == "" {
-			s.Protocol = config.ProtoUDP
-		}
-		if s.IsRecursive() {
-			if s.Proxy != "" && r.recursiveProxyURL == "" {
-				r.recursiveProxyURL = s.Proxy
-			}
-			r.recursive.spoofguard = r.recursive.spoofguard || s.Spoofguard
-			r.recursive.splitguard = r.recursive.splitguard || s.Splitguard
-			r.recursive.poisonguard = r.recursive.poisonguard || s.Poisonguard
-		}
-		fb = append(fb, s)
-	}
-	r.fallback.store(fb)
 }
 
 // Recursive returns the built-in recursive resolver, or nil if not initialized.
@@ -252,166 +228,21 @@ func (r *Resolver) UpstreamServers() []*config.UpstreamServer {
 	return r.upstream.list()
 }
 
-// FallbackServers returns the current list of fallback servers.
-func (r *Resolver) FallbackServers() []*config.UpstreamServer {
-	return r.fallback.list()
-}
-
-// Query resolves a DNS question by querying upstream servers, falling back to
-// recursive resolution if no upstream is configured.
-//
-// When both upstream and fallback servers are configured, they are queried
-// concurrently. Upstream is given DefaultFallbackTimeout to respond; if it
-// succeeds within the deadline, it is always preferred. After the deadline
-// expires (or if the fallback responds first with a successful answer), the
-// fallback result is used. If the fallback also failed, the resolver waits
-// for the upstream. Fallback results are cacheable — the concurrent model
-// ensures they are fresh, not stale second-attempt data.
+// Query resolves a DNS question by querying upstream servers, or falling back to
+// built-in recursive resolution if no upstream servers are configured.
 func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOption) *QueryResult {
 	servers := r.upstream.list()
-	fallbackServers := r.fallback.list()
 
 	// No servers configured — use built-in recursive resolver.
-	if len(servers) == 0 && len(fallbackServers) == 0 {
+	if len(servers) == 0 {
 		resolveCtx, cancel := context.WithTimeout(ctx, config.DefaultRecursiveResolveTimeout)
 		defer cancel()
 		qr := r.cname.resolve(resolveCtx, question, ecs)
 		return &qr
 	}
 
-	// Only one set of servers — query directly without coordination overhead.
-	// Do not fall back to recursive resolution when no fallback servers are
-	// configured; return the upstream error so the client receives a clear
-	// failure signal instead of silently switching to recursive mode.
-	if len(fallbackServers) == 0 {
-		qr := r.queryUpstream(ctx, question, ecs, servers)
-		return &qr
-	}
-
-	if len(servers) == 0 {
-		qr := r.queryUpstream(ctx, question, ecs, fallbackServers)
-		qr.Fallback = true
-		return &qr
-	}
-
-	// Both upstream and fallback configured — query concurrently. A deadline
-	// timer prevents a slow primary upstream from delaying the fallback:
-	// upstream gets DefaultFallbackTimeout to respond; after that the
-	// concurrent fallback result is preferred if it succeeded. If the
-	// fallback also failed, the resolver waits for the upstream.
-
-	upstreamCh := make(chan QueryResult, 1)
-	fallbackCh := make(chan QueryResult, 1)
-	queryCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(errors.New("query completed"))
-
-	go func() {
-		defer zdnsutil.HandlePanic("UPSTREAM primary query")
-		qr := r.queryUpstream(queryCtx, question, ecs, servers)
-		select {
-		case upstreamCh <- qr:
-		case <-queryCtx.Done():
-		}
-	}()
-
-	go func() {
-		defer zdnsutil.HandlePanic("UPSTREAM fallback query")
-		qr := r.queryUpstream(queryCtx, question, ecs, fallbackServers)
-		select {
-		case fallbackCh <- qr:
-		case <-queryCtx.Done():
-		}
-	}()
-
-	deadline := time.NewTimer(config.DefaultFallbackTimeout)
-	defer deadline.Stop()
-
-	select {
-	case up := <-upstreamCh:
-		// Upstream responded within the deadline — prefer it.
-		if up.Err == nil {
-			return &up
-		}
-		log.Debugf("UPSTREAM: primary upstream failed for %s, waiting for concurrent fallback", question.Name)
-		select {
-		case fb := <-fallbackCh:
-			if fb.Err == nil {
-				fb.Fallback = true
-				return &fb
-			}
-			return &QueryResult{Err: fb.Err}
-		case <-ctx.Done():
-			return &QueryResult{Err: ctx.Err()}
-		}
-
-	case fb := <-fallbackCh:
-		// Fallback responded first.
-		if fb.Err == nil {
-			// Give upstream until the deadline to also respond.
-			select {
-			case up := <-upstreamCh:
-				if up.Err == nil {
-					return &up
-				}
-			case <-deadline.C:
-			case <-ctx.Done():
-				return &QueryResult{Err: ctx.Err()}
-			}
-			fb.Fallback = true
-			return &fb
-		}
-		// Fallback failed — must wait for upstream.
-		select {
-		case up := <-upstreamCh:
-			if up.Err == nil {
-				return &up
-			}
-			return &QueryResult{Err: up.Err}
-		case <-ctx.Done():
-			return &QueryResult{Err: ctx.Err()}
-		}
-
-	case <-deadline.C:
-		// Deadline expired — prefer fallback if it succeeded, otherwise
-		// wait for whichever responds first.
-		select {
-		case fb := <-fallbackCh:
-			if fb.Err == nil {
-				fb.Fallback = true
-				return &fb
-			}
-			// Fallback failed — wait for upstream.
-			select {
-			case up := <-upstreamCh:
-				if up.Err == nil {
-					return &up
-				}
-				return &QueryResult{Err: up.Err}
-			case <-ctx.Done():
-				return &QueryResult{Err: ctx.Err()}
-			}
-		case up := <-upstreamCh:
-			if up.Err == nil {
-				return &up
-			}
-			// Upstream failed — wait for fallback.
-			select {
-			case fb := <-fallbackCh:
-				if fb.Err == nil {
-					fb.Fallback = true
-					return &fb
-				}
-				return &QueryResult{Err: fb.Err}
-			case <-ctx.Done():
-				return &QueryResult{Err: ctx.Err()}
-			}
-		case <-ctx.Done():
-			return &QueryResult{Err: ctx.Err()}
-		}
-
-	case <-ctx.Done():
-		return &QueryResult{Err: ctx.Err()}
-	}
+	qr := r.queryUpstream(ctx, question, ecs, servers)
+	return &qr
 }
 
 // ShuffleSlice shuffles the input slice in-place using the Fisher-Yates

@@ -39,7 +39,7 @@ func initResolver(
 		DNSSECEnforce:  cfg.Server.Features.DNSSECEnforce,
 		Ctx:            backgroundCtx,
 	})
-	r.ConfigureServers(cfg.Upstream, cfg.Fallback)
+	r.ConfigureServers(cfg.Upstream)
 	return r
 }
 

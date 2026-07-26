@@ -122,7 +122,6 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 				return QueryResult{Err: ErrCIDRFilterRefused}
 			}
 			if res.Server != "" {
-				res.Fallback = false
 				return res
 			}
 		}
@@ -148,7 +147,6 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 					return QueryResult{Err: ErrCIDRFilterRefused}
 				}
 				if res.Server != "" {
-					res.Fallback = false
 					return res
 				}
 			}

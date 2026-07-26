@@ -5,7 +5,6 @@ package config
 type ServerConfig struct {
 	Server   ServerSettings   `json:"server"`
 	Upstream []UpstreamServer `json:"upstream,omitzero"`
-	Fallback []UpstreamServer `json:"fallback,omitzero"`
 	Zone     []ZoneRule       `json:"zone,omitzero"`
 	RuleSet  []RuleSet        `json:"ruleset,omitzero"`
 }

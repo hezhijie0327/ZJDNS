@@ -167,7 +167,7 @@ func (w *AsyncStatsWriter) flush(batch []RequestRecord) {
 		// Error discarded — stats are best-effort and non-critical.
 		_, _ = w.db.StmtQueryStats.Exec( // _, _ = result, error: background stats write, non-critical
 			r.Result, r.Protocol, r.Rcode, r.DNSSECStatus,
-			database.BoolToInt(r.Poisoned), database.BoolToInt(r.Fallback),
+			database.BoolToInt(r.Poisoned),
 			r.ResponseTime,
 		)
 
@@ -177,7 +177,7 @@ func (w *AsyncStatsWriter) flush(batch []RequestRecord) {
 			_, _ = w.db.StmtQueryLog.Exec( // _, _ = result, error: background stats write, non-critical
 				log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass),
 				r.Protocol, r.Result, r.Rcode, r.ResponseTime, r.Server,
-				database.BoolToInt(r.Poisoned), database.BoolToInt(r.Fallback),
+				database.BoolToInt(r.Poisoned),
 				r.DNSSECStatus,
 			)
 		}

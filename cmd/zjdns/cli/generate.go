@@ -55,7 +55,7 @@ func generateExampleConfig() string {
 		{Protocol: config.ProtoHTTP3, Port: config.DefaultProbePortHTTPS, Timeout: int(config.DefaultLatencyProbeTimeout.Milliseconds())},
 	}
 
-	// ── upstream / fallback ─────────────────────────────────────────────────
+	// ── upstream ────────────────────────────────────────────────────────────
 
 	cfg.Upstream = []config.UpstreamServer{
 		{Address: "223.5.5.5:53", Protocol: config.ProtoTCP, Proxy: "socks5://127.0.0.1:1080"},
@@ -67,14 +67,6 @@ func generateExampleConfig() string {
 		// DNS stamps — protocol auto-detected by normalizeStamps
 		{Address: "sdns://AQMAAAAAAAAADDkuOS45Ljk6ODQ0MyBnyEe4yHWM0SAkVUO-dWdG3zTfHYTAC4xHA2jfgh2GPhkyLmRuc2NyeXB0LWNlcnQucXVhZDkubmV0"},
 		{Address: "sdns://AgMAAAAAAAAABzkuOS45LjkgKhX11qy258CQGt5Ou8dDsszUiQMrRuFkLwaTaDABJYoSZG5zOS5xdWFkOS5uZXQ6NDQzCi9kbnMtcXVlcnk"},
-	}
-
-	cfg.Fallback = []config.UpstreamServer{
-		{Address: "sdns://AQcAAAAAAAAAEjk0LjE0MC4xNC4xNDA6NTQ0MyC16ETWuDo-PhJo62gfvqcN48X6aNvWiBQdvy7AZrLa-iUyLmRuc2NyeXB0LnVuZmlsdGVyZWQubnMxLmFkZ3VhcmQuY29t"},
-		{Address: "149.112.112.9:53", Protocol: config.ProtoUDP, NoCache: true},
-		{Protocol: config.ProtoRecursive, Poisonguard: true, Splitguard: true, Spoofguard: true},
-		{Address: "8.8.4.4:53", Protocol: config.ProtoUDP, Spoofguard: true},
-		{Address: "8.8.8.8:53", Protocol: config.ProtoTCP, Splitguard: true},
 	}
 
 	// ── zone / ruleset ──────────────────────────────────────────────────────

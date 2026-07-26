@@ -135,32 +135,6 @@
       "address": "sdns://AgMAAAAAAAAABzkuOS45LjkgKhX11qy258CQGt5Ou8dDsszUiQMrRuFkLwaTaDABJYoSZG5zOS5xdWFkOS5uZXQ6NDQzCi9kbnMtcXVlcnk"
     }
   ],
-  "fallback": [
-    {
-      "address": "sdns://AQcAAAAAAAAAEjk0LjE0MC4xNC4xNDA6NTQ0MyC16ETWuDo-PhJo62gfvqcN48X6aNvWiBQdvy7AZrLa-iUyLmRuc2NyeXB0LnVuZmlsdGVyZWQubnMxLmFkZ3VhcmQuY29t"
-    },
-    {
-      "address": "149.112.112.9:53",
-      "protocol": "udp",
-      "no_cache": true
-    },
-    {
-      "protocol": "recursive",
-      "poisonguard": true,
-      "spoofguard": true,
-      "splitguard": true
-    },
-    {
-      "address": "8.8.4.4:53",
-      "protocol": "udp",
-      "spoofguard": true
-    },
-    {
-      "address": "8.8.8.8:53",
-      "protocol": "tcp",
-      "splitguard": true
-    }
-  ],
   "zone": [
     {
       "match": ["gateway"]
