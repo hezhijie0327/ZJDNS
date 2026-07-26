@@ -213,6 +213,18 @@ func (c *Client) buildState(
 	return state, nil
 }
 
+// deleteState removes a cached state entry so the next query re-fetches the
+// certificate.  Called when a query fails — the server may have rotated its
+// certificate, making the cached shared key and client magic invalid.
+func (c *Client) deleteState(addr, providerName string) {
+	providerName = dnsutil.Fqdn(providerName)
+	cacheKey := addr + "|" + providerName
+	c.cacheMu.Lock()
+	delete(c.cache, cacheKey)
+	c.cacheMu.Unlock()
+	log.Debugf("UPSTREAM: DNSCrypt cert cache invalidated for %s", cacheKey)
+}
+
 // parseCert parses and verifies DNSCrypt certificates from DNS TXT answer
 // records, returning the best PQ and classical certs separately.
 func parseCert(

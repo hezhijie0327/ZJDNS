@@ -106,6 +106,7 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 		}
 		respPayload, err = dnscryptcrypto.ReadPrefixed(conn)
 		if err != nil {
+			c.deleteState(stampAddr, providerName)
 			return nil, fmt.Errorf("reading dnscrypt TCP response: %w", err)
 		}
 	} else {
@@ -116,6 +117,7 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 		respBuf := make([]byte, config.DefaultDNSCryptUDPSize)
 		n, udpErr := conn.Read(respBuf)
 		if udpErr != nil {
+			c.deleteState(stampAddr, providerName)
 			return nil, fmt.Errorf("reading dnscrypt response: %w", udpErr)
 		}
 		respPayload = respBuf[:n]
@@ -126,6 +128,7 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 	}
 	decrypted, err := dnscryptcrypto.DecryptResponse(resp, respPayload, sharedKey, clientNonce)
 	if err != nil {
+		c.deleteState(stampAddr, providerName)
 		return nil, fmt.Errorf("decrypting dnscrypt response: %w", err)
 	}
 
@@ -159,6 +162,7 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 	err = response.Unpack()
 	if err != nil {
 		pool.DefaultMessage.Put(response)
+		c.deleteState(stampAddr, providerName)
 		return nil, fmt.Errorf("unpacking dnscrypt response: %w", err)
 	}
 	response.Data = nil

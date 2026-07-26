@@ -294,3 +294,77 @@ func TestCertCacheKeyNormalisation(t *testing.T) {
 		t.Fatal("cache key without trailing dot should not exist")
 	}
 }
+
+// TestCertCacheInvalidationOnError verifies that a failed DNSCrypt query
+// invalidates the cached state, forcing the next query to re-fetch the
+// certificate.  Without this, a server cert rotation would cause every query
+// to fail for up to DefaultDNSCryptCertificateCacheTTL (1 hour).
+func TestCertCacheInvalidationOnError(t *testing.T) {
+	_, stamp := startTestDNSCryptServer(t)
+	c := New(nil)
+	server := &config.UpstreamServer{Address: stamp, Protocol: config.ProtoDNSCrypt}
+
+	// 1. Successful query → populates cache.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	resp, err := c.Execute(ctx, newQuery("example.com."), server, false)
+	cancel()
+	if err != nil {
+		t.Fatalf("first query: %v", err)
+	}
+	if len(resp.Answer) != 1 {
+		t.Fatalf("want 1 answer, got %d", len(resp.Answer))
+	}
+
+	// Find the cache key and grab the state pointer.
+	c.cacheMu.RLock()
+	var cacheKey string
+	var st *State
+	for k, v := range c.cache {
+		cacheKey = k
+		st = v
+		break
+	}
+	c.cacheMu.RUnlock()
+	if st == nil {
+		t.Fatal("state should be cached after successful query")
+	}
+
+	// 2. Corrupt clientMagic and sharedKey to simulate a cert rotation.
+	//    A wrong clientMagic causes the server to drop the query silently,
+	//    producing a read timeout on the client.
+	st.mu.Lock()
+	for i := range st.clientMagic {
+		st.clientMagic[i] ^= 0xFF
+	}
+	for i := range st.sharedKey {
+		st.sharedKey[i] ^= 0xFF
+	}
+	st.mu.Unlock()
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	_, err = c.Execute(ctx2, newQuery("example.com."), server, false)
+	cancel2()
+	if err == nil {
+		t.Fatal("second query should fail with corrupted state")
+	}
+	t.Logf("expected error: %v", err)
+
+	// Cache must be gone.
+	c.cacheMu.RLock()
+	_, ok := c.cache[cacheKey]
+	c.cacheMu.RUnlock()
+	if ok {
+		t.Fatal("state should be invalidated after failed query")
+	}
+
+	// 3. Third query re-fetches the certificate and succeeds.
+	ctx3, cancel3 := context.WithTimeout(context.Background(), 5*time.Second)
+	resp, err = c.Execute(ctx3, newQuery("example.com."), server, false)
+	cancel3()
+	if err != nil {
+		t.Fatalf("third query (after re-fetch): %v", err)
+	}
+	if len(resp.Answer) != 1 {
+		t.Fatalf("want 1 answer, got %d", len(resp.Answer))
+	}
+}
