@@ -28,9 +28,9 @@ type Recursive struct {
 	lastDNSSECEDECode atomic.Uint64 // EDE code from the most recent DNSSEC validation failure
 	cache             cache.Store
 	ctx               context.Context // lifecycle context for background probes
-	spoofguard        bool            // from builtin_recursive upstream
-	splitguard        bool            // from builtin_recursive upstream
-	poisonguard       bool            // from builtin_recursive upstream
+	spoofguard        bool            // from protocol=recursive upstream
+	splitguard        bool            // from protocol=recursive upstream
+	poisonguard       bool            // from protocol=recursive upstream
 }
 
 // CNAME handles CNAME record chasing during DNS resolution, following the
@@ -110,7 +110,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		ecsResponse := r.resolver.edns.ParseFromDNS(response)
 		answer, authority, additional := response.Answer, response.Ns, response.Extra
 		pool.DefaultMessage.Put(response)
-		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Validated: cryptoValidated, ECS: ecsResponse, Server: config.RecursiveIndicator, Poisoned: poisonSeen}
+		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Validated: cryptoValidated, ECS: ecsResponse, Server: config.ProtoRecursive, Poisoned: poisonSeen}
 	}
 
 	for {
@@ -226,7 +226,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		if len(nsResult.addrs) == 0 {
 			nsSlice, extraSlice := response.Ns, response.Extra
 			pool.DefaultMessage.Put(response)
-			return QueryResult{Cacheable: true, Authority: nsSlice, Additional: extraSlice, Validated: validated, ECS: ecsResponse, Server: config.RecursiveIndicator}
+			return QueryResult{Cacheable: true, Authority: nsSlice, Additional: extraSlice, Validated: validated, ECS: ecsResponse, Server: config.ProtoRecursive}
 		}
 
 		r.cacheGlueRecords(nsResult.glue)

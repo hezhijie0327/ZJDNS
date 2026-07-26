@@ -127,7 +127,7 @@ type CacheSettings struct {
 // UpstreamServer defines a single upstream DNS server with address, protocol,
 // and optional matching.
 type UpstreamServer struct {
-	Address        string   `json:"address"`
+	Address        string   `json:"address,omitzero"`
 	Protocol       string   `json:"protocol,omitzero"`
 	ServerName     string   `json:"server_name,omitzero"`
 	SkipTLSVerify  bool     `json:"skip_tls_verify,omitzero"`
@@ -214,10 +214,10 @@ func (t *TLSCertificate) IsEnabled() bool {
 }
 
 // IsRecursive reports whether the upstream server is the built-in recursive
-// resolver.
+// resolver (Protocol = "recursive").
 func (s *UpstreamServer) IsRecursive() bool {
 	if s == nil {
 		return false
 	}
-	return s.Address == RecursiveIndicator
+	return s.Protocol == ProtoRecursive
 }

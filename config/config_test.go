@@ -62,9 +62,9 @@ func TestLoadConfig_MissingServer(t *testing.T) {
 }
 
 func TestUpstreamServer_IsRecursive(t *testing.T) {
-	s := &UpstreamServer{Address: "builtin_recursive"}
+	s := &UpstreamServer{Protocol: ProtoRecursive}
 	if !s.IsRecursive() {
-		t.Error("builtin_recursive should report as recursive")
+		t.Error("protocol=recursive should report as recursive")
 	}
 
 	s2 := &UpstreamServer{Address: "8.8.8.8:53"}
@@ -154,9 +154,9 @@ func TestUpstreamServer_DefenseFlagsParsed(t *testing.T) {
 		wantSG  bool
 		wantSpG bool
 	}{
-		{"all on", `[{"address":"builtin_recursive","poisonguard":true,"spoofguard":true,"splitguard":true}]`, true, true, true},
+		{"all on", `[{"protocol":"recursive","poisonguard":true,"spoofguard":true,"splitguard":true}]`, true, true, true},
 		{"all off", `[{"address":"8.8.8.8:53","protocol":"udp"}]`, false, false, false},
-		{"only poisonguard", `[{"address":"builtin_recursive","poisonguard":true}]`, true, false, false},
+		{"only poisonguard", `[{"protocol":"recursive","poisonguard":true}]`, true, false, false},
 		{"only spoofguard", `[{"address":"8.8.8.8:53","spoofguard":true}]`, false, true, false},
 		{"only splitguard", `[{"address":"1.2.4.8:53","protocol":"tcp","splitguard":true}]`, false, false, true},
 	}

@@ -145,7 +145,7 @@
       "no_cache": true
     },
     {
-      "address": "builtin_recursive",
+      "protocol": "recursive",
       "poisonguard": true,
       "spoofguard": true,
       "splitguard": true

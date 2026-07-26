@@ -499,7 +499,10 @@ func (s *Server) displayInfo() {
 
 func (s *Server) logServer(role string, server *config.UpstreamServer) {
 	if server.IsRecursive() {
-		info := server.Address
+		info := "built-in recursive"
+		if server.Address != "" {
+			info = server.Address
+		}
 		if len(server.Match) > 0 {
 			info += fmt.Sprintf(" [CIDR match: %v]", server.Match)
 		}

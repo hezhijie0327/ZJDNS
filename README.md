@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.6.46-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.7.0-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -49,7 +49,7 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 
 ### DNS 解析
 - **递归解析**：从 IANA 根服务器逐步解析至权威服务器，完整 DNSSEC 信任链（根提示 + 延迟排序缓存）
-- **上游转发**：主/备服务器并发查询 + 首胜策略；支持 `builtin_recursive` 纯递归模式
+- **上游转发**：主/备服务器并发查询 + 首胜策略；支持 `protocol: "recursive"` 纯递归模式
 - **CNAME 追踪**：最大 16 级，防循环检测
 - **QNAME 最小化**：[RFC 9156](docs/rfc/rfc9156.txt)，默认启用
 - **并发去重**：singleflight 合并同 key 并发 miss
@@ -113,8 +113,8 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `address` | string | `host:port` / `https://host:port/path` / `builtin_recursive` / `sdns://` |
-| `protocol` | string | 传输协议（`udp`/`tls`/`quic`/`https`/`http3`/`dtls`/`dnscrypt`/`tlcp`/`http-tlcp`/`dtlcp`），`sdns://` 自动推导 |
+| `address` | string | `host:port` / `https://host:port/path` / `sdns://` |
+| `protocol` | string | 传输协议（`udp`/`tls`/`quic`/`https`/`http3`/`dtls`/`dnscrypt`/`tlcp`/`http-tlcp`/`dtlcp`/`recursive`），`sdns://` 自动推导 |
 | `server_name` | string | TLS SNI / DNSCrypt provider name |
 | `skip_tls_verify` | bool | 跳过 TLS 证书验证 |
 | `privacy_profile` | string | `"strict"`（默认，[RFC 8310](docs/rfc/rfc8310.txt) §6）/ `"opportunistic"`（§5） |
@@ -130,7 +130,7 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 ### 防污染配置示例
 
 ```json
-{ "address": "builtin_recursive", "poisonguard": true, "spoofguard": true, "splitguard": true },
+{ "protocol": "recursive", "poisonguard": true, "spoofguard": true, "splitguard": true },
 { "address": "8.8.4.4:53", "protocol": "udp", "spoofguard": true },
 { "address": "8.8.8.8:53", "protocol": "tcp", "splitguard": true }
 ```

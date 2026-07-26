@@ -80,7 +80,7 @@ type Resolver struct {
 	lastUpstreamEDE atomic.Pointer[dns.EDE] // EDE from upstream response for passthrough
 	cache           cache.Store             // DNS response cache for NS A/AAAA lookups
 
-	recursiveProxyURL string // proxy for recursive mode (from builtin_recursive upstream)
+	recursiveProxyURL string // proxy for recursive mode (from protocol=recursive upstream)
 }
 
 // Validator holds the DNSSEC and poison detection components for response

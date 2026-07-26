@@ -133,6 +133,9 @@ func validateRuleSets(cfg *ServerConfig) (map[string]bool, error) {
 
 func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) error {
 	validProtocols := map[string]bool{
+		// Built-in recursive
+		ProtoRecursive: true,
+
 		// Plain DNS
 		ProtoUDP: true,
 		ProtoTCP: true,

@@ -246,8 +246,6 @@ const (
 // =============================================================================
 
 const (
-	RecursiveIndicator = "builtin_recursive"
-
 	DNSSECStatusSecure   = "secure"
 	DNSSECStatusInsecure = "insecure"
 	DNSSECStatusBogus    = "bogus"
@@ -258,6 +256,8 @@ const (
 
 	ProtoUDP = "udp"
 	ProtoTCP = "tcp"
+
+	ProtoRecursive = "recursive" // built-in recursive resolver
 
 	ProtoTLS   = "tls"
 	ProtoQUIC  = "quic"

@@ -8,7 +8,7 @@ import (
 func TestEmptyPortDisablesPlainDNS(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Upstream: []config.UpstreamServer{
-			{Address: "builtin_recursive"},
+			{Protocol: config.ProtoRecursive},
 		},
 	}
 	// No port set — plain DNS should be skipped without error.
@@ -30,7 +30,7 @@ func TestEmptyPortDisablesPlainDNS(t *testing.T) {
 func TestPortSetAllowsPlainDNS(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Upstream: []config.UpstreamServer{
-			{Address: "builtin_recursive"},
+			{Protocol: config.ProtoRecursive},
 		},
 	}
 	cfg.Server.Protocol.UDP = "15353"

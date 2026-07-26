@@ -8,7 +8,7 @@
   },
   "upstream": [
     {
-      "address": "builtin_recursive",
+      "protocol": "recursive",
       "poisonguard": true
     }
   ]

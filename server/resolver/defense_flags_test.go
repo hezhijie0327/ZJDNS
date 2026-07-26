@@ -21,29 +21,29 @@ func TestConfigureServers_DefenseFlagPropagation(t *testing.T) {
 		{
 			name: "all flags enabled",
 			servers: []config.UpstreamServer{
-				{Address: config.RecursiveIndicator, Spoofguard: true, Splitguard: true, Poisonguard: true},
+				{Protocol: config.ProtoRecursive, Spoofguard: true, Splitguard: true, Poisonguard: true},
 			},
 			wantFlags: struct{ spoofguard, splitguard, poisonguard bool }{true, true, true},
 		},
 		{
 			name: "all flags disabled",
 			servers: []config.UpstreamServer{
-				{Address: config.RecursiveIndicator},
+				{Protocol: config.ProtoRecursive},
 			},
 			wantFlags: struct{ spoofguard, splitguard, poisonguard bool }{false, false, false},
 		},
 		{
 			name: "only spoofguard",
 			servers: []config.UpstreamServer{
-				{Address: config.RecursiveIndicator, Spoofguard: true},
+				{Protocol: config.ProtoRecursive, Spoofguard: true},
 			},
 			wantFlags: struct{ spoofguard, splitguard, poisonguard bool }{true, false, false},
 		},
 		{
 			name: "OR semantics — any server enables flag",
 			servers: []config.UpstreamServer{
-				{Address: config.RecursiveIndicator, Spoofguard: false, Poisonguard: false},
-				{Address: config.RecursiveIndicator, Spoofguard: true, Poisonguard: true},
+				{Protocol: config.ProtoRecursive, Spoofguard: false, Poisonguard: false},
+				{Protocol: config.ProtoRecursive, Spoofguard: true, Poisonguard: true},
 			},
 			wantFlags: struct{ spoofguard, splitguard, poisonguard bool }{true, false, true},
 		},
@@ -51,27 +51,27 @@ func TestConfigureServers_DefenseFlagPropagation(t *testing.T) {
 			name: "non-recursive servers do not affect flags",
 			servers: []config.UpstreamServer{
 				{Address: "8.8.8.8:53", Protocol: "udp", Spoofguard: true},
-				{Address: config.RecursiveIndicator},
+				{Protocol: config.ProtoRecursive},
 			},
 			wantFlags: struct{ spoofguard, splitguard, poisonguard bool }{false, false, false},
 		},
 		{
 			name: "fallback recursive OR semantics",
 			servers: []config.UpstreamServer{
-				{Address: config.RecursiveIndicator, Spoofguard: true},
+				{Protocol: config.ProtoRecursive, Spoofguard: true},
 			},
 			fallback: []config.UpstreamServer{
-				{Address: config.RecursiveIndicator, Splitguard: true, Poisonguard: true},
+				{Protocol: config.ProtoRecursive, Splitguard: true, Poisonguard: true},
 			},
 			wantFlags: struct{ spoofguard, splitguard, poisonguard bool }{true, true, true},
 		},
 		{
 			name: "fallback does not override true with false",
 			servers: []config.UpstreamServer{
-				{Address: config.RecursiveIndicator, Spoofguard: true, Splitguard: true, Poisonguard: true},
+				{Protocol: config.ProtoRecursive, Spoofguard: true, Splitguard: true, Poisonguard: true},
 			},
 			fallback: []config.UpstreamServer{
-				{Address: config.RecursiveIndicator, Spoofguard: false, Splitguard: false, Poisonguard: false},
+				{Protocol: config.ProtoRecursive, Spoofguard: false, Splitguard: false, Poisonguard: false},
 			},
 			wantFlags: struct{ spoofguard, splitguard, poisonguard bool }{true, true, true},
 		},
@@ -145,7 +145,7 @@ func TestConfigureServers_RecursiveProxyURL(t *testing.T) {
 
 	// Primary recursive server sets proxy URL.
 	r.ConfigureServers([]config.UpstreamServer{
-		{Address: config.RecursiveIndicator, Proxy: "socks5://proxy:1080"},
+		{Protocol: config.ProtoRecursive, Proxy: "socks5://proxy:1080"},
 	}, nil)
 
 	if r.recursiveProxyURL != "socks5://proxy:1080" {
@@ -154,9 +154,9 @@ func TestConfigureServers_RecursiveProxyURL(t *testing.T) {
 
 	// Fallback does NOT override already-set proxy URL.
 	r.ConfigureServers([]config.UpstreamServer{
-		{Address: config.RecursiveIndicator, Proxy: "socks5://proxy:1080"},
+		{Protocol: config.ProtoRecursive, Proxy: "socks5://proxy:1080"},
 	}, []config.UpstreamServer{
-		{Address: config.RecursiveIndicator, Proxy: "socks5://other:1080"},
+		{Protocol: config.ProtoRecursive, Proxy: "socks5://other:1080"},
 	})
 
 	if r.recursiveProxyURL != "socks5://proxy:1080" {
@@ -172,9 +172,9 @@ func TestConfigureServers_RecursiveProxyURL(t *testing.T) {
 	r2.cname = &CNAME{resolver: r2}
 
 	r2.ConfigureServers([]config.UpstreamServer{
-		{Address: config.RecursiveIndicator},
+		{Protocol: config.ProtoRecursive},
 	}, []config.UpstreamServer{
-		{Address: config.RecursiveIndicator, Proxy: "socks5://fallback:1080"},
+		{Protocol: config.ProtoRecursive, Proxy: "socks5://fallback:1080"},
 	})
 
 	if r2.recursiveProxyURL != "socks5://fallback:1080" {

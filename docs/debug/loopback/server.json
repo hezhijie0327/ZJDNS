@@ -27,5 +27,5 @@
       "cache": { "max_entries": 1000 }
     }
   },
-  "upstream": [{ "address": "builtin_recursive", "poisonguard": false }]
+  "upstream": [{ "protocol": "recursive", "poisonguard": false }]
 }
