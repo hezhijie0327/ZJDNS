@@ -124,6 +124,20 @@ dig @127.0.0.1 -p 10533 www.baidu.com A +short
 pkill -f zjdns
 ```
 
+### Hopguard (UDP IP TTL fingerprint)
+
+```bash
+/tmp/zjdns -config docs/debug/defense/hopguard.json > /tmp/hopguard.log 2>&1 &
+sleep 3
+
+dig @127.0.0.1 -p 10533 www.baidu.com A +short
+
+# Expected log: hopguard IP_RECVTTL … enabled (Linux) / not available (Windows)
+# TTL mismatch → packet dropped silently; TTL match → passed to content analysis
+
+pkill -f zjdns
+```
+
 ### Splitguard (TCP segmentation)
 
 ```bash

@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.7.5-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.7.6-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -69,7 +69,7 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 
 ### 安全
 - **DNSSEC**：完整密码学信任链（DNSKEY→DS→RRSIG），NSEC/NSEC3 否定回答（[RFC 5155](docs/rfc/rfc5155.txt)），REVOKE 位检查（[RFC 5011](docs/rfc/rfc5011.txt)）
-- **DNS 防污染**：spoofguard（UDP 多读）、poisonguard（越权检测）、splitguard（TCP 分段），检测到投毒自动 UDP→TCP 回退
+- **DNS 防污染**：hopguard（IP TTL 指纹）、spoofguard（UDP 多读）、poisonguard（越权检测）、splitguard（TCP 分段）
 - **DNS Cookie**：SipHash-2-4（[RFC 9018](docs/rfc/rfc9018.txt)），密钥 24h 轮换，保留历史密钥兼容慢客户端
 - **EDNS Padding**：[RFC 8467](docs/rfc/rfc8467.txt)，请求 128/响应 468 块大小，随机填充
 - **DNS64**：[RFC 6147](docs/rfc/rfc6147.txt)，AAAA 无记录时从 A 合成（默认前缀 `64:ff9b::/96`）
@@ -126,13 +126,15 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 | `poisonguard` | bool | 递归越权检测 |
 | `spoofguard` | bool | UDP 多读防欺骗 |
 | `splitguard` | bool | TCP 分段防 RST |
+| `hopguard` | bool | IP TTL 指纹防欺骗 |
 
 ### 防污染配置示例
 
 ```json
-{ "protocol": "recursive", "poisonguard": true, "spoofguard": true, "splitguard": true },
+{ "protocol": "recursive", "poisonguard": true, "spoofguard": true, "splitguard": true, "hopguard": true },
 { "address": "8.8.4.4:53", "protocol": "udp", "spoofguard": true },
-{ "address": "8.8.8.8:53", "protocol": "tcp", "splitguard": true }
+{ "address": "8.8.8.8:53", "protocol": "tcp", "splitguard": true },
+{ "address": "8.8.8.8:53", "protocol": "udp", "hopguard": true }
 ```
 
 ### 常用功能配置

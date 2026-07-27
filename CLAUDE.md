@@ -226,7 +226,7 @@ zjdns/
 └── server/
     ├── handler/        ← query pipeline adapter + QueryContext
     │   └── middleware/ ← 9 composable middleware + AssembleChain
-    ├── defense/        ← DNS anti-pollution (Detector, poisonguard/spoofguard/splitguard)
+    ├── defense/        ← DNS anti-pollution (Detector, hopguard/poisonguard/spoofguard/splitguard)
     ├── protocol/       ← {plain,tls,tlcp,dnscrypt} server listeners
     ├── upstream/       ← {plain,tls,tlcp,dnscrypt} outbound client + pool + SOCKS5
     └── resolver/       ← recursive walk + forward + dnssec/ + probe/
@@ -287,6 +287,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 
 | Mechanism | Layer | Algorithm |
 |-----------|-------|-----------|
+| **Hopguard** | UDP upstream | IP TTL fingerprint: auto-learn baseline, reject responses with TTL outside ±2 range |
 | **Spoofguard** | UDP upstream | Multi-read loop: reject `AR=0+NOERROR+EDNS`; accept `AN>=2`/`NS>0`/`AD=1`; collect ambiguous (≤500ms) → pick richest |
 | **Poisonguard** | Recursive | Zone-authority cross-validation on resolved answers |
 | **Splitguard** | TCP upstream | Random [1,N] payload segmentation with jitter |

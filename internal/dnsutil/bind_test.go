@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -161,10 +162,23 @@ func isAddrInUse(err error) bool {
 	if errors.As(err, &opErr) {
 		var syscallErr *os.SyscallError
 		if errors.As(opErr.Err, &syscallErr) {
-			return errors.Is(syscallErr.Err, syscall.EADDRINUSE)
+			// Windows: WSAEADDRINUSE (10048) doesn't match syscall.EADDRINUSE
+			// because Go maps Winsock errors to a separate numbering space.
+			// Fall back to string matching for portability.
+			if errors.Is(syscallErr.Err, syscall.EADDRINUSE) {
+				return true
+			}
 		}
+		return isAddrInUseString(opErr.Error())
 	}
 	return false
+}
+
+// isAddrInUseString provides a platform-independent fallback for EADDRINUSE
+// detection when the error number doesn't match syscall.EADDRINUSE (e.g.
+// Windows WSAEADDRINUSE).
+func isAddrInUseString(msg string) bool {
+	return strings.Contains(msg, "address") && (strings.Contains(msg, "use") || strings.Contains(msg, "usage"))
 }
 
 // --- benchmarks ---

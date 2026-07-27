@@ -15,28 +15,28 @@ func TestConfigureServers_DefenseFlagPropagation(t *testing.T) {
 	tests := []struct {
 		name      string
 		servers   []config.UpstreamServer
-		wantFlags struct{ spoofguard, splitguard, poisonguard bool }
+		wantFlags struct{ spoofguard, splitguard, poisonguard, hopguard bool }
 	}{
 		{
 			name: "all flags enabled",
 			servers: []config.UpstreamServer{
-				{Protocol: config.ProtoRecursive, Spoofguard: true, Splitguard: true, Poisonguard: true},
+				{Protocol: config.ProtoRecursive, Spoofguard: true, Splitguard: true, Poisonguard: true, HopGuard: true},
 			},
-			wantFlags: struct{ spoofguard, splitguard, poisonguard bool }{true, true, true},
+			wantFlags: struct{ spoofguard, splitguard, poisonguard, hopguard bool }{true, true, true, true},
 		},
 		{
 			name: "all flags disabled",
 			servers: []config.UpstreamServer{
 				{Protocol: config.ProtoRecursive},
 			},
-			wantFlags: struct{ spoofguard, splitguard, poisonguard bool }{false, false, false},
+			wantFlags: struct{ spoofguard, splitguard, poisonguard, hopguard bool }{false, false, false, false},
 		},
 		{
 			name: "only spoofguard",
 			servers: []config.UpstreamServer{
 				{Protocol: config.ProtoRecursive, Spoofguard: true},
 			},
-			wantFlags: struct{ spoofguard, splitguard, poisonguard bool }{true, false, false},
+			wantFlags: struct{ spoofguard, splitguard, poisonguard, hopguard bool }{true, false, false, false},
 		},
 		{
 			name: "OR semantics — any server enables flag",
@@ -44,7 +44,7 @@ func TestConfigureServers_DefenseFlagPropagation(t *testing.T) {
 				{Protocol: config.ProtoRecursive, Spoofguard: false, Poisonguard: false},
 				{Protocol: config.ProtoRecursive, Spoofguard: true, Poisonguard: true},
 			},
-			wantFlags: struct{ spoofguard, splitguard, poisonguard bool }{true, false, true},
+			wantFlags: struct{ spoofguard, splitguard, poisonguard, hopguard bool }{true, false, true, false},
 		},
 		{
 			name: "non-recursive servers do not affect flags",
@@ -52,7 +52,7 @@ func TestConfigureServers_DefenseFlagPropagation(t *testing.T) {
 				{Address: "8.8.8.8:53", Protocol: "udp", Spoofguard: true},
 				{Protocol: config.ProtoRecursive},
 			},
-			wantFlags: struct{ spoofguard, splitguard, poisonguard bool }{false, false, false},
+			wantFlags: struct{ spoofguard, splitguard, poisonguard, hopguard bool }{false, false, false, false},
 		},
 	}
 
@@ -85,6 +85,9 @@ func TestConfigureServers_DefenseFlagPropagation(t *testing.T) {
 			}
 			if r.recursive.poisonguard != tt.wantFlags.poisonguard {
 				t.Errorf("poisonguard = %v, want %v", r.recursive.poisonguard, tt.wantFlags.poisonguard)
+			}
+			if r.recursive.hopguard != tt.wantFlags.hopguard {
+				t.Errorf("hopguard = %v, want %v", r.recursive.hopguard, tt.wantFlags.hopguard)
 			}
 		})
 	}

@@ -189,6 +189,7 @@ func (r *Resolver) ConfigureServers(servers []config.UpstreamServer) {
 			r.recursive.spoofguard = r.recursive.spoofguard || s.Spoofguard
 			r.recursive.splitguard = r.recursive.splitguard || s.Splitguard
 			r.recursive.poisonguard = r.recursive.poisonguard || s.Poisonguard
+			r.recursive.hopguard = r.recursive.hopguard || s.HopGuard
 		}
 		active = append(active, s)
 	}

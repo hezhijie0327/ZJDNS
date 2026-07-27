@@ -1,0 +1,17 @@
+{
+  "server": {
+    "log_level": "debug:UPSTREAM,RESULT",
+    "protocol": {
+      "udp": "10533",
+      "tcp": "10533"
+    }
+  },
+  "upstream": [
+    {
+      "address": "8.8.8.8:53",
+      "protocol": "udp",
+      "hopguard": true,
+      "spoofguard": true
+    }
+  ]
+}

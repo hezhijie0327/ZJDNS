@@ -11,7 +11,8 @@
       "protocol": "recursive",
       "poisonguard": true,
       "spoofguard": true,
-      "splitguard": true
+      "splitguard": true,
+      "hopguard": true
     }
   ]
 }

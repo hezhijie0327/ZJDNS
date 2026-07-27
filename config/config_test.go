@@ -154,13 +154,15 @@ func TestUpstreamServer_DefenseFlagsParsed(t *testing.T) {
 		json    string
 		wantPG  bool
 		wantSG  bool
+		wantHG  bool
 		wantSpG bool
 	}{
-		{"all on", `[{"protocol":"recursive","poisonguard":true,"spoofguard":true,"splitguard":true}]`, true, true, true},
-		{"all off", `[{"address":"8.8.8.8:53","protocol":"udp"}]`, false, false, false},
-		{"only poisonguard", `[{"protocol":"recursive","poisonguard":true}]`, true, false, false},
-		{"only spoofguard", `[{"address":"8.8.8.8:53","spoofguard":true}]`, false, true, false},
-		{"only splitguard", `[{"address":"1.2.4.8:53","protocol":"tcp","splitguard":true}]`, false, false, true},
+		{"all on", `[{"protocol":"recursive","poisonguard":true,"spoofguard":true,"splitguard":true,"hopguard":true}]`, true, true, true, true},
+		{"all off", `[{"address":"8.8.8.8:53","protocol":"udp"}]`, false, false, false, false},
+		{"only poisonguard", `[{"protocol":"recursive","poisonguard":true}]`, true, false, false, false},
+		{"only spoofguard", `[{"address":"8.8.8.8:53","spoofguard":true}]`, false, true, false, false},
+		{"only splitguard", `[{"address":"1.2.4.8:53","protocol":"tcp","splitguard":true}]`, false, false, false, true},
+		{"only hopguard", `[{"address":"8.8.8.8:53","hopguard":true}]`, false, false, true, false},
 	}
 
 	for _, tt := range tests {
@@ -187,6 +189,9 @@ func TestUpstreamServer_DefenseFlagsParsed(t *testing.T) {
 			}
 			if u.Splitguard != tt.wantSpG {
 				t.Errorf("Splitguard = %v, want %v", u.Splitguard, tt.wantSpG)
+			}
+			if u.HopGuard != tt.wantHG {
+				t.Errorf("HopGuard = %v, want %v", u.HopGuard, tt.wantHG)
 			}
 		})
 	}

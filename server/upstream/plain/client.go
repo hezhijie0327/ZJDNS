@@ -4,6 +4,7 @@ package plain
 import (
 	"time"
 	"zjdns/config"
+	"zjdns/server/defense"
 	"zjdns/server/upstream/pool"
 	socks5 "zjdns/server/upstream/socks5"
 
@@ -17,6 +18,7 @@ type Client struct {
 	tcpPool   *pool.ConnPool
 	getProxy  func(*config.UpstreamServer) *socks5.Dialer
 	timeout   time.Duration
+	hopGuard  *defense.HopGuard // shared LRU cache for TTL fingerprints
 }
 
 // New creates a Client for plain UDP and TCP DNS queries.
@@ -27,5 +29,6 @@ func New(udpClient, tcpClient *dns.Client, tcpPool *pool.ConnPool, getProxy func
 		tcpPool:   tcpPool,
 		getProxy:  getProxy,
 		timeout:   timeout,
+		hopGuard:  defense.NewHopGuard(),
 	}
 }

@@ -8,8 +8,10 @@ import (
 	"sync"
 	"time"
 	"zjdns/config"
+	"zjdns/internal/ipttl"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/server/defense"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -57,9 +59,11 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 	}
 	proxyDialer := c.getProxy(server)
 
-	// GFW only hijacks A/AAAA.  Skip spoofguard for other QTYPEs
-	// (NS, DS, DNSKEY, etc.) — no fakes to detect.
-	if server.Spoofguard && len(msg.Question) > 0 &&
+	// GFW only hijacks A/AAAA — skip multi-read for other QTYPEs.
+	// HopGuard also needs multi-read: reject the GFW fake by TTL mismatch,
+	// then keep reading for the real response.
+	needMultiRead := server.Spoofguard || server.HopGuard
+	if needMultiRead && len(msg.Question) > 0 &&
 		(dns.RRToType(msg.Question[0]) == dns.TypeA ||
 			dns.RRToType(msg.Question[0]) == dns.TypeAAAA) {
 		return c.executeUDPMultiRead(ctx, msg, server, proxyDialer)
@@ -122,6 +126,17 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 		defer func() { clear(buf); spoofguardBufPool.Put(bufPtr) }()
 	}
 
+	// ── HopGuard: enable TTL/HopLimit capture on raw UDP conns ──
+	var tc *ipttl.Capture
+	var hg *defense.HopGuard
+	if server.HopGuard && conn != nil {
+		hg = c.hopGuard
+		tc = ipttl.New(conn.(*net.UDPConn))
+		if tc == nil {
+			log.Warnf("UPSTREAM: hopguard TTL/HopLimit capture not available on %s: platform not supported — guard disabled for this upstream", server.Address)
+		}
+	}
+
 	// ── Multi-read loop ───────────────────────────────────────────
 	maxDeadline := time.Now().Add(config.DefaultDNSQueryTimeout)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(maxDeadline) {
@@ -138,11 +153,15 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 		}
 		var n int
 		var err error
-		if pconn != nil {
+		var ttl uint8
+		if tc != nil { //nolint:gocritic // three-branch read dispatch
+			_ = conn.SetReadDeadline(time.Now().Add(config.DefaultSpoofguardPollInterval))
+			n, ttl, err = tc.ReadFrom(buf)
+		} else if pconn != nil {
 			_ = pconn.SetDeadline(time.Now().Add(config.DefaultSpoofguardPollInterval))
 			n, _, err = pconn.ReadFrom(buf)
 		} else {
-			_ = conn.SetReadDeadline(time.Now().Add(config.DefaultSpoofguardPollInterval))
+			_ = conn.SetDeadline(time.Now().Add(config.DefaultSpoofguardPollInterval))
 			n, err = conn.Read(buf)
 		}
 
@@ -181,6 +200,11 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 				pool.DefaultMessage.Put(sg.nonEDNS)
 			}
 			return nil, err
+		}
+
+		// HopGuard: reject packets with out-of-range TTL (GFW injection).
+		if hg != nil && !hg.Validate(server.Address, ttl) {
+			continue
 		}
 
 		if n < 12 || uint16(buf[0])<<8|uint16(buf[1]) != msg.ID {

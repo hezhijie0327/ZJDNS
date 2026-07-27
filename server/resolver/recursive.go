@@ -31,6 +31,7 @@ type Recursive struct {
 	spoofguard        bool            // from protocol=recursive upstream
 	splitguard        bool            // from protocol=recursive upstream
 	poisonguard       bool            // from protocol=recursive upstream
+	hopguard          bool            // from protocol=recursive upstream
 }
 
 // CNAME handles CNAME record chasing during DNS resolution, following the

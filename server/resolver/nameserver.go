@@ -52,6 +52,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			Proxy:      r.resolver.recursiveProxyURL,
 			Spoofguard: r.spoofguard && protocol == config.ProtoUDP,
 			Splitguard: r.splitguard && protocol == config.ProtoTCP,
+			HopGuard:   r.hopguard && protocol == config.ProtoUDP,
 		}
 
 		g.Go(func() error {

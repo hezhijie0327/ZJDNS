@@ -33,8 +33,10 @@ docs/debug/
 ├── defense/                # Anti-pollution defense scenarios
 │   ├── spoofguard.json              # forwarding UDP + spoofguard (8.8.8.8)
 │   ├── splitguard.json              # forwarding TCP + splitguard (8.8.8.8)
+│   ├── hopguard.json                # forwarding UDP + hopguard (TTL-based, 8.8.8.8)
+│   ├── hopguard-spoofguard.json     # forwarding UDP + hopguard + spoofguard (8.8.8.8)
 │   ├── poisonguard.json             # recursive + poisonguard (content detection)
-│   └── recursive-defense.json       # recursive all three: poisonguard + spoofguard + splitguard
+│   └── recursive-defense.json       # recursive all four: poisonguard + spoofguard + splitguard + hopguard
 └── upstream/               # ZJDNS → external upstream tests
     ├── alidns-tls.json      # AliDNS via TLS
     ├── alidns-https.json    # AliDNS via HTTPS
@@ -223,6 +225,37 @@ pkill -f "spoofguard-socks5"
 pkill -f "socks5"
 ```
 
+### HopGuard (forwarding UDP IP TTL 检测)
+
+```bash
+/tmp/zjdns -config docs/debug/defense/hopguard.json &
+sleep 2
+
+dig @127.0.0.1 -p 10533 www.google.com A +short
+
+# IP 层 TTL 指纹：首个响应记录基线 TTL，后续响应 TTL 偏离 ±2 → 丢弃
+# 与 GFW 注入点的 TTL 不同（靠近用户 vs 真实服务器远端）
+# 预期日志: "hopguard SetControlMessage"  (Linux 正常启用, Windows 降级提示)
+#   → TTL 不匹配时: 静默丢弃 (continue, 不输出 WARN)
+
+pkill -f "hopguard"
+```
+
+### HopGuard + Spoofguard (IP TTL + DNS 内容双层过滤)
+
+```bash
+/tmp/zjdns -config docs/debug/defense/hopguard-spoofguard.json &
+sleep 2
+
+dig @127.0.0.1 -p 10533 www.google.com A +short
+
+# TTL 检查作为前置过滤器，先于 spoofguard 内容分析
+# TTL 不匹配 → 直接丢弃; TTL 匹配 → 进入 spoofguard EDNS 门控
+# 两个信号正交: IP 层 (路由拓扑) + DNS 层 (报文格式)
+
+pkill -f "hopguard-spoofguard"
+```
+
 ### Splitguard (forwarding TCP 分段)
 
 ```bash
@@ -251,7 +284,7 @@ dig @127.0.0.1 -p 10533 www.google.com A +short
 pkill -f "poisonguard"
 ```
 
-### Recursive Defense (recursive 三层全开)
+### Recursive Defense (recursive 四层全开)
 
 ```bash
 /tmp/zjdns -config docs/debug/defense/recursive-defense.json &
@@ -259,6 +292,7 @@ sleep 2
 
 dig @127.0.0.1 -p 10533 www.google.com A +short
 
+# hopguard: 每跳 UDP IP TTL 指纹验证
 # spoofguard: 每跳 UDP EDNS OPT 门控
 # poisonguard: 内容检测 + 劫持触发 TCP 回退
 # splitguard: TCP 回退时分段抗 RST

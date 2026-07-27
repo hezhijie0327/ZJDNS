@@ -139,6 +139,7 @@ type UpstreamServer struct {
 	Poisonguard    bool     `json:"poisonguard,omitzero"`
 	Spoofguard     bool     `json:"spoofguard,omitzero"`
 	Splitguard     bool     `json:"splitguard,omitzero"`
+	HopGuard       bool     `json:"hopguard,omitzero"`
 }
 
 // ZoneRule defines a DNS zone rule for constructing synthetic responses.
