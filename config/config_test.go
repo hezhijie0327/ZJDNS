@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"codeberg.org/miekg/dns"
 )
 
 func TestLoadConfig_DefaultPortsApplied(t *testing.T) {
@@ -213,6 +215,273 @@ func TestValidateUpstreamServers_EmptyAddress(t *testing.T) {
 	_, err := LoadConfig(path)
 	if err == nil {
 		t.Error("expected error for empty upstream address")
+	}
+}
+
+func TestDDRRecords_AllProtocolsEnabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	// Enable every encrypted protocol; HTTPS + HTTP3 share port 443,
+	// TLS + QUIC share port 853, TLCP + DTLCP share port 9853.
+	cfg := `{
+		"server": {
+			"protocol": {
+				"tls": "853",
+				"quic": "853",
+				"https": {"port": "443", "endpoint": "/dns-query"},
+				"http3": {"port": "443", "endpoint": "/dns-query"},
+				"dtls": "8853",
+				"tlcp": "9853",
+				"http_tlcp": {"port": "9443", "endpoint": "/dns-query"},
+				"dtlcp": "9853"
+			},
+			"certificate": {"domain": "dns.example.com"},
+			"features": {"ddr": {"ipv4": "127.0.0.1", "ipv6": "::1"}}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	// Find the _dns.resolver.arpa zone rule.
+	var svcbRecords []ZoneRecord
+	for _, zr := range c.Zone {
+		if zr.Name == "_dns.resolver.arpa" {
+			svcbRecords = zr.Answer
+			break
+		}
+	}
+	if len(svcbRecords) == 0 {
+		t.Fatal("no SVCB records for _dns.resolver.arpa")
+	}
+
+	// Expected: 5 records aggregated by port.
+	// Port 443: HTTPS(h2) + HTTP3(h3) → alpn=h2,h3 + dohpath
+	// Port 9443: HTTP_TLCP(h2) → alpn=h2 + dohpath
+	// Port 853: TLS(dot) + QUIC(doq) → alpn=doq,dot
+	// Port 8853: DTLS(dot) → alpn=dot
+	// Port 9853: TLCP(dot) + DTLCP(dot) → alpn=dot
+	want := []string{
+		`1 . alpn=h2,h3 port=443 dohpath="/dns-query{?dns}" ipv4hint=127.0.0.1 ipv6hint=::1`,
+		`2 . alpn=h2 port=9443 dohpath="/dns-query{?dns}" ipv4hint=127.0.0.1 ipv6hint=::1`,
+		`3 . alpn=doq,dot port=853 ipv4hint=127.0.0.1 ipv6hint=::1`,
+		`4 . alpn=dot port=8853 ipv4hint=127.0.0.1 ipv6hint=::1`,
+		`5 . alpn=dot port=9853 ipv4hint=127.0.0.1 ipv6hint=::1`,
+	}
+	if len(svcbRecords) != len(want) {
+		t.Fatalf("got %d SVCB records, want %d:\n%v", len(svcbRecords), len(want), svcbRecords)
+	}
+	for i, w := range want {
+		if svcbRecords[i].Type != dns.TypeSVCB {
+			t.Errorf("record %d: Type = %d, want SVCB(%d)", i, svcbRecords[i].Type, dns.TypeSVCB)
+		}
+		if svcbRecords[i].Content != w {
+			t.Errorf("record %d:\n  got  %s\n  want %s", i, svcbRecords[i].Content, w)
+		}
+	}
+
+	// Verify the domain zone rule also exists.
+	foundDomain := false
+	for _, zr := range c.Zone {
+		if zr.Name == "dns.example.com" {
+			foundDomain = true
+			break
+		}
+	}
+	if !foundDomain {
+		t.Error("missing A/AAAA zone rule for dns.example.com")
+	}
+}
+
+func TestDDRRecords_HTTPSOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	cfg := `{
+		"server": {
+			"protocol": {
+				"https": {"port": "443", "endpoint": "/dns-query"}
+			},
+			"certificate": {"domain": "dns.example.com"},
+			"features": {"ddr": {"ipv4": "1.2.3.4"}}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	var svcbRecords []ZoneRecord
+	for _, zr := range c.Zone {
+		if zr.Name == "_dns.resolver.arpa" {
+			svcbRecords = zr.Answer
+			break
+		}
+	}
+	if len(svcbRecords) != 1 {
+		t.Fatalf("got %d SVCB records, want 1", len(svcbRecords))
+	}
+	want := `1 . alpn=h2 port=443 dohpath="/dns-query{?dns}" ipv4hint=1.2.3.4`
+	if svcbRecords[0].Content != want {
+		t.Errorf("got  %s\nwant %s", svcbRecords[0].Content, want)
+	}
+}
+
+func TestDDRRecords_DifferentPorts(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	// TLS on 853, QUIC on 784 (different); DTLS separate on 8853 → 3 records.
+	cfg := `{
+		"server": {
+			"protocol": {
+				"tls": "853",
+				"quic": "784",
+				"dtls": "8853"
+			},
+			"certificate": {"domain": "dns.example.com"},
+			"features": {"ddr": {"ipv4": "10.0.0.1"}}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	var svcbRecords []ZoneRecord
+	for _, zr := range c.Zone {
+		if zr.Name == "_dns.resolver.arpa" {
+			svcbRecords = zr.Answer
+			break
+		}
+	}
+	if len(svcbRecords) != 3 {
+		t.Fatalf("got %d SVCB records, want 3", len(svcbRecords))
+	}
+	// Sorted: stream group by port → 784 < 853 < 8853
+	// Port 784: QUIC(doq) only
+	want0 := `1 . alpn=doq port=784 ipv4hint=10.0.0.1`
+	if svcbRecords[0].Content != want0 {
+		t.Errorf("record 0:\n  got  %s\n  want %s", svcbRecords[0].Content, want0)
+	}
+	// Port 853: TLS(dot) only
+	want1 := `2 . alpn=dot port=853 ipv4hint=10.0.0.1`
+	if svcbRecords[1].Content != want1 {
+		t.Errorf("record 1:\n  got  %s\n  want %s", svcbRecords[1].Content, want1)
+	}
+	// Port 8853: DTLS(dot) only
+	want2 := `3 . alpn=dot port=8853 ipv4hint=10.0.0.1`
+	if svcbRecords[2].Content != want2 {
+		t.Errorf("record 2:\n  got  %s\n  want %s", svcbRecords[2].Content, want2)
+	}
+}
+
+func TestDDRRecords_TLSAndDTLS_SamePort(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	// TLS (TCP) and DTLS (UDP) on the same port — same ALPN (dot),
+	// different transports, no port conflict.  Should merge into one record.
+	cfg := `{
+		"server": {
+			"protocol": {
+				"tls": "853",
+				"dtls": "853"
+			},
+			"certificate": {"domain": "dns.example.com"},
+			"features": {"ddr": {"ipv4": "10.0.0.1"}}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	var svcbRecords []ZoneRecord
+	for _, zr := range c.Zone {
+		if zr.Name == "_dns.resolver.arpa" {
+			svcbRecords = zr.Answer
+			break
+		}
+	}
+	if len(svcbRecords) != 1 {
+		t.Fatalf("got %d SVCB records, want 1 (merged)", len(svcbRecords))
+	}
+	want := `1 . alpn=dot port=853 ipv4hint=10.0.0.1`
+	if svcbRecords[0].Content != want {
+		t.Errorf("got  %s\nwant %s", svcbRecords[0].Content, want)
+	}
+}
+
+func TestDDRRecords_NoSecureProtocols(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	// DDR configured but no secure protocols enabled → should be skipped.
+	cfg := `{
+		"server": {
+			"protocol": {"udp": "53"},
+			"certificate": {"domain": "dns.example.com"},
+			"features": {"ddr": {"ipv4": "127.0.0.1"}}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	for _, zr := range c.Zone {
+		if zr.Name == "_dns.resolver.arpa" {
+			t.Error("DDR should be disabled when no secure protocols are enabled")
+		}
+	}
+}
+
+func TestDDRRecords_Disabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	// DDR enabled but no certificate domain → should be skipped.
+	cfg := `{
+		"server": {
+			"features": {"ddr": {"ipv4": "127.0.0.1"}}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	for _, zr := range c.Zone {
+		if zr.Name == "_dns.resolver.arpa" {
+			t.Error("DDR should be disabled when certificate.domain is missing")
+		}
 	}
 }
 
