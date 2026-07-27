@@ -9,7 +9,7 @@ const testServer = "8.8.8.8"
 
 func feedTTL(hg *HopGuard, serverIP string, ttl uint8, count int) {
 	for range count {
-		hg.Validate(serverIP, ttl)
+		hg.Feed(serverIP, ttl)
 	}
 }
 
@@ -139,6 +139,7 @@ func TestHopGuard_NilGuard(t *testing.T) {
 	if !hg.Validate("8.8.8.8", 42) {
 		t.Error("nil guard should always return true")
 	}
+	hg.Feed("8.8.8.8", 42) // nil guard: no-op
 	if hg.Expected("8.8.8.8") != 0 {
 		t.Errorf("nil guard Expected() should be 0, got %d", hg.Expected("8.8.8.8"))
 	}

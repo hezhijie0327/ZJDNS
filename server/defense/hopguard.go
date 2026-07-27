@@ -52,16 +52,46 @@ func NewHopGuard() *HopGuard {
 }
 
 // Validate checks whether the observed TTL is acceptable for the given server.
+// It does NOT record TTLs — learning is handled separately by Feed, which is
+// called only after spoofguard confirms the response is clean.
 //
-// Learning phase: all responses pass; TTLs are recorded in a histogram. After
-// hopGuardMinSamples, trusted TTLs are selected adaptively and the guard arms.
-//
-// Enforcement phase: a response passes if its TTL is within ±fluctuation of
-// any trusted TTL. The histogram is always updated (even on rejection) so new
-// anycast TTLs can accumulate enough relative count to become trusted.
+// Learning phase: all TTLs pass (insufficient data to judge).
+// Enforcement phase: TTL must be within ±fluctuation of any trusted baseline.
 func (h *HopGuard) Validate(serverIP string, observed uint8) bool {
 	if h == nil || observed == 0 {
 		return true
+	}
+
+	st, ok := h.states.Get(serverIP)
+	if !ok {
+		// No state yet — first contact with this server.  Feed will
+		// create the state when spoofguard accepts the response.
+		return true
+	}
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	// Learning phase: accept all.
+	if !st.armed {
+		return true
+	}
+
+	// Enforcement phase: check against trusted baselines.
+	if passTrusted(st, observed) {
+		return true
+	}
+
+	log.Debugf("UPSTREAM: hopguard reject TTL=%d for %s (trusted: %s)", observed, serverIP, trustedKeys(st))
+	return false
+}
+
+// Feed records a TTL observation from a response that spoofguard has
+// confirmed clean.  Only trusted DNS content is used for TTL learning,
+// preventing GFW-injected responses from poisoning the histogram.
+func (h *HopGuard) Feed(serverIP string, observed uint8) {
+	if h == nil || observed == 0 {
+		return
 	}
 
 	st, ok := h.states.Get(serverIP)
@@ -79,44 +109,72 @@ func (h *HopGuard) Validate(serverIP string, observed uint8) bool {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
-	// Learning phase: record and accept all.
-	if !st.armed {
+	// Already armed — keep histogram updated for periodic rebuild.
+	if st.armed {
 		st.histogram[observed]++
 		st.samples++
-		if st.samples%8 == 0 {
-			log.Debugf("UPSTREAM: hopguard learning (%d samples, %d TTLs) for %s",
-				st.samples, len(st.histogram), serverIP)
-		}
-		if st.samples >= hopGuardMinSamples && st.samples%hopGuardMinSamples == 0 {
+		if st.samples%hopGuardMinSamples == 0 {
 			rebuildTrusted(st)
-			if len(st.trusted) > 0 {
-				st.armed = true
-				log.Debugf("UPSTREAM: hopguard armed (%d trusted, threshold=%d) for %s",
-					len(st.trusted), trustThreshold(st), serverIP)
-			}
-			// If no TTL reached the threshold, keep learning. The LRU
-			// map naturally bounds memory; infrequently queried servers
-			// are evicted and re-learned on next access.
+			log.Debugf("UPSTREAM: hopguard rebuild (%d trusted, threshold=%d) for %s", len(st.trusted), trustThreshold(st), serverIP)
 		}
-		return true
+		return
 	}
 
-	// Enforcement phase: always update histogram so new anycast TTLs can
-	// accumulate enough relative counts to become trusted. Rebuild on every
-	// hopGuardMinSamples boundary.
+	// Learning phase: record and check arming.
 	st.histogram[observed]++
 	st.samples++
-	if st.samples%hopGuardMinSamples == 0 {
-		rebuildTrusted(st)
-		log.Debugf("UPSTREAM: hopguard rebuild (%d trusted, threshold=%d) for %s", len(st.trusted), trustThreshold(st), serverIP)
+	if st.samples%8 == 0 {
+		log.Debugf("UPSTREAM: hopguard learning (%d samples, %d TTLs) for %s",
+			st.samples, len(st.histogram), serverIP)
 	}
+	if st.samples >= hopGuardMinSamples && st.samples%hopGuardMinSamples == 0 {
+		rebuildTrusted(st)
+		if len(st.trusted) > 0 {
+			st.armed = true
+			log.Debugf("UPSTREAM: hopguard armed (%d trusted, threshold=%d) for %s",
+				len(st.trusted), trustThreshold(st), serverIP)
+		}
+	}
+}
 
-	if passTrusted(st, observed) {
+// Confident reports whether hopguard is fully armed for serverIP — the TTL
+// baseline is trusted and can be used for rejection decisions.
+func (h *HopGuard) Confident(serverIP string) bool {
+	if h == nil {
 		return true
 	}
+	st, ok := h.states.Get(serverIP)
+	if !ok {
+		return false
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.armed
+}
 
-	log.Debugf("UPSTREAM: hopguard reject TTL=%d for %s (trusted: %s)", observed, serverIP, trustedKeys(st))
-	return false
+// Expected returns the most frequent trusted TTL for the server (0 if not armed).
+func (h *HopGuard) Expected(serverIP string) uint8 {
+	if h == nil {
+		return 0
+	}
+	st, ok := h.states.Get(serverIP)
+	if !ok {
+		return 0
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if !st.armed {
+		return 0
+	}
+	var mode uint8
+	maxCount := 0
+	for ttl, count := range st.trusted {
+		if count > maxCount || (count == maxCount && ttl < mode) {
+			mode = ttl
+			maxCount = count
+		}
+	}
+	return mode
 }
 
 // trustThreshold computes the adaptive min-trust threshold: max(4, modeCount/4).
@@ -185,44 +243,4 @@ func rebuildTrusted(st *serverState) {
 			st.trusted[ttl] = count
 		}
 	}
-}
-
-// Confident reports whether hopguard is fully armed for serverIP — the TTL
-// baseline is trusted and can be used for rejection decisions.
-func (h *HopGuard) Confident(serverIP string) bool {
-	if h == nil {
-		return true
-	}
-	st, ok := h.states.Get(serverIP)
-	if !ok {
-		return false
-	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.armed
-}
-
-// Expected returns the most frequent trusted TTL for the server (0 if not armed).
-func (h *HopGuard) Expected(serverIP string) uint8 {
-	if h == nil {
-		return 0
-	}
-	st, ok := h.states.Get(serverIP)
-	if !ok {
-		return 0
-	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if !st.armed {
-		return 0
-	}
-	var mode uint8
-	maxCount := 0
-	for ttl, count := range st.trusted {
-		if count > maxCount || (count == maxCount && ttl < mode) {
-			mode = ttl
-			maxCount = count
-		}
-	}
-	return mode
 }

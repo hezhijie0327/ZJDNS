@@ -118,7 +118,6 @@ const (
 	DefaultSpoofguardCollectWindow = 500 * time.Millisecond // silence window before returning best EDNS candidate
 	DefaultSpoofguardPollInterval  = 100 * time.Millisecond // per-read poll interval
 	DefaultSplitguardMaxSegSize    = 4                      // max bytes per TCP segment (random [1,N] to avoid fingerprinting)
-	DefaultSplitguardMaxDelay      = 5 * time.Microsecond   // max inter-segment delay (random [0,N]; near-zero latency, avoids timing fingerprint)
 )
 
 // =============================================================================

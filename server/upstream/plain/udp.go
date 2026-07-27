@@ -33,6 +33,9 @@ type spoofguardState struct {
 	// precedence; non-EDNS is used only when no EDNS response arrives.
 	nonEDNS    *dns.Msg
 	nonEDNSAns int
+
+	// TTL values for hopguard learning — stored per candidate.
+	lastTTL, prevTTL, nonEDNSTTL uint8
 }
 
 // spoofguardBufPool reuses 4KB read buffers across spoofguard queries.
@@ -211,7 +214,14 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 			continue
 		}
 
-		if resp := sg.processPacket(buf[:n], n, msg.UDPSize, server.Address); resp != nil {
+		// TTL confidence signal for spoofguard: when hopguard is armed
+		// and the TTL is trusted, ambiguous EDNS responses can be
+		// fast-accepted without waiting for a second candidate.
+		ttlConfident := hg != nil && hg.Confident(server.Address)
+		if resp := sg.processPacket(buf[:n], n, msg.UDPSize, server.Address, ttlConfident, ttl); resp != nil {
+			if hg != nil {
+				hg.Feed(server.Address, sg.pickBestTTL())
+			}
 			return resp, nil
 		}
 	}
@@ -276,7 +286,7 @@ func dialProxyUDP(ctx context.Context, proxyDialer *socks5.Dialer, addr string, 
 
 // processPacket applies EDNS-gate and fast-return checks to a single raw packet.
 // Returns a response to return immediately, or nil to continue the loop.
-func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, addr string) *dns.Msg {
+func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, addr string, ttlConfident bool, ttl uint8) *dns.Msg {
 	s.lastRecv = time.Now()
 
 	// Fast signals from raw header — check first, before EDNS gate.
@@ -308,6 +318,7 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 			s.nonEDNS = nil
 		}
 		log.Debugf("UPSTREAM: UDP spoofguard fast return from %s (AN=%d, NS=%d, AD=%d, EDNS=%v, rejected=%d)", addr, ancount, nscount, ad, hasEDNS, s.rejected)
+		s.lastTTL = ttl
 		return resp
 	}
 
@@ -354,11 +365,14 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 		}
 		s.nonEDNS = resp
 		s.nonEDNSAns = len(resp.Answer)
+		s.nonEDNSTTL = ttl
 		log.Debugf("UPSTREAM: UDP spoofguard non-EDNS fallback #%d from %s, answer=%d (collecting, waiting for EDNS)", s.rejected, addr, s.nonEDNSAns)
 		return nil
 	}
 
-	// Ambiguous EDNS-bearing — collect as primary candidate.
+	// Ambiguous EDNS-bearing — when TTL is confident, fast-accept
+	// instead of collecting. GFW can't simultaneously forge the correct
+	// TTL and valid EDNS content; the two signals are orthogonal.
 	resp := pool.DefaultMessage.Get()
 	resp.Data = make([]byte, n)
 	copy(resp.Data, raw[:n])
@@ -368,16 +382,45 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 	}
 	resp.Data = nil
 
+	if ttlConfident {
+		if s.prev != nil {
+			pool.DefaultMessage.Put(s.prev)
+		}
+		if s.last != nil {
+			pool.DefaultMessage.Put(s.last)
+		}
+		if s.nonEDNS != nil {
+			pool.DefaultMessage.Put(s.nonEDNS)
+			s.nonEDNS = nil
+		}
+		s.lastTTL = ttl
+		log.Debugf("UPSTREAM: UDP spoofguard fast-accept from %s (EDNS, TTL trusted, answer=%d)", addr, len(resp.Answer))
+		return resp
+	}
+
 	s.candidates++
 	if s.prev != nil {
 		pool.DefaultMessage.Put(s.prev)
 	}
+	s.prevTTL = s.lastTTL
 	s.prev = s.last
 	s.prevAns = s.lastAns
 	s.last = resp
 	s.lastAns = len(resp.Answer)
+	s.lastTTL = ttl
 	log.Debugf("UPSTREAM: UDP spoofguard EDNS candidate #%d from %s, answer=%d (ambiguous, collecting more)", s.candidates, addr, s.lastAns)
 	return nil
+}
+
+// pickBestTTL returns the TTL of the candidate that pickBest would return.
+func (s *spoofguardState) pickBestTTL() uint8 {
+	if s.last != nil {
+		return s.lastTTL
+	}
+	if s.nonEDNS != nil {
+		return s.nonEDNSTTL
+	}
+	return 0
 }
 
 // pickBest returns the best candidate.  EDNS-bearing candidates are always

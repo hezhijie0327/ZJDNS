@@ -3,7 +3,6 @@ package dnsutil
 import (
 	"net"
 	"testing"
-	"time"
 )
 
 func TestWriteTCPMsgSegmented_NoSegment(t *testing.T) {
@@ -20,7 +19,7 @@ func TestWriteTCPMsgSegmented_NoSegment(t *testing.T) {
 		}
 	}()
 
-	n, err := WriteTCPMsgSegmented(client, msg, 0, 0)
+	n, err := WriteTCPMsgSegmented(client, msg, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -50,7 +49,7 @@ func TestWriteTCPMsgSegmented_Segment(t *testing.T) {
 		}
 	}()
 
-	n, err := WriteTCPMsgSegmented(client, msg, 1, 0)
+	n, err := WriteTCPMsgSegmented(client, msg, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -73,37 +72,11 @@ func TestWriteTCPMsgSegmented_SegSizeLargerThanPayload(t *testing.T) {
 		}
 	}()
 
-	n, err := WriteTCPMsgSegmented(client, msg, 100, 0)
+	n, err := WriteTCPMsgSegmented(client, msg, 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if n != len(msg) {
 		t.Errorf("expected %d bytes written, got %d", len(msg), n)
-	}
-}
-
-func TestWriteTCPMsgSegmented_Delay(t *testing.T) {
-	server, client := net.Pipe()
-	defer func() { _ = server.Close() }()
-	defer func() { _ = client.Close() }()
-
-	msg := []byte{0x00, 0x02, 0x01, 0x02}
-	go func() {
-		buf := make([]byte, 100)
-		var total int
-		for total < len(msg) {
-			n, _ := server.Read(buf[total:])
-			total += n
-		}
-	}()
-
-	// The delay parameter enables random inter-segment jitter — the only
-	// guarantee is that the write succeeds and delivers all bytes.
-	n, err := WriteTCPMsgSegmented(client, msg, 1, 1*time.Millisecond)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if n != len(msg) {
-		t.Errorf("expected %d bytes, got %d", len(msg), n)
 	}
 }

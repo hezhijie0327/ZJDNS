@@ -5,7 +5,6 @@ import (
 	"io"
 	"math/rand/v2"
 	"net"
-	"time"
 
 	"codeberg.org/miekg/dns"
 )
@@ -46,8 +45,7 @@ func ReadTCPMsg(conn net.Conn) (*dns.Msg, error) {
 // When segSize > 0, each segment's payload size is randomly chosen from
 // [1, segSize] to avoid fingerprinting (a fixed size like 1B is a DPI
 // signature).  The first segment includes the 2-byte length prefix.
-// An optional inter-segment delay can be set via the delay parameter.
-func WriteTCPMsgSegmented(conn net.Conn, msg []byte, segSize int, delay time.Duration) (int, error) {
+func WriteTCPMsgSegmented(conn net.Conn, msg []byte, segSize int) (int, error) {
 	if segSize <= 0 || segSize >= len(msg)-2 {
 		return conn.Write(msg)
 	}
@@ -74,9 +72,6 @@ func WriteTCPMsgSegmented(conn net.Conn, msg []byte, segSize int, delay time.Dur
 			return totalWritten, err
 		}
 
-		if totalWritten < len(msg) && delay > 0 {
-			time.Sleep(time.Duration(rand.Int64N(int64(delay)))) //nolint:gosec // G404: delay jitter — not cryptographic
-		}
 	}
 	return totalWritten, nil
 }

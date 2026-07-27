@@ -43,8 +43,7 @@ type Conn struct {
 	closeOnce sync.Once
 	done      chan struct{}
 
-	segmentSize  int           // 0 = no segmentation
-	segmentDelay time.Duration // inter-segment delay
+	segmentSize int // 0 = no segmentation
 }
 
 // Pool manages a set of pipelined TCP connections per upstream server key.
@@ -79,8 +78,7 @@ func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 		maxPipe:  int32(maxPipe),
 		done:     make(chan struct{}),
 
-		segmentSize:  0,
-		segmentDelay: 0,
+		segmentSize: 0,
 	}
 	c.nextID.Store(rand.Uint32()) //nolint:gosec // G404: DNS message ID — not cryptographic
 	go c.readLoop()
@@ -91,10 +89,9 @@ func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 // response.
 // SetSegmentation configures TCP DNS message segmentation for this connection.
 // segSize=0 disables segmentation (normal Write).
-func (c *Conn) SetSegmentation(segSize int, delay time.Duration) {
+func (c *Conn) SetSegmentation(segSize int) {
 	c.writeMu.Lock()
 	c.segmentSize = segSize
-	c.segmentDelay = delay
 	c.writeMu.Unlock()
 }
 
@@ -178,7 +175,7 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	}()
 
 	c.writeMu.Lock()
-	_, writeErr := zdnsutil.WriteTCPMsgSegmented(c.conn, writeBuf, c.segmentSize, c.segmentDelay)
+	_, writeErr := zdnsutil.WriteTCPMsgSegmented(c.conn, writeBuf, c.segmentSize)
 	c.writeMu.Unlock()
 	if writeErr != nil {
 		c.close()
