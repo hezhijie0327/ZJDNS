@@ -7,11 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sync"
 	"time"
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 	"zjdns/internal/pool"
 	socks5 "zjdns/server/upstream/socks5"
 
@@ -20,15 +20,14 @@ import (
 
 // Client executes encrypted DNS queries over the DNSCrypt v2 protocol.
 type Client struct {
-	cache    map[string]*State
-	cacheMu  sync.RWMutex
+	cache    *lrumap.Map[string, *State]
 	getProxy func(*config.UpstreamServer) *socks5.Dialer
 }
 
 // New creates a Client for DNSCrypt DNS queries.
 func New(getProxy func(*config.UpstreamServer) *socks5.Dialer) *Client {
 	return &Client{
-		cache:    make(map[string]*State),
+		cache:    lrumap.New[string, *State](config.DefaultTransportMax * 2),
 		getProxy: getProxy,
 	}
 }
@@ -204,7 +203,5 @@ func (c *Client) Close() {
 	if c == nil {
 		return
 	}
-	c.cacheMu.Lock()
 	c.cache = nil
-	c.cacheMu.Unlock()
 }

@@ -25,8 +25,7 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 	}
 
 	key := fmt.Sprintf("%s|%s|%t|%s", server.Address, server.ServerName, server.SkipTLSVerify, server.Proxy)
-	c.httpMu.Lock()
-	httpClient, ok := c.httpClient[key]
+	httpClient, ok := c.httpClient.Get(key)
 	if !ok {
 		tlcpCfg := c.tlcpClientConfig(server).Clone()
 		tlcpCfg.NextProtos = config.NextProtoDOH
@@ -50,21 +49,8 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 			Transport: transport,
 		}
 
-		// Evict if over threshold.
-		if len(c.httpClient) >= config.DefaultHTTPTLCPClientMax*2 {
-			for k := range c.httpClient {
-				if t, ok := c.httpClient[k].Transport.(*http.Transport); ok {
-					t.CloseIdleConnections()
-				}
-				delete(c.httpClient, k)
-				if len(c.httpClient) <= config.DefaultHTTPTLCPClientMax {
-					break
-				}
-			}
-		}
-		c.httpClient[key] = httpClient
+		c.httpClient.Set(key, httpClient)
 	}
-	c.httpMu.Unlock()
 
 	return zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, httpClient, http.MethodGet)
 }

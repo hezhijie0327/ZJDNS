@@ -1,6 +1,5 @@
-// Package lrumap provides a generic, concurrent-safe bounded map with LRU
-// eviction. When the map reaches its capacity, the least recently used entry is
-// evicted to make room for new entries.
+// Package maps provides generic, concurrent-safe map data structures with
+// bounded capacity and LRU eviction.
 //
 // LRU ordering is maintained via an embedded doubly-linked list with sentinel
 // head/tail nodes: Get and Set (update) move the accessed entry to the front
@@ -85,6 +84,27 @@ func (m *Map[K, V]) Set(key K, val V) {
 	m.mu.Unlock()
 }
 
+// LoadOrStore returns the existing value for the key if present.
+// Otherwise, it stores and returns the given value.
+// The loaded result is true if the key was already present, false if
+// the value was freshly stored.
+func (m *Map[K, V]) LoadOrStore(key K, val V) (V, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e, ok := m.m[key]; ok {
+		m.moveToFront(e)
+		return e.val, true
+	}
+	if m.len >= m.cap {
+		m.evictLocked()
+	}
+	e := &lruEntry[K, V]{key: key, val: val}
+	m.m[key] = e
+	m.pushFront(e)
+	m.len++
+	return val, false
+}
+
 // Len returns the current number of entries.
 func (m *Map[K, V]) Len() int {
 	m.mu.Lock()
@@ -102,6 +122,18 @@ func (m *Map[K, V]) Delete(key K) {
 		m.len--
 	}
 	m.mu.Unlock()
+}
+
+// Range calls fn for each entry in the map, from most recent to least recent.
+// Iteration stops if fn returns false.
+func (m *Map[K, V]) Range(fn func(K, V) bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for e := m.head.next; e != m.tail; e = e.next {
+		if !fn(e.key, e.val) {
+			return
+		}
+	}
 }
 
 // moveToFront moves e to the front (most-recent side) of the list.

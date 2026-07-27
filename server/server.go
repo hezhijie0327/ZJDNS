@@ -256,7 +256,7 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 		TagMatcher:       nil,
 		Resolver:         dnsResolver,
 		Prober:           prober,
-		PendingReqs:      handler.NewPendingRequests(ctx),
+		PendingReqs:      handler.NewPendingRequests(),
 		PendingRefrs:     handler.NewRefreshGroup(),
 		DNS64:            nil,
 		Closed:           func() bool { return isClosed() },

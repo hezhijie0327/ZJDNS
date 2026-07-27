@@ -16,34 +16,21 @@ func (c *Client) proxyDialer(server *config.UpstreamServer) *socks5.Dialer {
 		return nil
 	}
 
-	c.proxyMu.Lock()
-	defer c.proxyMu.Unlock()
-
 	if c.proxyDialers == nil {
 		return nil
 	}
 
-	if d, ok := c.proxyDialers[server.Proxy]; ok {
+	if d, ok := c.proxyDialers.Get(server.Proxy); ok {
 		return d
-	}
-
-	if len(c.proxyDialers) >= config.DefaultTransportMax*2 {
-		for k, d := range c.proxyDialers {
-			if d != nil {
-				zdnsutil.CloseWithLog(d, server.Proxy, "UPSTREAM")
-			}
-			delete(c.proxyDialers, k)
-			break
-		}
 	}
 
 	d, err := socks5.New(server.Proxy, c.timeout)
 	if err != nil {
 		log.Warnf("UPSTREAM: invalid proxy %s for %s: %v", server.Proxy, server.Address, err)
-		c.proxyDialers[server.Proxy] = nil
+		c.proxyDialers.Set(server.Proxy, nil)
 		return nil
 	}
-	c.proxyDialers[server.Proxy] = d
+	c.proxyDialers.Set(server.Proxy, d)
 	return d
 }
 

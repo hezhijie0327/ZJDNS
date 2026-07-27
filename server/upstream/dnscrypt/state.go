@@ -96,13 +96,10 @@ func (c *Client) state(
 	providerName = dnsutil.Fqdn(providerName)
 	cacheKey := addr + "|" + providerName
 
-	c.cacheMu.RLock()
-	if state, ok := c.cache[cacheKey]; ok && time.Now().Before(state.expires) {
-		c.cacheMu.RUnlock()
+	if state, ok := c.cache.Get(cacheKey); ok && time.Now().Before(state.expires) {
 		log.Debugf("UPSTREAM: DNSCrypt cert cache hit for %s", cacheKey)
 		return state, nil
 	}
-	c.cacheMu.RUnlock()
 	log.Debugf("UPSTREAM: DNSCrypt cert cache miss for %s", cacheKey)
 
 	certQuery := &dns.Msg{}
@@ -194,21 +191,10 @@ func (c *Client) buildState(
 	}
 
 	cacheKey := addr + "|" + providerName
-	c.cacheMu.Lock()
 	if c.cache == nil {
-		c.cacheMu.Unlock()
 		return nil, errors.New("dnscrypt client closed")
 	}
-	c.cache[cacheKey] = state
-	if len(c.cache) >= config.DefaultTransportMax*2 {
-		// Evict one entry when over threshold.  Under concurrent access the map
-		// may temporarily exceed the limit, which is acceptable.
-		for k := range c.cache {
-			delete(c.cache, k)
-			break
-		}
-	}
-	c.cacheMu.Unlock()
+	c.cache.Set(cacheKey, state)
 
 	return state, nil
 }
@@ -219,9 +205,7 @@ func (c *Client) buildState(
 func (c *Client) deleteState(addr, providerName string) {
 	providerName = dnsutil.Fqdn(providerName)
 	cacheKey := addr + "|" + providerName
-	c.cacheMu.Lock()
-	delete(c.cache, cacheKey)
-	c.cacheMu.Unlock()
+	c.cache.Delete(cacheKey)
 	log.Debugf("UPSTREAM: DNSCrypt cert cache invalidated for %s", cacheKey)
 }
 

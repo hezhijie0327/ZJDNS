@@ -263,6 +263,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 | **RFC 偏离** | 实现时对规范理解有误；边缘条件被省略；RFC 更新后实现未跟进；新增 RFC 未存档到 `docs/rfc/` | 每个协议实现文件顶部标注 RFC 章节引用；实现前先 `cp rfc{number}.txt docs/rfc/`；审计时逐条核对 MUST/SHOULD/MAY 条款 |
 | **注释腐烂** | 代码移动/重命名/删除后注释未更新；注释引用的函数名/行号已失效；TODO 的触发条件已不存在但注释仍在；"临时方案"注释超过 6 个月未清理 | 每次重构后 `grep` 被移动符号的旧名确认无残留引用；注释中用函数名而非行号引用代码；每个 TODO 加截止日期，过期即处理 |
 | **函数散乱** | 新增方法时随意插入在文件末尾或两个无关函数之间；同一接收者的方法跨文件散落；其他类型插入在主类型和其构造器之间 | 新增方法时找到同一接收者的方法块再插入；同一接收者的方法按调用链/复杂度排序（公开在前，私有在后）；在 `type → const → var → func` 顺序下，`New*` 应是 var 块之后的第一个 func；const/var 夹在类型和 `New*` 之间是**正确行为**（decorder 要求），不应标记为问题 |
+| **手动有界缓存** | 用 `map[K]V` + `sync.Mutex`/`sync.RWMutex` 手写容量限制和淘汰逻辑，存在随机淘汰（`range` 第一个元素）、TOCTOU 窗口（check-then-set 不在同一锁内）、无界内存增长风险（清扫逻辑遗漏或 OOM 阈值过高） | 所有有界缓存统一使用 `lrumap.Map[K, V]`（`internal/lrumap`）：并发安全、LRU 淘汰语义、零手动锁。审计时 grep `map\[.*\].*sync\.(Mutex|RWMutex)` 查找未迁移的手动实现；`LoadOrStore` 替代 check-then-set 模式；确需自定义淘汰回调的场景才单独实现 |
 
 ---
 
@@ -311,6 +312,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 14. **新增 RFC 必须存档后再实现**：引入新协议或修改现有协议实现前，先将对应 RFC 文本放入 `docs/rfc/`（命名 `rfc{NUMBER}.txt`），阅读确认 MUST/SHOULD/MAY 条款，再编码。代码中引用 RFC 时注明具体章节号（如 `RFC 7873 §5.2`）
 15. **注释引用符号名而非行号**：行号在每次编辑后失效。注释中引用代码位置使用函数名/类型名（可 grep），而非行号。代码移动后立即 grep 旧符号名检查注释残留
 16. **构造函数紧跟类型定义**：在 `type → const → var → func` 顺序下，`type Foo struct` 之后的 const/var 是正常的（decorder 要求），`func NewFoo` 应是 var 块之后的**第一个 func**。不应有其他类型或其他接收者的方法插入在 `type Foo` 和 `func NewFoo` 之间。同一接收者的方法聚合在一个连续块中，不跨文件散落 |
+17. **有界缓存统一用 lrumap**：任何需要容量上限的缓存（证书、HTTP client、proxy dialer、连接配置）统一使用 `lrumap.Map[K, V]`（`internal/lrumap`）。它内置并发安全 + LRU 淘汰 + `LoadOrStore` 原子操作。禁止用 `map[K]V` + `sync.Mutex` 手写淘汰逻辑 — 这种模式在审计中反复出现且每次实现都有细微并发 bug（TOCTOU、随机淘汰而非 LRU、清理泄漏） |
 
 ### 6.2 避免的反模式
 
@@ -330,7 +332,8 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 14. **乱序插入**：在文件末尾或两个无关函数之间随意插入新增方法。应找到同一接收者的方法块，按 `公开 → 私有`、`简单 → 复杂` 的顺序插入
 15. **`New*` 与类型之间有其他类型或方法**：其他类型或其他接收者的方法插入在 `type Foo struct` 和 `func NewFoo` 之间。const/var 在二者之间是**正确的**（decorder 要求 `type → const → var → func`）——这不是问题。问题是插入了不相关的 type 或 method |
 16. **注释残留**：代码已删除/移动/重命名但旧注释还在原地；TODO 的截止日期已过但无人处理；注释说"临时方案"但已存在超过两个版本
-17. **新 RFC 未存档**：实现了新协议功能但 `docs/rfc/` 中没有对应 RFC 文本。先存档 RFC，再编码 |
+17. **新 RFC 未存档**：实现了新协议功能但 `docs/rfc/` 中没有对应 RFC 文本。先存档 RFC，再编码
+18. **手写有界 map**：用 `map[K]V` + `sync.Mutex` + `len >= cap` 检查 + `range` 随机踢一个来实现"有界缓存"。这不能保证 LRU 语义，`range` 在 map 上的迭代顺序是随机的，且 check-then-set 和 check-evict-set 存在 TOCTOU 窗口。应使用 `lrumap.Map[K, V]` |
 
 ### 6.3 持续改进
 

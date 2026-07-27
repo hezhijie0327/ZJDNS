@@ -68,7 +68,7 @@ func (c *Client) ExecuteHTTP3(ctx context.Context, msg *dns.Msg, server *config.
 
 	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
 
-	client, isCached := c.getDOH3Client(key)
+	client, isCached := c.doh3Transports.Get(key)
 	if !isCached {
 		client = c.createDOH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
 	}
@@ -91,14 +91,12 @@ func (c *Client) ExecuteHTTP3(ctx context.Context, msg *dns.Msg, server *config.
 				c.resetQUICConfig("doh3:" + key)
 			}
 
-			c.doh3TransportMu.Lock()
-			if old, ok := c.doh3Transports[key]; ok && old == client {
-				if t, ok := old.Transport.(*http3Transport); ok {
+			if cached, ok := c.doh3Transports.Get(key); ok && cached == client {
+				if t, ok := client.Transport.(*http3Transport); ok {
 					_ = t.Close()
 				}
-				delete(c.doh3Transports, key)
+				c.doh3Transports.Delete(key)
 			}
-			c.doh3TransportMu.Unlock()
 
 			client = c.createDOH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
 			resp, err = zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, client, http3.MethodGet0RTT)
@@ -109,47 +107,24 @@ func (c *Client) ExecuteHTTP3(ctx context.Context, msg *dns.Msg, server *config.
 	}
 
 	if err != nil {
-		c.doh3TransportMu.Lock()
-		if old, ok := c.doh3Transports[key]; ok && old == client {
-			if t, ok := old.Transport.(*http3Transport); ok {
+		if cached, ok := c.doh3Transports.Get(key); ok && cached == client {
+			if t, ok := client.Transport.(*http3Transport); ok {
 				_ = t.Close()
 			}
-			delete(c.doh3Transports, key)
+			c.doh3Transports.Delete(key)
 		}
-		c.doh3TransportMu.Unlock()
 	}
 
 	return resp, err
 }
 
-func (c *Client) getDOH3Client(key string) (*http.Client, bool) {
-	c.doh3TransportMu.RLock()
-	defer c.doh3TransportMu.RUnlock()
-	client, ok := c.doh3Transports[key]
-	return client, ok
-}
-
 func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Config) *http.Client {
-	c.doh3TransportMu.Lock()
-	defer c.doh3TransportMu.Unlock()
-
 	if c.doh3Transports == nil {
 		return c.doh3Client
 	}
 
-	if client, ok := c.doh3Transports[key]; ok {
+	if client, ok := c.doh3Transports.Get(key); ok {
 		return client
-	}
-
-	if len(c.doh3Transports) >= config.DefaultTransportMax {
-		for k := range c.doh3Transports {
-			if t, ok := c.doh3Transports[k].Transport.(*http3Transport); ok {
-				_ = t.Close()
-			}
-			// Transport closed via t.Close() above.
-			delete(c.doh3Transports, k)
-			break
-		}
 	}
 
 	tlsCfg := tlsConfig.Clone()
@@ -198,7 +173,13 @@ func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 		Timeout:   c.doh3Client.Timeout,
 		Transport: transport,
 	}
-	c.doh3Transports[key] = client
+	actual, loaded := c.doh3Transports.LoadOrStore(key, client)
+	if loaded {
+		if t, ok := client.Transport.(*http3Transport); ok {
+			_ = t.Close()
+		}
+		return actual
+	}
 	return client
 }
 

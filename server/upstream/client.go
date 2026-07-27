@@ -50,8 +50,7 @@ type Client struct {
 	tlcpClient     *tlcpclient.Client
 	dnscryptClient *dnscrypt.Client
 
-	proxyDialers map[string]*socks5.Dialer
-	proxyMu      sync.Mutex
+	proxyDialers *lrumap.Map[string, *socks5.Dialer]
 
 	skipVerifyWarned sync.Map // serverName → struct{}{}, dedup SkipTLSVerify warning
 
@@ -109,7 +108,7 @@ func New() *Client {
 
 	c := &Client{
 		timeout:      timeout,
-		proxyDialers: make(map[string]*socks5.Dialer),
+		proxyDialers: lrumap.New[string, *socks5.Dialer](config.DefaultTransportMax * 2),
 	}
 
 	c.plainClient = plain.New(udpClient, tcpClient, tcpPool, c.proxyDialer, timeout)
@@ -282,14 +281,15 @@ func (c *Client) Close() {
 
 	c.tlsClient.Close()
 
-	c.proxyMu.Lock()
-	for _, d := range c.proxyDialers {
-		if d != nil {
-			_ = d.Close()
-		}
+	if c.proxyDialers != nil {
+		c.proxyDialers.Range(func(key string, d *socks5.Dialer) bool {
+			if d != nil {
+				_ = d.Close()
+			}
+			return true
+		})
+		c.proxyDialers = nil
 	}
-	c.proxyDialers = nil
-	c.proxyMu.Unlock()
 
 	c.dnscryptClient.Close()
 }

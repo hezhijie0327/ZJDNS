@@ -276,3 +276,69 @@ func TestNoLeak_OverwriteNoLeak(t *testing.T) {
 		t.Errorf("value = %d, want 42", v)
 	}
 }
+
+func TestLoadOrStore(t *testing.T) {
+	m := New[string, int](10)
+	v, loaded := m.LoadOrStore("a", 1)
+	if loaded {
+		t.Error("LoadOrStore should store new key")
+	}
+	if v != 1 {
+		t.Errorf("value = %d, want 1", v)
+	}
+	// Second call should return existing value.
+	v2, loaded2 := m.LoadOrStore("a", 2)
+	if !loaded2 {
+		t.Error("LoadOrStore should find existing key")
+	}
+	if v2 != 1 {
+		t.Errorf("value = %d, want 1 (existing)", v2)
+	}
+}
+
+func TestLoadOrStore_Eviction(t *testing.T) {
+	m := New[string, int](2)
+	m.LoadOrStore("a", 1)
+	m.LoadOrStore("b", 2)
+	// "c" triggers eviction — "a" is LRU.
+	m.LoadOrStore("c", 3)
+	if _, ok := m.Get("a"); ok {
+		t.Error("a should have been evicted")
+	}
+	if m.Len() != 2 {
+		t.Errorf("Len = %d, want 2", m.Len())
+	}
+}
+
+func TestRange(t *testing.T) {
+	m := New[string, int](10)
+	m.Set("a", 1)
+	m.Set("b", 2)
+	m.Set("c", 3)
+
+	var keys []string
+	var vals []int
+	m.Range(func(k string, v int) bool {
+		keys = append(keys, k)
+		vals = append(vals, v)
+		return true
+	})
+	if len(keys) != 3 {
+		t.Errorf("Range visited %d entries, want 3", len(keys))
+	}
+}
+
+func TestRange_EarlyStop(t *testing.T) {
+	m := New[string, int](10)
+	for i := range 5 {
+		m.Set(strconv.Itoa(i), i)
+	}
+	count := 0
+	m.Range(func(k string, v int) bool {
+		count++
+		return count < 2
+	})
+	if count != 2 {
+		t.Errorf("Range visited %d entries, want 2 (early stop)", count)
+	}
+}

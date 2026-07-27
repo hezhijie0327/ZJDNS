@@ -275,21 +275,15 @@ func TestCertCacheKeyNormalisation(t *testing.T) {
 
 	// Simulate a cached state — buildState() also uses the normalised name
 	// (passed by state()), so the cache key should match.
-	c.cacheMu.Lock()
-	c.cache[cacheKey] = &State{serverAddress: addr}
-	c.cacheMu.Unlock()
+	c.cache.Set(cacheKey, &State{serverAddress: addr})
 
-	c.cacheMu.RLock()
-	_, ok := c.cache[cacheKey]
-	c.cacheMu.RUnlock()
+	_, ok := c.cache.Get(cacheKey)
 	if !ok {
 		t.Fatal("cache key with trailing dot not found")
 	}
 
 	// The raw (non-FQDN) key should NOT be in the cache.
-	c.cacheMu.RLock()
-	_, ok = c.cache[addr+"|"+rawProvider]
-	c.cacheMu.RUnlock()
+	_, ok = c.cache.Get(addr + "|" + rawProvider)
 	if ok {
 		t.Fatal("cache key without trailing dot should not exist")
 	}
@@ -316,15 +310,13 @@ func TestCertCacheInvalidationOnError(t *testing.T) {
 	}
 
 	// Find the cache key and grab the state pointer.
-	c.cacheMu.RLock()
 	var cacheKey string
 	var st *State
-	for k, v := range c.cache {
+	c.cache.Range(func(k string, v *State) bool {
 		cacheKey = k
 		st = v
-		break
-	}
-	c.cacheMu.RUnlock()
+		return false
+	})
 	if st == nil {
 		t.Fatal("state should be cached after successful query")
 	}
@@ -350,9 +342,7 @@ func TestCertCacheInvalidationOnError(t *testing.T) {
 	t.Logf("expected error: %v", err)
 
 	// Cache must be gone.
-	c.cacheMu.RLock()
-	_, ok := c.cache[cacheKey]
-	c.cacheMu.RUnlock()
+	_, ok := c.cache.Get(cacheKey)
 	if ok {
 		t.Fatal("state should be invalidated after failed query")
 	}

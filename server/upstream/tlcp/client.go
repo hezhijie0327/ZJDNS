@@ -4,10 +4,10 @@ package tlcp
 
 import (
 	"net/http"
-	"sync"
 	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/lrumap"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"gitee.com/Trisia/gotlcp/dtlcp"
@@ -21,8 +21,7 @@ type Client struct {
 	timeout      time.Duration
 	tlcpSessions tlcp.SessionCache
 	dtlcpSession dtlcp.SessionCache
-	httpMu       sync.Mutex
-	httpClient   map[string]*http.Client // cached DoH-over-TLCP clients by key
+	httpClient   *lrumap.Map[string, *http.Client] // cached DoH-over-TLCP clients by key
 }
 
 // New creates a Client for TLCP and DTLCP DNS queries.
@@ -32,7 +31,7 @@ func New(getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Dura
 		timeout:      timeout,
 		tlcpSessions: tlcp.NewLRUSessionCache(config.DefaultTLCPSessionCacheSize),
 		dtlcpSession: dtlcp.NewLRUSessionCache(config.DefaultDTLCPSessionCacheSize),
-		httpClient:   make(map[string]*http.Client),
+		httpClient:   lrumap.New[string, *http.Client](config.DefaultHTTPTLCPClientMax * 2),
 	}
 }
 

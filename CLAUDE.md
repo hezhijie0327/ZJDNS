@@ -312,6 +312,8 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | `Conn` / `ConnPool` | `server/upstream/pool` | RFC 7766 pipelined TCP/DoT connection pool |
 | `Detector` | `server/defense` | DNS poison detection; `Verdict` type (Clean/Poisoned/Uncertain) |
 | `Engine` | `ruleset` | CIDR + domain tag matching; CIDR uses binary radix trie O(128) |
+| `Map[K, V]` | `internal/lrumap` | Generic concurrent-safe bounded LRU map — replaces all manual map+mutex+eviction patterns |
+| `DTLSSessionStore` | `internal/lrumap` | DTLS session store backed by LRU map |
 | `Message` / `Buffer` | `internal/pool` | sync.Pool allocators for DNS messages |
 | `DNSStamp` | `internal/stamp` | sdns:// stamp parser/encoder (8 protocol types) |
 

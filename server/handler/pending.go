@@ -1,13 +1,12 @@
 package handler
 
 import (
-	"context"
 	"errors"
-	"sync"
 	"time"
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 	"zjdns/internal/pending"
 	"zjdns/server/resolver"
 
@@ -23,8 +22,7 @@ import (
 // closes the window for cache-poisoning attacks that exploit concurrent
 // identical queries.
 type PendingRequests struct {
-	mu   sync.Mutex
-	sets map[PendingKey]*pendingCall
+	sets *lrumap.Map[PendingKey, *pendingCall]
 }
 
 // --- Unexported types ---
@@ -48,45 +46,13 @@ type pendingCall struct {
 	result *resolver.QueryResult
 }
 
-const maxPendingEntries = 10000 // safety bound against unbounded growth
+const pendingRequestCapacity = 10000 // safety bound against unbounded growth
 
 // NewPendingRequests creates a PendingRequests ready for use.
-func NewPendingRequests(ctx ...context.Context) *PendingRequests {
-	p := &PendingRequests{
-		sets: make(map[PendingKey]*pendingCall),
+func NewPendingRequests() *PendingRequests {
+	return &PendingRequests{
+		sets: lrumap.New[PendingKey, *pendingCall](pendingRequestCapacity),
 	}
-
-	cleanupCtx := context.Background()
-	if len(ctx) > 0 && ctx[0] != nil {
-		cleanupCtx = ctx[0]
-	}
-
-	// Periodic cleanup of orphaned entries from panicked/broken leaders.
-	go func() {
-		ticker := time.NewTicker(config.DefaultPendingCleanupInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-cleanupCtx.Done():
-				return
-			case <-ticker.C:
-				p.mu.Lock()
-				if len(p.sets) > maxPendingEntries {
-					target := len(p.sets) / 2
-					n := 0
-					for k := range p.sets {
-						delete(p.sets, k)
-						n++
-						if n >= target {
-							break
-						}
-					}
-				}
-				p.mu.Unlock()
-			}
-		}
-	}()
-	return p
 }
 
 // NewRefreshGroup creates a pending group for cache refresh dedup.
@@ -105,15 +71,11 @@ func NewRefreshGroup() *pending.Group[PendingKey] {
 func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool) (*resolver.QueryResult, bool) {
 	key := BuildPendingKey(qname, qtype, qclass, ecsOpt, dnssecOK)
 
-	p.mu.Lock()
-	call, loaded := p.sets[key]
+	call := &pendingCall{done: make(chan struct{})}
+	actual, loaded := p.sets.LoadOrStore(key, call)
 	if !loaded {
-		call = &pendingCall{done: make(chan struct{})}
-		p.sets[key] = call
-		p.mu.Unlock()
-		return nil, false // leader
+		return nil, false // leader (our call was stored)
 	}
-	p.mu.Unlock()
 
 	// Follower: wait for leader to finish.  Safety timeout prevents
 	// indefinite blocking if the leader panics and Done is never called.
@@ -122,7 +84,7 @@ func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.
 	// Ok for most deployments; high-latency upstreams may need a longer timeout.
 	timer := time.NewTimer(config.DefaultPendingFollowerTimeout)
 	select {
-	case <-call.done:
+	case <-actual.done:
 		if !timer.Stop() {
 			<-timer.C
 		}
@@ -130,7 +92,7 @@ func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.
 		log.Debugf("CACHE: pending-request follower timeout for %s (type=%s)", qname, dns.TypeToString[qtype])
 		return &resolver.QueryResult{Err: errors.New("pending request timeout")}, true
 	}
-	return call.result, true
+	return actual.result, true
 }
 
 // Done stores the result and wakes all waiting followers.  Must only be
@@ -138,14 +100,11 @@ func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.
 func (p *PendingRequests) Done(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool, result *resolver.QueryResult) {
 	key := BuildPendingKey(qname, qtype, qclass, ecsOpt, dnssecOK)
 
-	p.mu.Lock()
-	call, ok := p.sets[key]
+	call, ok := p.sets.Get(key)
 	if !ok {
-		p.mu.Unlock()
 		return
 	}
-	delete(p.sets, key)
-	p.mu.Unlock()
+	p.sets.Delete(key)
 
 	// Clone records before sharing with followers to prevent concurrent
 	// modification of shared RR headers (e.g. zone rule domain rewrite

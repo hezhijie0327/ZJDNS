@@ -31,7 +31,7 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
 	tlsConfig := c.eTLSClientConfig(server)
 
-	client, isCached := c.getDOHClient(key)
+	client, isCached := c.dohTransports.Get(key)
 	if !isCached {
 		client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
 	}
@@ -43,14 +43,12 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 
 	if isCached {
 		for i := 0; shouldRetryHTTP(err) && i < config.DefaultSecureTransportRetries; i++ {
-			c.dohTransportMu.Lock()
-			if old, ok := c.dohTransports[key]; ok && old == client {
-				if ct, ok := old.Transport.(*eHTTP.CompatableTransport); ok {
+			if cached, ok := c.dohTransports.Get(key); ok && cached == client {
+				if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
 					ct.CloseIdleConnections()
 				}
-				delete(c.dohTransports, key)
+				c.dohTransports.Delete(key)
 			}
-			c.dohTransportMu.Unlock()
 
 			client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
 			resp, err = zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, client, http.MethodGet)
@@ -61,14 +59,12 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 	}
 
 	if err != nil {
-		c.dohTransportMu.Lock()
-		if old, ok := c.dohTransports[key]; ok && old == client {
-			if ct, ok := old.Transport.(*eHTTP.CompatableTransport); ok {
+		if cached, ok := c.dohTransports.Get(key); ok && cached == client {
+			if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
 				ct.CloseIdleConnections()
 			}
-			delete(c.dohTransports, key)
+			c.dohTransports.Delete(key)
 		}
-		c.dohTransportMu.Unlock()
 	}
 
 	return resp, err
@@ -96,13 +92,6 @@ func transportKey(host, serverName string, skipVerify bool, proxyURL string) str
 	return b.String()
 }
 
-func (c *Client) getDOHClient(key string) (*http.Client, bool) {
-	c.dohTransportMu.RLock()
-	defer c.dohTransportMu.RUnlock()
-	client, ok := c.dohTransports[key]
-	return client, ok
-}
-
 // shouldRetryHTTP checks whether an HTTP/2 error warrants recreating the client
 // and retrying.
 func shouldRetryHTTP(err error) bool {
@@ -119,9 +108,6 @@ func shouldRetryHTTP(err error) bool {
 }
 
 func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxyURL string, tlsConfig *eTLS.Config) *http.Client {
-	c.dohTransportMu.Lock()
-	defer c.dohTransportMu.Unlock()
-
 	if c.dohTransports == nil {
 		tr, ok := c.dohClient.Transport.(*eHTTP.Transport)
 		if !ok {
@@ -131,20 +117,8 @@ func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxy
 	}
 
 	key := transportKey(host, serverName, skipVerify, proxyURL)
-	if client, ok := c.dohTransports[key]; ok {
+	if client, ok := c.dohTransports.Get(key); ok {
 		return client
-	}
-
-	if len(c.dohTransports) >= config.DefaultTransportMax*2 {
-		// Evict one entry when over threshold.  Under concurrent access the map
-		// may temporarily exceed the limit, which is acceptable.
-		for k := range c.dohTransports {
-			if ct, ok := c.dohTransports[k].Transport.(*eHTTP.CompatableTransport); ok {
-				ct.CloseIdleConnections()
-			}
-			delete(c.dohTransports, k)
-			break
-		}
 	}
 
 	tr, ok := c.dohClient.Transport.(*eHTTP.Transport)
@@ -180,6 +154,12 @@ func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxy
 		Timeout:   c.dohClient.Timeout,
 		Transport: &eHTTP.CompatableTransport{Transport: transport},
 	}
-	c.dohTransports[key] = client
+	actual, loaded := c.dohTransports.LoadOrStore(key, client)
+	if loaded {
+		if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
+			ct.CloseIdleConnections()
+		}
+		return actual
+	}
 	return client
 }

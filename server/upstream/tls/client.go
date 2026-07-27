@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"sync"
 	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
@@ -41,10 +40,8 @@ type Client struct {
 
 	quicConfigs *lrumap.Map[string, *quic.Config]
 
-	dohTransports   map[string]*http.Client
-	dohTransportMu  sync.RWMutex
-	doh3Transports  map[string]*http.Client
-	doh3TransportMu sync.RWMutex
+	dohTransports  *lrumap.Map[string, *http.Client]
+	doh3Transports *lrumap.Map[string, *http.Client]
 
 	getProxy func(*config.UpstreamServer) *socks5.Dialer
 
@@ -76,8 +73,8 @@ func New(
 		quicSessionCache: quicSessionCache,
 		dtlsSessions:     dtlsSessions,
 		quicConfigs:      lrumap.New[string, *quic.Config](config.DefaultQUICConfigCacheSize),
-		dohTransports:    make(map[string]*http.Client),
-		doh3Transports:   make(map[string]*http.Client),
+		dohTransports:    lrumap.New[string, *http.Client](config.DefaultTransportMax * 2),
+		doh3Transports:   lrumap.New[string, *http.Client](config.DefaultTransportMax),
 		getProxy:         getProxy,
 		timeout:          timeout,
 	}
@@ -95,23 +92,24 @@ func (c *Client) Close() {
 		return
 	}
 
-	c.dohTransportMu.Lock()
-	for _, client := range c.dohTransports {
-		if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
-			ct.CloseIdleConnections()
-		}
+	if c.dohTransports != nil {
+		c.dohTransports.Range(func(key string, client *http.Client) bool {
+			if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
+				ct.CloseIdleConnections()
+			}
+			return true
+		})
+		c.dohTransports = nil
 	}
-	c.dohTransports = nil
-	c.dohTransportMu.Unlock()
-
-	c.doh3TransportMu.Lock()
-	for _, client := range c.doh3Transports {
-		if t, ok := client.Transport.(*http3Transport); ok {
-			_ = t.Close()
-		}
+	if c.doh3Transports != nil {
+		c.doh3Transports.Range(func(key string, client *http.Client) bool {
+			if t, ok := client.Transport.(*http3Transport); ok {
+				_ = t.Close()
+			}
+			return true
+		})
+		c.doh3Transports = nil
 	}
-	c.doh3Transports = nil
-	c.doh3TransportMu.Unlock()
 
 	if c.dotPool != nil {
 		c.dotPool.Shutdown()
