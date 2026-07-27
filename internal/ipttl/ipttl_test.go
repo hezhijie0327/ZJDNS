@@ -5,23 +5,16 @@ import (
 	"testing"
 )
 
-// localUDPPair returns two connected *net.UDPConn sockets.
-// The server writes to the client; both have RemoteAddr set.
+// localUDPPair returns a client connected to a listening server.
+// The server is an unconnected *net.UDPConn (ListenUDP) so it can receive
+// packets from any source — required for ipv4.PacketConn.ReadFrom to work.
 func localUDPPair(t *testing.T, network string, ip net.IP) (client, server *net.UDPConn) {
 	t.Helper()
 
-	// Bind a free port then dial to get a connected socket.
-	tmp, err := net.ListenUDP(network, &net.UDPAddr{IP: ip, Port: 0})
+	var err error
+	server, err = net.ListenUDP(network, &net.UDPAddr{IP: ip, Port: 0})
 	if err != nil {
 		t.Skipf("listen %s: %v", network, err)
-	}
-	addr := tmp.LocalAddr().(*net.UDPAddr)
-	_ = tmp.Close()
-
-	// Both sides use DialUDP for connected sockets (RemoteAddr is set).
-	server, err = net.DialUDP(network, &net.UDPAddr{IP: ip, Port: 0}, addr)
-	if err != nil {
-		t.Fatalf("dial server %s: %v", network, err)
 	}
 	t.Cleanup(func() { _ = server.Close() })
 
@@ -37,14 +30,14 @@ func localUDPPair(t *testing.T, network string, ip net.IP) (client, server *net.
 func TestNew_IPv4(t *testing.T) {
 	client, server := localUDPPair(t, "udp4", net.IPv4(127, 0, 0, 1))
 
-	payload := []byte("hello-ipttl")
-	if _, err := client.Write(payload); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
 	c := New(server)
 	if c == nil {
 		t.Skip("platform does not support IP_RECVTTL — skipping capture test")
+	}
+
+	payload := []byte("hello-ipttl")
+	if _, err := client.Write(payload); err != nil {
+		t.Fatalf("write: %v", err)
 	}
 
 	buf := make([]byte, 1500)
@@ -64,14 +57,14 @@ func TestNew_IPv4(t *testing.T) {
 func TestNew_IPv6(t *testing.T) {
 	client, server := localUDPPair(t, "udp6", net.IPv6loopback)
 
-	payload := []byte("hello-ipttl-v6")
-	if _, err := client.Write(payload); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
 	c := New(server)
 	if c == nil {
 		t.Skip("platform does not support IPV6_RECVHOPLIMIT — skipping capture test")
+	}
+
+	payload := []byte("hello-ipttl-v6")
+	if _, err := client.Write(payload); err != nil {
+		t.Fatalf("write: %v", err)
 	}
 
 	buf := make([]byte, 1500)
