@@ -12,20 +12,29 @@ import (
 )
 
 // FetchCert sends a plain DNS query to addr and returns the unpacked response.
-// UDP is tried first; if the response has the TC flag set, the query is
-// retried over TCP per §10.3 of draft-denis-dprive-dnscrypt-10.
+// UDP is tried first; falls back to TCP on error (firewall blocking UDP, NAT
+// dropping fragments) or truncation per §10.3 of draft-denis-dprive-dnscrypt-10.
 func FetchCert(ctx context.Context, addr string, query []byte) (*dns.Msg, error) {
 	resp, err := fetchCertOverUDP(ctx, addr, query)
-	if err != nil {
-		return nil, err
-	}
-	if !resp.Truncated {
+
+	// Fast path: UDP succeeded without truncation.
+	if err == nil && !resp.Truncated {
 		return resp, nil
 	}
 
-	log.Debugf("UPSTREAM: DNSCrypt cert response truncated, retrying over TCP")
+	// UDP failed or truncated — fall back to TCP.
+	if err != nil {
+		log.Debugf("UPSTREAM: DNSCrypt cert UDP failed: %v, falling back to TCP", err)
+	} else {
+		log.Debugf("UPSTREAM: DNSCrypt cert response truncated, retrying over TCP")
+	}
+
 	tcpResp, tcpErr := fetchCertOverTCP(ctx, addr, query)
 	if tcpErr != nil {
+		if err != nil {
+			return nil, fmt.Errorf("udp: %w; tcp: %w", err, tcpErr)
+		}
+		// TCP failed but the truncated UDP response is better than nothing.
 		log.Debugf("UPSTREAM: DNSCrypt cert TCP retry failed: %v", tcpErr)
 		return resp, nil
 	}

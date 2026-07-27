@@ -132,17 +132,17 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 		// Parse 2-byte length prefix (TCP DNS framing, RFC 1035 §4.2.2).
 		// DTLS records provide datagram boundaries — the inner prefix
 		// mirrors DoT framing and is not required by RFC 8094.
-		if n < 2 {
+		if n < zdnsutil.DNSFramePrefixLen {
 			continue
 		}
-		msgLen := binary.BigEndian.Uint16(buf[:2])
-		if int(msgLen)+2 > n {
+		msgLen := binary.BigEndian.Uint16(buf[:zdnsutil.DNSFramePrefixLen])
+		if int(msgLen)+zdnsutil.DNSFramePrefixLen > n {
 			log.Debugf("TLS: DTLS short read: want %d + 2, got %d", msgLen, n)
 			continue
 		}
 
 		query := pool.DefaultMessage.Get()
-		query.Data = buf[2 : 2+msgLen]
+		query.Data = buf[zdnsutil.DNSFramePrefixLen : zdnsutil.DNSFramePrefixLen+msgLen]
 		if err := query.Unpack(); err != nil {
 			log.Debugf("TLS: DTLS unpack error: %v", err)
 			pool.DefaultMessage.Put(query)
@@ -168,8 +168,8 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 			pool.DefaultMessage.Put(response)
 			continue
 		}
-		resp := make([]byte, 2+respLen)
-		binary.BigEndian.PutUint16(resp[:2], uint16(respLen))
+		resp := make([]byte, zdnsutil.DNSFramePrefixLen+respLen)
+		binary.BigEndian.PutUint16(resp[:zdnsutil.DNSFramePrefixLen], uint16(respLen))
 		copy(resp[2:], response.Data)
 
 		if _, err := conn.Write(resp); err != nil {

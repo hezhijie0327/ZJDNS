@@ -55,6 +55,12 @@ func (h *http3Transport) Close() (err error) {
 // ExecuteHTTP3 performs a DNS-over-HTTPS/3 query, using cached transports with
 // automatic retry on connection failure.
 func (c *Client) ExecuteHTTP3(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+	if msg == nil {
+		return nil, errors.New("http3: nil query message")
+	}
+	if server == nil {
+		return nil, errors.New("http3: nil server config")
+	}
 	tlsConfig := c.stdTLSConfig(server)
 
 	parsedURL, err := url.Parse(server.Address)
@@ -151,6 +157,7 @@ func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 					}
 					remoteAddr, err := net.ResolveUDPAddr("udp", host)
 					if err != nil {
+						_ = pconn.Close()
 						return nil, fmt.Errorf("resolve %s: %w", host, err)
 					}
 					return quic.Dial(ctx, pconn, remoteAddr, tlsCfg, cpy)

@@ -217,6 +217,7 @@ func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 
 // rotationLoop periodically rotates the resolver short-term keys.
 func (s *Server) rotationLoop() {
+	defer zdnsutil.HandlePanic("DNSCRYPT key rotation")
 	ticker := time.NewTicker(config.DefaultDNSCryptCertificateTTL)
 	defer ticker.Stop()
 	for {

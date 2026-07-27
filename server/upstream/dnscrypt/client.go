@@ -166,12 +166,21 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 	}
 	response.Data = nil
 
-	if response.Truncated && !useTCP {
+	if response.Truncated {
 		const maxQueryLen = 4096
 		state.mu.Lock()
 		if state.minQueryLen+64 <= maxQueryLen {
 			state.minQueryLen += 64
 			log.Debugf("UPSTREAM: DNSCrypt min-query-len escalated to %d after TC", state.minQueryLen)
+			state.mu.Unlock()
+			// The padding envelope was too small for the response.
+			// Retry with the larger minQueryLen so the server has
+			// enough padding headroom.  This applies to both UDP
+			// (where TC also means "retry over TCP") and TCP
+			// (where the DNSCrypt envelope itself is the bottleneck).
+			pool.DefaultMessage.Put(response)
+			_ = conn.Close()
+			return c.Execute(ctx, msg, server, useTCP)
 		}
 		state.mu.Unlock()
 	}

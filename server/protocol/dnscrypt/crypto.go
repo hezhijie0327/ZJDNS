@@ -64,9 +64,10 @@ func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *d
 
 		// Issue a resumption ticket.
 		var resumeSecret [dnscryptcrypto.SharedKeySize]byte
-		resumeSecret, err := dnscryptcrypto.PQResumeSecret(sharedKey, q.ClientMagic, q.Nonce[:dnscryptcrypto.NonceSize/2])
-		if err != nil {
-			return nil, fmt.Errorf("deriving PQ resume secret: %w", err)
+		var pqErr error
+		resumeSecret, pqErr = dnscryptcrypto.PQResumeSecret(sharedKey, q.ClientMagic, q.Nonce[:dnscryptcrypto.NonceSize/2])
+		if pqErr != nil {
+			return nil, fmt.Errorf("deriving PQ resume secret: %w", pqErr)
 		}
 		ticketExpiry := dnscryptcrypto.NowUnix32() + uint32(config.DefaultDNSCryptPQTicketLifetime/time.Second)
 		peHash := dnscryptcrypto.ProfileExtensionHash()

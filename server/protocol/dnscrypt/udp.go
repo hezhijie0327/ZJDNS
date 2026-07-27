@@ -103,6 +103,8 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 			s.handleUDPPacket(ctx, packet, addr, udpConn)
 		})
 	}
+	// Loop exited via isStarted() → return the held buffer.
+	pool.DefaultBuffer.Put(buf)
 }
 
 // handleUDPPacket processes a single UDP datagram.

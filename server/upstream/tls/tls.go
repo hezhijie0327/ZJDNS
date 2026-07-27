@@ -2,6 +2,7 @@ package tls
 
 import (
 	"context"
+	"errors"
 	"net"
 	"zjdns/config"
 	"zjdns/internal/log"
@@ -15,6 +16,12 @@ import (
 // ExecuteTLS performs a DNS-over-TLS query, using the pipelined connection
 // pool when available.
 func (c *Client) ExecuteTLS(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+	if msg == nil {
+		return nil, errors.New("tls: nil query message")
+	}
+	if server == nil {
+		return nil, errors.New("tls: nil server config")
+	}
 	key := transportKey(server.Address, server.ServerName, server.SkipTLSVerify, server.Proxy)
 	proxyDialer := c.getProxy(server)
 

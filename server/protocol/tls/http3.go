@@ -76,6 +76,9 @@ func (s *Server) startDOH3Server(port string) error {
 					time.Sleep(config.DefaultAcceptRetryDelay)
 					continue
 				}
+				if conn == nil {
+					continue
+				}
 
 				s.serverGroup.Go(func() error {
 					defer zdnsutil.HandlePanic("DoH3 connection handler")

@@ -236,6 +236,7 @@ func (c *Client) WarmUpQUIC(ctx context.Context, server *config.UpstreamServer) 
 				}
 				remoteAddr, err := net.ResolveUDPAddr("udp", addr)
 				if err != nil {
+					_ = pconn.Close()
 					return nil, fmt.Errorf("resolve %s: %w", addr, err)
 				}
 				return quic.Dial(timeoutCtx, pconn, remoteAddr, dialTLS, c.getQUICConfig("doq:"+addr, dialTLS.InsecureSkipVerify))

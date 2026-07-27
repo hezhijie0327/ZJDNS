@@ -54,6 +54,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	g.SetLimit(concurrencyLimit(len(servers)))
 
 	var activeConnections atomic.Int32
+	var cidrFilterRefused atomic.Bool
 
 	for _, srv := range servers {
 		server := srv
@@ -70,7 +71,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 
 			switch {
 			case server.IsRecursive():
-				if handled := r.handleRecursiveQuery(groupCtx, server, question, ecs, resultChan, cancel); handled {
+				if handled := r.handleRecursiveQuery(groupCtx, server, question, ecs, resultChan, cancel, &cidrFilterRefused); handled {
 					return nil
 				}
 
@@ -90,7 +91,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 				pool.DefaultMessage.Put(msg)
 
 				if queryResult.Error == nil && queryResult.Response != nil {
-					if handled := r.processUpstreamResponse(queryResult, server, question, resultChan, &nxdomainResult, &activeConnections, cancel, groupCtx); handled {
+					if handled := r.processUpstreamResponse(queryResult, server, question, resultChan, &nxdomainResult, &activeConnections, cancel, groupCtx, &cidrFilterRefused); handled {
 						return nil
 					}
 				}
@@ -101,14 +102,11 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 
 	go func() {
 		defer zdnsutil.HandlePanic("UPSTREAM errgroup wait")
-		if err := g.Wait(); err != nil {
-			if errors.Is(err, ErrCIDRFilterRefused) {
-				select {
-				case resultChan <- QueryResult{Err: ErrCIDRFilterRefused}:
-				default:
-				}
-			} else {
-				log.Debugf("UPSTREAM: errgroup for %s: %v", question.Name, err)
+		_ = g.Wait()
+		if cidrFilterRefused.Load() {
+			select {
+			case resultChan <- QueryResult{Err: ErrCIDRFilterRefused}:
+			default:
 			}
 		}
 		close(resultChan)
@@ -245,7 +243,7 @@ func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]
 
 // processUpstreamResponse handles the response from a forwarding upstream server.
 // Returns true if the goroutine should return (result sent or handled).
-func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server *config.UpstreamServer, question Question, resultChan chan<- QueryResult, nxdomainResult *atomic.Pointer[QueryResult], activeConnections *atomic.Int32, cancel context.CancelCauseFunc, groupCtx context.Context) bool {
+func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server *config.UpstreamServer, question Question, resultChan chan<- QueryResult, nxdomainResult *atomic.Pointer[QueryResult], activeConnections *atomic.Int32, cancel context.CancelCauseFunc, groupCtx context.Context, cidrFilterRefused *atomic.Bool) bool {
 	rcode := queryResult.Response.Rcode
 	serverDesc := server.Address
 	if server.Protocol != "" && server.Protocol != config.ProtoUDP {
@@ -259,8 +257,9 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 		if len(server.Match) > 0 {
 			filteredAnswer, shouldRefuse := r.filterRecordsByCIDR(queryResult.Response.Answer, server.Match)
 			if shouldRefuse {
+				cidrFilterRefused.Store(true)
 				pool.DefaultMessage.Put(queryResult.Response)
-				return false // errgroup will detect ErrCIDRFilterRefused
+				return false
 			}
 			queryResult.Response.Answer = filteredAnswer
 		}
@@ -301,7 +300,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 
 // handleRecursiveQuery dispatches a single query to the built-in recursive
 // resolver with CIDR filtering. Returns true if a successful result was sent.
-func (r *Resolver) handleRecursiveQuery(groupCtx context.Context, server *config.UpstreamServer, question Question, ecs *edns.ECSOption, resultChan chan<- QueryResult, cancel context.CancelCauseFunc) bool {
+func (r *Resolver) handleRecursiveQuery(groupCtx context.Context, server *config.UpstreamServer, question Question, ecs *edns.ECSOption, resultChan chan<- QueryResult, cancel context.CancelCauseFunc, cidrFilterRefused *atomic.Bool) bool {
 	recursiveCtx, recursiveCancel := context.WithTimeout(groupCtx, config.DefaultRecursiveResolveTimeout)
 	defer recursiveCancel()
 
@@ -319,7 +318,8 @@ func (r *Resolver) handleRecursiveQuery(groupCtx context.Context, server *config
 	if len(server.Match) > 0 {
 		filteredAnswer, shouldRefuse := r.filterRecordsByCIDR(qr.Answer, server.Match)
 		if shouldRefuse {
-			return false // errgroup will detect ErrCIDRFilterRefused
+			cidrFilterRefused.Store(true)
+			return false
 		}
 		qr.Answer = filteredAnswer
 	}

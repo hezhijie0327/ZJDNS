@@ -134,7 +134,11 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 	var hg *defense.HopGuard
 	if server.HopGuard && conn != nil {
 		hg = c.hopGuard
-		tc = ipttl.New(conn.(*net.UDPConn))
+		udpConn, ok := conn.(*net.UDPConn)
+		if !ok {
+			return nil, errors.New("plain: unexpected connection type for UDP TTL capture")
+		}
+		tc = ipttl.New(udpConn)
 		if tc == nil {
 			log.Warnf("UPSTREAM: hopguard TTL/HopLimit capture not available on %s: platform not supported — guard disabled for this upstream", server.Address)
 		}
@@ -318,6 +322,7 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 			s.nonEDNS = nil
 		}
 		log.Debugf("UPSTREAM: UDP spoofguard fast return from %s (AN=%d, NS=%d, AD=%d, EDNS=%v, rejected=%d)", addr, ancount, nscount, ad, hasEDNS, s.rejected)
+		s.last = resp
 		s.lastTTL = ttl
 		return resp
 	}
@@ -393,6 +398,7 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 			pool.DefaultMessage.Put(s.nonEDNS)
 			s.nonEDNS = nil
 		}
+		s.last = resp
 		s.lastTTL = ttl
 		log.Debugf("UPSTREAM: UDP spoofguard fast-accept from %s (EDNS, TTL trusted, answer=%d)", addr, len(resp.Answer))
 		return resp

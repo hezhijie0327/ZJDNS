@@ -19,6 +19,12 @@ import (
 // ExecuteHTTPS performs a DNS-over-HTTPS query (HTTP/2), using cached
 // transports with automatic retry on connection failure.
 func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+	if msg == nil {
+		return nil, errors.New("https: nil query message")
+	}
+	if server == nil {
+		return nil, errors.New("https: nil server config")
+	}
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		return nil, fmt.Errorf("parse URL: %w", err)

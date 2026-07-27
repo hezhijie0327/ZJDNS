@@ -21,6 +21,12 @@ import (
 // ExecuteQUIC performs a DNS-over-QUIC query, using the QUIC connection pool
 // when available.
 func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+	if msg == nil {
+		return nil, errors.New("quic: nil query message")
+	}
+	if server == nil {
+		return nil, errors.New("quic: nil server config")
+	}
 	tlsConfig := c.stdTLSConfig(server)
 	key := server.Address
 	poolKey := key
@@ -42,6 +48,7 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 			}
 			remoteAddr, err := net.ResolveUDPAddr("udp", addr)
 			if err != nil {
+				_ = pconn.Close()
 				return nil, fmt.Errorf("resolve %s: %w", addr, err)
 			}
 			return quic.Dial(timeoutCtx, pconn, remoteAddr, dialTLS, c.getQUICConfig("doq:"+key, tlsConfig.InsecureSkipVerify))

@@ -22,8 +22,15 @@ type Capture struct {
 // New enables TTL (IPv4) or HopLimit (IPv6) capture on conn. Returns nil if
 // the platform does not support the required socket option.
 func New(conn *net.UDPConn) *Capture {
+	if conn == nil {
+		return nil
+	}
 	c := &Capture{conn: conn}
-	if conn.LocalAddr().(*net.UDPAddr).IP.To4() != nil {
+	addr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		return nil
+	}
+	if addr.IP.To4() != nil {
 		c.pc4 = ipv4.NewPacketConn(conn)
 		if err := c.pc4.SetControlMessage(ipv4.FlagTTL, true); err != nil {
 			return nil
