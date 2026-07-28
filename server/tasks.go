@@ -179,6 +179,9 @@ func (s *Server) shutdownServer() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 	defer shutdownCancel()
 	s.plain.Shutdown(shutdownCtx)
+	if s.dashboardSocket != nil {
+		_ = s.dashboardSocket.Close()
+	}
 
 	if s.tls != nil {
 		if err := s.tls.Shutdown(); err != nil {

@@ -6,6 +6,7 @@ import (
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
+	"zjdns/internal/ringbuffer"
 )
 
 // AsyncStatsWriter offloads RecordRequest SQLite writes from the query hot path
@@ -26,6 +27,7 @@ type AsyncStatsWriter struct {
 	db        *database.DB
 	done      chan struct{}
 	closeOnce sync.Once
+	ringBuf   *ringbuffer.RingBuffer[RequestRecord] // nil when dashboard disabled
 }
 
 // NewAsyncStatsWriter creates an AsyncStatsWriter and starts its background
@@ -57,6 +59,10 @@ func (w *AsyncStatsWriter) Record(r *RequestRecord) {
 	select {
 	case w.ch <- *r:
 	default:
+	}
+	// Push to ring buffer for dashboard — fast mutex, no allocation.
+	if w.ringBuf != nil {
+		w.ringBuf.Push(*r)
 	}
 }
 

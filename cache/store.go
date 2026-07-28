@@ -12,6 +12,7 @@ import (
 	"zjdns/database"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/internal/ringbuffer"
 	"zjdns/internal/ttl"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -84,6 +85,12 @@ func (s *SQLiteCache) Close() error {
 // Primarily for tests that need to observe RecordRequest results synchronously.
 func (s *SQLiteCache) Flush() {
 	s.asyncWriter.Flush()
+}
+
+// SetRingBuf sets the ring buffer that receives a copy of every RequestRecord
+// for the dashboard socket server.  Pass nil to disable.  Thread-safe.
+func (s *SQLiteCache) SetRingBuf(rb *ringbuffer.RingBuffer[RequestRecord]) {
+	s.asyncWriter.ringBuf = rb
 }
 
 // ── Store interface ──────────────────────────────────────────────────────────

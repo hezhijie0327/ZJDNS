@@ -18,7 +18,9 @@ import (
 	"zjdns/edns"
 	"zjdns/internal/dns64"
 	"zjdns/internal/log"
+	"zjdns/internal/ringbuffer"
 	"zjdns/ruleset"
+	"zjdns/server/dashboard"
 	"zjdns/server/defense"
 	"zjdns/server/handler"
 	"zjdns/server/handler/middleware"
@@ -52,6 +54,7 @@ type Server struct {
 	dnscryptServer  *serverdnscrypt.Server
 	plain           *serverplain.Server
 	pprofServer     *http.Server
+	dashboardSocket *dashboard.SocketServer
 	shutdown        chan struct{}
 	tcpSem          chan struct{}
 	tcpWriteMu      sync.Map
@@ -427,6 +430,22 @@ func (s *Server) Start() error {
 			<-ctx.Done()
 			return nil
 		})
+	}
+
+	// Dashboard socket server.
+	if s.config.Server.DashboardSocket != "" {
+		rb := ringbuffer.New[cache.RequestRecord](1000)
+		if c, ok := s.handler.CacheStore().(*cache.SQLiteCache); ok {
+			c.SetRingBuf(rb)
+		}
+		var err error
+		s.dashboardSocket, err = dashboard.NewSocketServer(s.config.Server.DashboardSocket, s.handler.CacheStore(), rb)
+		if err != nil {
+			log.Warnf("DASHBOARD: %v", err)
+		} else {
+			log.Infof("DASHBOARD: socket server on %s", s.config.Server.DashboardSocket)
+			_ = s.dashboardSocket.Start()
+		}
 	}
 
 	// Pprof must be registered AFTER all error-returning init calls above.

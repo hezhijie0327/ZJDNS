@@ -11,11 +11,12 @@ type ServerConfig struct {
 
 // ServerSettings contains the server runtime settings and feature flags.
 type ServerSettings struct {
-	Pprof       string              `json:"pprof,omitzero"`
-	LogLevel    string              `json:"log_level,omitzero"`
-	Protocol    ProtocolSettings    `json:"protocol,omitzero"`
-	Certificate CertificateSettings `json:"certificate,omitzero"`
-	Features    FeatureFlags        `json:"features,omitzero"`
+	Pprof           string              `json:"pprof,omitzero"`
+	LogLevel        string              `json:"log_level,omitzero"`
+	Protocol        ProtocolSettings    `json:"protocol,omitzero"`
+	Certificate     CertificateSettings `json:"certificate,omitzero"`
+	Features        FeatureFlags        `json:"features,omitzero"`
+	DashboardSocket string              `json:"dashboard_socket,omitzero"`
 }
 
 // ProtocolSettings holds the port and endpoint configuration for every DNS

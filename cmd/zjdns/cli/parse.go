@@ -9,11 +9,12 @@ import (
 // ParseFlags parses command-line arguments and handles special commands.
 // Returns the config file path (empty for default config) and whether the
 // caller should exit (true after running a special command).
-func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfter bool) {
+func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfter, dashboardMode bool) {
 	// ── Flags ────────────────────────────────────────────────────────────
 	var (
 		// Server
 		configFileFlag string
+		runDashboard   bool
 		showVersion    bool
 
 		// Generate config
@@ -51,6 +52,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	// Server
 	fs.StringVar(&configFileFlag, "config", "", "Configuration file path (JSON format)")
 	fs.BoolVar(&showVersion, "version", false, "Show version information and exit")
+	fs.BoolVar(&runDashboard, "dashboard", false, "Start server with interactive TUI dashboard")
 
 	// Generate config
 	fs.BoolVar(&generateConfig, "generate-config", false, "Generate example configuration")
@@ -105,13 +107,13 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	for _, arg := range osArgs[1:] {
 		if arg == "-h" || arg == "--help" {
 			fs.Usage()
-			return "", true
+			return "", true, false
 		}
 	}
 
 	// ── Parse ────────────────────────────────────────────────────────────
 	if err := fs.Parse(osArgs[1:]); err != nil {
-		return "", true
+		return "", true, false
 	}
 
 	// ── Dispatch ─────────────────────────────────────────────────────────
@@ -119,7 +121,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	if showVersion {
 		fmt.Printf("ZJDNS Server\n")
 		fmt.Printf("Version: %s\n", versionStr)
-		return "", true
+		return "", true, false
 	}
 
 	// --generate-config
@@ -134,7 +136,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		} else {
 			fmt.Println(generateExampleConfig())
 		}
-		return "", true
+		return "", true, false
 	}
 
 	// --probe
@@ -142,7 +144,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		args := fs.Args()
 		if len(args) < 1 {
 			fmt.Fprintf(os.Stderr, "Usage: %s --probe --pipeline|--conn-reuse|--idle-timeout <tcp://host:port|tls://host:port>\n", fs.Name())
-			return "", true
+			return "", true, false
 		}
 		var probeType string
 		switch {
@@ -154,12 +156,12 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 			probeType = "idle-timeout"
 		default:
 			fmt.Fprintf(os.Stderr, "Usage: %s --probe --pipeline|--conn-reuse|--idle-timeout <tcp://host:port|tls://host:port>\n", fs.Name())
-			return "", true
+			return "", true, false
 		}
 		if err := runProbe(probeType, args[0]); err != nil {
 			fmt.Fprintf(os.Stderr, "probe: %v\n", err)
 		}
-		return "", true
+		return "", true, false
 	}
 
 	// --dnsstamp
@@ -169,7 +171,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 			args := fs.Args()
 			if len(args) < 1 {
 				fmt.Fprintf(os.Stderr, "Usage: %s --dnsstamp --decode <sdns://...>\n", fs.Name())
-				return "", true
+				return "", true, false
 			}
 			if err := RunDNSStampDecode(args[0]); err != nil {
 				fmt.Fprintf(os.Stderr, "dnsstamp decode: %v\n", err)
@@ -181,7 +183,17 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		default:
 			fmt.Fprintf(os.Stderr, "Usage: %s --dnsstamp --decode <stamp> | --dnsstamp --encode [options]\n", fs.Name())
 		}
-		return "", true
+		return "", true, false
+	}
+
+	// --dashboard
+	if runDashboard {
+		args := fs.Args()
+		if len(args) < 1 {
+			fmt.Fprintf(os.Stderr, "Usage: %s --dashboard <socket-path>\n", fs.Name())
+			return "", true, false
+		}
+		return args[0], false, true
 	}
 
 	// --sql
@@ -189,7 +201,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		args := fs.Args()
 		if len(args) < 2 {
 			fmt.Fprintf(os.Stderr, "Usage: %s --sql <db> <query> [--rw]\n", fs.Name())
-			return "", true
+			return "", true, false
 		}
 		if sqlRW {
 			if err := RunSQLRW(args[0], args[1]); err != nil {
@@ -200,9 +212,9 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 				fmt.Fprintf(os.Stderr, "sql: %v\n", err)
 			}
 		}
-		return "", true
+		return "", true, false
 	}
 
 	// Default: start server
-	return configFileFlag, false
+	return configFileFlag, false, runDashboard
 }

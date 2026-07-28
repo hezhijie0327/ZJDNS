@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"zjdns/cmd/zjdns/cli"
+	"zjdns/cmd/zjdns/tui"
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
@@ -18,8 +19,17 @@ func main() {
 	// because this package has no defers.
 	versionStr := getVersion()
 	database.Version = Version
-	configFile, exitAfter := cli.ParseFlags(os.Args, versionStr)
+	configFile, exitAfter, dashboardMode := cli.ParseFlags(os.Args, versionStr)
 	if exitAfter {
+		return
+	}
+
+	if dashboardMode {
+		fmt.Print(banner(versionStr))
+		if err := tui.RunDashboard(configFile); err != nil {
+			log.Errorf("DASHBOARD: %v", err)
+			os.Exit(1)
+		}
 		return
 	}
 
