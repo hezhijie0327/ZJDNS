@@ -50,9 +50,11 @@ const pendingRequestCapacity = 10000 // safety bound against unbounded growth
 
 // NewPendingRequests creates a PendingRequests ready for use.
 func NewPendingRequests() *PendingRequests {
-	return &PendingRequests{
+	p := &PendingRequests{
 		sets: lrumap.New[PendingKey, *pendingCall](pendingRequestCapacity),
 	}
+	p.sets.OnEvict = func(_ PendingKey, call *pendingCall) { close(call.done) }
+	return p
 }
 
 // NewRefreshGroup creates a pending group for cache refresh dedup.

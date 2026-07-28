@@ -2,6 +2,7 @@
 package plain
 
 import (
+	"sync"
 	"time"
 	"zjdns/config"
 	"zjdns/server/defense"
@@ -13,12 +14,13 @@ import (
 
 // Client executes DNS queries over plain UDP and TCP transports.
 type Client struct {
-	udpClient *dns.Client
-	tcpClient *dns.Client
-	tcpPool   *pool.ConnPool
-	getProxy  func(*config.UpstreamServer) *socks5.Dialer
-	timeout   time.Duration
-	hopGuard  *defense.HopGuard // shared LRU cache for TTL fingerprints
+	udpClient      *dns.Client
+	tcpClient      *dns.Client
+	tcpPool        *pool.ConnPool
+	getProxy       func(*config.UpstreamServer) *socks5.Dialer
+	timeout        time.Duration
+	hopGuard       *defense.HopGuard // shared LRU cache for TTL fingerprints
+	hopguardWarned sync.Map          // per-address one-shot hopguard warning
 }
 
 // New creates a Client for plain UDP and TCP DNS queries.

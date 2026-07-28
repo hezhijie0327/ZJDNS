@@ -164,7 +164,10 @@ func (c *Client) buildState(
 	var secretKey, clientPK [dnscryptcrypto.KeySize]byte
 	var err error
 	if cert.classical != nil {
-		secretKey, clientPK = dnscryptcrypto.GenerateKeyPairRaw()
+		secretKey, clientPK, err = dnscryptcrypto.GenerateKeyPairRaw()
+		if err != nil {
+			return nil, fmt.Errorf("generating key pair: %w", err)
+		}
 		sharedKey, err = dnscryptcrypto.ComputeSharedKey(
 			dnscryptcrypto.XChacha20Poly1305, &secretKey, &cert.classical.ResolverPk,
 		)

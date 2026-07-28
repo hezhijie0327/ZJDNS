@@ -232,6 +232,8 @@ func (r *Recursive) verifyDelegationDSRRSIG(response *dns.Msg, childZone string,
 		return nil
 	}
 
+	// Allocate RR slice for DS verification. This is a cold path
+	// (only on delegation changes); pooling is not warranted.
 	rrset := make([]dns.RR, len(dsRecords))
 	for i, ds := range dsRecords {
 		rrset[i] = ds

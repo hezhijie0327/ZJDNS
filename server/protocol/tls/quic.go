@@ -195,6 +195,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	}
 
 	req := pool.DefaultMessage.Get()
+	defer pool.DefaultMessage.Put(req)
 	req.Data = body
 	if err := req.Unpack(); err != nil {
 		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "invalid DNS message")

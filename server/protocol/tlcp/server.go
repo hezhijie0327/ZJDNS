@@ -157,7 +157,7 @@ func displayCertificateInfo(cert *tlcp.Certificate) {
 
 	daysUntilExpiry := int(time.Until(x509Cert.NotAfter).Hours() / 24)
 	if daysUntilExpiry <= 0 {
-		log.Errorf("TLCP: Certificate has already expired!")
+		log.Warnf("TLCP: Certificate has already expired!")
 	} else if daysUntilExpiry <= config.DefaultCertExpiryWarnDays {
 		log.Warnf("TLCP: Certificate expires in %d days!", daysUntilExpiry)
 	}

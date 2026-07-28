@@ -92,7 +92,6 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 	clientIP := net.ParseIP(host)
 
 	resp := s.handler.ServeDNS(msg, clientIP, true, config.ProtoHTTPTLCP)
-	pool.DefaultMessage.Put(msg)
 	if resp == nil {
 		return
 	}

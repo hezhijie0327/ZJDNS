@@ -63,6 +63,7 @@ func (r *Recursive) resolveNextNameservers(
 
 	// Fall back to glue records for NS names not satisfied by cache.
 	result.glue = make(map[string][]dns.RR) // NS name → A/AAAA glue records
+	fqParDom := dnsutil.Fqdn(parentDomain)
 	for _, ns := range bestNSRecords {
 		nsName := dnsutil.Fqdn(ns.Ns)
 		if cachedNSNames[nsName] {
@@ -73,13 +74,11 @@ func (r *Recursive) resolveNextNameservers(
 			if !ok {
 				continue
 			}
-			fqRrecName := dnsutil.Fqdn(rrec.Header().Name)
-			fqParDom := dnsutil.Fqdn(parentDomain)
-			if !dnsutil.IsBelow(fqParDom, fqRrecName) && fqParDom != "." {
+			rrecNameFq := dnsutil.Fqdn(rrec.Header().Name)
+			if !dnsutil.IsBelow(fqParDom, rrecNameFq) && fqParDom != "." {
 				continue
 			}
-			nsKey := dnsutil.Fqdn(rrec.Header().Name)
-			result.glue[nsKey] = append(result.glue[nsKey], rrec)
+			result.glue[rrecNameFq] = append(result.glue[rrecNameFq], rrec)
 			result.addrs = append(result.addrs, net.JoinHostPort(ip, config.DefaultUDPPort))
 		}
 	}

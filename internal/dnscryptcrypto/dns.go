@@ -59,6 +59,9 @@ func ReadPrefixed(conn net.Conn) (b []byte, err error) {
 	if packetLen > dns.MaxMsgSize {
 		return nil, ErrQueryTooLarge
 	}
+	if packetLen == 0 {
+		return nil, ErrQueryTooLarge
+	}
 	buf := make([]byte, packetLen)
 	_, err = io.ReadFull(conn, buf)
 	if err != nil {

@@ -48,7 +48,10 @@ func (s *Server) startCookieRotation() {
 		return
 	}
 	s.runBackgroundTicker("DNS cookie secret rotation", config.DefaultCookieSecretRotationInterval, func() {
-		ednsH.CookieGenerator.RotateSecret()
+		if err := ednsH.CookieGenerator.RotateSecret(); err != nil {
+			log.Warnf("EDNS: cookie secret rotation failed: %v", err)
+			return
+		}
 		log.Debugf("EDNS: rotated DNS cookie secret")
 	})
 }
@@ -225,7 +228,7 @@ func (s *Server) shutdownServer() {
 	select {
 	case err := <-bgDone:
 		if err != nil {
-			log.Errorf("SERVER: Background goroutines finished with error: %v", err)
+			log.Warnf("SERVER: Background goroutines finished with error: %v", err)
 		}
 		log.Infof("SERVER: All background tasks shut down")
 	case <-bgTimer.C:
@@ -243,7 +246,7 @@ func (s *Server) shutdownServer() {
 	select {
 	case err := <-refreshDone:
 		if err != nil {
-			log.Errorf("SERVER: Cache refresh goroutines finished with error: %v", err)
+			log.Warnf("SERVER: Cache refresh goroutines finished with error: %v", err)
 		}
 		log.Infof("SERVER: All cache refresh tasks shut down")
 	case <-refreshTimer.C:

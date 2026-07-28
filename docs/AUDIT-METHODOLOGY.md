@@ -12,7 +12,7 @@
 
 ### 1.1 审计维度
 
-每个文件、每个包在以下 14 个维度接受审查：
+每个文件、每个包在以下 18 个维度接受审查：
 
 | 维度 | 关注点 |
 |------|--------|
@@ -23,6 +23,10 @@
 | **架构设计** | God package、命名一致性、类型别名合理性 |
 | **性能** | QPS 瓶颈、SQL 模式、热路径分配 |
 | **Panic 检测** | nil 解引用、切片越界、空 map 写入、裸类型断言、通道关闭、除零、use-after-Put |
+| **错误处理** | `%w` 包装链路完整；`errors.Is`/`As` 使用正确；sentinel error vs custom type 选择合理；同一函数内包装策略一致（要么全 Wrap 要么全不 Wrap） |
+| **Context 传播** | 所有 I/O 函数第一参数为 `context.Context`；取消信号正确传播到下游；无 `context.TODO()` 出现在生产代码；`WithoutCancel`/`WithTimeout` 使用场景正确 |
+| **Goroutine 生命周期** | 每个 goroutine 有 `defer HandlePanic`；有明确的父 goroutine/owner；有取消路径（ctx.Done 或 done channel）；`errgroup` 使用 `SetLimit` 限制并发；channel 由唯一 owner 关闭 |
+| **资源生命周期** | `Close()` 幂等（`sync.Once` 或 atomic 守卫）；New 创建的资源在 Close 中全部释放；`Close()` 不阻塞（不在锁内做 IO）；`SetReadDeadline` 用于取消阻塞的 IO |
 | **日志质量** | 完整性（关键路径有日志）、精准性（级别正确、信息充分）、不刷屏（info/warn 不在热路径重复打印） |
 | **文档质量** | 架构文档与代码一致、CLAUDE.md 类型引用准确、注释不过时/不误导、关键设计决策有记录、公开 API 有 godoc |
 | **参数校验** | 公开函数未检查 nil/空字符串/零值参数；构造后未验证字段有效性（如 `net.ParseIP("")` 返回 nil）；错误返回值被 `_` 丢弃导致后续代码基于零值继续执行；`func(_, name string)` 中 `_` 丢弃的参数是否存在应校验但未校验的值 |
@@ -30,6 +34,7 @@
 | **RFC 一致性** | 实现是否偏离 RFC 规范；RFC 要求的边界条件/错误处理是否完整；新引入的 RFC 是否已在 `docs/rfc/` 存档；代码中的 RFC 注释引用是否正确（RFC 编号、章节号是否有效） |
 | **注释准确性** | 注释是否引用已删除/移动/重命名的函数、类型、字段；注释描述的行为是否与当前代码一致；TODO/FIXME/HACK 是否仍然有效还是已过期；注释中的行号引用是否已失效 |
 | **函数排序** | 文件内声明顺序是否严格遵循 `type → const → var → func`（decorder 强制）；同一接收者的方法是否聚合而非散落；构造/初始化函数是否在最靠近类型的位置（即紧跟 var 块之后的第一个 func）；新增函数是否随机插入在无关函数之间 |
+| **Go 版本特性** | 代码是否采用了当前最低 Go 版本的语言/库特性；是否存在可用 `new(expr)`、`errors.AsType[T]`、`slices.Reverse` 等新版标准库替代的手写模式；`go fix` 现代器覆盖的迁移是否已应用 |
 
 ### 1.2 审计架构
 
@@ -45,20 +50,25 @@ Phase 1: 包级审计（7 agent 并行）
 ├── Handler audit:    server/handler/*
 └── Defense audit:    server/defense/*
 
-Phase 2: 交叉分析（13 agent 并行）
+Phase 2: 交叉分析（18 agent 并行）
 ├── CrossCut Locks:      全部 sync.Mutex / RWMutex / Once / atomic / channel / WaitGroup / Pool
 ├── CrossCut Memory:     goroutine 泄漏、无界增长、资源泄漏、池误用
 ├── CrossCut Panic:      nil 解引用、切片越界、空 map 写入、裸类型断言、死锁、除零
+├── CrossCut Error:      错误包装链路（%w）、sentinel error 定义位置、errors.Is/As 正确性、包装策略一致性
+├── CrossCut Context:    ctx 第一参数约定、取消传播、context.TODO() 扫描、WithoutCancel 误用
+├── CrossCut Goroutine:  每个 goroutine 的 HandlePanic、owner、取消路径；errgroup SetLimit；channel 关闭 owner
+├── CrossCut Resource:   Close() 幂等性（sync.Once/atomic）、New/Close 对称性、Close 内不阻塞 IO
 ├── CrossCut Validation: 公开函数参数未校验（nil/空字符串/零值）、错误被 _ 丢弃、构造函数未验证字段
 ├── CrossCut DeadCode:   未用符号、重复代码、不必要接口
 ├── CrossCut Perf:       SQL N+1、热路径分配、索引缺失
-├── CrossCut Arch:       导入分层验证、循环依赖风险
+├── CrossCut Arch:       导入分层验证、循环依赖风险、接口契约满足性
 ├── CrossCut Logging:    日志级别审计、info/warn 热路径刷屏、错误路径缺失日志、格式一致性
 ├── CrossCut Docs:       全部 .md 文件与代码一致性、CLAUDE.md 准确性、注释是否过时、godoc 覆盖率
 ├── CrossCut Constants:  魔法数字扫描、RFC 推荐值对比、跨包重复常量检测
 ├── CrossCut RFC:        实现 vs RFC 规范逐条对照、docs/rfc/ 存档完整性、RFC 注释引用有效性
 ├── CrossCut Comments:   注释引用符号存在性检查、注释行为描述 vs 代码实际行为、过时 TODO/FIXME
-└── CrossCut Ordering:   构造函数位置、方法聚合度、声明顺序（decorder）、随机插入检测
+├── CrossCut Ordering:   构造函数位置、方法聚合度、声明顺序（decorder）、随机插入检测
+└── CrossCut GoVersion:  go.mod 版本对应的语言/库特性采用；手写模式可用标准库替代；`go fix` 现代器覆盖检查
 
 Phase 3: 综合报告
 └── Synthesis: 汇总排序 → 主题分析 → 行动计划
@@ -264,10 +274,13 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 | **注释腐烂** | 代码移动/重命名/删除后注释未更新；注释引用的函数名/行号已失效；TODO 的触发条件已不存在但注释仍在；"临时方案"注释超过 6 个月未清理 | 每次重构后 `grep` 被移动符号的旧名确认无残留引用；注释中用函数名而非行号引用代码；每个 TODO 加截止日期，过期即处理 |
 | **函数散乱** | 新增方法时随意插入在文件末尾或两个无关函数之间；同一接收者的方法跨文件散落；其他类型插入在主类型和其构造器之间 | 新增方法时找到同一接收者的方法块再插入；同一接收者的方法按调用链/复杂度排序（公开在前，私有在后）；在 `type → const → var → func` 顺序下，`New*` 应是 var 块之后的第一个 func；const/var 夹在类型和 `New*` 之间是**正确行为**（decorder 要求），不应标记为问题 |
 | **手动有界缓存** | 用 `map[K]V` + `sync.Mutex`/`sync.RWMutex` 手写容量限制和淘汰逻辑，存在随机淘汰（`range` 第一个元素）、TOCTOU 窗口（check-then-set 不在同一锁内）、无界内存增长风险（清扫逻辑遗漏或 OOM 阈值过高） | 所有有界缓存统一使用 `lrumap.Map[K, V]`（`internal/lrumap`）：并发安全、LRU 淘汰语义、零手动锁。审计时 grep `map\[.*\].*sync\.(Mutex|RWMutex)` 查找未迁移的手动实现；`LoadOrStore` 替代 check-then-set 模式；确需自定义淘汰回调的场景才单独实现 |
-
----
-
-## 五、工具链
+| **冗余函数对** | `Foo(a)` + `FooWithB(a, b)` 成对出现：两者做同一件事，后者只是多了可选参数。不限于构造函数 — `Replace`/`ReplaceAll`、`Read`/`ReadWith` 等都适用。每增加一个可选参数就多一个函数，API 线性膨胀 | 合并为单一函数，可选行为通过导出字段/option 设置（如 `m.OnEvict = fn`）。审计时 `grep -rn 'func.*With[A-Z]' --include='*.go'` 找到所有 `With*` 函数，检查是否存在对应的无 `With` 版本 |
+| **LRU 淘汰资源泄漏** | `lrumap.Map` 缓存持有可释放资源的值（网络连接、channel、句柄），淘汰时未设置 `OnEvict` 回调导致 goroutine/fd 泄漏 | 每个 `lrumap.New` 调用点审计：(1) 值类型是否实现了 `Close()` 或持有 channel/goroutine？(2) 是 → 必须设 `OnEvict`；(3) 否（纯数据）→ 无需 |
+| **错误包装断裂** | 中间层函数用 `fmt.Errorf("...: %v", err)` 而非 `%w`，导致 `errors.Is`/`As` 在上层失效；或反之，用 `%w` 包装了不应暴露给调用方的内部 sentinel | `grep -rn 'fmt.Errorf.*%v.*err' --include='*.go'` 找出所有用 `%v` 包装 error 的地方，判断是否应改用 `%w`；`grep -rn 'errors\.Is\|errors\.As'` 确认 sentinel 可被检测到 |
+| **Context 断裂** | 函数接受 `ctx` 但内部创建 `context.Background()` 或 `context.TODO()` 绕过取消链；goroutine 使用父 ctx 而非派生 ctx 导致取消泄漏 | `grep -rn 'context\.Background()\|context\.TODO()' --include='*.go'` 排除 `main.go` 和 `_test.go` 后审计每个调用点 |
+| **Close 非幂等** | `Close()` 可被多次调用（shutdown 重试、defer 链），但实现未用 `sync.Once` 或 atomic 守卫 | `grep -rn 'func.*Close()' --include='*.go'` 检查每个 `Close()` 方法是否有 `sync.Once`、`atomic.CompareAndSwap` 或 nil channel 守卫 |
+| **Goroutine 无 owner** | goroutine 被 `go func()` 启动后无任何机制等待其退出；父函数返回后子 goroutine 成为孤儿 | `grep -rn 'go func' --include='*.go'` 排除 `_test.go`，审计每个 goroutine 是否被 errgroup/WaitGroup/channel 追踪 |
+| **Go 特性滞后** | 代码停留在旧版 Go 风格 — 手写模式已有标准库替代（如 `errors.As` 循环 → `errors.AsType[T]`、手写反向切片 → `slices.Reverse`/`slices.Backward`、`fmt.Errorf("x")` 可受益于新版分配优化） | `go fix ./...` 检查是否有未应用的现代器；`grep -rn 'errors\.As(' --include='*.go'` 检查可否替换为 `errors.AsType[T]`；`grep -rn 'for i := len' --include='*.go'` 检查手写反向迭代 |
 
 ### 5.1 审计工具
 
@@ -313,6 +326,12 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 15. **注释引用符号名而非行号**：行号在每次编辑后失效。注释中引用代码位置使用函数名/类型名（可 grep），而非行号。代码移动后立即 grep 旧符号名检查注释残留
 16. **构造函数紧跟类型定义**：在 `type → const → var → func` 顺序下，`type Foo struct` 之后的 const/var 是正常的（decorder 要求），`func NewFoo` 应是 var 块之后的**第一个 func**。不应有其他类型或其他接收者的方法插入在 `type Foo` 和 `func NewFoo` 之间。同一接收者的方法聚合在一个连续块中，不跨文件散落 |
 17. **有界缓存统一用 lrumap**：任何需要容量上限的缓存（证书、HTTP client、proxy dialer、连接配置）统一使用 `lrumap.Map[K, V]`（`internal/lrumap`）。它内置并发安全 + LRU 淘汰 + `LoadOrStore` 原子操作。禁止用 `map[K]V` + `sync.Mutex` 手写淘汰逻辑 — 这种模式在审计中反复出现且每次实现都有细微并发 bug（TOCTOU、随机淘汰而非 LRU、清理泄漏） |
+18. **可选行为用导出字段，不用冗余函数对**：`Foo(a)` 是唯一函数；可选回调/配置通过导出字段设置（如 `m.OnEvict = fn`）。禁止 `Foo(a)` + `FooWithB(a, b)` 成对出现 — 不限构造函数，`Replace`/`ReplaceAll`、任何 `DoX`/`DoXWithY` 都算。每增加一个可选参数就多一个函数，API 线性膨胀。审计命令：`grep -rn 'func.*With[A-Z]' --include='*.go'` 列出所有带 `With` 的函数，人工核对是否存在对应的无 `With` 版本 |
+19. **lrumap 持有资源型值必须设 OnEvict**：如果 `lrumap.Map[K, V]` 的 V 是 `*socks5.Dialer`、`*pendingCall`（含 channel）、`*http.Client` 等持有 goroutine/fd/连接的资源型值，必须设 `OnEvict` 回调释放资源。纯数据值（`string`、`int`、`time.Time`、不可变 struct）无需。审计方法：列出所有 `lrumap.New` 调用点，对每个值类型判断是否实现了 `Close()` 或包含 `chan`/`sync.WaitGroup` 字段 |
+20. **错误包装用 %w 不用 %v**：`fmt.Errorf("context: %w", err)` 保留错误链，`errors.Is`/`As` 可穿透。仅在有意对上层隐藏实现细节时才用 `%v`。审计命令：`grep -rn 'fmt.Errorf.*%v.*err'` |
+21. **每个 goroutine 都要有 owner**：`go func()` 启动后，要么被 errgroup 追踪，要么通过 `done` channel/`ctx.Done()` 被父 goroutine 管理。fire-and-forget goroutine 必须有 `defer HandlePanic`。审计命令：`grep -rn 'go func' --include='*.go'` |
+22. **Close 必须幂等**：`Close()` 多次调用不 panic，不 double-close channel。实现模式：`sync.Once`、`atomic.CompareAndSwapInt32`、或 nil channel 检查 |
+23. **跟踪 Go 版本特性采用**：每次 Go 版本升级后审计：`go fix ./...` 应用现代器；`errors.As` → `errors.AsType[T]`；`slices.Backward` 替代手写反向迭代；`new(expr)` 简化指针构造。通过 `grep -rn 'for i := len.*-1' --include='*.go'` 找手写反向循环 |
 
 ### 6.2 避免的反模式
 
@@ -334,6 +353,13 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 16. **注释残留**：代码已删除/移动/重命名但旧注释还在原地；TODO 的截止日期已过但无人处理；注释说"临时方案"但已存在超过两个版本
 17. **新 RFC 未存档**：实现了新协议功能但 `docs/rfc/` 中没有对应 RFC 文本。先存档 RFC，再编码
 18. **手写有界 map**：用 `map[K]V` + `sync.Mutex` + `len >= cap` 检查 + `range` 随机踢一个来实现"有界缓存"。这不能保证 LRU 语义，`range` 在 map 上的迭代顺序是随机的，且 check-then-set 和 check-evict-set 存在 TOCTOU 窗口。应使用 `lrumap.Map[K, V]` |
+19. **冗余函数对**：`Foo(a)` + `FooWithB(a, b)` 成对出现。可选行为应通过导出字段设置（`m.OnEvict = fn`），而非新建函数。不限构造函数 — `Replace`/`ReplaceAll`、`Read`/`ReadWith` 等都适用。每增加一个可选参数就多一个函数，API 线性膨胀 |
+20. **lrumap 持有资源型值未设 OnEvict**：V 为 `*socks5.Dialer`、`*pendingCall`（含 channel）、`*http.Client` 等持有 goroutine/fd 的类型，淘汰时不调用 `OnEvict` 导致资源泄漏 |
+21. **错误包装用 %v**：`fmt.Errorf("...: %v", err)` 切断了错误链 — 上层的 `errors.Is(err, ErrFoo)` 永远返回 false。应默认用 `%w`，仅在故意隐藏实现细节时用 `%v` 并注释原因 |
+22. **Context 断裂**：函数签名有 `ctx context.Context`，内部却 `context.Background()` 绕过取消链；或 goroutine 继承了父 ctx 导致父函数返回后 goroutine 立即被取消 |
+23. **Close 非幂等**：`Close()` 无 `sync.Once`/atomic 守卫 — 第二次调用 double-close channel 导致 panic，或重复关闭连接产生竞态 |
+24. **Goroutine 无回收**：`go func()` 后无任何机制等待其退出 — errgroup、WaitGroup、done channel 三者至少有一 |
+25. **Go 特性滞后**：手写 `for i := len(s)-1; i >= 0; i--` 反向迭代（用 `slices.Backward`）、`errors.As` 循环（用 `errors.AsType[T]`）、裸 `new(T)` 可简化为 `new(expr)` |
 
 ### 6.3 持续改进
 
@@ -354,6 +380,12 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 - 每次审计包含 CrossCut RFC 阶段：检查 `docs/rfc/` 目录确认所有协议实现有对应 RFC 存档；grep RFC 注释引用确认编号和章节号有效；逐条核对 MUST/SHOULD 条款覆盖率
 - 每次审计包含 CrossCut Comments 阶段：grep 注释中的函数名/类型名与 `go doc` 交叉验证仍存在；grep `TODO\|FIXME\|HACK\|临时` 确认每个有截止日期且未过期；检查被移动/删除代码附近的注释是否仍有残留引用
 - 每次审计包含 CrossCut Ordering 阶段：检查每个 `New*` 函数是否紧跟对应类型定义；检查同一接收者的方法是否聚合而非散落；检查声明顺序 `type → const → var → func`（`decorder` linter 已覆盖）；检查文件末尾是否有随机插入的新函数（无前置关联）
+- 每次审计包含 CrossCut RedundantPairs 阶段：`grep -rn 'func.*With[A-Z]' --include='*.go'` 列出所有带 `With` 的函数，核对是否存在对应的无 `With` 版本 → 合并为导出字段；`grep -rn 'lrumap\.New\[' --include='*.go'` 列出所有 lrumap 实例，逐个检查值类型是否持有资源 → 是否设了 `OnEvict`
+- 每次审计包含 CrossCut Error 阶段：`grep -rn 'fmt.Errorf.*%v.*err' --include='*.go'` 找出所有用 `%v` 包装 error 的位置，判断是否应改用 `%w`；`grep -rn 'errors\.Is\|errors\.As'` 确认 sentinel 可被检测到
+- 每次审计包含 CrossCut Context 阶段：`grep -rn 'context\.Background()\|context\.TODO()' --include='*.go'` 排除 `main.go` 和 `_test.go` 后审计每个调用点
+- 每次审计包含 CrossCut Goroutine 阶段：`grep -rn 'go func' --include='*.go'` 排除 `_test.go`，审计每个 goroutine 是否有 owner（errgroup/WaitGroup/channel）、是否有 `defer HandlePanic`
+- 每次审计包含 CrossCut Resource 阶段：`grep -rn 'func.*Close()' --include='*.go'` 检查每个 `Close()` 是否有 `sync.Once` 或 atomic 守卫，确保幂等
+- 每次审计包含 CrossCut GoVersion 阶段：`go fix ./...` 应用所有现代器；`grep -rn 'for i := len.*-1\|for i := .*-1;.*>=' --include='*.go'` 找手写反向迭代 → `slices.Backward`；`grep -rn 'errors\.As(' --include='*.go'` 评估 → `errors.AsType[T]`
 
 ---
 

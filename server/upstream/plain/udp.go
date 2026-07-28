@@ -36,6 +36,10 @@ type spoofguardState struct {
 
 	// TTL values for hopguard learning — stored per candidate.
 	lastTTL, prevTTL, nonEDNSTTL uint8
+
+	// copyBuf is reused across processPacket calls within a single
+	// multi-read loop, eliminating per-candidate heap allocations.
+	copyBuf []byte
 }
 
 // spoofguardBufPool reuses 4KB read buffers across spoofguard queries.
@@ -44,7 +48,7 @@ type spoofguardState struct {
 // bound for a single UDP datagram.
 var spoofguardBufPool = sync.Pool{
 	New: func() any {
-		b := make([]byte, 4096)
+		b := make([]byte, pool.RecursiveUDPBufferSize)
 		return &b
 	},
 }
@@ -140,7 +144,9 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 		}
 		tc = ipttl.New(udpConn)
 		if tc == nil {
-			log.Warnf("UPSTREAM: hopguard TTL/HopLimit capture not available on %s: platform not supported — guard disabled for this upstream", server.Address)
+			if _, warned := c.hopguardWarned.LoadOrStore(server.Address, true); !warned {
+				log.Warnf("UPSTREAM: hopguard TTL/HopLimit capture not available on %s", server.Address)
+			}
 		}
 	}
 
@@ -288,6 +294,18 @@ func dialProxyUDP(ctx context.Context, proxyDialer *socks5.Dialer, addr string, 
 	return pconn, nil
 }
 
+// copyData returns a byte slice of length n holding a copy of raw[:n],
+// reusing s.copyBuf to avoid per-candidate heap allocations in the
+// multi-read loop.
+func (s *spoofguardState) copyData(raw []byte, n int) []byte {
+	if cap(s.copyBuf) < n {
+		s.copyBuf = make([]byte, n)
+	}
+	s.copyBuf = s.copyBuf[:n]
+	copy(s.copyBuf, raw[:n])
+	return s.copyBuf
+}
+
 // processPacket applies EDNS-gate and fast-return checks to a single raw packet.
 // Returns a response to return immediately, or nil to continue the loop.
 func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, addr string, ttlConfident bool, ttl uint8) *dns.Msg {
@@ -304,8 +322,7 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 
 	if ancount >= 2 || nscount > 0 || ad == 1 {
 		resp := pool.DefaultMessage.Get()
-		resp.Data = make([]byte, n)
-		copy(resp.Data, raw[:n])
+		resp.Data = s.copyData(raw, n)
 		if err := resp.Unpack(); err != nil {
 			pool.DefaultMessage.Put(resp)
 			return nil
@@ -339,8 +356,7 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 	// still rejected.
 	if rcode == dns.RcodeSuccess && !hasEDNS && queryUDPSize > 0 {
 		resp := pool.DefaultMessage.Get()
-		resp.Data = make([]byte, n)
-		copy(resp.Data, raw[:n])
+		resp.Data = s.copyData(raw, n)
 		if err := resp.Unpack(); err != nil {
 			pool.DefaultMessage.Put(resp)
 			return nil
@@ -379,8 +395,7 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 	// instead of collecting. GFW can't simultaneously forge the correct
 	// TTL and valid EDNS content; the two signals are orthogonal.
 	resp := pool.DefaultMessage.Get()
-	resp.Data = make([]byte, n)
-	copy(resp.Data, raw[:n])
+	resp.Data = s.copyData(raw, n)
 	if err := resp.Unpack(); err != nil {
 		pool.DefaultMessage.Put(resp)
 		return nil

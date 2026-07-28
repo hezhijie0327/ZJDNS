@@ -1,7 +1,6 @@
 package dnssec
 
 import (
-	"strings"
 	"zjdns/cache"
 	"zjdns/config"
 
@@ -33,13 +32,13 @@ func FindRRSIGs(sigs []*dns.RRSIG, ownerName string, typeCovered uint16) []*dns.
 	if len(sigs) == 0 {
 		return nil
 	}
-	normalized := strings.ToLower(ownerName)
+	// ownerName is already canonical from the DNS wire / resolver pipeline.
 	var result []*dns.RRSIG
 	for _, rrsig := range sigs {
 		if rrsig == nil {
 			continue
 		}
-		if rrsig.TypeCovered == typeCovered && strings.EqualFold(rrsig.Header().Name, normalized) {
+		if rrsig.TypeCovered == typeCovered && rrsig.Header().Name == ownerName {
 			result = append(result, rrsig)
 		}
 	}

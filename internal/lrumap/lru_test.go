@@ -342,3 +342,36 @@ func TestRange_EarlyStop(t *testing.T) {
 		t.Errorf("Range visited %d entries, want 2 (early stop)", count)
 	}
 }
+
+func TestOnEvict(t *testing.T) {
+	var evictedKey string
+	var evictedVal int
+	m := New[string, int](3)
+	m.OnEvict = func(k string, v int) {
+		evictedKey = k
+		evictedVal = v
+	}
+
+	m.Set("a", 1)
+	m.Set("b", 2)
+	m.Set("c", 3) // at capacity, no eviction yet
+
+	if evictedKey != "" {
+		t.Errorf("onEvict fired prematurely for key %q", evictedKey)
+	}
+
+	m.Set("d", 4) // evicts "a" (LRU, never accessed)
+
+	if evictedKey != "a" || evictedVal != 1 {
+		t.Errorf("onEvict: want (a,1), got (%q,%d)", evictedKey, evictedVal)
+	}
+
+	// Get "b" to mark it recent, then add "e" — "c" should be evicted.
+	m.Get("b")
+	evictedKey = ""
+	m.Set("e", 5)
+
+	if evictedKey != "c" || evictedVal != 3 {
+		t.Errorf("onEvict after Get: want (c,3), got (%q,%d)", evictedKey, evictedVal)
+	}
+}

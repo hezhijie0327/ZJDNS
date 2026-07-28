@@ -99,10 +99,15 @@ func (l *dtlcpListener) Close() error {
 	// Connections accepted between the snapshot above and udpConn.Close()
 	// were never closed. Re-acquire the lock and close any stragglers.
 	l.mu.Lock()
+	stragglers := make([]*dtlcp.Conn, 0, len(l.active))
 	for _, conn := range l.active {
-		_ = conn.Close()
+		stragglers = append(stragglers, conn)
 	}
 	l.mu.Unlock()
+
+	for _, conn := range stragglers {
+		_ = conn.Close()
+	}
 
 	return err
 }

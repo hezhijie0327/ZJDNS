@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -28,11 +29,6 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	// this query's response.
 	r.lastUpstreamEDE.Store(nil)
 
-	shuffled := make([]*config.UpstreamServer, len(servers))
-	copy(shuffled, servers)
-	ShuffleSlice(shuffled)
-	servers = shuffled
-
 	if log.Default.Level() >= log.Debug {
 		serverAddrs := make([]string, 0, len(servers))
 		for _, s := range servers {
@@ -56,7 +52,10 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	var activeConnections atomic.Int32
 	var cidrFilterRefused atomic.Bool
 
-	for _, srv := range servers {
+	//nolint:gosec // non-crypto random for server load balancing
+	startIdx := rand.IntN(len(servers))
+	for i := range servers {
+		srv := servers[(startIdx+i)%len(servers)]
 		server := srv
 
 		g.Go(func() error {
@@ -78,6 +77,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 			default:
 				// TCP/TLS/other: encrypted or single-response —
 				// no hijacking possible, first-wins is fine.
+				// Keep this list in sync with config.Protocol when adding new transports.
 				isSecure := server.Protocol == config.ProtoTLS ||
 					server.Protocol == config.ProtoQUIC ||
 					server.Protocol == config.ProtoHTTPS ||

@@ -56,11 +56,11 @@ func (c *CryptoValidator) verifyNSECRecord(nsec *dns.NSEC, rrsigs []*dns.RRSIG, 
 func matchesNSECDenial(nsec *dns.NSEC, normalizedQname string, qtype uint16, denialType string) bool {
 	switch denialType {
 	case "NXDOMAIN":
-		lower := strings.ToLower(nsec.Header().Name)
-		upper := strings.ToLower(nsec.NextDomain)
-		return isDomainInRange(normalizedQname, lower, upper)
+		// DNS names from wire are already canonical; normalisedQname is
+		// pre-canonicalised by the caller.
+		return isDomainInRange(normalizedQname, nsec.Header().Name, nsec.NextDomain)
 	case "NODATA":
-		owner := strings.ToLower(nsec.Header().Name)
+		owner := nsec.Header().Name
 		if owner != normalizedQname {
 			return false
 		}

@@ -2,6 +2,7 @@ package dnscryptcrypto
 
 import (
 	"crypto/rand"
+	"fmt"
 )
 
 // Prior to encryption, queries are padded using the ISO/IEC 7816-4 format.
@@ -31,9 +32,13 @@ func Pad(packet []byte, minLen int) (padded []byte) {
 // client queries over TCP, per §5.4.3 of draft-denis-dprive-dnscrypt-10.
 // The padding length is randomly selected from 1 to 256 bytes (including the
 // leading 0x80), and the total length is rounded up to a multiple of 64.
-func PadTCP(packet []byte) (padded []byte) {
+func PadTCP(packet []byte) (padded []byte, err error) {
 	// Pick a random padding length between 1 and 256 bytes (incl. 0x80).
-	padLen := 1 + CryptoRandIntn(256)
+	n, err := CryptoRandIntn(256)
+	if err != nil {
+		return nil, fmt.Errorf("CryptoRandIntn: %w", err)
+	}
+	padLen := 1 + n
 	packet = append(packet, 0x80)
 	if padLen > 1 {
 		padding := make([]byte, padLen-1)
@@ -43,22 +48,22 @@ func PadTCP(packet []byte) (padded []byte) {
 	for len(packet)&63 != 0 {
 		packet = append(packet, 0)
 	}
-	return packet
+	return packet, nil
 }
 
 // CryptoRandIntn returns a cryptographic random integer in [0, n).
 // n must be a power of 2 and ≤ 256.  The function uses a simple mask (not
 // rejection sampling), so non-power-of-2 n would produce biased output.
-func CryptoRandIntn(n int) int {
+func CryptoRandIntn(n int) (int, error) {
 	if n <= 0 || n > 256 || n&(n-1) != 0 {
 		panic("CryptoRandIntn: n must be a power of 2 ≤ 256")
 	}
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		panic(err)
+		return 0, fmt.Errorf("crypto rand read failed: %w", err)
 	}
 	// Simple rejection sampling; n <= 256 so bias is negligible.
-	return int(uint64(b[0])|uint64(b[1])<<8) % n //nolint:gosec // G115: n <= 256, result fits in int
+	return int(uint64(b[0])|uint64(b[1])<<8) % n, nil //nolint:gosec // G115: n <= 256, result fits in int
 }
 
 // PadWithin is like Pad but never exceeds maxLen.  When the padded packet

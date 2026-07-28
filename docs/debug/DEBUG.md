@@ -35,6 +35,7 @@ docs/debug/
 │   ├── splitguard.json              # forwarding TCP + splitguard (8.8.8.8)
 │   ├── hopguard.json                # forwarding UDP + hopguard (TTL-based, 8.8.8.8)
 │   ├── hopguard-spoofguard.json     # forwarding UDP + hopguard + spoofguard (8.8.8.8)
+│   ├── spoofguard-socks5.json           # forwarding UDP + spoofguard over SOCKS5 proxy
 │   ├── poisonguard.json             # recursive + poisonguard (content detection)
 │   └── recursive-defense.json       # recursive all four: poisonguard + spoofguard + splitguard + hopguard
 └── upstream/               # ZJDNS → external upstream tests
@@ -201,7 +202,7 @@ sleep 2
 dig @127.0.0.1 -p 10533 www.google.com A +short
 
 # EDNS-gate + richness: 查询带 EDNS，非 EDNS 响应直接丢弃，EDNS 响应间选 richest
-# 预期日志: "UDP spoofguard rejected non-EDNS response" → "UDP spoofguard EDNS candidate"
+# 预期日志: "UPSTREAM: UDP spoofguard rejected non-EDNS response" → "UPSTREAM: UDP spoofguard EDNS candidate"
 
 pkill -f "spoofguard"
 ```
@@ -219,7 +220,7 @@ sleep 2
 dig @127.0.0.1 -p 10533 www.google.com A +short
 
 # Same detection logic over SOCKS5 UDP ASSOCIATE
-# Expected: "UDP spoofguard rejected non-EDNS response" → "UDP spoofguard fast return"
+# Expected: "UPSTREAM: UDP spoofguard rejected non-EDNS response" → "UPSTREAM: UDP spoofguard fast return"
 
 pkill -f "spoofguard-socks5"
 pkill -f "socks5"
@@ -235,7 +236,7 @@ dig @127.0.0.1 -p 10533 www.google.com A +short
 
 # IP 层 TTL 指纹：首个响应记录基线 TTL，后续响应 TTL 偏离 ±2 → 丢弃
 # 与 GFW 注入点的 TTL 不同（靠近用户 vs 真实服务器远端）
-# 预期日志: "hopguard SetControlMessage"  (Linux 正常启用, Windows 降级提示)
+# 预期日志: "UPSTREAM: hopguard TTL/HopLimit capture not available on" (Linux 正常启用, Windows 降级提示)
 #   → TTL 不匹配时: 静默丢弃 (continue, 不输出 WARN)
 
 pkill -f "hopguard"

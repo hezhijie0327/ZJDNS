@@ -61,6 +61,15 @@ type Server struct {
 	rotateCh chan struct{} // closed when rotation goroutine should stop
 }
 
+// remainingTTL returns the remaining TTL in seconds for this key entry.
+func (k *keyEntry) remainingTTL() uint32 {
+	d := time.Until(k.createdAt.Add(config.DefaultDNSCryptCertificateTTL + config.DefaultDNSCryptKeyOverlap))
+	if d <= 0 {
+		return 0
+	}
+	return uint32(d.Seconds())
+}
+
 // New creates a new DNSCrypt Server from the given configuration.
 // port is the listener port, providerName is auto-derived as "2.dnscrypt-cert.<ddr.domain>".
 func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) (*Server, error) {
@@ -116,32 +125,6 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) 
 
 	log.Debugf("DNSCRYPT: generated initial key pair (serial=%d)", pair.Classical.Serial)
 	return s, nil
-}
-
-func buildResolverConfig(certificateCfg *config.DNSCryptCertificate, providerName string) (ResolverConfig, error) {
-	rc := ResolverConfig{
-		ProviderName: providerName,
-		PublicKey:    certificateCfg.PublicKey,
-		PrivateKey:   certificateCfg.PrivateKey,
-	}
-
-	if rc.PublicKey == "" || rc.PrivateKey == "" {
-		pub, priv, err := dnscryptcrypto.GenerateEd25519Keypair()
-		if err != nil {
-			return rc, fmt.Errorf("generating ed25519 keypair: %w", err)
-		}
-		rc.PublicKey = dnscryptcrypto.HexEncodeKey(pub)
-		rc.PrivateKey = dnscryptcrypto.HexEncodeKey(priv)
-		log.Warnf("DNSCRYPT: Ed25519 keypair auto-generated — save these keys for persistence")
-	}
-
-	// Resolver encryption keys are always auto-generated.  They are short-term
-	// keys rotated every 24h (§7.2); PQ keys are derived deterministically.
-	sk, pk := dnscryptcrypto.GenerateRandomKeyPair()
-	rc.ResolverSk = dnscryptcrypto.HexEncodeKey(sk[:])
-	rc.ResolverPk = dnscryptcrypto.HexEncodeKey(pk[:])
-
-	return rc, nil
 }
 
 // Start begins listening for DNSCrypt queries on UDP and TCP.
@@ -233,13 +216,11 @@ func (s *Server) rotationLoop() {
 }
 
 // Shutdown gracefully stops the DNSCrypt server.
-// NOTE(M16): WaitGroup swap between cancel and lock has a race window where
-// handler goroutines may add to the old wg. Benign in single-shutdown scenarios.
-// After l.mu.Unlock() at the cancel call, a concurrent serveUDP/serveTCP call
-// that reads s.wg between unlock and re-lock will Add to s.wg (now a fresh wg)
-// instead of prevWg, preventing Wait() from ever completing. This is a known
-// benign race: the rotated fresh wg is never waited on, and the goroutine that
-// incremented it will eventually exit via ctx cancellation.
+// The cancel and WaitGroup swap are performed under s.mu without
+// releasing the lock, so serveUDP/serveTCP always see a consistent
+// (cancelled ctx, correct wg) pair.  Any handler that reads s.wg
+// after the swap sees the fresh WaitGroup and exits immediately
+// because the context is already cancelled.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	if !s.started {
@@ -259,19 +240,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	for conn := range s.tcpConns {
 		_ = conn.SetReadDeadline(time.Unix(1, 0))
 	}
-	// Snapshot the WaitGroup for in-flight handlers and install a
-	// fresh one for a potential future Start() call. Per-packet
-	// and per-connection goroutines Add/Done on the WaitGroup that
-	// was current when serveUDP/serveTCP spawned them.
-	// Cancel the context BEFORE swapping the WaitGroup so any in-flight
-	// handlers that haven't yet called wg.Add() see a cancelled context
-	// and return early, rather than joining a WaitGroup that will never
-	// be waited on.  Cancel under s.mu to prevent a data race between
-	// Shutdown swapping s.wg and serveUDP/serveTCP reading s.wg.
+	// Cancel the context and swap the WaitGroup atomically under s.mu.
+	// Handlers that read s.wg after this point see a fresh WaitGroup;
+	// because the context is already cancelled, they return immediately
+	// rather than joining a WaitGroup that will never be waited on.
 	s.cancel(errors.New("dnscrypt server shutdown"))
-	s.mu.Unlock()
-
-	s.mu.Lock()
 	prevWg := s.wg
 	s.wg = &sync.WaitGroup{}
 	s.mu.Unlock()
@@ -320,49 +293,6 @@ func (s *Server) hasClientMagic(b []byte) bool {
 	return false
 }
 
-// buildCertTXTForCert serialises a single certificate into TXT chunks.
-func buildCertTXTForCert(cert *dnscryptcrypto.Certificate) []string {
-	certBytes, err := cert.MarshalBinary()
-	if err != nil {
-		log.Warnf("DNSCRYPT: marshal cert failed: %v", err)
-		return nil
-	}
-	escaped := escapeBackslash(certBytes)
-	const maxChunk = 255
-	var chunks []string
-	for i := 0; i < len(escaped); i += maxChunk {
-		end := min(i+maxChunk, len(escaped))
-		chunks = append(chunks, string(escaped[i:end]))
-	}
-	return chunks
-}
-
-// certTXTWireSize returns the predicted wire size of the TXT RR produced by
-// buildCertTXTForCert.  The estimate matches what miekg/dns writes when the
-// name is compressed to a pointer (0xc00c), which is the case for all
-// certificate TXT records in a handshake response.
-func certTXTWireSize(cert *dnscryptcrypto.Certificate) int {
-	certBytes, err := cert.MarshalBinary()
-	if err != nil {
-		return 0
-	}
-	escaped := escapeBackslash(certBytes)
-	nChunks := (len(escaped) + 254) / 255
-	// RR header (pointer compressed name): type(2) + class(2) + ttl(4) + rdlength(2)
-	// Rdata: 1-byte length prefix per chunk + chunk data
-	rdataLen := nChunks + len(escaped)
-	return 12 + rdataLen
-}
-
-// remainingTTL returns the seconds until this key's certificates expire, floored at 0.
-func (k *keyEntry) remainingTTL() uint32 {
-	d := time.Until(k.createdAt.Add(config.DefaultDNSCryptCertificateTTL + config.DefaultDNSCryptKeyOverlap))
-	if d <= 0 {
-		return 0
-	}
-	return uint32(d.Seconds())
-}
-
 // rotateKeys generates a fresh resolver key pair, creates a new certificate
 // pair signed with the same Ed25519 identity key, and prepends it to the key
 // list.  Entries older than key lifetime + overlap are purged.
@@ -372,7 +302,7 @@ func (k *keyEntry) remainingTTL() uint32 {
 func (s *Server) rotateKeys() {
 	newPair, err := s.generateNewCertPair()
 	if err != nil {
-		log.Errorf("DNSCRYPT: key rotation failed: %v", err)
+		log.Warnf("DNSCRYPT: key rotation failed: %v", err)
 		return
 	}
 
@@ -412,34 +342,14 @@ func (s *Server) generateNewCertPair() (*dnscryptcrypto.CertPair, error) {
 	rc.PublicKey = dnscryptcrypto.HexEncodeKey(s.signingSK.Public().(ed25519.PublicKey))
 	rc.PrivateKey = dnscryptcrypto.HexEncodeKey(s.signingSK)
 
-	sk, pk := dnscryptcrypto.GenerateRandomKeyPair()
+	sk, pk, err := dnscryptcrypto.GenerateRandomKeyPair()
+	if err != nil {
+		return nil, fmt.Errorf("generating resolver keys: %w", err)
+	}
 	rc.ResolverSk = dnscryptcrypto.HexEncodeKey(sk[:])
 	rc.ResolverPk = dnscryptcrypto.HexEncodeKey(pk[:])
 
 	return rc.NewCertPair()
-}
-
-// escapeBackslash replaces each 0x5C byte with "\\" so that miekg/dns
-// pack.String's escape handling won't misinterpret raw cert bytes.
-func escapeBackslash(b []byte) []byte {
-	n := 0
-	for _, c := range b {
-		if c == '\\' {
-			n++
-		}
-	}
-	if n == 0 {
-		return b
-	}
-	out := make([]byte, 0, len(b)+n)
-	for _, c := range b {
-		if c == '\\' {
-			out = append(out, '\\', '\\')
-		} else {
-			out = append(out, c)
-		}
-	}
-	return out
 }
 
 func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
@@ -580,4 +490,83 @@ func (s *Server) serveDNS(ctx context.Context, rw responseWriter, m *dns.Msg, pr
 	}
 	defer pool.DefaultMessage.Put(resp)
 	return rw.WriteMsg(ctx, resp)
+}
+
+func buildResolverConfig(certificateCfg *config.DNSCryptCertificate, providerName string) (ResolverConfig, error) {
+	rc := ResolverConfig{
+		ProviderName: providerName,
+		PublicKey:    certificateCfg.PublicKey,
+		PrivateKey:   certificateCfg.PrivateKey,
+	}
+
+	if rc.PublicKey == "" || rc.PrivateKey == "" {
+		pub, priv, err := dnscryptcrypto.GenerateEd25519Keypair()
+		if err != nil {
+			return rc, fmt.Errorf("generating ed25519 keypair: %w", err)
+		}
+		rc.PublicKey = dnscryptcrypto.HexEncodeKey(pub)
+		rc.PrivateKey = dnscryptcrypto.HexEncodeKey(priv)
+		log.Warnf("DNSCRYPT: Ed25519 keypair auto-generated — save these keys for persistence")
+	}
+
+	// Resolver encryption keys are always auto-generated.  They are short-term
+	// keys rotated every 24h (§7.2); PQ keys are derived deterministically.
+	sk, pk, err := dnscryptcrypto.GenerateRandomKeyPair()
+	if err != nil {
+		return rc, fmt.Errorf("generating resolver keys: %w", err)
+	}
+	rc.ResolverSk = dnscryptcrypto.HexEncodeKey(sk[:])
+	rc.ResolverPk = dnscryptcrypto.HexEncodeKey(pk[:])
+
+	return rc, nil
+}
+
+func buildCertTXTForCert(cert *dnscryptcrypto.Certificate) []string {
+	certBytes, err := cert.MarshalBinary()
+	if err != nil {
+		log.Warnf("DNSCRYPT: marshal cert failed: %v", err)
+		return nil
+	}
+	escaped := escapeBackslash(certBytes)
+	const maxChunk = 255
+	var chunks []string
+	for i := 0; i < len(escaped); i += maxChunk {
+		end := min(i+maxChunk, len(escaped))
+		chunks = append(chunks, string(escaped[i:end]))
+	}
+	return chunks
+}
+
+func certTXTWireSize(cert *dnscryptcrypto.Certificate) int {
+	certBytes, err := cert.MarshalBinary()
+	if err != nil {
+		return 0
+	}
+	escaped := escapeBackslash(certBytes)
+	nChunks := (len(escaped) + 254) / 255
+	// RR header (pointer compressed name): type(2) + class(2) + ttl(4) + rdlength(2)
+	// Rdata: 1-byte length prefix per chunk + chunk data
+	rdataLen := nChunks + len(escaped)
+	return 12 + rdataLen
+}
+
+func escapeBackslash(b []byte) []byte {
+	n := 0
+	for _, c := range b {
+		if c == '\\' {
+			n++
+		}
+	}
+	if n == 0 {
+		return b
+	}
+	out := make([]byte, 0, len(b)+n)
+	for _, c := range b {
+		if c == '\\' {
+			out = append(out, '\\', '\\')
+		} else {
+			out = append(out, c)
+		}
+	}
+	return out
 }

@@ -151,7 +151,7 @@ go test -bench=. -short -benchtime=500ms ./... \
 
 ```bash
 # SQL query (read-only; add --rw for writes)
-./zjdns --sql cache.db "SELECT e.qname, e.rcode, e.hit_udp FROM entries e"
+./zjdns --sql cache.db "SELECT e.qname, e.rcode, e.validated, e.msg_wire FROM entries e"
 
 # DNS Stamp
 ./zjdns --dnsstamp --decode "sdns://..."       # decode to upstream JSON
@@ -271,6 +271,8 @@ Execution order (outermost → innermost):
 9. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive with singleflight dedup
 
 All layers share a mutable `QueryContext`. Any layer may short-circuit by setting `qctx.Res`.
+
+> **Note:** Names like `ResponseMiddleware`, `CacheStoreMiddleware`, etc. are descriptive labels for the pipeline. The actual Go types are simply `Response`, `CacheStore`, `Validation`, `Zone`, `EDNS`, `CacheLookup`, `PTR`, `DNS64`, and `Resolution`.
 
 ### Query Routing (`server/resolver`)
 - Upstream servers queried concurrently via `errgroup`; first NOERROR wins

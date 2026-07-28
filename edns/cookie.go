@@ -66,32 +66,35 @@ const (
 var timeNow = func() uint32 { return uint32(log.NowUnix()) }
 
 // NewCookieGenerator creates a CookieGenerator with a random 16-byte secret.
-func NewCookieGenerator() *CookieGenerator {
+// Returns an error if the system CSPRNG is unavailable.
+func NewCookieGenerator() (*CookieGenerator, error) {
 	secret := make([]byte, cookieSecretSize)
 	if _, err := rand.Read(secret); err != nil {
-		panic(fmt.Sprintf("EDNS: failed to generate cookie secret: %v (system CSPRNG unavailable)", err))
+		return nil, fmt.Errorf("EDNS: failed to generate cookie secret: %w (system CSPRNG unavailable)", err)
 	}
 	cg := &CookieGenerator{}
 	cg.secrets.Store(&secretPair{current: secret})
-	return cg
+	return cg, nil
 }
 
 // RotateSecret rotates the cookie signing secret, keeping the previous one for
-// validation.
-func (c *CookieGenerator) RotateSecret() {
+// validation.  Returns an error if the system CSPRNG is unavailable; the
+// existing secret remains valid.
+func (c *CookieGenerator) RotateSecret() error {
 	if c == nil {
-		return
+		return nil
 	}
 	newSecret := make([]byte, cookieSecretSize)
 	if _, err := rand.Read(newSecret); err != nil {
-		panic(fmt.Sprintf("EDNS: failed to rotate cookie secret: %v (system CSPRNG unavailable)", err))
+		return fmt.Errorf("EDNS: failed to rotate cookie secret: %w (system CSPRNG unavailable)", err)
 	}
 	old := c.secrets.Load()
 	if old == nil {
 		c.secrets.Store(&secretPair{current: newSecret})
-		return
+		return nil
 	}
 	c.secrets.Store(&secretPair{current: newSecret, previous: old.current, older: old.previous})
+	return nil
 }
 
 func (c *CookieGenerator) loadSecrets() *secretPair {

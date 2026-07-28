@@ -394,7 +394,7 @@ func (s *Server) displayCertificateInfo(cert *eTLS.Certificate) {
 
 	daysUntilExpiry := int(time.Until(x509Cert.NotAfter).Hours() / 24)
 	if daysUntilExpiry < 0 {
-		log.Errorf("TLS: Certificate has EXPIRED for %d days!", -daysUntilExpiry)
+		log.Warnf("TLS: Certificate has EXPIRED for %d days!", -daysUntilExpiry)
 	} else if daysUntilExpiry <= config.DefaultCertExpiryWarnDays {
 		log.Warnf("TLS: Certificate expires in %d days!", daysUntilExpiry)
 	}

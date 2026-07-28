@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"zjdns/cache"
@@ -287,11 +288,11 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	allValidated := true
 
 	currentQuestion := question
-	visitedCNAMEs := make(map[string]bool)
-	var cnameDepth int
+	var visitedCNAMEs [config.DefaultMaxCNAMEChain]string
+	visitedCount := 0
 
 	chainExhausted := true
-	for cnameDepth = range config.DefaultMaxCNAMEChain {
+	for cnameDepth := range config.DefaultMaxCNAMEChain {
 		select {
 		case <-ctx.Done():
 			return QueryResult{Cacheable: true, Err: ctx.Err()}
@@ -299,11 +300,12 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 		}
 
 		currentName := dnsutil.Canonical(currentQuestion.Name)
-		if visitedCNAMEs[currentName] {
+		if slices.Contains(visitedCNAMEs[:visitedCount], currentName) {
 			log.Debugf("RECURSION: CNAME loop detected for %s", currentName)
 			return QueryResult{Cacheable: true, Err: fmt.Errorf("CNAME loop detected: %s", currentName)}
 		}
-		visitedCNAMEs[currentName] = true
+		visitedCNAMEs[visitedCount] = currentName
+		visitedCount++
 		log.Debugf("RECURSION: CNAME step %d/%d: resolving %s %s", cnameDepth+1, config.DefaultMaxCNAMEChain, currentQuestion.Name, dns.TypeToString[currentQuestion.Qtype])
 
 		// When hijack was detected anywhere in the CNAME chain,

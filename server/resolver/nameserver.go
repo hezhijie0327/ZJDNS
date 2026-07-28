@@ -40,6 +40,10 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	var nxdomainMsg atomic.Pointer[dns.Msg] // NXDOMAIN stored as secondary — never wins race against NOERROR
 	normalizedQname := dnsutil.Canonical(question.Name)
 
+	baseMsg := r.resolver.buildMsg(question, ecs, false, false)
+	baseMsg.UDPSize = pool.RecursiveUDPBufferSize
+	defer pool.DefaultMessage.Put(baseMsg)
+
 	for _, ns := range nameservers {
 		nsAddr := ns
 		protocol := config.ProtoUDP
@@ -64,8 +68,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			default:
 			}
 
-			msg := r.resolver.buildMsg(question, ecs, false, false)
-			msg.UDPSize = pool.RecursiveUDPBufferSize
+			msg := baseMsg.Copy()
 			defer pool.DefaultMessage.Put(msg)
 
 			subCtx, subCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
@@ -178,6 +181,9 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 	select {
 	case resp := <-resultChan:
+		if nx := nxdomainMsg.Load(); nx != nil {
+			pool.DefaultMessage.Put(nx)
+		}
 		if poisonRejected.Load() {
 			verdict = defense.VerdictPoisoned
 		}

@@ -62,7 +62,12 @@ var (
 
 // New creates a cache backed by the given database. The caller is responsible
 // for opening the database via database.Open() before calling New.
+// New creates a SQLite-backed DNS cache.  Panics if db is nil (caller must
+// provide a valid database handle — the server wiring always does).
 func New(db *database.DB) *SQLiteCache {
+	if db == nil {
+		panic("cache: nil database")
+	}
 	return &SQLiteCache{
 		db:          db,
 		asyncWriter: NewAsyncStatsWriter(db, config.DefaultAsyncStatsBufferSize),
@@ -299,7 +304,7 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	// Strip EDNS OPT pseudo-record from additional before caching,
 	// since padding and other EDNS options have no semantic value and
 	// waste storage space (up to 468 bytes per encrypted response).
-	additional = stripOPT(additional)
+	additional = stripOPT(cloneRRs(additional))
 
 	// Clone records to prevent downstream mutations (e.g. restoreDomain
 	// rewriting rr.Header().Name) from corrupting the cache.

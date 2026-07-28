@@ -14,9 +14,8 @@ import (
 
 // Capture wraps a *net.UDPConn with IP-layer TTL/HopLimit extraction.
 type Capture struct {
-	conn *net.UDPConn
-	pc4  *ipv4.PacketConn
-	pc6  *ipv6.PacketConn
+	pc4 *ipv4.PacketConn
+	pc6 *ipv6.PacketConn
 }
 
 // New enables TTL (IPv4) or HopLimit (IPv6) capture on conn. Returns nil if
@@ -25,7 +24,7 @@ func New(conn *net.UDPConn) *Capture {
 	if conn == nil {
 		return nil
 	}
-	c := &Capture{conn: conn}
+	c := &Capture{}
 	addr, ok := conn.LocalAddr().(*net.UDPAddr)
 	if !ok {
 		return nil

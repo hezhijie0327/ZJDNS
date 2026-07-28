@@ -111,6 +111,8 @@ func New() *Client {
 		proxyDialers: lrumap.New[string, *socks5.Dialer](config.DefaultTransportMax * 2),
 	}
 
+	c.proxyDialers.OnEvict = func(_ string, d *socks5.Dialer) { _ = d.Close() }
+
 	c.plainClient = plain.New(udpClient, tcpClient, tcpPool, c.proxyDialer, timeout)
 	c.tlsClient = tlsclient.New(tlsDNSClient, dohClient, doh3Client, dotPool, quicPool, sessionCache, quicSessionCache, dtlsSessions, c.proxyDialer, timeout)
 	c.tlcpClient = tlcpclient.New(c.proxyDialer, timeout)

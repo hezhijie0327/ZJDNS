@@ -3,6 +3,7 @@ package dnscryptcrypto
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"time"
 
@@ -22,15 +23,15 @@ func HexDecodeKey(str string) ([]byte, error) {
 }
 
 // GenerateRandomKeyPair generates a new X25519 key pair.
-func GenerateRandomKeyPair() (secretKey, publicKey [KeySize]byte) {
+func GenerateRandomKeyPair() (secretKey, publicKey [KeySize]byte, err error) {
 	var sk, pk x25519.Key
 	if _, err := rand.Read(sk[:]); err != nil {
-		panic(err)
+		return secretKey, publicKey, fmt.Errorf("x25519 key generation failed: crypto/rand.Read: %w", err)
 	}
 	x25519.KeyGen(&pk, &sk)
 	secretKey = [KeySize]byte(sk)
 	publicKey = [KeySize]byte(pk)
-	return secretKey, publicKey
+	return secretKey, publicKey, nil
 }
 
 // GenerateEd25519Keypair generates a new Ed25519 key pair for provider signing.

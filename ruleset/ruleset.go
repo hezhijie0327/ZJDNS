@@ -27,14 +27,18 @@ type RuleSetStorage interface {
 // The ruleset_entries PK is (type, tag, value), so WHERE type=? uses a PK
 // prefix seek (not a full scan).
 type Engine struct {
-	db             RuleSetStorage
-	tags           map[string]bool // all known tags from config
-	hasDomainRules bool            // set by LoadRules when domain-type rules exist
-	ipTrie         ipTrie          // binary radix trie for O(128) CIDR matching
+	db     RuleSetStorage
+	tags   map[string]bool // all known tags from config
+	ipTrie ipTrie          // binary radix trie for O(128) CIDR matching
 }
 
 // New creates an Engine backed by the given database.
+// New creates a ruleset Engine backed by the given database.
+// Panics if db is nil (caller must provide a valid store).
 func New(db RuleSetStorage) *Engine {
+	if db == nil {
+		panic("ruleset: nil database")
+	}
 	return &Engine{
 		db:   db,
 		tags: make(map[string]bool),
@@ -55,9 +59,6 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 	}
 
 	for _, rs := range rulesets {
-		if rs.Type == "domain" {
-			e.hasDomainRules = true
-		}
 		for _, v := range rs.Rule {
 			if err := insertRule(tx, rs.Tag, rs.Type, v); err != nil {
 				return err
@@ -81,9 +82,7 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 		return err
 	}
 
-	// Reset domain-rule flag on reload.
-	e.hasDomainRules = false
-
+	// Reload tag set from committed rules.
 	var n int
 	if err := e.db.SQLQueryRow("SELECT COUNT(*) FROM ruleset_entries").Scan(&n); err != nil {
 		log.Warnf("RULESET: count query: %v", err)

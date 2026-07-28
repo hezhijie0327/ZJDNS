@@ -3,7 +3,6 @@ package dnssec
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 	"zjdns/cache"
 	"zjdns/internal/log"
@@ -285,13 +284,15 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 }
 
 func groupRRset(rrs []dns.RR) map[rrsetKey][]dns.RR {
-	groups := make(map[rrsetKey][]dns.RR)
+	groups := make(map[rrsetKey][]dns.RR, len(rrs)/2)
 	for _, rr := range rrs {
 		if rr == nil {
 			continue
 		}
 		h := rr.Header()
-		key := rrsetKey{name: strings.ToLower(h.Name), rrtype: dns.RRToType(rr)}
+		// DNS names from wire responses are already canonical (lowercase);
+		// no ToLower needed here — callers canonicalise before invoking.
+		key := rrsetKey{name: h.Name, rrtype: dns.RRToType(rr)}
 		groups[key] = append(groups[key], rr)
 	}
 	return groups

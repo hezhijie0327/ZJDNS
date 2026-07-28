@@ -3,6 +3,7 @@ package tlcp
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"zjdns/config"
@@ -41,6 +42,13 @@ func dialDTLCP(ctx context.Context, network, addr string, cfg *dtlcp.Config) (*d
 
 // ExecuteDTLCP performs a DNS-over-DTLCP query (GM/T 0128-2023).
 func (c *Client) ExecuteDTLCP(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+	if msg == nil {
+		return nil, errors.New("dtlcp: nil query message")
+	}
+	if server == nil {
+		return nil, errors.New("dtlcp: nil server config")
+	}
+
 	dtlcpConfig := c.dtlcpClientConfig(server)
 
 	host, port, err := net.SplitHostPort(server.Address)

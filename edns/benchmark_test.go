@@ -28,7 +28,7 @@ func BenchmarkHandler_ApplyToMessage(b *testing.B) {
 
 func BenchmarkCookieGenerator_GenerateServerCookie(b *testing.B) {
 	log.Default.SetLevel(log.Error)
-	cg := NewCookieGenerator()
+	cg, _ := NewCookieGenerator()
 	clientIP := net.IPv4(192, 0, 2, 1)
 	clientCookie := make([]byte, DefaultCookieClientLen)
 
@@ -40,7 +40,7 @@ func BenchmarkCookieGenerator_GenerateServerCookie(b *testing.B) {
 
 func BenchmarkCookieGenerator_IsServerCookieValid(b *testing.B) {
 	log.Default.SetLevel(log.Error)
-	cg := NewCookieGenerator()
+	cg, _ := NewCookieGenerator()
 	clientIP := net.IPv4(192, 0, 2, 1)
 	clientCookie := make([]byte, DefaultCookieClientLen)
 	serverCookie := cg.GenerateServerCookie(clientIP, clientCookie)

@@ -104,22 +104,6 @@ func (m *Logger) Level() Level {
 	return Level(m.level.Load())
 }
 
-// String returns the string representation of the Level.
-func (l Level) String() string {
-	switch l {
-	case Error:
-		return "error"
-	case Warn:
-		return "warn"
-	case Info:
-		return "info"
-	case Debug:
-		return "debug"
-	default:
-		return "unknown"
-	}
-}
-
 // SetComponentFilter sets the component filter. If components is empty, all
 // components pass through (no filtering). Otherwise, only messages with a
 // matching "PREFIX:" prefix are emitted. Messages without a recognized prefix
@@ -143,58 +127,6 @@ func (m *Logger) SetComponentFilter(components []string) {
 	} else {
 		m.componentFilter = filter
 	}
-}
-
-// ParseLevelFilter parses a log level string that may include component
-// filters in the format "level:comp1,comp2,...". Returns the level and a
-// component list (nil components means no filtering). The defaultLevel is
-// used when parsing fails.
-func ParseLevelFilter(s string, defaultLevel Level) (lvl Level, components []string) {
-	if s == "" {
-		return defaultLevel, nil
-	}
-
-	// Split on colon: "debug:upstream,recursion" or plain "info".
-	parts := strings.SplitN(s, ":", 2)
-	levelStr := strings.TrimSpace(strings.ToLower(parts[0]))
-
-	switch levelStr {
-	case "error":
-		lvl = Error
-	case "warn":
-		lvl = Warn
-	case "info":
-		lvl = Info
-	case "debug":
-		lvl = Debug
-	default:
-		return defaultLevel, nil
-	}
-
-	if len(parts) == 2 && parts[1] != "" {
-		raw := strings.Split(parts[1], ",")
-		components := make([]string, 0, len(raw))
-		for _, c := range raw {
-			c = strings.TrimSpace(c)
-			if c != "" {
-				components = append(components, c)
-			}
-		}
-		return lvl, components
-	}
-
-	return lvl, nil
-}
-
-// extractPrefix extracts the component prefix from a log message. Messages
-// are expected to start with "PREFIX: " (e.g., "UPSTREAM: querying...").
-// Returns the prefix in uppercase, or empty string if no prefix found.
-func extractPrefix(msg string) string {
-	idx := strings.Index(msg, ":")
-	if idx <= 0 || idx >= len(msg)-1 || msg[idx+1] != ' ' {
-		return ""
-	}
-	return strings.ToUpper(msg[:idx])
 }
 
 // Log logs a message at the specified level, respecting both the level
@@ -257,6 +189,74 @@ func (m *Logger) Info(format string, args ...any) { m.Log(Info, format, args...)
 
 // Debug logs a debug-level message.
 func (m *Logger) Debug(format string, args ...any) { m.Log(Debug, format, args...) }
+
+// String returns the string representation of the Level.
+func (l Level) String() string {
+	switch l {
+	case Error:
+		return "error"
+	case Warn:
+		return "warn"
+	case Info:
+		return "info"
+	case Debug:
+		return "debug"
+	default:
+		return "unknown"
+	}
+}
+
+// ParseLevelFilter parses a log level string that may include component
+// filters in the format "level:comp1,comp2,...". Returns the level and a
+// component list (nil components means no filtering). The defaultLevel is
+// used when parsing fails.
+func ParseLevelFilter(s string, defaultLevel Level) (lvl Level, components []string) {
+	if s == "" {
+		return defaultLevel, nil
+	}
+
+	// Split on colon: "debug:upstream,recursion" or plain "info".
+	parts := strings.SplitN(s, ":", 2)
+	levelStr := strings.TrimSpace(strings.ToLower(parts[0]))
+
+	switch levelStr {
+	case "error":
+		lvl = Error
+	case "warn":
+		lvl = Warn
+	case "info":
+		lvl = Info
+	case "debug":
+		lvl = Debug
+	default:
+		return defaultLevel, nil
+	}
+
+	if len(parts) == 2 && parts[1] != "" {
+		raw := strings.Split(parts[1], ",")
+		components := make([]string, 0, len(raw))
+		for _, c := range raw {
+			c = strings.TrimSpace(c)
+			if c != "" {
+				components = append(components, c)
+			}
+		}
+		return lvl, components
+	}
+
+	return lvl, nil
+}
+
+// extractPrefix extracts the component prefix from a log message. Messages
+// are expected to start with "PREFIX: " (e.g., "UPSTREAM: querying...").
+// Returns the prefix in uppercase, or empty string if no prefix found.
+func extractPrefix(msg string) string {
+	idx := strings.Index(msg, ":")
+	if idx <= 0 || idx >= len(msg)-1 || msg[idx+1] != ' ' {
+		return ""
+	}
+	return strings.ToUpper(msg[:idx])
+}
 
 // Errorf logs an error-level message via the default logger.
 func Errorf(format string, args ...any) { Default.Error(format, args...) }

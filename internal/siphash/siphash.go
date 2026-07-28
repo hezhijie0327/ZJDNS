@@ -8,6 +8,9 @@ package siphash
 
 // Sum64 computes the SipHash-2-4 64-bit MAC of msg under the given 128-bit key.
 func Sum64(key *[16]byte, msg []byte) uint64 {
+	if key == nil {
+		return 0
+	}
 	k0 := uint64(key[0]) | uint64(key[1])<<8 | uint64(key[2])<<16 | uint64(key[3])<<24 |
 		uint64(key[4])<<32 | uint64(key[5])<<40 | uint64(key[6])<<48 | uint64(key[7])<<56
 	k1 := uint64(key[8]) | uint64(key[9])<<8 | uint64(key[10])<<16 | uint64(key[11])<<24 |

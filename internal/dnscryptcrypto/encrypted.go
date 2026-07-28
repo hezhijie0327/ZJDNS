@@ -344,7 +344,10 @@ func (q *EncryptedQuery) Encrypt(
 
 	var padded []byte
 	if q.IsTCP {
-		padded = PadTCP(packet)
+		padded, err = PadTCP(packet)
+		if err != nil {
+			return nil, Nonce{}, err
+		}
 	} else {
 		padded = encryptPadding(packet, q.MinQueryLen)
 	}
@@ -373,7 +376,10 @@ func (q *EncryptedQuery) EncryptPQ(
 	if len(q.PQTicket) > 0 {
 		var padded []byte
 		if q.IsTCP {
-			padded = PadTCP(packet)
+			padded, err = PadTCP(packet)
+			if err != nil {
+				return nil, Nonce{}, err
+			}
 		} else {
 			floor := max(q.MinQueryLen, PQMinPaddingResumed)
 			padded = PQPad(packet, floor)
@@ -569,6 +575,6 @@ func DecryptResponse(r *EncryptedResponse, response []byte, sharedKey [SharedKey
 }
 
 // GenerateKeyPairRaw generates a new X25519 key pair.
-func GenerateKeyPairRaw() (secretKey, publicKey [KeySize]byte) {
+func GenerateKeyPairRaw() (secretKey, publicKey [KeySize]byte, err error) {
 	return GenerateRandomKeyPair()
 }

@@ -50,6 +50,9 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		var aqr *resolver.QueryResult
 		if m.pending != nil {
 			if shared, follower := m.pending.Join(qname, dns.TypeA, qclass, ecsOpt, dnssecOK); follower {
+				if shared == nil {
+					return err
+				}
 				aqr = shared
 			} else {
 				aQuestion := handler.Question{Name: qname, Qtype: dns.TypeA, Qclass: qclass}

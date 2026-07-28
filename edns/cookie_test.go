@@ -6,7 +6,7 @@ import (
 )
 
 func TestCookieGenerator_RFC9018_Basic(t *testing.T) {
-	cg := NewCookieGenerator()
+	cg, _ := NewCookieGenerator()
 	if cg == nil {
 		t.Fatal("NewCookieGenerator returned nil")
 	}
@@ -70,12 +70,12 @@ func TestCookieGenerator_RFC9018_Basic(t *testing.T) {
 }
 
 func TestCookieGenerator_RFC9018_Rotation(t *testing.T) {
-	cg := NewCookieGenerator()
+	cg, _ := NewCookieGenerator()
 	clientIP := net.ParseIP("10.0.0.1")
 	clientCookie := []byte{8, 7, 6, 5, 4, 3, 2, 1}
 
 	oldCookie := cg.GenerateServerCookie(clientIP, clientCookie)
-	cg.RotateSecret()
+	_ = cg.RotateSecret()
 	newCookie := cg.GenerateServerCookie(clientIP, clientCookie)
 
 	// Old cookie should still validate (previous secret retained) but flag renew
@@ -91,7 +91,7 @@ func TestCookieGenerator_RFC9018_Rotation(t *testing.T) {
 	}
 
 	// Second rotation: even older secret still validates
-	cg.RotateSecret()
+	_ = cg.RotateSecret()
 	statusOld = cg.IsServerCookieValid(clientIP, clientCookie, oldCookie)
 	if statusOld != CookieValidRenew {
 		t.Errorf("after 2nd rotation old cookie status = %d, want CookieValidRenew (%d)", statusOld, CookieValidRenew)
@@ -106,11 +106,11 @@ func TestCookieGenerator_RFC9018_Nil(t *testing.T) {
 	if cg.IsServerCookieValid(nil, nil, nil) != CookieInvalid {
 		t.Error("nil CookieGenerator should return CookieInvalid")
 	}
-	cg.RotateSecret() // should not panic
+	_ = cg.RotateSecret() // should not panic
 }
 
 func TestCookieGenerator_RFC9018_TimeExpired(t *testing.T) {
-	cg := NewCookieGenerator()
+	cg, _ := NewCookieGenerator()
 	clientIP := net.ParseIP("192.168.1.1")
 	clientCookie := []byte{1, 2, 3, 4, 5, 6, 7, 8}
 
@@ -129,7 +129,7 @@ func TestCookieGenerator_RFC9018_TimeExpired(t *testing.T) {
 }
 
 func TestCookieGenerator_RFC9018_TimeRenew(t *testing.T) {
-	cg := NewCookieGenerator()
+	cg, _ := NewCookieGenerator()
 	clientIP := net.ParseIP("192.168.1.1")
 	clientCookie := []byte{1, 2, 3, 4, 5, 6, 7, 8}
 
@@ -148,7 +148,7 @@ func TestCookieGenerator_RFC9018_TimeRenew(t *testing.T) {
 }
 
 func TestCookieGenerator_RFC9018_TimeFuture(t *testing.T) {
-	cg := NewCookieGenerator()
+	cg, _ := NewCookieGenerator()
 	clientIP := net.ParseIP("192.168.1.1")
 	clientCookie := []byte{1, 2, 3, 4, 5, 6, 7, 8}
 

@@ -2,6 +2,7 @@ package tlcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -16,6 +17,13 @@ import (
 // whose DialTLSContext establishes TLCP connections. Clients are cached per
 // upstream key to amortize the TLCP handshake cost across queries.
 func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+	if msg == nil {
+		return nil, errors.New("tlcp: nil query message")
+	}
+	if server == nil {
+		return nil, errors.New("tlcp: nil server config")
+	}
+
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		return nil, fmt.Errorf("parse URL: %w", err)

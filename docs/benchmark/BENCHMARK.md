@@ -165,6 +165,6 @@ pkill -f zjdns
 sleep 4
 /tmp/zjdns -config docs/debug/loopback/client-dtlcp.json > /dev/null 2>&1 &
 sleep 3
-dig @127.0.0.1 -p 14553 www.baidu.com A +short
+dig @127.0.0.1 -p 14653 www.baidu.com A +short
 pkill -f zjdns
 ```

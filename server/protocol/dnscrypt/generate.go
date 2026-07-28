@@ -64,7 +64,10 @@ func GenerateResolverConfig(providerName string, privateKey ed25519.PrivateKey) 
 	}
 	cfg.PublicKey = dnscryptcrypto.HexEncodeKey(publicKey)
 
-	sk, pk := dnscryptcrypto.GenerateRandomKeyPair()
+	sk, pk, err := dnscryptcrypto.GenerateRandomKeyPair()
+	if err != nil {
+		return cfg, fmt.Errorf("generating resolver keys: %w", err)
+	}
 	cfg.ResolverSk = dnscryptcrypto.HexEncodeKey(sk[:])
 	cfg.ResolverPk = dnscryptcrypto.HexEncodeKey(pk[:])
 	return cfg, nil
@@ -90,7 +93,11 @@ func (rc *ResolverConfig) NewCert(serial, notBefore, notAfter uint32) (cert *dns
 		return nil, fmt.Errorf("decoding resolver secret key: %w", err)
 	}
 	if len(resolverPk) != dnscryptcrypto.KeySize || len(resolverSk) != dnscryptcrypto.KeySize {
-		sk, pk := dnscryptcrypto.GenerateRandomKeyPair()
+		var keyErr error
+		sk, pk, keyErr := dnscryptcrypto.GenerateRandomKeyPair()
+		if keyErr != nil {
+			return nil, fmt.Errorf("generating resolver keys: %w", keyErr)
+		}
 		resolverSk = sk[:]
 		resolverPk = pk[:]
 	}

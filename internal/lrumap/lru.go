@@ -29,6 +29,11 @@ type Map[K comparable, V any] struct {
 	tail *lruEntry[K, V] // sentinel: least-recent side
 	len  int
 	cap  int
+
+	// OnEvict, if set, is called with the key and value of an entry
+	// that is evicted to make room.  It runs with the map mutex held,
+	// so it must not call back into the map or block.
+	OnEvict func(K, V)
 }
 
 // New creates a Map with the given capacity. When the map reaches capacity,
@@ -175,5 +180,8 @@ func (m *Map[K, V]) evictLocked() {
 		m.remove(e)
 		delete(m.m, e.key)
 		m.len--
+		if m.OnEvict != nil {
+			m.OnEvict(e.key, e.val)
+		}
 	}
 }

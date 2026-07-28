@@ -121,10 +121,10 @@ Full implementation with PQC support. Two crypto constructions: XWingPQ (default
 ### Client (`server/upstream/dnscrypt/`)
 
 - Supports `dnscrypt` (UDP) and `dnscrypt-tcp` (TCP) protocols
-- `getDNSCryptState()`: fetches cert via plain DNS TXT, verifies Ed25519 signature, auto-detects PQ certs
-- `prepareAndEncryptQuery()`: tries resumed query → cached X-Wing encapsulation → fresh X-Wing encapsulation
+- `state()`: fetches cert via plain DNS TXT, verifies Ed25519 signature, auto-detects PQ certs
+- `prepareQuery()`: tries resumed query → cached X-Wing encapsulation → fresh X-Wing encapsulation
 - UDP→TCP fallback: TC bit, timeouts, padding failures all trigger TCP retry
-- State caching: `dnscryptState` with `pqPublicKey`, `pqCertContext`, `pqTicket`, `pqResumeSecret`, `pqTicketExpiry`
+- State caching: `State` with `pqPublicKey`, `pqCertContext`, `pqTicket`, `pqResumeSecret`, `pqTicketExpiry`
 
 ### Wire Formats
 

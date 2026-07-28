@@ -121,7 +121,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		protocol = config.ProtoHTTP3
 	}
 	response := s.handler.ServeDNS(req, clientIP, true, protocol)
-	pool.DefaultMessage.Put(req)
 
 	if err := s.respondDOH(w, response); err != nil {
 		log.Debugf("TLS: DoH response failed for %s: %v", r.URL.String(), err)

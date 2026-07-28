@@ -36,12 +36,16 @@ type Handler struct {
 
 // NewHandler creates a Handler with the given default ECS configuration.
 func NewHandler(defaultECS config.ECSConfig) (*Handler, error) {
+	cg, err := NewCookieGenerator()
+	if err != nil {
+		return nil, fmt.Errorf("EDNS: %w", err)
+	}
 	h := &Handler{
 		defaultECSConfig: defaultECS,
 		detector: &ipdetect.Detector{
 			TraceURL: defaultECS.AutoDetectURL,
 		},
-		CookieGenerator: NewCookieGenerator(),
+		CookieGenerator: cg,
 	}
 
 	if !defaultECS.IsEmpty() {

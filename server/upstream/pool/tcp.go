@@ -423,9 +423,9 @@ func (p *ConnPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFun
 	if len(p.conns[key]) >= p.maxConns {
 		old := p.replaceDead(key)
 		if old == nil {
+			p.mu.Unlock()
 			c.close()
 			log.Debugf("TCPPOOL: pool for %s already at limit (%d), discarding extra connection", key, p.maxConns)
-			p.mu.Unlock()
 			return nil, fmt.Errorf("client: max conns reached for %s", key)
 		}
 		p.conns[key] = append(p.conns[key], c)

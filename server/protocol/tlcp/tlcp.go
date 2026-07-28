@@ -98,7 +98,6 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 		}
 
 		resp := s.handler.ServeDNS(msg, clientIP, true, config.ProtoTLCP)
-		pool.DefaultMessage.Put(msg)
 		if resp == nil {
 			return
 		}
