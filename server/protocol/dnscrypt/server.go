@@ -13,6 +13,7 @@ import (
 	"zjdns/edns"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 	"zjdns/internal/pool"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -63,6 +64,10 @@ type Server struct {
 	// workerCap limits concurrent handler goroutines to prevent unbounded
 	// goroutine creation under high load.
 	workerCap chan struct{}
+
+	// sharedKeyCache avoids recomputing X25519 per query for classical
+	// DNSCrypt (RFC §8).  Cleared on key rotation.
+	sharedKeyCache *lrumap.Map[[32]byte, [32]byte]
 }
 
 // remainingTTL returns the remaining TTL in seconds for this key entry.
@@ -115,6 +120,7 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) 
 		signingSK:      signingSK,
 		rotateCh:       make(chan struct{}),
 		workerCap:      make(chan struct{}, config.DefaultMaxConcurrentStreams),
+		sharedKeyCache: lrumap.New[[32]byte, [32]byte](2000),
 	}
 
 	// Derive ticket key from the Ed25519 signing key for PQ resumption.
@@ -322,6 +328,7 @@ func (s *Server) rotateKeys() {
 			buildCertTXTForCert(newPair.PQ),
 		},
 	}
+	s.sharedKeyCache = lrumap.New[[32]byte, [32]byte](2000)
 	s.keys = append([]keyEntry{entry}, s.keys...)
 
 	// Purge expired keys.

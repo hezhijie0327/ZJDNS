@@ -43,6 +43,17 @@ func GenerateEd25519Keypair() (publicKey, privateKey []byte, err error) {
 	return pub, priv, nil
 }
 
+// X25519KeyPairFromSeed derives an X25519 key pair from a 32-byte seed.
+// Used for ephemeral per-query keys (dnscrypt-proxy ephemeralKeys mode).
+func X25519KeyPairFromSeed(seed [32]byte) (secretKey, publicKey [KeySize]byte, err error) {
+	var sk, pk x25519.Key
+	copy(sk[:], seed[:])
+	x25519.KeyGen(&pk, &sk)
+	secretKey = [KeySize]byte(sk)
+	publicKey = [KeySize]byte(pk)
+	return secretKey, publicKey, nil
+}
+
 // NowUnix32 returns the current Unix time as uint32.  The DNSCrypt protocol
 // uses 32-bit timestamps throughout (certificates, tickets), and Unix epoch
 // values fit in uint32 until year 2106.  All timestamp-to-uint32 conversions

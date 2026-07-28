@@ -186,3 +186,54 @@ func TestNormalize_TruncateRepackRoundTrip(t *testing.T) {
 		t.Error("TC bit should be set in wire format after truncation")
 	}
 }
+
+func TestNormalize_WireBudget_Constrains(t *testing.T) {
+	// When maxWireLen is small, Normalize should truncate even when
+	// the EDNS buffer is large (§5.4.6 wire budget constraint).
+	req := new(dns.Msg)
+	req.UDPSize = 4096 // large EDNS buffer
+	res := buildBulkResponse(20)
+	if err := res.Pack(); err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+	packedLen := res.Len()
+	t.Logf("response: %d bytes, EDNS=4096, maxWireLen=256", packedLen)
+
+	// maxWireLen=256 → maxPlain=256-48-1=207 bytes. Response should be truncated.
+	dnscryptcrypto.Normalize("udp", req, res, 256)
+
+	if !res.Truncated {
+		t.Error("response must be truncated when wire budget (256) is smaller than EDNS buffer (4096)")
+	}
+}
+
+func TestNormalize_WireBudget_TCP_Unlimited(t *testing.T) {
+	// maxWireLen=0 (TCP) → no truncation.
+	req := new(dns.Msg)
+	res := buildBulkResponse(50)
+	if err := res.Pack(); err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+
+	dnscryptcrypto.Normalize("tcp", req, res, 0)
+
+	if res.Truncated {
+		t.Error("TCP (maxWireLen=0) must never truncate")
+	}
+}
+
+func TestNormalize_WireBudget_LargeEnough(t *testing.T) {
+	// maxWireLen large enough → no truncation.
+	req := new(dns.Msg)
+	res := new(dns.Msg)
+	res.Answer = []dns.RR{mkA("x.")}
+	if err := res.Pack(); err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+
+	dnscryptcrypto.Normalize("udp", req, res, 8192)
+
+	if res.Truncated {
+		t.Error("small response with large wire budget must not be truncated")
+	}
+}

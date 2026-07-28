@@ -226,6 +226,24 @@ func ProfileExtensionHash() [32]byte {
 	return cachedProfileExtensionHash
 }
 
+// PQClientMagic derives the 8-byte client magic for a PQ certificate from the
+// X-Wing public key, matching encrypted-dns-server dnscrypt_certs.rs:64-67:
+// SHA-256(PK)[:8], with QUIC and PQResume collision avoidance.
+func PQClientMagic(pk []byte) [ClientMagicSize]byte {
+	h := sha256.Sum256(pk)
+	var magic [ClientMagicSize]byte
+	copy(magic[:], h[:ClientMagicSize])
+	// §5.5: MUST NOT start with 7 zero bytes (QUIC collision).
+	if [7]byte(magic[:7]) == ([7]byte{}) {
+		magic[0] ^= 0xFF
+	}
+	// §11.2: MUST NOT collide with resume magic.
+	if bytes.Equal(magic[:], PQResumeMagic[:]) {
+		magic[0] ^= 0xFF
+	}
+	return magic
+}
+
 func EncodeTicketPlaintext(resumeSecret [SharedKeySize]byte, clientMagic [ClientMagicSize]byte, serial, tsEnd, expiry uint32, peHash [32]byte) []byte {
 	buf := make([]byte, TicketPlaintextSize)
 	copy(buf[TicketPlaintextSecretOff:TicketPlaintextSecretOff+TicketPlaintextSecretLen], resumeSecret[:])

@@ -1,0 +1,9 @@
+server_names = ['zjdns-test']
+listen_addresses = ['127.0.0.1:13253']
+cache = false
+log_level = 2
+pqdnscrypt = false
+dnscrypt_ephemeral_keys = true
+
+[static.'zjdns-test']
+stamp = 'sdns://AQAAAAAAAAAADzEyNy4wLjAuMToxMjQ0MyAUmKzDmr6poBAvplXaa-dAhM70r8mZLkP9rjZO0VbeUyAyLmRuc2NyeXB0LWNlcnQuempkbnMtdGVzdC5sb2NhbA'

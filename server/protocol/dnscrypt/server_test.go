@@ -222,3 +222,90 @@ func TestHandshakeTTL(t *testing.T) {
 		}
 	}
 }
+
+func TestHandshakeTC_ClassicalPreserved(t *testing.T) {
+	// When the UDP cert query is too small for the PQ cert, the response
+	// must have TC=true with the classical cert preserved (§5.5/§10.3).
+	certificateCfg := &config.DNSCryptCertificate{}
+	srv, err := New(certificateCfg, "0", "2.dnscrypt-cert.example.com")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Build a handshake query that is large enough for the classical cert
+	// but too small for the classical+PQ pair.  Classical cert is ~124 bytes
+	// TXT-wire (~140 bytes).  PQ is ~1320 bytes TXT-wire (~1350 bytes).
+	// Together ~1500 bytes.  Query of 200 bytes → PQ omitted, TC=true.
+	m := new(dns.Msg)
+	txtRR := new(dns.TXT)
+	txtRR.Hdr = dns.Header{Name: "2.dnscrypt-cert.example.com.", Class: dns.ClassINET}
+	m.Question = []dns.RR{txtRR}
+	if err := m.Pack(); err != nil {
+		t.Fatalf("pack query: %v", err)
+	}
+	query := m.Data
+	t.Logf("cert query size: %d bytes", len(query))
+
+	res, err := srv.handleHandshake(query, true) // isUDP=true
+	if err != nil {
+		t.Fatalf("handleHandshake: %v", err)
+	}
+
+	reply := new(dns.Msg)
+	reply.Data = res
+	if err := reply.Unpack(); err != nil {
+		t.Fatalf("unpack reply: %v", err)
+	}
+
+	// Must have TC=true because PQ cert doesn't fit.
+	if !reply.Truncated {
+		t.Error("UDP cert response must have TC=true when PQ cert omitted")
+	}
+	// Must include the classical cert (at least 1 TXT record).
+	if len(reply.Answer) == 0 {
+		t.Fatal("TC cert response must preserve classical cert (≥1 TXT record)")
+	}
+	for _, rr := range reply.Answer {
+		if _, ok := rr.(*dns.TXT); !ok {
+			t.Errorf("expected TXT record, got %T", rr)
+		}
+	}
+	t.Logf("TC response: %d TXT records, TC=%v", len(reply.Answer), reply.Truncated)
+}
+
+func TestHandshakeTC_AllFit_NoTC(t *testing.T) {
+	// TCP query → no anti-amplification → both certs fit → TC=false.
+	certificateCfg := &config.DNSCryptCertificate{}
+	srv, err := New(certificateCfg, "0", "2.dnscrypt-cert.example.com")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	m := new(dns.Msg)
+	txtRR := new(dns.TXT)
+	txtRR.Hdr = dns.Header{Name: "2.dnscrypt-cert.example.com.", Class: dns.ClassINET}
+	m.Question = []dns.RR{txtRR}
+	if err := m.Pack(); err != nil {
+		t.Fatalf("pack query: %v", err)
+	}
+
+	// TCP → no anti-amplification budget → both certs always included.
+	res, err := srv.handleHandshake(m.Data, false) // isUDP=false
+	if err != nil {
+		t.Fatalf("handleHandshake: %v", err)
+	}
+
+	reply := new(dns.Msg)
+	reply.Data = res
+	if err := reply.Unpack(); err != nil {
+		t.Fatalf("unpack reply: %v", err)
+	}
+
+	if reply.Truncated {
+		t.Error("TCP cert query must have TC=false (both certs fit, no anti-amplification)")
+	}
+	if len(reply.Answer) < 2 {
+		t.Errorf("want ≥2 TXT records (classical+PQ), got %d", len(reply.Answer))
+	}
+	t.Logf("TCP response: %d TXT records, TC=%v", len(reply.Answer), reply.Truncated)
+}

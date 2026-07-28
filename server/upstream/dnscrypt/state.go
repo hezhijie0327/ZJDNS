@@ -35,7 +35,10 @@ type State struct {
 	esVersion     dnscryptcrypto.CryptoConstruction
 	expires       time.Time
 
-	minQueryLen int
+	minQueryLen   int
+	ewmaQuerySize float64                      // EWMA of encrypted response size
+	ephemeralKeys bool                         // per-query X25519 keys for forward secrecy
+	resolverPK    [dnscryptcrypto.KeySize]byte // resolver X25519 public key
 
 	// PQ fields — only set when the server offers a PQ certificate.
 	pqPublicKey       []byte
@@ -136,7 +139,12 @@ func (c *Client) state(
 		preferPQ = *server.PQDNSCrypt
 	}
 
-	return c.buildState(addr, providerName, publicKey, cert, preferPQ)
+	state, err = c.buildState(addr, providerName, publicKey, cert, preferPQ)
+	if err != nil {
+		return nil, err
+	}
+	state.ephemeralKeys = server.EphemeralKeys
+	return state, nil
 }
 
 // buildState constructs a State from parsed certificates.  When preferPQ is
@@ -189,8 +197,12 @@ func (c *Client) buildState(
 		esVersion:     esVersion,
 		expires:       time.Now().Add(config.DefaultDNSCryptCertificateCacheTTL),
 		minQueryLen:   config.DefaultDNSCryptMinQueryLen,
+		ewmaQuerySize: float64(config.DefaultDNSCryptMinQueryLen),
 	}
 
+	if cert.classical != nil {
+		state.resolverPK = cert.classical.ResolverPk
+	}
 	if esVersion.IsPQ() && len(cert.pq.PqPublicKey) > 0 {
 		state.pqPublicKey = cert.pq.PqPublicKey
 		state.pqCertContext = cert.pq.PqCertContext

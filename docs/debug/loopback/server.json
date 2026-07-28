@@ -27,5 +27,8 @@
       "cache": { "max_entries": 1000 }
     }
   },
-  "upstream": [{ "protocol": "recursive", "poisonguard": false }]
+  "upstream": [
+    { "address": "223.5.5.5:53", "protocol": "udp" },
+    { "address": "223.6.6.6:53", "protocol": "udp" }
+  ]
 }

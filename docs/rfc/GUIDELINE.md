@@ -872,17 +872,19 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## DNSCrypt (draft-denis-dprive-dnscrypt-10)
+## DNSCrypt (draft-denis-dprive-dnscrypt-11)
 
 **非 IETF 标准的 DNS 加密协议，支持后量子密码学（X-Wing PQ/T KEM）。**
 
 ### 关键常量
 
-- 默认端口: **8443**
-- Client Magic: 8 字节协议标识
-- UDP 查询最小: **256** 字节（填充防放大）
-- 证书轮换: **24h**
+- 默认端口: **8443**（§5.2 SHOULD 443 — 与 dnscrypt-proxy 社区一致）
+- Client Magic: 8 字节；Classical=X25519 PK 前 8B, PQ=SHA-256(X-Wing PK)[:8]
+- UDP 查询最小: **512** 字节（§5.4.1 MAY，与 dnscrypt-proxy 对齐）
+- 证书轮换: **24h**（§8 MUST ≤24h）
 - 证书有效期: 48h（当前+前一个重叠）
+- 查询上限: **4096** 字节（§5.2 MUST）
+- TCP 响应上限: **4096** 字节（§5.4.7 MUST）
 
 ### 两种加密构造
 
@@ -900,10 +902,32 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 4. PQ 模式：首次查询后获得 ticket，后续查询可复用（类似 TLS 会话恢复）
 ```
 
-### 防放大（§10.3）
+### 新增 §5.4.5 确定性响应填充
+
+- 填充长度: SHA-256(sharedKey || clientNonce)[0] → 1-256 字节
+- 64 字节对齐（预算允许时）
+- 防止重传查询产生不同的填充长度（可链接信号）
+- 与 encrypted-dns-server 的 SipHash 方案功能等价
+
+### 新增 §5.4.6-5.4.7 响应处理
+
+- **UDP**: 加密响应 ≤ 查询大小（反放大）。超预算 → 截断 DNS 响应 + TC，禁止静默丢弃
+- **TCP**: 无 UDP 反放大限制，但加密响应 < 4096 字节
+- TCP 每次连接只处理一个查询后关闭（§5.4.4）
+
+### 防放大（§5.5 / §11.3）
 
 - UDP 证书响应 MUST NOT 大于请求
-- 响应过大 → 设置 TC 位 → 客户端通过 TCP 重试
+- PQ 证书省略时 → 设置 TC=true，保留 Classical 证书
+- 客户端收到 TC → TCP 重试获取完整证书集
+
+### 客户端优化
+
+- **EWMA 自适应 sizing**: 跟踪响应大小，逐步下调 minQueryLen（对齐 dnscrypt-proxy）
+- **TC 翻倍升级**: 收到 TC 时 minQueryLen *= 2（O(log n) 收敛）
+- **临时密钥**: `ephemeral_keys: true` 启用每查询新 X25519 密钥对（前向安全）
+- **PQ 降级保护**: `pqdnscrypt: true` 时拒绝 Classical 回退（§11.9 MUST）
+- **服务端共享密钥缓存**: client_pk → shared_key LRU 缓存（§8 SHOULD）
 
 ### 我们的实现
 
@@ -911,8 +935,16 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 - XWingPQ + XChacha20Poly1305 两种构造 ✓
 - 24h 证书轮换 ✓
 - PQ Ticket 会话恢复 ✓
-- UDP 256 字节最小填充 ✓
-- 防放大（TC 回退 TCP）✓
+- §5.4.5 确定性响应填充 ✓
+- §5.4.6 TC 截断（不静默丢弃）✓
+- §5.4.7 TCP 4096 字节限制 ✓
+- 证书 TC + Classical 保留 ✓
+- EWMA 自适应 sizing ✓
+- 临时密钥 ✓
+- PQ 降级保护 ✓
+- §8 共享密钥缓存 ✓
+- 弱密钥检查 ✓
+- 19/19 参考实现对齐 ✓
 
 ---
 

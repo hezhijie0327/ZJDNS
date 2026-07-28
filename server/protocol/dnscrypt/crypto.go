@@ -172,7 +172,19 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.Encrypte
 				ClientMagic:    k.pair.Classical.ClientMagic,
 				ClientQueryLen: len(b),
 			}
+			// RFC §8: cache shared keys to avoid X25519 per query.
+			cpk := query.ClientPk
+			if cached, ok := s.sharedKeyCache.Get(cpk); ok {
+				query.SharedKey = cached
+			}
 			decrypted, decErr := query.Decrypt(b, k.pair.Classical.ResolverSk)
+			if decErr == nil && query.SharedKey == [dnscryptcrypto.SharedKeySize]byte{} {
+				// Cache miss — compute the key and store it.
+				sk, skErr := dnscryptcrypto.ComputeSharedKey(dnscryptcrypto.XChacha20Poly1305, &k.pair.Classical.ResolverSk, &cpk)
+				if skErr == nil {
+					s.sharedKeyCache.Set(cpk, sk)
+				}
+			}
 			if decErr == nil {
 				msg = &dns.Msg{}
 				msg.Data = decrypted

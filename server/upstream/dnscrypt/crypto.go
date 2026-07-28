@@ -2,6 +2,7 @@ package dnscrypt
 
 import (
 	"crypto/rand"
+	"crypto/sha512"
 	"fmt"
 	"time"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
@@ -13,8 +14,24 @@ import (
 // the response without reading state.sharedKey outside the lock.
 func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte) (encrypted []byte, clientNonce dnscryptcrypto.Nonce, sharedKey [dnscryptcrypto.SharedKeySize]byte, err error) {
 	if !state.esVersion.IsPQ() {
-		enc, nonce, err := dnscryptcrypto.EncryptQuery(q, packet, state.sharedKey)
-		return enc, nonce, state.sharedKey, err
+		sk := state.sharedKey
+		if state.ephemeralKeys {
+			// Pre-generate nonce so we can derive the ephemeral key from it.
+			q.Nonce = newNonce()
+			seed := sha512.Sum512_256(append(q.Nonce[:dnscryptcrypto.NonceSize/2], state.secretKey[:]...))
+			epSk, epPk, epErr := dnscryptcrypto.X25519KeyPairFromSeed(seed)
+			if epErr != nil {
+				return nil, dnscryptcrypto.Nonce{}, [dnscryptcrypto.SharedKeySize]byte{}, fmt.Errorf("ephemeral key: %w", epErr)
+			}
+			q.ClientPk = epPk
+			epSharedKey, epErr := dnscryptcrypto.ComputeSharedKey(dnscryptcrypto.XChacha20Poly1305, &epSk, &state.resolverPK)
+			if epErr != nil {
+				return nil, dnscryptcrypto.Nonce{}, [dnscryptcrypto.SharedKeySize]byte{}, fmt.Errorf("ephemeral shared key: %w", epErr)
+			}
+			sk = epSharedKey
+		}
+		enc, nonce, err := dnscryptcrypto.EncryptQuery(q, packet, sk)
+		return enc, nonce, sk, err
 	}
 
 	// PQ: try resumed query first, fall back to fresh encapsulation.

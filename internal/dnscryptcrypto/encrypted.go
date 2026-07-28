@@ -338,7 +338,7 @@ func (q *EncryptedQuery) Encrypt(
 
 	if q.ESVersion.IsPQ() {
 		query, clientNonce, err = q.EncryptPQ(packet, sharedKey)
-		if err == nil && !q.IsTCP && len(query) > MaxDNSUDPPacketSize {
+		if err == nil && len(query) > MaxDNSUDPPacketSize {
 			err = ErrQueryTooLarge
 		}
 		return query, clientNonce, err
@@ -453,9 +453,14 @@ func (q *EncryptedQuery) Decrypt(
 	idx := ClientMagicSize
 	copy(q.ClientPk[:KeySize], query[idx:idx+KeySize])
 
-	sharedKey, err := ComputeSharedKey(q.ESVersion, &serverSecretKey, &q.ClientPk)
-	if err != nil {
-		return nil, fmt.Errorf("computing shared key: %w", err)
+	var sharedKey [SharedKeySize]byte
+	if q.SharedKey != [SharedKeySize]byte{} {
+		sharedKey = q.SharedKey
+	} else {
+		sharedKey, err = ComputeSharedKey(q.ESVersion, &serverSecretKey, &q.ClientPk)
+		if err != nil {
+			return nil, fmt.Errorf("computing shared key: %w", err)
+		}
 	}
 
 	idx += KeySize

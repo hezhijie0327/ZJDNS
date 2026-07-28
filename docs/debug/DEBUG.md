@@ -8,7 +8,6 @@ docs/debug/
 ├── loopback/               # ZJDNS ↔ ZJDNS protocol loopback tests
 │   ├── server.json         # server: all protocols + self-signed TLS + DNSCrypt + TLCP/DTLCP
 │   ├── server-dnssec.json  # server: dnssec_enforce=true, recursive mode
-│   ├── server-hijack.json   # server: poisonguard + splitguard, recursive mode
 │   ├── client-udp.json     # client: UDP → server
 │   ├── client-tcp.json     # client: TCP → server
 │   ├── client-tls.json     # client: TLS → server
@@ -19,8 +18,9 @@ docs/debug/
 │   ├── client-tlcp.json     # client: TLCP → server
 │   ├── client-http-tlcp.json  # client: HTTP over TLCP → server
 │   ├── client-dtlcp.json   # client: DTLCP → server
-│   ├── client-dnscrypt.json       # client: DNSCrypt (PQ preferred) → server
-│   └── client-dnscrypt-classic.json  # client: DNSCrypt (classic only) → server
+│   ├── client-dnscrypt.json              # client: DNSCrypt (PQ preferred) → server
+│   ├── client-dnscrypt-classic.json       # client: DNSCrypt (classical only) → server
+│   └── client-dnscrypt-ephemeral.json     # client: DNSCrypt + ephemeral_keys + PQ → server
 ├── routedns/               # ZJDNS ↔ RouteDNS tests
 │   └── dtls-client.toml    # RouteDNS DTLS client → ZJDNS DTLS server
 │                            #   Prerequisite: generate cert with
@@ -28,8 +28,9 @@ docs/debug/
 │                            #   and configure ZJDNS to use the same cert
 ├── dnscrypt/               # ZJDNS ↔ DNSCrypt-proxy tests
 │   ├── zjdns-server.json          # ZJDNS DNSCrypt server (dual-cert: classical + PQ)
-│   ├── proxy-pq.toml              # DNSCrypt-proxy client (pqdnscrypt=true, default)
-│   └── proxy-classic.toml         # DNSCrypt-proxy client (pqdnscrypt=false)
+│   ├── proxy-pq.toml                     # DNSCrypt-proxy client (pqdnscrypt=true, default)
+│   ├── proxy-classic.toml                # DNSCrypt-proxy client (pqdnscrypt=false)
+│   └── proxy-classic-ephemeral.toml      # DNSCrypt-proxy client (classical + ephemeral keys)
 ├── defense/                # Anti-pollution defense scenarios
 │   ├── spoofguard.json              # forwarding UDP + spoofguard (8.8.8.8)
 │   ├── splitguard.json              # forwarding TCP + splitguard (8.8.8.8)
@@ -135,7 +136,8 @@ sleep 3
 | `client-http-tlcp.json` | 13553 | TLCP DoH | 10440 |
 | `client-dtlcp.json` | 14653 | DTLCP | 8542 |
 | `client-dnscrypt.json` | 12444 | DNSCrypt (PQ) | 12443 |
-| `client-dnscrypt-classic.json` | 12445 | DNSCrypt (classic) | 12443 |
+| `client-dnscrypt-classic.json` | 12445 | DNSCrypt (classical) | 12443 |
+| `client-dnscrypt-ephemeral.json` | 12445 | DNSCrypt + ephemeral_keys + PQ | 12443 |
 
 ### Quick Tests
 
@@ -334,6 +336,21 @@ dig @127.0.0.1 -p 12053 www.baidu.com A +short
 
 ## DNSCrypt Tests (ZJDNS ↔ DNSCrypt-proxy)
 
+## DNSCrypt Features (v3.7.12)
+
+| Feature | RFC | Config | Default |
+|---------|-----|--------|---------|
+| Deterministic response padding | §5.4.5 | built-in | SHA-256(sharedKey, clientNonce) |
+| Server TC truncation | §5.4.6 | built-in | truncate + TC, never silent |
+| TCP 4096 response cap | §5.4.7 | built-in | enforced |
+| Cert TC + classical preserve | §5.5/§11.3 | built-in | PQ omitted → TC=true |
+| EWMA adaptive query sizing | §5.4.2 | built-in | decay minQueryLen on small responses |
+| Client TC doubling | §5.4.2 | built-in | O(log n) escalation |
+| Shared key cache | §8 | built-in | 2000-entry LRU |
+| PQ downgrade protection | §11.9 | `pqdnscrypt: true` | refuses classical fallback |
+| Ephemeral keys | dnscrypt-proxy | `ephemeral_keys: true` | per-query X25519 key pair |
+| Weak key rejection | §13.7 | built-in | all-zero X25519 point rejected |
+
 The server always serves both classical (XChacha20Poly1305) and post-quantum
 (X-Wing KEM) certificates simultaneously. The proxy chooses which to use.
 
@@ -356,6 +373,12 @@ pkill -f "dnscrypt-proxy"
 sleep 3
 dig @127.0.0.1 -p 13153 www.baidu.com A +short
 # Expected: uses XChacha20-Poly1305 (classical only)
+# Classical + ephemeral_keys (per-query forward secrecy)
+	/tmp/dnscrypt-proxy/dnscrypt-proxy -config docs/debug/dnscrypt/proxy-classic-ephemeral.toml &
+	sleep 3
+	dig @127.0.0.1 -p 13253 www.baidu.com A +short
+	# Expected: per-query X25519 key pairs
+	pkill -f "dnscrypt-proxy"
 pkill -f "dnscrypt-proxy"
 ```
 
@@ -376,6 +399,12 @@ pkill -f "client-dnscrypt"
 sleep 2
 dig @127.0.0.1 -p 12445 www.baidu.com A +short
 pkill -f "client-dnscrypt-classic"
+
+# Ephemeral keys (per-query forward secrecy)
+/tmp/zjdns -config docs/debug/loopback/client-dnscrypt-ephemeral.json &
+sleep 2
+dig @127.0.0.1 -p 12445 www.baidu.com A +short
+pkill -f "client-dnscrypt-ephemeral"
 ```
 
 ## Upstream Protocol Tests
