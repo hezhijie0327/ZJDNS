@@ -35,6 +35,7 @@
 | **注释准确性** | 注释是否引用已删除/移动/重命名的函数、类型、字段；注释描述的行为是否与当前代码一致；TODO/FIXME/HACK 是否仍然有效还是已过期；注释中的行号引用是否已失效 |
 | **函数排序** | 文件内声明顺序是否严格遵循 `type → const → var → func`（decorder 强制）；同一接收者的方法是否聚合而非散落；构造/初始化函数是否在最靠近类型的位置（即紧跟 var 块之后的第一个 func）；新增函数是否随机插入在无关函数之间 |
 | **Go 版本特性** | 代码是否采用了当前最低 Go 版本的语言/库特性；是否存在可用 `new(expr)`、`errors.AsType[T]`、`slices.Reverse` 等新版标准库替代的手写模式；`go fix` 现代器覆盖的迁移是否已应用 |
+| **流程图覆盖** | `docs/FLOWCHARTS.md` 是否覆盖全部核心功能和协议；新增特性/协议/中间件是否同步更新了流程图；mermaid 语法是否正确可渲染 |
 
 ### 1.2 审计架构
 
@@ -68,7 +69,8 @@ Phase 2: 交叉分析（18 agent 并行）
 ├── CrossCut RFC:        实现 vs RFC 规范逐条对照、docs/rfc/ 存档完整性、RFC 注释引用有效性
 ├── CrossCut Comments:   注释引用符号存在性检查、注释行为描述 vs 代码实际行为、过时 TODO/FIXME
 ├── CrossCut Ordering:   构造函数位置、方法聚合度、声明顺序（decorder）、随机插入检测
-└── CrossCut GoVersion:  go.mod 版本对应的语言/库特性采用；手写模式可用标准库替代；`go fix` 现代器覆盖检查
+├── CrossCut GoVersion:  go.mod 版本对应的语言/库特性采用；手写模式可用标准库替代；`go fix` 现代器覆盖检查
+└── CrossCut Flowcharts:  docs/FLOWCHARTS.md 覆盖率 — 全部核心功能/协议是否有流程图；新增特性是否同步更新
 
 Phase 3: 综合报告
 └── Synthesis: 汇总排序 → 主题分析 → 行动计划
@@ -386,6 +388,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 - 每次审计包含 CrossCut Goroutine 阶段：`grep -rn 'go func' --include='*.go'` 排除 `_test.go`，审计每个 goroutine 是否有 owner（errgroup/WaitGroup/channel）、是否有 `defer HandlePanic`
 - 每次审计包含 CrossCut Resource 阶段：`grep -rn 'func.*Close()' --include='*.go'` 检查每个 `Close()` 是否有 `sync.Once` 或 atomic 守卫，确保幂等
 - 每次审计包含 CrossCut GoVersion 阶段：`go fix ./...` 应用所有现代器；`grep -rn 'for i := len.*-1\|for i := .*-1;.*>=' --include='*.go'` 找手写反向迭代 → `slices.Backward`；`grep -rn 'errors\.As(' --include='*.go'` 评估 → `errors.AsType[T]`
+- 每次审计包含 CrossCut Flowcharts 阶段：检查 `docs/FLOWCHARTS.md` 中的 mermaid 流程图是否覆盖了所有核心功能和协议 —— 整体架构、中间件管道、缓存查询、递归解析、DNSSEC 验证链、EDNS 处理、四层防御（含每种详解）、TC→TCP 回退、连接池与协议协商、SOCKS5 代理、Zone 规则、Singleflight 去重、DNS64 合成、DNSCrypt 密钥管理、异步统计写入、规则集引擎、延迟探测、服务生命周期。新增特性/协议/中间件时必须同步更新流程图。
 
 ---
 

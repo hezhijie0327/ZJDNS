@@ -52,14 +52,33 @@ func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.U
 		return nil
 	}))
 
-	udpAddr, err := net.ResolveUDPAddr("udp", addr)
-	if err != nil {
-		return nil, fmt.Errorf("dtls: resolve %s: %w", addr, err)
-	}
+	proxyDialer := c.getProxy(server)
+	var conn net.Conn
 
-	conn, err := dtls.DialWithOptions("udp", udpAddr, dtlsOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("dtls: dial %s: %w", addr, err)
+	if proxyDialer != nil {
+		pconn, pErr := proxyDialer.ListenPacket(ctx)
+		if pErr != nil {
+			return nil, fmt.Errorf("dtls: proxy ListenPacket: %w", pErr)
+		}
+		udpAddr, rErr := net.ResolveUDPAddr("udp", addr)
+		if rErr != nil {
+			_ = pconn.Close()
+			return nil, fmt.Errorf("dtls: resolve %s: %w", addr, rErr)
+		}
+		conn, pErr = dtls.ClientWithOptions(pconn, udpAddr, dtlsOpts...)
+		if pErr != nil {
+			_ = pconn.Close()
+			return nil, fmt.Errorf("dtls: client %s: %w", addr, pErr)
+		}
+	} else {
+		udpAddr, rErr := net.ResolveUDPAddr("udp", addr)
+		if rErr != nil {
+			return nil, fmt.Errorf("dtls: resolve %s: %w", addr, rErr)
+		}
+		conn, rErr = dtls.DialWithOptions("udp", udpAddr, dtlsOpts...)
+		if rErr != nil {
+			return nil, fmt.Errorf("dtls: dial %s: %w", addr, rErr)
+		}
 	}
 	defer zdnsutil.CloseWithLog(conn, "DTLS connection", "UPSTREAM")
 

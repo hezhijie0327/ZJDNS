@@ -57,9 +57,30 @@ func (c *Client) ExecuteDTLCP(ctx context.Context, msg *dns.Msg, server *config.
 	}
 	addr := net.JoinHostPort(host, port)
 
-	conn, err := dialDTLCP(ctx, "udp", addr, dtlcpConfig)
-	if err != nil {
-		return nil, err
+	proxyDialer := c.getProxy(server)
+	var conn *dtlcp.Conn
+
+	if proxyDialer != nil {
+		pconn, pErr := proxyDialer.ListenPacket(ctx)
+		if pErr != nil {
+			return nil, fmt.Errorf("dtlcp: proxy ListenPacket: %w", pErr)
+		}
+		remoteAddr, rErr := net.ResolveUDPAddr("udp", addr)
+		if rErr != nil {
+			_ = pconn.Close()
+			return nil, fmt.Errorf("dtlcp: resolve %s: %w", addr, rErr)
+		}
+		conn = dtlcp.Client(pconn, remoteAddr, dtlcpConfig)
+		if hErr := conn.HandshakeContext(ctx); hErr != nil {
+			_ = pconn.Close()
+			return nil, fmt.Errorf("dtlcp: handshake %s: %w", addr, hErr)
+		}
+	} else {
+		var dialErr error
+		conn, dialErr = dialDTLCP(ctx, "udp", addr, dtlcpConfig)
+		if dialErr != nil {
+			return nil, dialErr
+		}
 	}
 	defer zdnsutil.CloseWithLog(conn, "DTLCP connection", "UPSTREAM")
 

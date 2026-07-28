@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.7.14-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.7.15-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -214,6 +214,7 @@ golangci-lint run && golangci-lint fmt                 # Lint
 | [BENCHMARK.md](docs/benchmark/BENCHMARK.md) | Benchmark 指南 |
 | [DEBUG.md](docs/debug/DEBUG.md) | 调试配置、E2E 测试 |
 | [GUIDELINE.md](docs/rfc/GUIDELINE.md) | RFC 精华指南（RFC 的关键常量/协议流程/合规状态） |
+| [FLOWCHARTS.md](docs/FLOWCHARTS.md) | 架构流程图（查询管道、DNS 防污染、DNSSEC、递归解析） |
 
 ## License
 
