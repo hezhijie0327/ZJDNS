@@ -11,6 +11,7 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 
+	"codeberg.org/miekg/dns"
 	"gitee.com/Trisia/gotlcp/tlcp"
 )
 
@@ -89,6 +90,8 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 	clientIP := zdnsutil.ClientIPFromAddr(conn.RemoteAddr())
 
 	for {
+		_ = conn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
+
 		msg, err := zdnsutil.ReadTCPMsg(conn)
 		if err != nil {
 			if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.EOF) {
@@ -98,15 +101,24 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 		}
 
 		resp := s.handler.ServeDNS(msg, clientIP, true, config.ProtoTLCP)
-		if resp == nil {
+		if !s.sendDOTResponse(conn, resp, clientIP) {
 			return
 		}
-
-		if err := zdnsutil.WriteTCPMsg(conn, resp); err != nil {
-			log.Debugf("TLCP: DoT write error to %s: %v", clientIP, err)
-			pool.DefaultMessage.Put(resp)
-			return
-		}
-		pool.DefaultMessage.Put(resp)
 	}
+}
+
+// sendDOTResponse writes a TLCP DoT response. Returns true to continue the
+// connection loop, false to close. The response is always returned to the pool
+// (defer-protected).
+func (s *Server) sendDOTResponse(conn net.Conn, resp *dns.Msg, clientIP net.IP) bool {
+	if resp == nil {
+		return true
+	}
+	defer pool.DefaultMessage.Put(resp)
+
+	if err := zdnsutil.WriteTCPMsg(conn, resp); err != nil {
+		log.Debugf("TLCP: DoT write error to %s: %v", clientIP, err)
+		return false
+	}
+	return true
 }

@@ -25,9 +25,8 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 		return QueryResult{Err: errors.New("no upstream servers")}
 	}
 
-	// Clear any stale EDE from a previous query so it does not leak into
-	// this query's response.
-	r.lastUpstreamEDE.Store(nil)
+	// Per-query EDE capture — avoids cross-query data race on the resolver.
+	var lastUpstreamEDE atomic.Pointer[dns.EDE]
 
 	if log.Default.Level() >= log.Debug {
 		serverAddrs := make([]string, 0, len(servers))
@@ -91,7 +90,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 				pool.DefaultMessage.Put(msg)
 
 				if queryResult.Error == nil && queryResult.Response != nil {
-					if handled := r.processUpstreamResponse(queryResult, server, question, resultChan, &nxdomainResult, &activeConnections, cancel, groupCtx, &cidrFilterRefused); handled {
+					if handled := r.processUpstreamResponse(queryResult, server, question, resultChan, &nxdomainResult, &activeConnections, cancel, groupCtx, &cidrFilterRefused, &lastUpstreamEDE); handled {
 						return nil
 					}
 				}
@@ -127,9 +126,9 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 			return *nxRes
 		}
 		// Propagate any EDE code captured from upstream SERVFAIL.
-		if opt := r.lastUpstreamEDE.Load(); opt != nil {
+		if opt := lastUpstreamEDE.Load(); opt != nil {
 			log.Debugf("UPSTREAM: all %d servers failed for %s, propagating EDE %d", len(servers), question.Name, opt.InfoCode)
-			return QueryResult{Err: dnssecEDEError(uint64(opt.InfoCode))}
+			return QueryResult{Err: dnssecEDEError(uint64(opt.InfoCode)), UpstreamEDE: opt}
 		}
 		log.Debugf("UPSTREAM: all %d servers failed for %s", len(servers), question.Name)
 		return QueryResult{Err: errors.New("all upstream queries failed")}
@@ -152,8 +151,8 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 		}
 		// Check for captured EDE codes here too so they are
 		// not lost to a "context canceled" error.
-		if opt := r.lastUpstreamEDE.Load(); opt != nil {
-			return QueryResult{Err: dnssecEDEError(uint64(opt.InfoCode))}
+		if opt := lastUpstreamEDE.Load(); opt != nil {
+			return QueryResult{Err: dnssecEDEError(uint64(opt.InfoCode)), UpstreamEDE: opt}
 		}
 		return QueryResult{Err: queryCtx.Err()}
 	}
@@ -163,13 +162,13 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 // response for passthrough to downstream clients. Upstream resolvers attach
 // EDE codes (e.g. DNSSEC Bogus) to any rcode, so this is called once per
 // response before rcode-specific handling.
-func captureUpstreamEDE(r *Resolver, resp *dns.Msg, serverAddr string) {
+func captureUpstreamEDE(lastEDE *atomic.Pointer[dns.EDE], resp *dns.Msg, serverAddr string) {
 	if resp == nil {
 		return
 	}
 	for _, rr := range resp.Pseudo {
 		if ede, ok := rr.(*dns.EDE); ok {
-			r.lastUpstreamEDE.Store(ede)
+			lastEDE.Store(ede)
 			log.Debugf("UPSTREAM: captured EDE %d (%s) from %s (rcode=%s)",
 				ede.InfoCode, dns.ExtendedErrorToString[ede.InfoCode], serverAddr, dns.RcodeToString[resp.Rcode])
 			break
@@ -243,14 +242,14 @@ func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]
 
 // processUpstreamResponse handles the response from a forwarding upstream server.
 // Returns true if the goroutine should return (result sent or handled).
-func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server *config.UpstreamServer, question Question, resultChan chan<- QueryResult, nxdomainResult *atomic.Pointer[QueryResult], activeConnections *atomic.Int32, cancel context.CancelCauseFunc, groupCtx context.Context, cidrFilterRefused *atomic.Bool) bool {
+func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server *config.UpstreamServer, question Question, resultChan chan<- QueryResult, nxdomainResult *atomic.Pointer[QueryResult], activeConnections *atomic.Int32, cancel context.CancelCauseFunc, groupCtx context.Context, cidrFilterRefused *atomic.Bool, lastEDE *atomic.Pointer[dns.EDE]) bool {
 	rcode := queryResult.Response.Rcode
 	serverDesc := server.Address
 	if server.Protocol != "" && server.Protocol != config.ProtoUDP {
 		serverDesc = server.Address + " (" + strings.ToUpper(server.Protocol) + ")"
 	}
 
-	captureUpstreamEDE(r, queryResult.Response, server.Address)
+	captureUpstreamEDE(lastEDE, queryResult.Response, server.Address)
 
 	switch rcode {
 	case dns.RcodeSuccess:
@@ -269,7 +268,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 		ecsResponse := r.edns.ParseFromDNS(queryResult.Response)
 
 		select {
-		case resultChan <- QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Cacheable: !server.NoCache, ECS: ecsResponse, Server: serverDesc}:
+		case resultChan <- QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Cacheable: !server.NoCache, ECS: ecsResponse, Server: serverDesc, UpstreamEDE: lastEDE.Load()}:
 			remaining := activeConnections.Load() - 1
 			if remaining > 0 {
 				log.Debugf("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
@@ -283,13 +282,14 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 		}
 	case dns.RcodeNameError:
 		nxdomainResult.CompareAndSwap(nil, &QueryResult{
-			Answer:     queryResult.Response.Answer,
-			Authority:  queryResult.Response.Ns,
-			Additional: queryResult.Response.Extra,
-			Validated:  false,
-			Cacheable:  !server.NoCache,
-			ECS:        r.edns.ParseFromDNS(queryResult.Response),
-			Server:     serverDesc,
+			Answer:      queryResult.Response.Answer,
+			Authority:   queryResult.Response.Ns,
+			Additional:  queryResult.Response.Extra,
+			Validated:   false,
+			Cacheable:   !server.NoCache,
+			ECS:         r.edns.ParseFromDNS(queryResult.Response),
+			Server:      serverDesc,
+			UpstreamEDE: lastEDE.Load(),
 		})
 		pool.DefaultMessage.Put(queryResult.Response)
 	default:

@@ -65,6 +65,9 @@ type Dependencies struct {
 //	DNS64         — AAAA synthesis
 //	Resolution    — terminal: upstream / recursive resolution
 func AssembleChain(deps *Dependencies) handler.QueryHandler {
+	if deps == nil {
+		panic("middleware: nil Dependencies — programming error")
+	}
 	// Innermost: no-op terminal stub — not reached in normal operation
 	// (Resolution is always configured).  Resolution is the real terminal
 	// — it ignores next and never calls this stub.

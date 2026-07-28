@@ -127,7 +127,7 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 	resp := &dnscryptcrypto.EncryptedResponse{
 		ESVersion: state.esVersion,
 	}
-	decrypted, err := dnscryptcrypto.DecryptResponse(resp, respPayload, sharedKey, clientNonce)
+	decrypted, err := resp.Decrypt(respPayload, sharedKey, clientNonce)
 	if err != nil {
 		c.deleteState(stampAddr, providerName)
 		return nil, fmt.Errorf("decrypting dnscrypt response: %w", err)

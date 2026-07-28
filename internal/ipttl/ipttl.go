@@ -1,4 +1,4 @@
-// Package ttlcap provides platform-independent IP TTL (IPv4) and Hop Limit
+// Package ipttl provides platform-independent IP TTL (IPv4) and Hop Limit
 // (IPv6) capture from UDP connections via the golang.org/x/net control-message
 // API. On platforms that do not support the required socket options (e.g.
 // Windows), the constructor returns nil and the caller falls back to plain

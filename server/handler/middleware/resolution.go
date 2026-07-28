@@ -63,6 +63,10 @@ func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 
 		log.Debugf("RECURSION: resolving %s %s", qname, dns.TypeToString[qtype])
 		qr := m.resolver.Query(ctx, question, ecsOpt)
+		if qr == nil {
+			qctx.ResolutionError = true
+			return nil
+		}
 
 		qctx.ResolutionResult = qr
 		qctx.Resolved = true

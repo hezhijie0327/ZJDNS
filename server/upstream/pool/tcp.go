@@ -245,6 +245,7 @@ func (c *Conn) readLoop() {
 				zpool.DefaultBuffer.Put(bodyBuf)
 			}
 			log.Debugf("TCPPOOL: unpack error from %s: %v", c.addr, err)
+			resp.Data = nil
 			zpool.DefaultMessage.Put(resp)
 			continue
 		}
@@ -267,6 +268,7 @@ func (c *Conn) readLoop() {
 				zpool.DefaultMessage.Put(resp)
 			}
 		} else {
+			resp.Data = nil
 			zpool.DefaultMessage.Put(resp)
 		}
 	}

@@ -18,10 +18,11 @@ import (
 // Prober measures network latency to IP addresses using configurable probe
 // steps and returns them sorted fastest-first.
 type Prober struct {
-	steps    []config.LatencyProbeStep
-	sem      chan struct{}
-	httpPool *httpClientPool
-	ctx      context.Context
+	steps     []config.LatencyProbeStep
+	sem       chan struct{}
+	httpPool  *httpClientPool
+	ctx       context.Context
+	closeOnce sync.Once
 }
 
 // New creates a Prober with the given probe steps and background context.
@@ -43,9 +44,14 @@ func New(steps []config.LatencyProbeStep, bgCtx context.Context) *Prober {
 // Close releases resources held by the prober (HTTP/3 QUIC connections).
 // The prober must not be used after Close is called.
 func (p *Prober) Close() {
-	if p != nil && p.httpPool != nil {
-		p.httpPool.Close()
+	if p == nil {
+		return
 	}
+	p.closeOnce.Do(func() {
+		if p.httpPool != nil {
+			p.httpPool.Close()
+		}
+	})
 }
 
 // ProbeIPsLatency probes the given IP addresses and returns them sorted by

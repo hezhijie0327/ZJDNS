@@ -93,6 +93,7 @@ func (c *Client) ExecuteDTLCP(ctx context.Context, msg *dns.Msg, server *config.
 	response := pool.DefaultMessage.Get()
 	response.Data = msgBuf
 	if err := response.Unpack(); err != nil {
+		response.Data = nil
 		pool.DefaultMessage.Put(response)
 		return nil, fmt.Errorf("dtlcp: unpack response: %w", err)
 	}

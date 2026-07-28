@@ -30,7 +30,7 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 			}
 			sk = epSharedKey
 		}
-		enc, nonce, err := dnscryptcrypto.EncryptQuery(q, packet, sk)
+		enc, nonce, err := q.Encrypt(packet, sk)
 		return enc, nonce, sk, err
 	}
 
@@ -44,7 +44,7 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 		state.sharedKey = sharedKey
 		q.PQTicket = state.pqTicket
 		log.Debugf("UPSTREAM: DNSCrypt PQ resumed query to %s", state.serverAddress)
-		enc, nonce, err := dnscryptcrypto.EncryptQuery(q, packet, sharedKey)
+		enc, nonce, err := q.Encrypt(packet, sharedKey)
 		return enc, nonce, sharedKey, err
 	}
 
@@ -53,7 +53,7 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 		state.sharedKey = state.pqEncapsulatedKey
 		q.PQCiphertext = state.pqCiphertext
 		log.Debugf("UPSTREAM: DNSCrypt PQ query (cached encapsulation) to %s", state.serverAddress)
-		enc, nonce, err := dnscryptcrypto.EncryptQuery(q, packet, state.sharedKey)
+		enc, nonce, err := q.Encrypt(packet, state.sharedKey)
 		return enc, nonce, state.sharedKey, err
 	}
 
@@ -71,13 +71,13 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 	state.pqEncapsulatedKey = derivedKey
 	q.PQCiphertext = ct
 	log.Debugf("UPSTREAM: DNSCrypt PQ query (fresh X-Wing encapsulation) to %s", state.serverAddress)
-	enc, nonce, err := dnscryptcrypto.EncryptQuery(q, packet, derivedKey)
+	enc, nonce, err := q.Encrypt(packet, derivedKey)
 	return enc, nonce, derivedKey, err
 }
 
 // newNonce generates a fresh 24-byte client nonce.
 func newNonce() dnscryptcrypto.Nonce {
 	var n dnscryptcrypto.Nonce
-	_, _ = rand.Read(n[:dnscryptcrypto.NonceSize/2]) // crypto/rand.Read never fails on modern kernels
+	_, _ = rand.Read(n[:dnscryptcrypto.NonceSize/2]) // _ = error: crypto/rand.Read never fails on modern kernels
 	return n
 }

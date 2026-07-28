@@ -27,8 +27,8 @@ func initResolver(
 	cacheStore cache.Store,
 	buildMsg func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg,
 	backgroundCtx context.Context,
-) *resolver.Resolver {
-	r := resolver.New(&resolver.Config{
+) (*resolver.Resolver, error) {
+	r, err := resolver.New(&resolver.Config{
 		QueryClient:    queryClient,
 		Crypto:         cryptoValidator,
 		PoisonDetector: poisonDetector,
@@ -39,8 +39,11 @@ func initResolver(
 		DNSSECEnforce:  cfg.Server.Features.DNSSECEnforce,
 		Ctx:            backgroundCtx,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("create resolver: %w", err)
+	}
 	r.ConfigureServers(cfg.Upstream)
-	return r
+	return r, nil
 }
 
 // makeFlushFunc returns a closure that calls op() and formats the result as a

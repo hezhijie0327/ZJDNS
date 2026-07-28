@@ -149,6 +149,8 @@ func protocolMatchesStamp(userProto string, stampProto zstamp.ProtoType) bool {
 	case zstamp.ProtoDNSCrypt:
 		return userProto == ProtoDNSCrypt || userProto == ProtoDNSCryptTCP
 	case zstamp.ProtoDOH:
+		// Map to ProtoHTTP (not ProtoHTTPS): the stamp's endpoint is a URL,
+		// and BuildDoHURL() prepends "https://" at query time.
 		return userProto == ProtoHTTP
 	case zstamp.ProtoDOT:
 		return userProto == ProtoTLS

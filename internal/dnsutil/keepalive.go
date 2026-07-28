@@ -24,8 +24,8 @@ func (k *TCPKeepAliveListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		_ = tcpConn.SetKeepAlive(true)
-		_ = tcpConn.SetKeepAlivePeriod(defaultTCPKeepAlivePeriod)
+		_ = tcpConn.SetKeepAlive(true)                            // _ = error: non-fatal — connection is still usable
+		_ = tcpConn.SetKeepAlivePeriod(defaultTCPKeepAlivePeriod) // _ = error: non-fatal — connection is still usable
 	}
 	return conn, nil
 }

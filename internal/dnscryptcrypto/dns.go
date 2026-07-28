@@ -2,6 +2,7 @@ package dnscryptcrypto
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -37,7 +38,7 @@ func Normalize(proto string, req, res *dns.Msg, maxWireLen int) {
 	}
 }
 
-// dnsSize returns the buffer size advertised in the request's OPT record.
+// DNSSize returns the buffer size advertised in the request's OPT record.
 // The codeberg.org/miekg/dns fork stores the EDNS UDP payload size in
 // Msg.UDPSize and generates the OPT pseudo-record during Pack().  After
 // Unpack(), the OPT fields are merged back into the Msg header — Extra
@@ -68,6 +69,9 @@ func DNSSize(proto string, r *dns.Msg) int {
 // The caller MUST set a read deadline on conn before calling this function
 // to prevent goroutine leaks on unresponsive peers.
 func ReadPrefixed(conn net.Conn) (b []byte, err error) {
+	if conn == nil {
+		return nil, errors.New("dnscrypt: nil connection")
+	}
 	var l [2]byte
 	_, err = io.ReadFull(conn, l[:])
 	if err != nil {
@@ -93,6 +97,9 @@ func ReadPrefixed(conn net.Conn) (b []byte, err error) {
 // The caller MUST set a write deadline on conn before calling this function
 // to prevent goroutine leaks on unresponsive peers.
 func WritePrefixed(b []byte, conn net.Conn) (err error) {
+	if conn == nil {
+		return errors.New("dnscrypt: nil connection")
+	}
 	var l [2]byte
 	binary.BigEndian.PutUint16(l[:], uint16(len(b))) //nolint:gosec // G115: DNS message length bounded by MaxMsgSize
 	_, err = (&net.Buffers{l[:], b}).WriteTo(conn)

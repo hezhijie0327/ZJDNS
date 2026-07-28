@@ -53,7 +53,7 @@ var dangerousPrefixes = []string{"/etc/", "/proc/", "/sys/", "/dev/", "/run/"}
 // NOTE: When adding a new secure protocol, add it to this switch statement.
 func IsSecureProtocol(protocol string) bool {
 	switch protocol {
-	case "tls", "quic", "https", "http3", "dtls", "tlcp", "http-tlcp", "dtlcp":
+	case "tls", "quic", "https", "http3", "dtls", "tlcp", "http-tlcp", "dtlcp", "dnscrypt", "dnscrypttcp":
 		return true
 	default:
 		return false

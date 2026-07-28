@@ -105,7 +105,11 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	queryClient := s.initQueryClient(cfg)
 
-	dnsResolver := s.initDNSResolver(cfg, queryClient, ednsH, cacheStore, rulesetEngine)
+	dnsResolver, err := s.initDNSResolver(cfg, queryClient, ednsH, cacheStore, rulesetEngine)
+	if err != nil {
+		cancel(err)
+		return nil, fmt.Errorf("resolver init: %w", err)
+	}
 
 	s.warmUpConnections(cfg, queryClient)
 
@@ -197,7 +201,7 @@ func isRecursiveMode(cfg *config.ServerConfig) bool {
 
 // initDNSResolver wires together the recursive/forward resolver, security
 // validators, and CIDR matcher.
-func (s *Server) initDNSResolver(cfg *config.ServerConfig, queryClient *upstream.Client, ednsH *edns.Handler, cacheStore cache.Store, rulesetEngine *ruleset.Engine) *resolver.Resolver {
+func (s *Server) initDNSResolver(cfg *config.ServerConfig, queryClient *upstream.Client, ednsH *edns.Handler, cacheStore cache.Store, rulesetEngine *ruleset.Engine) (*resolver.Resolver, error) {
 	cryptoValidator := dnssec.NewCryptoValidator(cacheStore)
 
 	// Load root files only when recursive resolution is configured.
@@ -213,10 +217,14 @@ func (s *Server) initDNSResolver(cfg *config.ServerConfig, queryClient *upstream
 		cidrMatcher = rulesetEngine
 	}
 
-	return initResolver(cfg, queryClient, cryptoValidator, poisonDetector, ednsH, cidrMatcher, cacheStore,
+	r, err := initResolver(cfg, queryClient, cryptoValidator, poisonDetector, ednsH, cidrMatcher, cacheStore,
 		func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg {
 			return handler.BuildQueryMsg(ednsH, q, ecs, rd, secure)
 		}, s.backgroundCtx)
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 
 // warmUpConnections pre-establishes transport connections to all configured

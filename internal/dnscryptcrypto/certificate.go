@@ -195,10 +195,7 @@ func (c *Certificate) marshalPQ() ([]byte, error) {
 // UnmarshalBinary implements the encoding.BinaryUnmarshaler interface.
 func (c *Certificate) UnmarshalBinary(b []byte) (err error) {
 	if len(b) < CertByteLength {
-		if len(b) < PQCertByteLength {
-			return ErrCertTooShort
-		}
-		return ErrPQCertTooShort
+		return ErrCertTooShort
 	}
 	if !bytes.Equal(b[:4], CertMagic[:4]) {
 		return ErrCertMagic

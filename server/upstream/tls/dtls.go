@@ -93,6 +93,7 @@ func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.U
 	response := pool.DefaultMessage.Get()
 	response.Data = msgBuf
 	if err := response.Unpack(); err != nil {
+		response.Data = nil
 		pool.DefaultMessage.Put(response)
 		return nil, fmt.Errorf("dtls: unpack response: %w", err)
 	}

@@ -65,7 +65,8 @@ func (db *DB) prepareStatements() error {
 		return err
 	}
 
-	// Must match cache.maxLatencyLookupIPs (64).
+	// StmtIPLatency has 64 ? placeholders — must match cache.maxLatencyLookupIPs.
+	// Changing one without the other silently drops or truncates lookup IPs.
 	db.StmtIPLatency, err = db.SQ.Prepare(
 		`SELECT rdata_ip, latency_ms FROM ip_latency WHERE rdata_ip IN (` +
 			`?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,` +

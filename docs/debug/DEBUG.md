@@ -109,8 +109,8 @@ ZJDNS loopback and upstream tests use `self_signed: true` and
 - **Do not use port 5353** — reserved by mDNSResponder.
 - **dig may time out on UDP** when the server binds to multiple IPs
   (127.0.0.1, ::1, external). This is a macOS kernel UDP-loopback quirk,
-  not a ZJDNS bug. Workaround: use TCP (`+tcp`) or query via a ZJDNS
-  forwarding client (see Loopback Tests below). Linux is unaffected.
+  not a ZJDNS bug. All loopback client configs now expose both UDP and TCP
+  on the same port — use `dig +tcp` as a reliable fallback. Linux is unaffected.
 
 ## Loopback Tests (ZJDNS ↔ ZJDNS)
 

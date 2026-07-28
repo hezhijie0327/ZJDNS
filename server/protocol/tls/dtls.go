@@ -11,6 +11,7 @@ import (
 	"zjdns/internal/lrumap"
 	"zjdns/internal/pool"
 
+	"codeberg.org/miekg/dns"
 	"github.com/pion/dtls/v3"
 )
 
@@ -152,32 +153,38 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 
 		response := s.handler.ServeDNS(query, clientIP, true, config.ProtoDTLS)
 		pool.DefaultMessage.Put(query)
-		if response == nil {
-			continue
-		}
-
-		if err := response.Pack(); err != nil {
-			log.Debugf("TLS: DTLS pack error: %v", err)
-			pool.DefaultMessage.Put(response)
-			continue
-		}
-
-		// Write response with 2-byte length prefix in a single Write.
-		respLen := len(response.Data)
-		if respLen > config.MaxDNSMessageSize {
-			log.Debugf("TLS: DTLS response too large (%d bytes)", respLen)
-			pool.DefaultMessage.Put(response)
-			continue
-		}
-		resp := make([]byte, zdnsutil.DNSFramePrefixLen+respLen)
-		binary.BigEndian.PutUint16(resp[:zdnsutil.DNSFramePrefixLen], uint16(respLen))
-		copy(resp[2:], response.Data)
-
-		if _, err := conn.Write(resp); err != nil {
-			log.Debugf("TLS: DTLS write error: %v", err)
-			pool.DefaultMessage.Put(response)
+		if !s.sendDTLSResponse(conn, response) {
 			return
 		}
-		pool.DefaultMessage.Put(response)
 	}
+}
+
+// sendDTLSResponse packs and writes a DTLS response with 2-byte length prefix.
+// Returns true to continue the connection loop, false to close the connection.
+// The response is always returned to the pool (defer-protected).
+func (s *Server) sendDTLSResponse(conn net.Conn, response *dns.Msg) bool {
+	if response == nil {
+		return true
+	}
+	defer pool.DefaultMessage.Put(response)
+
+	if err := response.Pack(); err != nil {
+		log.Debugf("TLS: DTLS pack error: %v", err)
+		return true
+	}
+
+	respLen := len(response.Data)
+	if respLen > config.MaxDNSMessageSize {
+		log.Debugf("TLS: DTLS response too large (%d bytes)", respLen)
+		return true
+	}
+	resp := make([]byte, zdnsutil.DNSFramePrefixLen+respLen)
+	binary.BigEndian.PutUint16(resp[:zdnsutil.DNSFramePrefixLen], uint16(respLen)) //nolint:gosec // G115: DNS response length bounded by MaxDNSMessageSize
+	copy(resp[zdnsutil.DNSFramePrefixLen:], response.Data)
+
+	if _, err := conn.Write(resp); err != nil {
+		log.Debugf("TLS: DTLS write error: %v", err)
+		return false
+	}
+	return true
 }

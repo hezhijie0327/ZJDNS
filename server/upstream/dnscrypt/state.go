@@ -175,7 +175,7 @@ func (c *Client) buildState(
 	var secretKey, clientPK [dnscryptcrypto.KeySize]byte
 	var err error
 	if cert.classical != nil {
-		secretKey, clientPK, err = dnscryptcrypto.GenerateKeyPairRaw()
+		secretKey, clientPK, err = dnscryptcrypto.GenerateRandomKeyPair()
 		if err != nil {
 			return nil, fmt.Errorf("generating key pair: %w", err)
 		}

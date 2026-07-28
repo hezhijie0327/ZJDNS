@@ -62,14 +62,14 @@ func TryBind(network, addr string) error {
 		if err != nil {
 			return err
 		}
-		_ = l.Close() // _ = error: best-effort close during shutdown
+		_ = l.Close() // _ = error: best-effort close during startup preflight
 		return nil
 	default:
 		pc, err := net.ListenPacket(network, addr)
 		if err != nil {
 			return err
 		}
-		_ = pc.Close() // _ = error: best-effort close during shutdown
+		_ = pc.Close() // _ = error: best-effort close during startup preflight
 		return nil
 	}
 }

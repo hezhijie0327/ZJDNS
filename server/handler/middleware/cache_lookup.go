@@ -64,15 +64,17 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			})
 
 			// Prefetch if TTL is below threshold.
-			if !m.closed() && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) &&
+			if m.closed != nil && !m.closed() && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) &&
 				m.prefetchCooldown != nil && m.prefetchCooldown.ShouldStart(qname, log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds()) &&
 				m.tryStartRefresh(qname, qtype, qclass, ecsOpt) {
-				m.refreshGroup.Go(func() error {
-					defer zdnsutil.HandlePanic("Cache refresh: prefetch fresh-hit")
-					defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
-					_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt) // error logged inside
-					return nil                                            // prevent errgroup context cancellation cascade
-				})
+				if m.refreshGroup != nil {
+					m.refreshGroup.Go(func() error {
+						defer zdnsutil.HandlePanic("Cache refresh: prefetch fresh-hit")
+						defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
+						_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt) // error logged inside
+						return nil                                            // prevent errgroup context cancellation cascade
+					})
+				}
 			}
 			return nil
 		}
@@ -86,15 +88,17 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			qctx.CacheServed = true
 
 			// Handle stale serving strategies.
-			if m.preferStale && !m.closed() {
+			if m.preferStale && m.closed != nil && !m.closed() {
 				// PreferStale: return stale immediately, refresh in background.
 				if m.tryStartRefresh(qname, qtype, qclass, ecsOpt) {
-					m.refreshGroup.Go(func() error {
-						defer zdnsutil.HandlePanic("Cache refresh: stale prefetch")
-						defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
-						_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt) // error logged inside
-						return nil                                            // prevent errgroup context cancellation cascade
-					})
+					if m.refreshGroup != nil {
+						m.refreshGroup.Go(func() error {
+							defer zdnsutil.HandlePanic("Cache refresh: stale prefetch")
+							defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
+							_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt) // error logged inside
+							return nil                                            // prevent errgroup context cancellation cascade
+						})
+					}
 				}
 				m.store.RecordRequest(&cache.RequestRecord{
 					Qname: qname, Qtype: qtype, Qclass: qclass,
@@ -106,7 +110,7 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			}
 
 			// Default: try a quick foreground refresh, fall back to stale.
-			refreshed := !m.closed() && m.tryStartRefresh(qname, qtype, qclass, ecsOpt)
+			refreshed := m.closed != nil && !m.closed() && m.tryStartRefresh(qname, qtype, qclass, ecsOpt)
 			if !refreshed {
 				m.store.RecordRequest(&cache.RequestRecord{
 					Qname: qname, Qtype: qtype, Qclass: qclass,
@@ -130,22 +134,28 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 	var qr *resolver.QueryResult
 	var refreshFinished atomic.Bool
 
-	m.refreshGroup.Go(func() error {
-		defer zdnsutil.HandlePanic("Cache refresh: foreground refresh")
-		defer close(done)
-		defer func() {
-			if refreshFinished.CompareAndSwap(false, true) {
-				m.finishRefresh(qname, qtype, qclass, ecsOpt)
+	if m.refreshGroup != nil {
+		m.refreshGroup.Go(func() error {
+			defer zdnsutil.HandlePanic("Cache refresh: foreground refresh")
+			defer close(done)
+			defer func() {
+				if refreshFinished.CompareAndSwap(false, true) {
+					m.finishRefresh(qname, qtype, qclass, ecsOpt)
+				}
+			}()
+			// Bound the background refresh to prevent goroutine accumulation under
+			// pathological upstream latency.  refreshCtx already covers shutdown.
+			rc := m.refreshCtx
+			if rc == nil {
+				rc = context.Background()
 			}
-		}()
-		// Bound the background refresh to prevent goroutine accumulation under
-		// pathological upstream latency.  refreshCtx already covers shutdown.
-		refreshCtx, cancel := context.WithTimeout(m.refreshCtx, config.DefaultBackgroundTimeout)
-		defer cancel()
-		question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
-		qr = m.resolver.Query(refreshCtx, question, ecsOpt)
-		return nil
-	})
+			refreshCtx, cancel := context.WithTimeout(rc, config.DefaultBackgroundTimeout)
+			defer cancel()
+			question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
+			qr = m.resolver.Query(refreshCtx, question, ecsOpt)
+			return nil
+		})
+	}
 
 	timer := time.NewTimer(config.DefaultServeExpiredClientTimeout)
 	defer timer.Stop()
@@ -187,23 +197,25 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
 			EntryID: entry.ID,
 		})
-		m.refreshGroup.Go(func() error {
-			defer zdnsutil.HandlePanic("Cache refresh: background update")
-			defer func() {
-				if refreshFinished.CompareAndSwap(false, true) {
-					m.finishRefresh(qname, qtype, qclass, ecsOpt)
+		if m.refreshGroup != nil {
+			m.refreshGroup.Go(func() error {
+				defer zdnsutil.HandlePanic("Cache refresh: background update")
+				defer func() {
+					if refreshFinished.CompareAndSwap(false, true) {
+						m.finishRefresh(qname, qtype, qclass, ecsOpt)
+					}
+				}()
+				select {
+				case <-done:
+					if qr != nil && qr.Err == nil && qr.Cacheable {
+						m.store.Set(qname, qtype, qclass, ecsOpt, false, // dnssecOK — background refresh does not need DNSSEC
+							qr.Answer, qr.Authority, qr.Additional, qr.Validated)
+					}
+				case <-m.refreshCtx.Done():
 				}
-			}()
-			select {
-			case <-done:
-				if qr != nil && qr.Err == nil && qr.Cacheable {
-					m.store.Set(qname, qtype, qclass, ecsOpt, false, // dnssecOK — background refresh does not need DNSSEC
-						qr.Answer, qr.Authority, qr.Additional, qr.Validated)
-				}
-			case <-m.refreshCtx.Done():
-			}
-			return nil
-		})
+				return nil
+			})
+		}
 	}
 
 	return nil

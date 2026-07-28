@@ -34,3 +34,10 @@ func New(udpClient, tcpClient *dns.Client, tcpPool *pool.ConnPool, getProxy func
 		hopGuard:  defense.NewHopGuard(),
 	}
 }
+
+// Close shuts down the TCP connection pool, stopping all readLoop goroutines.
+func (c *Client) Close() {
+	if c != nil && c.tcpPool != nil {
+		c.tcpPool.Shutdown()
+	}
+}

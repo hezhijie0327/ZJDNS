@@ -99,6 +99,7 @@ func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string
 		pool.DefaultMessage.Put(response)
 		return nil, err
 	}
+	response.Data = nil
 	response.ID = msg.ID
 	return response, nil
 }

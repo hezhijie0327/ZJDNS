@@ -28,7 +28,6 @@ type Question = resolver.Question
 type Resolver interface {
 	Query(ctx context.Context, question Question, ecs *edns.ECSOption) *resolver.QueryResult
 	DNSSECEDECode() uint16
-	UpstreamEDEOption() *dns.EDE
 	UpstreamServers() []*config.UpstreamServer
 }
 

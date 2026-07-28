@@ -69,7 +69,8 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			}
 
 			msg := baseMsg.Copy()
-			defer pool.DefaultMessage.Put(msg)
+			// Copy() creates a non-pool allocation; let GC collect it.
+			// baseMsg (from pool) is Put below via defer at line 45.
 
 			subCtx, subCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
 			defer subCancel()
@@ -397,6 +398,7 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 
 	select {
 	case resultChan <- retryResult.Response:
+		cancel()
 	case <-ctx.Done():
 		pool.DefaultMessage.Put(retryResult.Response)
 	}

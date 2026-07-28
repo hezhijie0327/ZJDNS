@@ -38,7 +38,7 @@ func GenerateRandomKeyPair() (secretKey, publicKey [KeySize]byte, err error) {
 func GenerateEd25519Keypair() (publicKey, privateKey []byte, err error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("generating ed25519 keypair: %w", err)
 	}
 	return pub, priv, nil
 }

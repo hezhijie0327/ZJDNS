@@ -58,7 +58,7 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			aqr = m.resolver.Query(ctx, aQuestion, ecsOpt)
 		}
 
-		if aqr.Err == nil && len(aqr.Answer) > 0 {
+		if aqr != nil && aqr.Err == nil && len(aqr.Answer) > 0 {
 			qr.Answer, qr.Authority, qr.Additional = m.synthesizer.Synthesize(
 				qr.Answer, qr.Authority, qr.Additional,
 				aqr.Answer, aqr.Authority, aqr.Additional, qr.Validated)

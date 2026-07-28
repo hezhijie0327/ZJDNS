@@ -11,7 +11,6 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
-	"zjdns/internal/log"
 	"zjdns/server/defense"
 	"zjdns/server/resolver/dnssec"
 	"zjdns/server/upstream"
@@ -35,15 +34,16 @@ type DNSSECError struct {
 // QueryResult bundles the return values of a DNS resolution query, replacing
 // the previous 8-return-value tuple at the public API boundary.
 type QueryResult struct {
-	Answer     []dns.RR
-	Authority  []dns.RR
-	Additional []dns.RR
-	Validated  bool
-	Cacheable  bool
-	ECS        *edns.ECSOption
-	Server     string
-	Poisoned   bool
-	Err        error
+	Answer      []dns.RR
+	Authority   []dns.RR
+	Additional  []dns.RR
+	Validated   bool
+	Cacheable   bool
+	ECS         *edns.ECSOption
+	Server      string
+	Poisoned    bool
+	UpstreamEDE *dns.EDE // EDE code captured from upstream response (per-query, no data race)
+	Err         error
 }
 
 // BuildQueryFunc is a function type that constructs a DNS query message from a
@@ -64,17 +64,16 @@ type upstreamSet struct {
 // Resolver handles DNS query resolution by dispatching to upstream servers or
 // built-in recursive resolution.
 type Resolver struct {
-	queryClient     UpstreamClient
-	edns            *edns.Handler
-	crd             CIDRMatcher
-	buildMsg        BuildQueryFunc
-	upstream        *upstreamSet
-	recursive       *Recursive
-	cname           *CNAME
-	validator       *Validator
-	DNSSECEnforce   bool
-	lastUpstreamEDE atomic.Pointer[dns.EDE] // EDE from upstream response for passthrough
-	cache           cache.Store             // DNS response cache for NS A/AAAA lookups
+	queryClient   UpstreamClient
+	edns          *edns.Handler
+	crd           CIDRMatcher
+	buildMsg      BuildQueryFunc
+	upstream      *upstreamSet
+	recursive     *Recursive
+	cname         *CNAME
+	validator     *Validator
+	DNSSECEnforce bool
+	cache         cache.Store // DNS response cache for NS A/AAAA lookups
 
 	recursiveProxyURL string // proxy for recursive mode (from protocol=recursive upstream)
 }
@@ -152,21 +151,21 @@ func (u *upstreamSet) store(s []*config.UpstreamServer) {
 }
 
 // New creates a new Resolver from the given Config.
-func New(cfg *Config) *Resolver {
+func New(cfg *Config) (*Resolver, error) {
 	if cfg == nil {
-		return nil
+		return nil, errors.New("resolver: nil config")
 	}
 	if cfg.EDNS == nil {
-		log.Warnf("RESOLVER: EDNS handler is nil — resolver will panic on first query")
+		return nil, errors.New("resolver: EDNS handler is required")
 	}
 	if cfg.BuildMsg == nil {
-		log.Warnf("RESOLVER: BuildMsg function is nil — resolver will panic on first query")
+		return nil, errors.New("resolver: BuildMsg function is required")
 	}
 	if cfg.QueryClient == nil {
-		log.Warnf("RESOLVER: QueryClient is nil — resolver will panic on first query")
+		return nil, errors.New("resolver: QueryClient is required")
 	}
 	if cfg.Cache == nil {
-		log.Warnf("RESOLVER: Cache is nil — resolver will panic on first query")
+		return nil, errors.New("resolver: Cache is required")
 	}
 	r := &Resolver{
 		queryClient:   cfg.QueryClient,
@@ -184,7 +183,7 @@ func New(cfg *Config) *Resolver {
 	}
 	r.cname = &CNAME{resolver: r}
 	r.validator = &Validator{Crypto: cfg.Crypto, Poisonguard: cfg.PoisonDetector}
-	return r
+	return r, nil
 }
 
 // ConfigureServers initializes the upstream server list.
@@ -224,17 +223,6 @@ func (r *Resolver) DNSSECEDECode() uint16 {
 		return 0
 	}
 	return r.recursive.DNSSECEDECode()
-}
-
-// UpstreamEDEOption returns the EDE option parsed from the last upstream
-// response (any rcode). Returns nil when no EDE was present or the resolver
-// used recursive mode. Callers should pass this through to downstream clients
-// so upstream DNSSEC bogus and other diagnostic EDE codes are not dropped.
-func (r *Resolver) UpstreamEDEOption() *dns.EDE {
-	if r == nil {
-		return nil
-	}
-	return r.lastUpstreamEDE.Load()
 }
 
 // UpstreamServers returns the current list of primary upstream servers.

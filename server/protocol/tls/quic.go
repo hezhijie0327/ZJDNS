@@ -173,6 +173,15 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	buf := pool.DefaultBuffer.Get()
 	defer pool.DefaultBuffer.Put(buf)
 
+	// Avoid blocking indefinitely during shutdown: derive a per-stream
+	// context from the QUIC connection and check it before each read.
+	select {
+	case <-conn.Context().Done():
+		return
+	default:
+	}
+
+	_ = stream.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 	_, err := io.ReadFull(stream, buf[:zdnsutil.DNSFramePrefixLen])
 	if err != nil {
 		return
@@ -195,6 +204,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		body = make([]byte, msgLen)
 	}
 
+	_ = stream.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 	_, err = io.ReadFull(stream, body)
 	if err != nil {
 		return
@@ -226,7 +236,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		log.Debugf("TLS: DoQ response failed: %v", err)
 	}
 	if response != nil {
-		pool.DefaultMessage.Put(response)
+		defer pool.DefaultMessage.Put(response)
 	}
 }
 

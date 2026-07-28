@@ -15,11 +15,14 @@ import (
 func BuildResponseMsg(req *dns.Msg) *dns.Msg {
 	msg := pool.DefaultMessage.Get()
 
-	if req != nil && len(req.Question) > 0 {
+	switch {
+	case req != nil && len(req.Question) > 0:
 		dnsutil.SetReply(msg, req)
-	} else if req != nil {
+	case req != nil:
 		msg.Response = true
 		msg.Rcode = dns.RcodeFormatError
+	default:
+		msg.Response = true
 	}
 
 	msg.Authoritative = false

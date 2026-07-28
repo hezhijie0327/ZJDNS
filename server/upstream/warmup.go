@@ -42,7 +42,7 @@ func (c *Client) WarmUpConnections(servers []config.UpstreamServer) {
 			continue
 		}
 		protocol := strings.ToLower(servers[i].Protocol)
-		if !zdnsutil.IsSecureProtocol(protocol) && protocol != config.ProtoDNSCrypt && protocol != config.ProtoDNSCryptTCP {
+		if !zdnsutil.IsSecureProtocol(protocol) {
 			continue
 		}
 		s := &servers[i]

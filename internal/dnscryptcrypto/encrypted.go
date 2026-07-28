@@ -585,18 +585,3 @@ func (q *EncryptedQuery) DecryptPayload(
 	}
 	return packet, nil
 }
-
-// EncryptQuery encrypts a DNS query packet for sending to a DNSCrypt server.
-func EncryptQuery(q *EncryptedQuery, packet []byte, sharedKey [SharedKeySize]byte) (encrypted []byte, clientNonce Nonce, err error) {
-	return q.Encrypt(packet, sharedKey)
-}
-
-// DecryptResponse decrypts a DNSCrypt server response.
-func DecryptResponse(r *EncryptedResponse, response []byte, sharedKey [SharedKeySize]byte, clientNonce Nonce) (packet []byte, err error) {
-	return r.Decrypt(response, sharedKey, clientNonce)
-}
-
-// GenerateKeyPairRaw generates a new X25519 key pair.
-func GenerateKeyPairRaw() (secretKey, publicKey [KeySize]byte, err error) {
-	return GenerateRandomKeyPair()
-}

@@ -64,7 +64,7 @@ func XchachaSeal(out, nonce, message, key []byte) (res []byte, err error) {
 	var firstBlock [XchachaBlockSize]byte
 	// key/nonce sizes already validated by panic checks above;
 	// NewUnauthenticatedCipher cannot fail with valid parameters.
-	cipher, _ := chacha20.NewUnauthenticatedCipher(key, nonce)
+	cipher, _ := chacha20.NewUnauthenticatedCipher(key, nonce) // _ = error: key/nonce sizes validated above // _ = error: key/nonce sizes validated above
 	cipher.XORKeyStream(firstBlock[:], firstBlock[:])
 	var polyKey [XchachaKeySize]byte
 	copy(polyKey[:], firstBlock[:XchachaKeySize])
@@ -88,8 +88,8 @@ func XchachaSeal(out, nonce, message, key []byte) (res []byte, err error) {
 
 	var tag [poly1305.TagSize]byte
 	hash := poly1305.New(&polyKey)
-	_, _ = hash.Write(ciphertext)
-	hash.Sum(tag[:0])
+	_, _ = hash.Write(ciphertext) // _ = error: poly1305 hash Write never fails
+	hash.Sum(tag[:0])             // Sum is infallible for poly1305
 	copy(tagOut, tag[:])
 
 	return res, nil
@@ -111,7 +111,7 @@ func XchachaOpen(out, nonce, ciphertext, key []byte) (res []byte, err error) {
 	var firstBlock [XchachaBlockSize]byte
 	// key/nonce sizes already validated by panic checks above;
 	// NewUnauthenticatedCipher cannot fail with valid parameters.
-	cipher, _ := chacha20.NewUnauthenticatedCipher(key, nonce)
+	cipher, _ := chacha20.NewUnauthenticatedCipher(key, nonce) // _ = error: key/nonce sizes validated above
 	cipher.XORKeyStream(firstBlock[:], firstBlock[:])
 	var polyKey [XchachaKeySize]byte
 	copy(polyKey[:], firstBlock[:XchachaKeySize])
@@ -119,8 +119,8 @@ func XchachaOpen(out, nonce, ciphertext, key []byte) (res []byte, err error) {
 	var tag [poly1305.TagSize]byte
 	msg := ciphertext[poly1305.TagSize:]
 	hash := poly1305.New(&polyKey)
-	_, _ = hash.Write(msg)
-	hash.Sum(tag[:0])
+	_, _ = hash.Write(msg) // _ = error: poly1305 hash Write never fails
+	hash.Sum(tag[:0])      // Sum is infallible for poly1305
 
 	if subtle.ConstantTimeCompare(tag[:], ciphertext[:poly1305.TagSize]) != 1 {
 		return nil, errCipherTextAuthenticationFail

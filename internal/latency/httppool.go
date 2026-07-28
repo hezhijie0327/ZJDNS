@@ -79,7 +79,7 @@ func (p *httpClientPool) Close() {
 	for key, client := range p.clients {
 		if key.http3 {
 			if t, ok := client.Transport.(*http3.Transport); ok {
-				_ = t.Close()
+				_ = t.Close() // _ = error: best-effort close during pool shutdown
 			}
 		}
 	}

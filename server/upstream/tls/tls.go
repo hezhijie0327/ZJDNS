@@ -93,5 +93,6 @@ func (c *Client) exchangeOverTLS(ctx context.Context, msg *dns.Msg, addr string,
 		pool.DefaultMessage.Put(response)
 		return nil, err
 	}
+	response.Data = nil
 	return response, nil
 }

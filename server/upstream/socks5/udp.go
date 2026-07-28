@@ -148,7 +148,7 @@ func (d *Dialer) establishUDPRelay(ctx context.Context) error {
 	// Use a connected UDP socket to the relay (same approach as mosdns-x).
 	// A connected socket allows us to use Read/Write directly and the OS
 	// filters out stray datagrams.
-	rawConn, err := dialer.DialContext(context.Background(), "udp", relay.String())
+	rawConn, err := dialer.DialContext(ctx, "udp", relay.String())
 	if err != nil {
 		_ = ctrlConn.Close()
 		return fmt.Errorf("socks5: dial UDP relay %s: %w", relay.String(), err)

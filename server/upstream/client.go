@@ -14,6 +14,7 @@ import (
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
+	zpool "zjdns/internal/pool"
 	"zjdns/server/upstream/dnscrypt"
 	"zjdns/server/upstream/plain"
 	"zjdns/server/upstream/pool"
@@ -111,7 +112,11 @@ func New() *Client {
 		proxyDialers: lrumap.New[string, *socks5.Dialer](config.DefaultTransportMax * 2),
 	}
 
-	c.proxyDialers.OnEvict = func(_ string, d *socks5.Dialer) { _ = d.Close() }
+	c.proxyDialers.OnEvict = func(_ string, d *socks5.Dialer) {
+		if d != nil {
+			_ = d.Close()
+		}
+	}
 
 	c.plainClient = plain.New(udpClient, tcpClient, tcpPool, c.proxyDialer, timeout)
 	c.tlsClient = tlsclient.New(tlsDNSClient, dohClient, doh3Client, dotPool, quicPool, sessionCache, quicSessionCache, dtlsSessions, c.proxyDialer, timeout)
@@ -160,6 +165,10 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 			// attempt may have exhausted the original deadline.
 			tcpCtx, tcpCancel := context.WithTimeout(ctx, c.timeout)
 			defer tcpCancel()
+			if result.Response != nil {
+				zpool.DefaultMessage.Put(result.Response)
+				result.Response = nil
+			}
 			result.Response, result.Error = c.dnscryptClient.Execute(tcpCtx, msg, server, true)
 			if result.Error == nil {
 				protocol = config.ProtoDNSCryptTCP
@@ -203,6 +212,9 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 			tcpServer.Protocol = config.ProtoTCP
 
 			if tcpResp, tcpErr := c.plainClient.ExecuteTCP(tcpCtx, msg, &tcpServer); tcpErr == nil {
+				if result.Response != nil {
+					zpool.DefaultMessage.Put(result.Response)
+				}
 				result.Response = tcpResp
 				result.Error = nil
 				result.Protocol = config.ProtoTCP
@@ -281,6 +293,7 @@ func (c *Client) Close() {
 
 	c.warmWg.Wait()
 
+	c.plainClient.Close()
 	c.tlsClient.Close()
 
 	if c.proxyDialers != nil {

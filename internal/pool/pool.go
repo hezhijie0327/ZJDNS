@@ -96,6 +96,11 @@ func (m *Message) Get() *dns.Msg {
 // Put returns a dns.Msg to the pool.
 func (m *Message) Put(msg *dns.Msg) {
 	if msg != nil {
+		// Zeroing the entire Msg struct ensures that callers who capture slices
+		// (Answer, Ns, Extra) before Put retain valid references — the backing
+		// arrays are not zeroed, only the slice headers. Callers who depend on
+		// this (e.g. recursive_helpers.go processAnswerWithDNSSEC) must not
+		// mutate the captured slices after Put.
 		*msg = dns.Msg{}
 		m.pool.Put(msg)
 	}

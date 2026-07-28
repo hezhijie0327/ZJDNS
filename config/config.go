@@ -200,6 +200,9 @@ func (d *DNSCryptCertificate) IsEnabled() bool {
 // ProviderName returns the DNSCrypt v2 provider name derived from the DDR
 // domain (e.g. "2.dnscrypt-cert.example.com").
 func (d *DNSCryptCertificate) ProviderName(domain string) string {
+	if domain == "" {
+		return DNSCryptV2Prefix
+	}
 	return DNSCryptV2Prefix + domain
 }
 
