@@ -39,7 +39,10 @@ type serverState struct {
 }
 
 const (
-	hopGuardFluctuation   = 2   // ±TTL tolerance
+	hopGuardFluctuation = 2 // ±TTL tolerance.  Empirically determined from four tested
+	// international upstreams — stable single-path connections exhibit ≤±1 variation.
+	// Anycast PoPs or load-balanced servers that rewrite TTL may need a wider window;
+	// make this configurable per-upstream if false rejections occur in practice.
 	hopGuardCacheCapacity = 256 // LRU cache capacity for server states
 	hopGuardMinSamples    = 32  // samples needed before arming
 )
@@ -235,7 +238,21 @@ func trustedKeys(st *serverState) string {
 }
 
 // rebuildTrusted promotes TTLs meeting the adaptive threshold to the trusted set.
+// Applies a 3/4 decay to all histogram counts before computing the threshold,
+// so stale TTLs naturally lose influence and new TTLs can become trusted after
+// routing changes (anycast reroute, PoP change).
 func rebuildTrusted(st *serverState) {
+	// Decay: multiply all counts by 3/4 so stale TTLs fade out.
+	// Capped at 1 — entries with count=1 are removed entirely.
+	for ttl, count := range st.histogram {
+		newCount := count * 3 / 4
+		if newCount <= 0 {
+			delete(st.histogram, ttl)
+		} else {
+			st.histogram[ttl] = newCount
+		}
+	}
+	// Recompute threshold from the decayed histogram.
 	threshold := trustThreshold(st)
 	clear(st.trusted)
 	for ttl, count := range st.histogram {

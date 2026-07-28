@@ -28,7 +28,7 @@ func (s *DNSStamp) String() string {
 	case ProtoODoHRelay:
 		return s.encodeSecure(ProtoODoHRelay, DefaultHTTPSPort, false)
 	default:
-		panic("unsupported protocol")
+		return "sdns://unknown-protocol"
 	}
 }
 
@@ -99,7 +99,14 @@ func (s *DNSStamp) encodeSecure(proto ProtoType, port int, skipPath bool) string
 }
 
 func stripDefaultPort(s string, defaultPort int) string {
-	return strings.TrimSuffix(s, ":"+strconv.Itoa(defaultPort))
+	host, port, err := net.SplitHostPort(s)
+	if err != nil {
+		return s // no port present
+	}
+	if p, err := strconv.Atoi(port); err == nil && p == defaultPort {
+		return host
+	}
+	return s
 }
 
 func encodeAddrAndHostname(addr, hostname string, defaultPort int) (encodedAddr, encodedHost string) {

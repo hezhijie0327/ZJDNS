@@ -105,6 +105,12 @@ func printRow(cols []string, widths []int) {
 // SQL statement (INSERT, UPDATE, DELETE, DROP, ALTER, etc.). Prompts for
 // confirmation before executing, showing the full statement.
 func RunSQLRW(dbPath, query string) error {
+	db, err := database.Open(dbPath, 0, database.Options{})
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+
 	fmt.Fprintf(os.Stderr, "Statement: %s\n", query)
 	fmt.Fprintf(os.Stderr, "Execute? [y/N] ")
 
@@ -116,12 +122,6 @@ func RunSQLRW(dbPath, query string) error {
 	if resp != "y" && resp != "Y" {
 		return errors.New("aborted")
 	}
-
-	db, err := database.Open(dbPath, 0, database.Options{})
-	if err != nil {
-		return fmt.Errorf("open database: %w", err)
-	}
-	defer func() { _ = db.Close() }()
 
 	result, err := db.SQ.Exec(query)
 	if err != nil {

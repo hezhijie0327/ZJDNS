@@ -92,6 +92,9 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 			return
 		}
 
+		// NOTE: This goroutine is fire-and-forget — context cancellation (s.ctx.Done())
+		// causes the listener Accept loop to return, so in-flight goroutines exit quickly.
+		// No WaitGroup is needed because shutdown blocks on listener close before returning.
 		go func() {
 			defer func() { <-entry.capacity }()
 			defer zdnsutil.HandlePanic("TCP query handler")

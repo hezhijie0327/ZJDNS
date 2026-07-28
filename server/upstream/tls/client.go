@@ -63,7 +63,7 @@ func New(
 	getProxy func(*config.UpstreamServer) *socks5.Dialer,
 	timeout time.Duration,
 ) *Client {
-	return &Client{
+	c := &Client{
 		tlsClient:        tlsClient,
 		dohClient:        dohClient,
 		doh3Client:       doh3Client,
@@ -78,6 +78,17 @@ func New(
 		getProxy:         getProxy,
 		timeout:          timeout,
 	}
+	c.dohTransports.OnEvict = func(_ string, client *http.Client) {
+		if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
+			ct.CloseIdleConnections()
+		}
+	}
+	c.doh3Transports.OnEvict = func(_ string, client *http.Client) {
+		if t, ok := client.Transport.(*http3Transport); ok {
+			_ = t.Close()
+		}
+	}
+	return c
 }
 
 // SetKTLS configures kernel TLS offload for upstream DoT/DoH connections.

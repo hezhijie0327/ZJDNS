@@ -48,7 +48,10 @@ func DNSSize(proto string, r *dns.Msg) int {
 	return int(size)
 }
 
-// readPrefixed reads a DNS message with a 2-byte length prefix.
+// ReadPrefixed reads a length-prefixed DNS message from conn.
+//
+// The caller MUST set a read deadline on conn before calling this function
+// to prevent goroutine leaks on unresponsive peers.
 func ReadPrefixed(conn net.Conn) (b []byte, err error) {
 	var l [2]byte
 	_, err = io.ReadFull(conn, l[:])
@@ -70,7 +73,10 @@ func ReadPrefixed(conn net.Conn) (b []byte, err error) {
 	return buf, nil
 }
 
-// writePrefixed writes a DNS message with a 2-byte length prefix.
+// WritePrefixed writes a DNS message with a 2-byte length prefix.
+//
+// The caller MUST set a write deadline on conn before calling this function
+// to prevent goroutine leaks on unresponsive peers.
 func WritePrefixed(b []byte, conn net.Conn) (err error) {
 	var l [2]byte
 	binary.BigEndian.PutUint16(l[:], uint16(len(b))) //nolint:gosec // G115: DNS message length bounded by MaxMsgSize

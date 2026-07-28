@@ -72,8 +72,20 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 		s.tcpConns[conn] = struct{}{}
 		s.mu.Unlock()
 
+		select {
+		case s.workerCap <- struct{}{}:
+		default:
+			// Drop the connection instead of spawning unbounded goroutines.
+			_ = conn.Close()
+			s.mu.Lock()
+			delete(s.tcpConns, conn)
+			s.mu.Unlock()
+			continue
+		}
+
 		s.wg.Go(func() {
 			defer zdnsutil.HandlePanic("DNSCrypt TCP handler")
+			defer func() { <-s.workerCap }()
 			defer func() {
 				_ = conn.Close()
 				s.mu.Lock()

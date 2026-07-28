@@ -38,6 +38,8 @@ var migrations = []migration{
 	{"3.2.22", "drop infra_cache table", migrateV3_2_22},
 	{"3.3.5", "normalize protocol identifiers in request_log and entry_hit_counters", migrateV3_3_5},
 	{"3.4.6", "reorder ruleset_entries PK to (type, tag, value) for index-seek queries", migrateV3_4_6},
+	// v3.4.18 (add last_hit_time column) and v3.4.19 (drop old tables) are
+	// cumulative — they must remain in this relative order.
 	{"3.4.18", "add last_hit_time to entry_hit_counters for time-based cleanup", migrateV3_4_18},
 	{"3.4.19", "query-stats-sliding-window", migrateV3_4_19},
 	{"3.4.24", "fqdn-canonical-form", migrateV3_4_24},

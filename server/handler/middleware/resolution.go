@@ -4,6 +4,7 @@ import (
 	"context"
 	"zjdns/internal/log"
 	"zjdns/server/handler"
+	"zjdns/server/resolver"
 
 	"codeberg.org/miekg/dns"
 )
@@ -44,22 +45,20 @@ func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// Singleflight dedup: if another goroutine is already resolving the
 		// same query, wait for its result.
 		if m.pending != nil {
-			if qr, follower := m.pending.Join(qname, qtype, qclass, ecsOpt, dnssecOK); follower {
-				if qr == nil {
-					qctx.ResolutionError = true
-					return nil
-				}
-				qctx.ResolutionResult = qr
-				qctx.Resolved = true
-				if qr.Err != nil {
-					qctx.ResolutionError = true
-				}
+			log.Debugf("RECURSION: resolving %s %s", qname, dns.TypeToString[qtype])
+			qr := m.pending.DoJoin(qname, qtype, qclass, ecsOpt, dnssecOK, func() *resolver.QueryResult {
+				return m.resolver.Query(ctx, question, ecsOpt)
+			})
+			if qr == nil {
+				qctx.ResolutionError = true
 				return nil
 			}
-			defer func() {
-				m.pending.Done(qname, qtype, qclass, ecsOpt, dnssecOK,
-					qctx.ResolutionResult)
-			}()
+			qctx.ResolutionResult = qr
+			qctx.Resolved = true
+			if qr.Err != nil {
+				qctx.ResolutionError = true
+			}
+			return nil
 		}
 
 		log.Debugf("RECURSION: resolving %s %s", qname, dns.TypeToString[qtype])

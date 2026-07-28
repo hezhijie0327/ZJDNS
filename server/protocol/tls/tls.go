@@ -90,7 +90,9 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 
 	// Enable TCP keep-alive on the underlying connection so idle DoT
 	// connections are not silently torn down by intermediate NAT/firewall
-	// state timeouts. The read deadline handles idle connection cleanup.
+	// state timeouts. The keep-alive probes maintain the network path;
+	// the per-message read deadline (SetReadDeadline below) handles
+	// application-level idle connection cleanup.
 	if tcpConn, ok := tlsConn.NetConn().(*net.TCPConn); ok {
 		_ = tcpConn.SetKeepAlive(true)
 		_ = tcpConn.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)

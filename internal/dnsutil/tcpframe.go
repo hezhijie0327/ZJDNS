@@ -14,7 +14,13 @@ var errFrameTooLarge = errors.New("dns: TCP frame exceeds maximum message size")
 
 // ReadTCPMsg reads a DNS message prefixed with a 2-byte big-endian length
 // from conn (RFC 1035 §4.2.2).  Shared by server and upstream TLCP/TLS stacks.
+//
+// The caller MUST set a read deadline on conn before calling this function
+// to prevent goroutine leaks on unresponsive peers. See SetReadDeadline.
 func ReadTCPMsg(conn net.Conn) (*dns.Msg, error) {
+	if conn == nil {
+		return nil, errors.New("dns: nil connection")
+	}
 	var prefix [2]byte
 	if _, err := io.ReadFull(conn, prefix[:]); err != nil {
 		return nil, err
@@ -46,6 +52,9 @@ func ReadTCPMsg(conn net.Conn) (*dns.Msg, error) {
 // [1, segSize] to avoid fingerprinting (a fixed size like 1B is a DPI
 // signature).  The first segment includes the 2-byte length prefix.
 func WriteTCPMsgSegmented(conn net.Conn, msg []byte, segSize int) (int, error) {
+	if conn == nil {
+		return 0, errors.New("dns: nil connection")
+	}
 	if segSize <= 0 || segSize >= len(msg)-2 {
 		return conn.Write(msg)
 	}
@@ -67,6 +76,9 @@ func WriteTCPMsgSegmented(conn net.Conn, msg []byte, segSize int) (int, error) {
 		}
 
 		written, err := conn.Write(msg[totalWritten:end])
+		if written == 0 && err == nil {
+			return totalWritten, errors.New("dns: zero-byte write without error — possible infinite loop")
+		}
 		totalWritten += written
 		if err != nil {
 			return totalWritten, err
@@ -77,8 +89,14 @@ func WriteTCPMsgSegmented(conn net.Conn, msg []byte, segSize int) (int, error) {
 }
 
 // WriteTCPMsg writes a DNS message prefixed with a 2-byte big-endian length
-// to conn (RFC 1035 §4.2.2).  Shared by server and upstream TLCP/TLS stacks.
+// to conn (RFC 1035 §4.2.2) in two separate writes (2-byte prefix + payload).
+// Callers must serialize access to conn — concurrent calls on the same
+// net.Conn will interleave frames and corrupt the TCP stream. Use a
+// per-connection sync.Mutex or equivalent.
 func WriteTCPMsg(conn net.Conn, msg *dns.Msg) error {
+	if conn == nil {
+		return errors.New("dns: nil connection")
+	}
 	if err := msg.Pack(); err != nil {
 		return err
 	}

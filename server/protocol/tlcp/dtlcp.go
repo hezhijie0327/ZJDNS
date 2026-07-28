@@ -277,7 +277,8 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 	}
 
 	idleTimeout := config.DefaultDTLSIdleTimeout
-	buf := make([]byte, pool.UDPBufferSize)
+	buf := pool.DefaultBuffer.Get()
+	defer pool.DefaultBuffer.Put(buf)
 
 	for {
 		if err := conn.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
@@ -332,7 +333,7 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 		}
 		resp := make([]byte, zdnsutil.DNSFramePrefixLen+respLen)
 		binary.BigEndian.PutUint16(resp[:zdnsutil.DNSFramePrefixLen], uint16(respLen)) //nolint:gosec // G115: DNS response length bounded by MaxDNSMessageSize
-		copy(resp[2:], response.Data)
+		copy(resp[zdnsutil.DNSFramePrefixLen:], response.Data)
 
 		if _, err := conn.Write(resp); err != nil {
 			log.Debugf("TLCP: DTLCP write error: %v", err)

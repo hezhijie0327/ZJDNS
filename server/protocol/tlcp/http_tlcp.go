@@ -84,7 +84,7 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 
 	msg, err := dnshttp.Request(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 

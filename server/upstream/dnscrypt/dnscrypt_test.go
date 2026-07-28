@@ -52,8 +52,15 @@ func startTestDNSCryptServer(t *testing.T) (addr, stamp string) {
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
-	time.Sleep(100 * time.Millisecond)
 	addr = "127.0.0.1:" + strconv.Itoa(port)
+	for range 50 {
+		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	stamp, err = rc.CreateStamp(addr)
 	if err != nil {
 		t.Fatalf("CreateStamp: %v", err)
@@ -205,8 +212,8 @@ func TestDNSCryptCertificateHandshake(t *testing.T) {
 	msg.RecursionDesired = true
 	q := &dns.TXT{Hdr: dns.Header{Name: "2.dnscrypt-cert.example.com.", Class: dns.ClassINET}}
 	msg.Question = []dns.RR{q}
-	if err := msg.Pack(); err != nil {
-		t.Fatalf("pack: %v", err)
+	if packErr := msg.Pack(); packErr != nil {
+		t.Fatalf("pack: %v", packErr)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

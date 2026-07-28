@@ -49,18 +49,10 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// Perform A-record lookup for DNS64 synthesis.
 		var aqr *resolver.QueryResult
 		if m.pending != nil {
-			if shared, follower := m.pending.Join(qname, dns.TypeA, qclass, ecsOpt, dnssecOK); follower {
-				if shared == nil {
-					return err
-				}
-				aqr = shared
-			} else {
+			aqr = m.pending.DoJoin(qname, dns.TypeA, qclass, ecsOpt, dnssecOK, func() *resolver.QueryResult {
 				aQuestion := handler.Question{Name: qname, Qtype: dns.TypeA, Qclass: qclass}
-				defer func() {
-					m.pending.Done(qname, dns.TypeA, qclass, ecsOpt, dnssecOK, aqr)
-				}()
-				aqr = m.resolver.Query(ctx, aQuestion, ecsOpt)
-			}
+				return m.resolver.Query(ctx, aQuestion, ecsOpt)
+			})
 		} else {
 			aQuestion := handler.Question{Name: qname, Qtype: dns.TypeA, Qclass: qclass}
 			aqr = m.resolver.Query(ctx, aQuestion, ecsOpt)

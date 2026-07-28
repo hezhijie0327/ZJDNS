@@ -26,14 +26,16 @@ func validatePort(field, value string) error {
 	if err != nil {
 		return fmt.Errorf("%s must be a numeric port: %w", field, err)
 	}
-	if p < 1 || p > 65535 {
-		return fmt.Errorf("%s must be between 1 and 65535", field)
+	if p < 1 || p > MaxPortNumber {
+		return fmt.Errorf("%s must be between 1 and %d", field, MaxPortNumber)
 	}
 	return nil
 }
 
 func validateConfig(cfg *ServerConfig) error {
-	validateLogLevel(cfg)
+	if err := validateLogLevel(cfg); err != nil {
+		return err
+	}
 
 	if !cfg.Server.Features.ECS.IsEmpty() {
 		if err := cfg.Server.Features.ECS.Validate(); err != nil {
@@ -82,7 +84,7 @@ func validateConfig(cfg *ServerConfig) error {
 	return nil
 }
 
-func validateLogLevel(cfg *ServerConfig) {
+func validateLogLevel(cfg *ServerConfig) error {
 	levelStr := strings.TrimSpace(cfg.Server.LogLevel)
 	if levelStr == "" {
 		levelStr = log.DefaultLevel
@@ -99,12 +101,14 @@ func validateLogLevel(cfg *ServerConfig) {
 		log.Infof("CONFIG: Log level set to %s", lvl.String())
 	}
 
-	// Warn if the original string didn't parse as a known level.
+	// Return an error for truly invalid level strings so validation
+	// fails startup instead of silently defaulting.
 	baseLevel := strings.SplitN(strings.ToLower(levelStr), ":", 2)[0]
 	switch baseLevel {
 	case "error", "warn", "info", "debug":
+		return nil
 	default:
-		log.Warnf("CONFIG: Invalid log level '%s', using default: info", cfg.Server.LogLevel)
+		return fmt.Errorf("invalid log level: %q", cfg.Server.LogLevel)
 	}
 }
 
@@ -372,16 +376,19 @@ func validateTLSCertificateConfig(cfg *ServerConfig) error {
 	return nil
 }
 
-// validateProbePort validates and default-fills the port field.
-// NOTE: mutates *port as a side effect when <= 0.
-// NOTE: modifies *port as a side effect — this is intentional to keep
-// default-setting close to validation logic.
-func validateProbePort(index int, protocol string, port *int, defaultPort int) error {
+// normalizeLatencyProbePort sets a default port when the configured port is ≤ 0.
+// Must be called before validateProbePort.
+func normalizeLatencyProbePort(port *int, defaultPort int) {
 	if *port <= 0 {
 		*port = defaultPort
 	}
-	if *port > 65535 {
-		return fmt.Errorf("latency_probe step %d: %s port must be between 1 and 65535", index, protocol)
+}
+
+// validateProbePort validates that a latency probe port is in range [1, MaxPortNumber].
+// Does not mutate *port — normalization is handled by normalizeLatencyProbePort.
+func validateProbePort(index int, protocol string, port int) error {
+	if port > MaxPortNumber {
+		return fmt.Errorf("latency_probe step %d: %s port must be between 1 and %d", index, protocol, MaxPortNumber)
 	}
 	return nil
 }
@@ -394,15 +401,20 @@ func validateLatencyProbeStep(index int, step *LatencyProbeStep) error {
 	switch protocol {
 	case ProtoPing, ProtoICMP:
 	case ProtoTCP:
-		return validateProbePort(index, ProtoTCP, &step.Port, DefaultProbePortHTTP)
+		normalizeLatencyProbePort(&step.Port, DefaultProbePortHTTP)
+		return validateProbePort(index, ProtoTCP, step.Port)
 	case ProtoUDP:
-		return validateProbePort(index, ProtoUDP, &step.Port, DefaultProbePortDNS)
+		normalizeLatencyProbePort(&step.Port, DefaultProbePortDNS)
+		return validateProbePort(index, ProtoUDP, step.Port)
 	case ProtoHTTP:
-		return validateProbePort(index, ProtoHTTP, &step.Port, DefaultProbePortHTTP)
+		normalizeLatencyProbePort(&step.Port, DefaultProbePortHTTP)
+		return validateProbePort(index, ProtoHTTP, step.Port)
 	case ProtoHTTPS:
-		return validateProbePort(index, ProtoHTTPS, &step.Port, DefaultProbePortHTTPS)
+		normalizeLatencyProbePort(&step.Port, DefaultProbePortHTTPS)
+		return validateProbePort(index, ProtoHTTPS, step.Port)
 	case ProtoHTTP3:
-		return validateProbePort(index, ProtoHTTP3, &step.Port, DefaultProbePortHTTPS)
+		normalizeLatencyProbePort(&step.Port, DefaultProbePortHTTPS)
+		return validateProbePort(index, ProtoHTTP3, step.Port)
 	default:
 		return fmt.Errorf("latency_probe step %d: unsupported protocol %s", index, step.Protocol)
 	}

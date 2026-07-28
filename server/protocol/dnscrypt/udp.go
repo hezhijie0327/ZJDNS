@@ -97,9 +97,18 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 		packet := buf[:n]
 		buf = pool.DefaultBuffer.Get()
 
+		select {
+		case s.workerCap <- struct{}{}:
+		default:
+			// Drop the packet instead of spawning unbounded goroutines.
+			pool.DefaultBuffer.Put(packet)
+			continue
+		}
+
 		s.wg.Go(func() {
 			defer zdnsutil.HandlePanic("DNSCrypt UDP handler")
 			defer pool.DefaultBuffer.Put(packet)
+			defer func() { <-s.workerCap }()
 			s.handleUDPPacket(ctx, packet, addr, udpConn)
 		})
 	}

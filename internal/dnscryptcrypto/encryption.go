@@ -2,6 +2,7 @@ package dnscryptcrypto
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 )
 
@@ -52,17 +53,17 @@ func PadTCP(packet []byte) (padded []byte, err error) {
 }
 
 // CryptoRandIntn returns a cryptographic random integer in [0, n).
-// n must be a power of 2 and ≤ 256.  The function uses a simple mask (not
-// rejection sampling), so non-power-of-2 n would produce biased output.
+// n must be a power of 2 and ≤ 256.  Returns an error if n is invalid.
+// Uses modulo reduction (equivalent to masking for power-of-2 n).
 func CryptoRandIntn(n int) (int, error) {
 	if n <= 0 || n > 256 || n&(n-1) != 0 {
-		panic("CryptoRandIntn: n must be a power of 2 ≤ 256")
+		return 0, errors.New("CryptoRandIntn: n must be a power of 2 ≤ 256")
 	}
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return 0, fmt.Errorf("crypto rand read failed: %w", err)
 	}
-	// Simple rejection sampling; n <= 256 so bias is negligible.
+	// Simple modulo reduction; n <= 256 so bias is negligible.
 	return int(uint64(b[0])|uint64(b[1])<<8) % n, nil //nolint:gosec // G115: n <= 256, result fits in int
 }
 
@@ -127,6 +128,9 @@ func ComputeSharedKey(
 	secretKey *[KeySize]byte,
 	publicKey *[KeySize]byte,
 ) (sharedKey [SharedKeySize]byte, err error) {
+	if secretKey == nil || publicKey == nil {
+		return [SharedKeySize]byte{}, errors.New("dnscrypt: nil key parameter")
+	}
 	switch cryptoConstruction {
 	case XChacha20Poly1305:
 		sk, err := XchachaSharedKey(*secretKey, *publicKey)

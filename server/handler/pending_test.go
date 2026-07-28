@@ -44,7 +44,6 @@ func TestPendingRequests_LeaderAndFollower(t *testing.T) {
 	})
 
 	<-followerJoined // follower goroutine is about to call Join()
-	time.Sleep(time.Millisecond)
 
 	expected := &resolver.QueryResult{Server: "test-server"}
 	pr.Done(qname, qtype, qclass, nil, false, expected)
@@ -74,11 +73,11 @@ func TestPendingRequests_MultipleFollowers(t *testing.T) {
 	const numFollowers = 10
 	var wg sync.WaitGroup
 	var received atomic.Int32
-	var entered atomic.Int32
+	entered := make(chan struct{}, numFollowers)
 
 	for range numFollowers {
 		wg.Go(func() {
-			entered.Add(1) // about to block in Join()
+			entered <- struct{}{} // about to block in Join()
 			_, f := pr.Join(qname, qtype, qclass, nil, false)
 			if !f {
 				t.Error("expected follower")
@@ -90,7 +89,8 @@ func TestPendingRequests_MultipleFollowers(t *testing.T) {
 	// Ensure all followers get a chance to enter Join() before Done().
 	// In production, the upstream resolution (50+ ms) provides this
 	// window naturally.
-	for entered.Load() < int32(numFollowers) {
+	for range numFollowers {
+		<-entered
 	}
 	time.Sleep(time.Millisecond)
 
@@ -170,9 +170,9 @@ func TestPendingRequests_ConcurrentSameKey(t *testing.T) {
 	qclass := uint16(dns.ClassINET)
 
 	const goroutines = 50
-	var entered atomic.Int32
 	var leaders atomic.Int32
 	var followers atomic.Int32
+	entered := make(chan struct{}, goroutines)
 	allSpawned := make(chan struct{})
 
 	var wg sync.WaitGroup
@@ -181,7 +181,7 @@ func TestPendingRequests_ConcurrentSameKey(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-allSpawned
-			entered.Add(1) // about to call Join()
+			entered <- struct{}{} // about to call Join()
 			_, f := pr.Join(qname, dns.TypeA, qclass, nil, false)
 			if f {
 				followers.Add(1)
@@ -193,9 +193,9 @@ func TestPendingRequests_ConcurrentSameKey(t *testing.T) {
 
 	close(allSpawned) // all goroutines surge toward Join()
 
-	// Wait for the leader to emerge and for all goroutines to have
-	// called Join() (followers are blocked inside, leader returned).
-	for entered.Load() < int32(goroutines) || leaders.Load() < 1 {
+	// Wait for all goroutines to have entered Join().
+	for range goroutines {
+		<-entered
 	}
 	time.Sleep(time.Millisecond)
 
@@ -227,14 +227,17 @@ func TestPendingRequests_NilECSAndZeroECSAreSameKey(t *testing.T) {
 	}
 
 	// Follower runs in a goroutine because it blocks until Done().
+	started := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Go(func() {
+		close(started) // about to block in Join()
 		_, f := pr.Join("example.com.", dns.TypeA, qclass, zeroECS, false)
 		if !f {
 			t.Error("expected follower for zero-value ECS (same key as nil ECS)")
 		}
 	})
 
+	<-started
 	time.Sleep(time.Millisecond)
 	pr.Done("example.com.", dns.TypeA, qclass, nilECS, false, &resolver.QueryResult{Server: "done"})
 	wg.Wait()
@@ -314,9 +317,9 @@ func TestPendingRefreshes_ConcurrentSameKey(t *testing.T) {
 	key := BuildPendingKey("concurrent.example.com.", dns.TypeA, uint16(dns.ClassINET), nil, false)
 
 	const goroutines = 50
-	var entered atomic.Int32
 	var leaders atomic.Int32
 	var followers atomic.Int32
+	completed := make(chan struct{}, goroutines)
 	allSpawned := make(chan struct{})
 
 	var wg sync.WaitGroup
@@ -325,20 +328,20 @@ func TestPendingRefreshes_ConcurrentSameKey(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-allSpawned
-			entered.Add(1)
 			if pr.Start(key) {
 				leaders.Add(1)
 			} else {
 				followers.Add(1)
 			}
+			completed <- struct{}{}
 		}()
 	}
 
 	close(allSpawned)
 
-	for entered.Load() < int32(goroutines) || leaders.Load() < 1 {
+	for range goroutines {
+		<-completed
 	}
-	time.Sleep(time.Millisecond)
 
 	if n := leaders.Load(); n != 1 {
 		t.Errorf("expected exactly 1 leader, got %d", n)
@@ -362,22 +365,22 @@ func TestPendingRefreshes_MultipleFollowers(t *testing.T) {
 	}
 
 	const numFollowers = 10
-	var entered atomic.Int32
 	var rejected atomic.Int32
+	completed := make(chan struct{}, numFollowers)
 
 	var wg sync.WaitGroup
 	for range numFollowers {
 		wg.Go(func() {
-			entered.Add(1)
 			if !pr.Start(key) {
 				rejected.Add(1)
 			}
+			completed <- struct{}{}
 		})
 	}
 
-	for entered.Load() < int32(numFollowers) || rejected.Load() < int32(numFollowers) {
+	for range numFollowers {
+		<-completed
 	}
-	time.Sleep(time.Millisecond)
 
 	if n := rejected.Load(); n != int32(numFollowers) {
 		t.Errorf("followers rejected = %d, want %d", n, numFollowers)
@@ -419,8 +422,10 @@ func TestPendingRefreshes_LeaderDoneFollowerCanProceed(t *testing.T) {
 		t.Fatal("expected leader")
 	}
 
+	followerStarted := make(chan struct{})
 	followerDone := make(chan struct{})
 	go func() {
+		close(followerStarted)
 		for pr.Start(key) == false {
 			time.Sleep(time.Microsecond)
 		}
@@ -428,7 +433,7 @@ func TestPendingRefreshes_LeaderDoneFollowerCanProceed(t *testing.T) {
 		close(followerDone)
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	<-followerStarted
 
 	pr.Done(key)
 

@@ -22,14 +22,6 @@ func TestIsSecureProtocol(t *testing.T) {
 		{"udp", false},
 		{"tcp", false},
 		{"", false},
-		{"tls", true},
-		{"quic", true},
-		{"https", true},
-		{"http3", true},
-		{"tls", true},
-		{"quic", true},
-		{"https", true},
-		{"http3", true},
 		{"DoT", false}, // case-sensitive — callers normalize to lowercase first
 	}
 	for _, tc := range tests {

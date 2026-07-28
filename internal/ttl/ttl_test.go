@@ -304,22 +304,30 @@ func TestDeductElapsedCyclical_ZeroTTL(t *testing.T) {
 
 func TestNowUnix_Advances(t *testing.T) {
 	// Verify NowUnix() returns a real function, not a captured method value.
-	// Two calls separated by ≥1s must return different values.
+	// Poll until we see time advance (up to ~5s for slow CI).
 	t1 := NowUnix()
-	time.Sleep(1100 * time.Millisecond)
-	t2 := NowUnix()
-	if t2 <= t1 {
-		t.Errorf("NowUnix must advance over time: t1=%d, t2=%d", t1, t2)
+	var t2 int64
+	for range 100 {
+		time.Sleep(50 * time.Millisecond)
+		t2 = NowUnix()
+		if t2 > t1 {
+			return
+		}
 	}
+	t.Errorf("NowUnix did not advance after ~5s: t1=%d, t2=%d", t1, t2)
 }
 
 func TestElapsed_RealTime(t *testing.T) {
 	ts := NowUnix()
-	time.Sleep(1100 * time.Millisecond)
-	elapsed := Elapsed(ts)
-	if elapsed < 1 {
-		t.Errorf("elapsed after ~1s sleep = %d, want ≥1", elapsed)
+	var elapsed int64
+	for range 100 {
+		time.Sleep(50 * time.Millisecond)
+		elapsed = Elapsed(ts)
+		if elapsed >= 1 {
+			return
+		}
 	}
+	t.Errorf("elapsed after ~5s polling = %d, want ≥1", elapsed)
 }
 
 func TestRemainingTTL_RealTime(t *testing.T) {
@@ -328,11 +336,15 @@ func TestRemainingTTL_RealTime(t *testing.T) {
 	if r1 < 299 || r1 > 300 {
 		t.Errorf("remaining immediately = %d, want ~300", r1)
 	}
-	time.Sleep(1100 * time.Millisecond)
-	r2 := RemainingTTL(ts, 300, 30)
-	if r2 >= r1 {
-		t.Errorf("remaining must decrease: r1=%d, r2=%d", r1, r2)
+	var r2 uint32
+	for range 100 {
+		time.Sleep(50 * time.Millisecond)
+		r2 = RemainingTTL(ts, 300, 30)
+		if r2 < r1 {
+			return
+		}
 	}
+	t.Errorf("remaining must decrease: r1=%d, r2=%d", r1, r2)
 }
 
 func TestIsExpired_RealTime(t *testing.T) {

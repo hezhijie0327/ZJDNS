@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"sync"
 	"time"
 	"zjdns/config"
 	"zjdns/edns"
@@ -25,7 +26,7 @@ type PendingRequests struct {
 	sets *lrumap.Map[PendingKey, *pendingCall]
 }
 
-// --- Unexported types ---
+// --- Types ---
 
 // PendingKey is a pre-computed cache key for deduplicating concurrent identical
 // queries.  It mirrors the cache lookup key (qname, qtype, qclass, ecs_addr,
@@ -44,6 +45,7 @@ type PendingKey struct {
 type pendingCall struct {
 	done   chan struct{}
 	result *resolver.QueryResult
+	once   sync.Once // guards closing of done channel
 }
 
 const pendingRequestCapacity = 10000 // safety bound against unbounded growth
@@ -53,12 +55,11 @@ func NewPendingRequests() *PendingRequests {
 	p := &PendingRequests{
 		sets: lrumap.New[PendingKey, *pendingCall](pendingRequestCapacity),
 	}
-	p.sets.OnEvict = func(_ PendingKey, call *pendingCall) { close(call.done) }
+	p.sets.OnEvict = func(_ PendingKey, call *pendingCall) { call.once.Do(func() { close(call.done) }) }
 	return p
 }
 
-// NewRefreshGroup creates a pending group for cache refresh dedup.
-// Exported for use by server.New() during chain assembly.
+// NewRefreshGroup creates a pending group for cache refresh deduplication.
 func NewRefreshGroup() *pending.Group[PendingKey] {
 	return pending.NewGroup[PendingKey]()
 }
@@ -112,7 +113,20 @@ func (p *PendingRequests) Done(qname string, qtype, qclass uint16, ecsOpt *edns.
 	// modification of shared RR headers (e.g. zone rule domain rewrite
 	// via restoreDomain).
 	call.result = cloneQueryResult(result)
-	close(call.done)
+	call.once.Do(func() { close(call.done) })
+}
+
+// DoJoin handles the leader/follower pattern for singleflight dedup.  If a
+// follower, it returns the shared result from an in-flight query.  If the
+// caller is the leader, it executes fn, stores the result via Done, and
+// returns the result.
+func (p *PendingRequests) DoJoin(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool, fn func() *resolver.QueryResult) *resolver.QueryResult {
+	if qr, follower := p.Join(qname, qtype, qclass, ecsOpt, dnssecOK); follower {
+		return qr
+	}
+	result := fn()
+	p.Done(qname, qtype, qclass, ecsOpt, dnssecOK, result)
+	return result
 }
 
 // cloneQueryResult returns a deep copy of qr where the Answer, Authority,

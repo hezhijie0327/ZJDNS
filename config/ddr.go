@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"zjdns/internal/log"
@@ -143,11 +144,21 @@ func addDDRRecords(cfg *ServerConfig) {
 			http:    r.dohpath != "",
 		})
 	}
-	sort.SliceStable(records, func(i, j int) bool {
-		if records[i].http != records[j].http {
-			return records[i].http // HTTP first
+	slices.SortStableFunc(records, func(a, b flatRecord) int {
+		if a.http != b.http {
+			if a.http {
+				return -1
+			}
+			return 1
 		}
-		return records[i].port < records[j].port
+		switch {
+		case a.port < b.port:
+			return -1
+		case a.port > b.port:
+			return 1
+		default:
+			return 0
+		}
 	})
 
 	zoneServiceRecords := make([]ZoneRecord, 0, len(records))

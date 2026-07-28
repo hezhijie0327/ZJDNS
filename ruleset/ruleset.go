@@ -239,16 +239,25 @@ func domainKey(p string) string {
 	return p
 }
 
-// tldPlusOne extracts the effective suffix for domain matching.
+// tldPlusOne extracts the effective TLD+1 (registrable domain) for domain
+// matching.  It takes the last two labels of the fully-qualified name.
+//
+// Note: this approach does not handle multi-part TLDs (e.g. "example.co.uk"
+// would return "co.uk" instead of "example.co.uk").  A complete solution
+// requires a Public Suffix List (https://publicsuffix.org/) which is ~10k
+// entries — out of scope for this project.  Domain rules targeting ccTLDs
+// with multi-part suffixes should use explicit subdomain patterns.
 func tldPlusOne(name string) string {
 	n := strings.TrimSuffix(strings.ToLower(name), ".")
+
 	last := strings.LastIndexByte(n, '.')
 	if last < 0 {
 		return n
 	}
-	prev := strings.LastIndexByte(n[:last], '.')
-	if prev < 0 {
+
+	secondLast := strings.LastIndexByte(n[:last], '.')
+	if secondLast < 0 {
 		return n
 	}
-	return n[prev+1:]
+	return n[secondLast+1:]
 }

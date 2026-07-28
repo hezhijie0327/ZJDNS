@@ -66,6 +66,10 @@ func (s *Server) startDOH3Server(port string) error {
 		capturedH3 := listener
 		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("DoH3 server")
+			// Manual accept loop instead of h3Server.ServeListener(capturedH3)
+			// so that each QUIC connection is logged and errors are handled
+			// per-connection, preventing a single bad connection from
+			// affecting the entire listener.
 			for {
 				conn, err := capturedH3.Accept(s.ctx)
 				if err != nil {

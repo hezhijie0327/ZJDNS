@@ -159,6 +159,7 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 			if err := r.recordDNSSECFailure(chain, *validated,
 				"bogus zone cut delegation for "+question.Name); err != nil {
 				log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut child has DS but RRSIG verification failed", question.Name)
+				pool.DefaultMessage.Put(response)
 				return &QueryResult{Cacheable: true, Server: config.ProtoRecursive, ECS: ecsResponse, Err: err}
 			}
 		} else {
@@ -184,6 +185,7 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 		// signed (e.g. Cloudflare challenge subdomains).  Treat as
 		// insecure, not bogus — same behaviour as 1.1.1.1.
 		if r.resolver.DNSSECEnforce && chain.lastEDECode != dns.ExtendedErrorRRSIGsMissing {
+			pool.DefaultMessage.Put(response)
 			return &QueryResult{
 				Cacheable: true,
 				Server:    config.ProtoRecursive, ECS: ecsResponse,

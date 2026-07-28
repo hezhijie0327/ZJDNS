@@ -19,6 +19,13 @@ import (
 
 // HandshakeInfo carries the negotiated parameters from a TLS, TLCP, DTLS, or
 // DTLCP handshake.  Zero-value fields are omitted from the log output.
+//
+// This type lives in dnsutil (a foundation package) rather than in the TLS or
+// TLCP protocol packages to break the import cycle: both server/protocol/tls
+// and server/protocol/tlcp (and their dtls/dtlcp counterparts) would need to
+// import a shared HandshakeInfo type, but each protocol package may import
+// dnsutil for other helpers.  A type in a third shared package would create
+// the same cycle since neither protocol can import the other.
 type HandshakeInfo struct {
 	Role       string // log prefix: "TLS", "TLCP", "UPSTREAM"
 	Direction  string // "handshake from" (server) or "negotiated for" (client)
@@ -212,5 +219,10 @@ func IsTemporaryError(err error) bool {
 	if errors.As(err, &ne) && ne.Timeout() {
 		return true
 	}
+	// Some wrapped errors (e.g., from quic-go or io.Pipe) do not implement
+	// net.Error or have lost the interface via wrapping, so we fall back to
+	// substring matching as a best-effort heuristic.  This is deliberately
+	// limited to "timeout" and "temporary" — the two canonical transient
+	// failure keywords — to avoid false positives from unrelated error text.
 	return strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "temporary")
 }

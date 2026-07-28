@@ -26,6 +26,9 @@ func (s *Server) startUDP(g Group, ctx context.Context, handler dns.Handler) err
 			Addr:    addr,
 			Net:     config.ProtoUDP,
 			Handler: handler,
+			// pool.UDPBufferSize matches the EDNS0 recommended minimum of 1232
+			// (RFC 6891 §6.2.5 with IPv4/IPv6 overhead subtracted from the
+			// typical 1500-byte path MTU).
 			UDPSize: pool.UDPBufferSize,
 		}
 		s.udpServers = append(s.udpServers, srv)

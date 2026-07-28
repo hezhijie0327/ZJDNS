@@ -554,7 +554,8 @@ func ecsParams(ecs *config.ECSOption) (addr string, prefix int) {
 	return ecs.Address.String(), int(ecs.SourcePrefix)
 }
 
-// maskIP applies a CIDR mask to ip, returning a new net.IP.
+// maskIP applies a CIDR mask to ip, returning a new net.IP with its own
+// backing array so the caller cannot inadvertently mutate the original IP.
 func maskIP(ip net.IP, prefixBits int) net.IP {
 	bits := 128
 	if ip.To4() != nil {
@@ -564,7 +565,10 @@ func maskIP(ip net.IP, prefixBits int) net.IP {
 	if mask == nil {
 		return ip
 	}
-	return ip.Mask(mask)
+	masked := ip.Mask(mask)
+	result := make(net.IP, len(masked))
+	copy(result, masked)
+	return result
 }
 
 // ecsFallbackCandidates generates ECS cache-key candidates from most specific

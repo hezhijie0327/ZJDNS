@@ -59,6 +59,10 @@ type Server struct {
 
 	// Rotation goroutine control.
 	rotateCh chan struct{} // closed when rotation goroutine should stop
+
+	// workerCap limits concurrent handler goroutines to prevent unbounded
+	// goroutine creation under high load.
+	workerCap chan struct{}
 }
 
 // remainingTTL returns the remaining TTL in seconds for this key entry.
@@ -110,6 +114,7 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) 
 		cancel:         cancel,
 		signingSK:      signingSK,
 		rotateCh:       make(chan struct{}),
+		workerCap:      make(chan struct{}, config.DefaultMaxConcurrentStreams),
 	}
 
 	// Derive ticket key from the Ed25519 signing key for PQ resumption.
@@ -528,6 +533,7 @@ func buildCertTXTForCert(cert *dnscryptcrypto.Certificate) []string {
 		return nil
 	}
 	escaped := escapeBackslash(certBytes)
+	// Maximum length of a single DNS TXT character-string per RFC 1035 §3.3.
 	const maxChunk = 255
 	var chunks []string
 	for i := 0; i < len(escaped); i += maxChunk {

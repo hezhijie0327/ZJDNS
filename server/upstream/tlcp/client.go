@@ -26,13 +26,17 @@ type Client struct {
 
 // New creates a Client for TLCP and DTLCP DNS queries.
 func New(getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Duration) *Client {
-	return &Client{
+	c := &Client{
 		getProxy:     getProxy,
 		timeout:      timeout,
 		tlcpSessions: tlcp.NewLRUSessionCache(config.DefaultTLCPSessionCacheSize),
 		dtlcpSession: dtlcp.NewLRUSessionCache(config.DefaultDTLCPSessionCacheSize),
 		httpClient:   lrumap.New[string, *http.Client](config.DefaultHTTPTLCPClientMax * 2),
 	}
+	c.httpClient.OnEvict = func(_ string, client *http.Client) {
+		client.CloseIdleConnections()
+	}
+	return c
 }
 
 // tlcpClientConfig builds a gotlcp/tlcp Config for upstream TLCP connections.

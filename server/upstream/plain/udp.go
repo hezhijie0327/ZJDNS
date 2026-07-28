@@ -215,7 +215,14 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 			return nil, err
 		}
 
-		// HopGuard: reject packets with out-of-range TTL (GFW injection).
+		// HopGuard: feed every observed TTL to the histogram so new TTLs
+		// after routing changes can be learned. Validate still gates
+		// packet acceptance, but recording is decoupled — rejected TTLs
+		// accumulate in the histogram and become trusted after decay
+		// cycles if they repeat consistently.
+		if hg != nil {
+			hg.Feed(server.Address, ttl)
+		}
 		if hg != nil && !hg.Validate(server.Address, ttl) {
 			continue
 		}

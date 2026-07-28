@@ -116,6 +116,8 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 		return
 	}
 
+	// Graceful close: send CONNECTION_CLOSE with NO_ERROR and wait for the
+	// peer to acknowledge, or fall through on timeout.
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultBackgroundTimeout)
 		defer cancel()
@@ -177,8 +179,12 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	}
 
 	msgLen := binary.BigEndian.Uint16(buf[:zdnsutil.DNSFramePrefixLen])
-	if msgLen == 0 || msgLen > pool.SecureBufferSize-zdnsutil.DNSFramePrefixLen {
-		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "invalid length")
+	switch {
+	case msgLen == 0:
+		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "zero-length DNS message")
+		return
+	case msgLen > pool.SecureBufferSize-zdnsutil.DNSFramePrefixLen:
+		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "message too large")
 		return
 	}
 
@@ -195,7 +201,6 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	}
 
 	req := pool.DefaultMessage.Get()
-	defer pool.DefaultMessage.Put(req)
 	req.Data = body
 	if err := req.Unpack(); err != nil {
 		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "invalid DNS message")
@@ -212,6 +217,9 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 
 	clientIP := zdnsutil.ClientIPFromAddr(conn.RemoteAddr())
 	response := s.handler.ServeDNS(req, clientIP, true, config.ProtoQUIC)
+	// req is transferred to ServeDNS — response holds the result.
+	// Both req and response are returned to the pool below and in
+	// the caller; req must not be double-Put.
 	pool.DefaultMessage.Put(req)
 
 	if err := s.respondQUIC(stream, response); err != nil {

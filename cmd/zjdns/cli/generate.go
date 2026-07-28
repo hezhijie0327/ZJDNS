@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"zjdns/config"
 	"zjdns/internal/log"
 
@@ -15,7 +16,7 @@ import (
 )
 
 // generateExampleConfig returns a complete example configuration as indented JSON.
-func generateExampleConfig() string {
+func generateExampleConfig() (string, error) {
 	cfg := config.NewDefaultServerConfig()
 
 	// ── server ──────────────────────────────────────────────────────────────
@@ -98,10 +99,9 @@ func generateExampleConfig() string {
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		log.Warnf("CONFIG: example config marshal failed: %v", err)
-		return ""
+		return "", fmt.Errorf("marshal example config: %w", err)
 	}
-	return string(data)
+	return string(data), nil
 }
 
 // generateDNSCryptConfig wraps the server/dnscrypt config generator for CLI use.

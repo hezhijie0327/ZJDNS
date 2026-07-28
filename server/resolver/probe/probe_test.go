@@ -61,9 +61,9 @@ func TestPendingProbes_ConcurrentSameKey(t *testing.T) {
 	key := probeKey{"concurrent.example.com.", dns.TypeA}
 
 	const goroutines = 50
-	var entered atomic.Int32
 	var leaders atomic.Int32
 	var followers atomic.Int32
+	completed := make(chan struct{}, goroutines)
 	allSpawned := make(chan struct{})
 
 	var wg sync.WaitGroup
@@ -72,20 +72,20 @@ func TestPendingProbes_ConcurrentSameKey(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-allSpawned
-			entered.Add(1)
 			if pp.Start(key) {
 				leaders.Add(1)
 			} else {
 				followers.Add(1)
 			}
+			completed <- struct{}{}
 		}()
 	}
 
 	close(allSpawned)
 
-	for entered.Load() < int32(goroutines) || leaders.Load() < 1 {
+	for range goroutines {
+		<-completed
 	}
-	time.Sleep(time.Millisecond)
 
 	if n := leaders.Load(); n != 1 {
 		t.Errorf("expected exactly 1 leader, got %d", n)
@@ -109,22 +109,22 @@ func TestPendingProbes_MultipleFollowers(t *testing.T) {
 	}
 
 	const numFollowers = 10
-	var entered atomic.Int32
 	var rejected atomic.Int32
+	completed := make(chan struct{}, numFollowers)
 
 	var wg sync.WaitGroup
 	for range numFollowers {
 		wg.Go(func() {
-			entered.Add(1)
 			if !pp.Start(key) {
 				rejected.Add(1)
 			}
+			completed <- struct{}{}
 		})
 	}
 
-	for entered.Load() < int32(numFollowers) || rejected.Load() < int32(numFollowers) {
+	for range numFollowers {
+		<-completed
 	}
-	time.Sleep(time.Millisecond)
 
 	if n := rejected.Load(); n != int32(numFollowers) {
 		t.Errorf("followers rejected = %d, want %d", n, numFollowers)
@@ -147,8 +147,10 @@ func TestPendingProbes_LeaderDoneFollowerCanProceed(t *testing.T) {
 		t.Fatal("expected leader")
 	}
 
+	followerStarted := make(chan struct{})
 	followerDone := make(chan struct{})
 	go func() {
+		close(followerStarted)
 		for pp.Start(key) == false {
 			time.Sleep(time.Microsecond)
 		}
@@ -156,7 +158,7 @@ func TestPendingProbes_LeaderDoneFollowerCanProceed(t *testing.T) {
 		close(followerDone)
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	<-followerStarted
 
 	pp.Done(key)
 
@@ -224,9 +226,9 @@ func TestTryStartNSProbe_ConcurrentSameKey(t *testing.T) {
 	key := "192.168.0.1,192.168.0.2"
 	const goroutines = 20
 
-	var entered atomic.Int32
 	var leaders atomic.Int32
 	var followers atomic.Int32
+	completed := make(chan struct{}, goroutines)
 	allSpawned := make(chan struct{})
 
 	var wg sync.WaitGroup
@@ -235,20 +237,20 @@ func TestTryStartNSProbe_ConcurrentSameKey(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-allSpawned
-			entered.Add(1)
 			if nsPending.Start(key) {
 				leaders.Add(1)
 			} else {
 				followers.Add(1)
 			}
+			completed <- struct{}{}
 		}()
 	}
 
 	close(allSpawned)
 
-	for entered.Load() < int32(goroutines) || leaders.Load() < 1 {
+	for range goroutines {
+		<-completed
 	}
-	time.Sleep(time.Millisecond)
 
 	if n := leaders.Load(); n != 1 {
 		t.Errorf("expected exactly 1 leader, got %d", n)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"zjdns/config"
 	zstamp "zjdns/internal/stamp"
 )
@@ -83,8 +84,17 @@ func RunDNSStampEncode(protoStr, addr, providerName, publicKeyHex, path string, 
 		s.PublicKey = pk
 	}
 
+	// Ensure path starts with / for DoH/ODoH protocols.
+	if !strings.HasPrefix(path, "/") && (proto == zstamp.ProtoDOH || proto == zstamp.ProtoODoHTarget) {
+		path = "/" + path
+		s.Path = path
+	}
+
 	if proto == zstamp.ProtoDNSCrypt && len(s.PublicKey) == 0 {
 		return errors.New("--public-key is required for DNSCrypt stamps")
+	}
+	if proto == zstamp.ProtoODoHTarget && providerName == "" {
+		return errors.New("--provider-name is required for odoh-target protocol")
 	}
 
 	fmt.Println(s.String())

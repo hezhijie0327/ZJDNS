@@ -80,8 +80,8 @@ func (c *Client) ExecuteHTTP3(ctx context.Context, msg *dns.Msg, server *config.
 	}
 
 	// NOTE: The first request gets no retry because the initial
-	// connection establishment serves as an implicit retry., while cached clients
-	// do. Consider retrying on first failure as well for consistency.
+	// connection establishment serves as an implicit retry; cached clients
+	// do retry. Consider retrying on first failure as well for consistency.
 	resp, err := zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, client, http3.MethodGet0RTT)
 	if err == nil {
 		return resp, nil

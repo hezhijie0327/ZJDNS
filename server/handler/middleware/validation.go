@@ -13,7 +13,8 @@ import (
 
 // Validation rejects malformed DNS queries (domain too long,
 // invalid labels, ANY/AXFR/IXFR query types) before any other processing.
-// Invalid queries receive a REFUSED response with an EDE error code.
+// Invalid queries receive a REFUSED or FORMERR (for nil/empty questions)
+// response with an EDE error code.
 type Validation struct{}
 
 // Wrap implements Wrapper.

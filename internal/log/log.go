@@ -322,6 +322,12 @@ func NewTimeCache() *TimeCache {
 	t.unixNano.Store(time.Now().UnixNano())
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// Log panic to stderr since the log package itself panicked.
+				fmt.Fprintf(os.Stderr, "PANIC: TimeCache: %v\n", r)
+			}
+		}()
 		for {
 			select {
 			case <-t.ticker.C:

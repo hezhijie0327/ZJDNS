@@ -134,13 +134,16 @@ func DerivePQKeys(classicalSk []byte) (pk, sk []byte) {
 // Ticket encryption (server-side)
 // ---------------------------------------------------------------------------
 
-func PQSealTicket(key [XchachaKeySize]byte, keyID [TicketKeyIDSize]byte, nonce [XchachaNonceSize]byte, plaintext []byte) []byte {
-	ct := XchachaSeal(nil, nonce[:], plaintext, key[:])
+func PQSealTicket(key [XchachaKeySize]byte, keyID [TicketKeyIDSize]byte, nonce [XchachaNonceSize]byte, plaintext []byte) ([]byte, error) {
+	ct, err := XchachaSeal(nil, nonce[:], plaintext, key[:])
+	if err != nil {
+		return nil, err
+	}
 	out := make([]byte, TicketKeyIDSize+XchachaNonceSize+len(ct))
 	copy(out[:TicketKeyIDSize], keyID[:])
 	copy(out[TicketKeyIDSize:TicketKeyIDSize+XchachaNonceSize], nonce[:])
 	copy(out[TicketKeyIDSize+XchachaNonceSize:], ct)
-	return out
+	return out, nil
 }
 
 func PQOpenTicket(key *[XchachaKeySize]byte, keyID *[TicketKeyIDSize]byte, ciphertext []byte) ([]byte, error) {
@@ -152,7 +155,11 @@ func PQOpenTicket(key *[XchachaKeySize]byte, keyID *[TicketKeyIDSize]byte, ciphe
 	}
 	var nonce [XchachaNonceSize]byte
 	copy(nonce[:], ciphertext[TicketKeyIDSize:TicketKeyIDSize+XchachaNonceSize])
-	return XchachaOpen(nil, nonce[:], ciphertext[TicketKeyIDSize+XchachaNonceSize:], key[:])
+	res, err := XchachaOpen(nil, nonce[:], ciphertext[TicketKeyIDSize+XchachaNonceSize:], key[:])
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
 }
 
 // ---------------------------------------------------------------------------

@@ -266,8 +266,9 @@ func (s *Server) Start() error {
 
 	for err := range errChan {
 		if err != nil {
-			// Cancel server context to stop accept loops that may have
-			// already started in other listeners before this one failed.
+			// Only the first protocol startup error matters — it triggers
+			// cancellation of all other listeners that may have already
+			// started accepting connections, preventing partial startup.
 			s.cancel(fmt.Errorf("tls startup failed: %w", err))
 			return err
 		}
@@ -296,6 +297,11 @@ func (s *Server) Shutdown() error {
 	for _, c := range s.doqConns {
 		if c != nil {
 			zdnsutil.CloseWithLog(c, "DoQ socket", "TLS")
+		}
+	}
+	for _, t := range s.doqTransports {
+		if t != nil {
+			_ = t.Close()
 		}
 	}
 	if s.h3Server != nil {

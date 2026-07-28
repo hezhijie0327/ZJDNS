@@ -109,9 +109,6 @@ func (e *Entry) ShouldPrefetch(thresholdPercent int) bool {
 // processRR applies DNSSEC filtering, copies, and adjusts TTL on a single
 // resource record. Returns nil if the record should be excluded.
 func processRR(rr dns.RR, value int64, isElapsed, includeDNSSEC bool) dns.RR {
-	if rr == nil {
-		return nil
-	}
 	if !includeDNSSEC {
 		switch rr.(type) {
 		case *dns.RRSIG, *dns.NSEC, *dns.NSEC3, *dns.DNSKEY, *dns.DS:
@@ -137,10 +134,8 @@ func processRR(rr dns.RR, value int64, isElapsed, includeDNSSEC bool) dns.RR {
 }
 
 // ProcessRecords adjusts TTLs on resource records and optionally filters
-// DNSSEC record types.
-// ProcessRecords adjusts TTLs and filters records by DNSSEC status.
-// The returned slice shares backing arrays with the input — callers must
-// not mutate the returned records.
+// DNSSEC record types. The returned slice shares backing arrays with the
+// input — callers must not mutate the returned records.
 func ProcessRecords(rrs []dns.RR, value int64, isElapsed, includeDNSSEC bool) []dns.RR {
 	if len(rrs) == 0 {
 		return nil

@@ -7,6 +7,11 @@ import (
 	"database/sql"
 	"fmt"
 	"sync/atomic"
+
+	// database imports config for default values (cache sizes, connection limits,
+	// TTL parameters). This is NOT a DAG violation — config is Layer 1-2 and
+	// database is Layer 3. The dependency exists because Open() applies config
+	// defaults when explicit values are zero.
 	"zjdns/config"
 	"zjdns/internal/log"
 
@@ -126,6 +131,9 @@ func Open(path string, maxEntries int, opts Options) (*DB, error) {
 
 // Close closes the database, running PRAGMA optimize for disk-backed DBs before shutdown.
 func (db *DB) Close() error {
+	if db.SQ == nil {
+		return nil
+	}
 	if !atomic.CompareAndSwapInt32(&db.closed, 0, 1) {
 		return nil
 	}
@@ -153,16 +161,20 @@ func (db *DB) Close() error {
 
 // SQLExec delegates to db.SQ.Exec, exposing a method that satisfies the
 // sqlExecutor interface defined by consumer packages (ruleset, zone).
+// Context-less variants are used intentionally: SQLite queries are fast (<1ms)
+// and context cancellation during shutdown is handled by closing the DB.
 func (db *DB) SQLExec(query string, args ...any) (sql.Result, error) {
 	return db.SQ.Exec(query, args...)
 }
 
 // SQLQueryRow delegates to db.SQ.QueryRow.
+// Context-less variant: see SQLExec for rationale.
 func (db *DB) SQLQueryRow(query string, args ...any) *sql.Row {
 	return db.SQ.QueryRow(query, args...)
 }
 
 // SQLQuery executes a query and returns the *sql.Rows for iteration.
+// Context-less variant: see SQLExec for rationale.
 func (db *DB) SQLQuery(query string, args ...any) (*sql.Rows, error) {
 	return db.SQ.Query(query, args...)
 }

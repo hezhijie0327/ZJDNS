@@ -114,7 +114,7 @@ func (c *ECSConfig) UnmarshalJSON(data []byte) error {
 	var aux struct {
 		IPv4          string `json:"ipv4"`
 		IPv6          string `json:"ipv6"`
-		PreferIPv4    bool   `json:"prefer_ipv4"`
+		PreferIPv4    *bool  `json:"prefer_ipv4"`
 		AutoDetectURL string `json:"auto_detect_url"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
@@ -123,16 +123,11 @@ func (c *ECSConfig) UnmarshalJSON(data []byte) error {
 	c.IPv4 = strings.TrimSpace(aux.IPv4)
 	c.IPv6 = strings.TrimSpace(aux.IPv6)
 	c.AutoDetectURL = strings.TrimSpace(aux.AutoDetectURL)
-	// Second unmarshal to detect absent prefer_ipv4 (config-load only, not hot path
-	// — double scan is acceptable for the negligible cost of config parsing).
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	if _, ok := raw["prefer_ipv4"]; !ok {
+	// Default PreferIPv4 to true when absent from JSON.
+	if aux.PreferIPv4 == nil {
 		c.PreferIPv4 = true
 	} else {
-		c.PreferIPv4 = aux.PreferIPv4
+		c.PreferIPv4 = *aux.PreferIPv4
 	}
 	return nil
 }

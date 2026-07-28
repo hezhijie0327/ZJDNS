@@ -54,7 +54,7 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// RFC 7873: Short server cookie (1-15 bytes) → BADCOOKIE.
 		if cookieOpt != nil && len(cookieOpt.ServerCookie) > 0 && len(cookieOpt.ServerCookie) < edns.DefaultCookieServerLen {
 			log.Debugf("EDNS: short server cookie (%d bytes) from %s, returning BADCOOKIE", len(cookieOpt.ServerCookie), qctx.ClientIP)
-			qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt)
+			qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt, qctx.ECSOpt)
 			return nil
 		}
 
@@ -63,7 +63,7 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			status := m.edns.IsServerCookieValid(qctx.ClientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie)
 			if status == edns.CookieExpired || status == edns.CookieFuture || status == edns.CookieInvalid {
 				log.Debugf("EDNS: bad server cookie (status=%d) from %s, returning BADCOOKIE", status, qctx.ClientIP)
-				qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt)
+				qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt, qctx.ECSOpt)
 				return nil
 			}
 		}
@@ -81,15 +81,13 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	})
 }
 
-func (m *EDNS) buildBadCookieResponse(req *dns.Msg, clientIP net.IP, cookieOpt *edns.CookieOption) *dns.Msg {
+func (m *EDNS) buildBadCookieResponse(req *dns.Msg, clientIP net.IP, cookieOpt *edns.CookieOption, ecsOpt *edns.ECSOption) *dns.Msg {
 	msg := handler.BuildResponseMsg(req)
 	msg.Rcode = dns.RcodeBadCookie
 
 	serverCookie := m.edns.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 	cookieStr := edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
 
-	// ECS parsing on the bad-cookie response path.
-	ecsOpt := m.edns.ParseFromDNS(req)
 	m.edns.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil, false, edns.HasPaddingOption(req), 0)
 	return msg
 }

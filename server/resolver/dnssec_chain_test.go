@@ -235,18 +235,26 @@ func TestLameDelegation_NonAuthoritativeSameZone(t *testing.T) {
 		},
 	}
 
-	if len(msg.Answer) == 0 && !msg.Authoritative {
-		currentDomain := dnsutil.Fqdn(zone)
-		normalizedCurrent := dnsutil.Canonical(currentDomain)
-		for _, rr := range msg.Ns {
-			if ns, ok := rr.(*dns.NS); ok {
-				nsName := dnsutil.Canonical(ns.Hdr.Name)
-				if nsName == normalizedCurrent {
-					t.Log("Correctly identified lame delegation pattern")
-					return
-				}
+	if len(msg.Answer) != 0 {
+		t.Fatal("test message should have empty Answer section")
+	}
+	if msg.Authoritative {
+		t.Fatal("test message should not be authoritative (lame delegation scenario)")
+	}
+
+	currentDomain := dnsutil.Fqdn(zone)
+	normalizedCurrent := dnsutil.Canonical(currentDomain)
+	foundLame := false
+	for _, rr := range msg.Ns {
+		if ns, ok := rr.(*dns.NS); ok {
+			if dnsutil.Canonical(ns.Hdr.Name) == normalizedCurrent {
+				foundLame = true
+				break
 			}
 		}
+	}
+	if !foundLame {
+		t.Error("expected to find NS record with zone name in lame delegation response")
 	}
 }
 
@@ -267,18 +275,26 @@ func TestLameDelegation_AuthoritativeNODATA(t *testing.T) {
 	}
 	msg.Authoritative = true
 
-	if len(msg.Answer) == 0 && msg.Authoritative {
-		currentDomain := dnsutil.Fqdn(zone)
-		normalizedCurrent := dnsutil.Canonical(currentDomain)
-		for _, rr := range msg.Ns {
-			if ns, ok := rr.(*dns.NS); ok {
-				nsName := dnsutil.Canonical(ns.Hdr.Name)
-				if nsName == normalizedCurrent {
-					t.Log("Correctly identified authoritative NODATA (not lame)")
-					return
-				}
+	if len(msg.Answer) != 0 {
+		t.Fatal("test message should have empty Answer section")
+	}
+	if !msg.Authoritative {
+		t.Fatal("test message should be authoritative (NODATA scenario)")
+	}
+
+	currentDomain := dnsutil.Fqdn(zone)
+	normalizedCurrent := dnsutil.Canonical(currentDomain)
+	foundNS := false
+	for _, rr := range msg.Ns {
+		if ns, ok := rr.(*dns.NS); ok {
+			if dnsutil.Canonical(ns.Hdr.Name) == normalizedCurrent {
+				foundNS = true
+				break
 			}
 		}
+	}
+	if !foundNS {
+		t.Error("expected to find NS record with zone name in authoritative NODATA response")
 	}
 }
 

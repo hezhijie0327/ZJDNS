@@ -54,6 +54,15 @@ func (c *QUICConn) isDead() bool {
 	}
 }
 
+// decDialing decrements the in-flight dialing count and removes the key from the
+// dialing map when it reaches zero. Must be called with p.mu held.
+func (p *QUIC) decDialing(key string) {
+	p.dialing[key]--
+	if p.dialing[key] == 0 {
+		delete(p.dialing, key)
+	}
+}
+
 // NewQUIC creates a QUIC with the specified maximum connections.
 func NewQUIC(maxConns int) *QUIC {
 	if maxConns <= 0 {
@@ -68,6 +77,13 @@ func NewQUIC(maxConns int) *QUIC {
 
 // Acquire gets a reusable QUIC connection, dialing a new one if needed.
 func (p *QUIC) Acquire(ctx context.Context, key string, dialFunc func(context.Context, string) (*quic.Conn, error)) (*QUICConn, error) {
+	// Check for context cancellation before acquiring the lock to avoid
+	// a potentially blocking lock acquisition on a cancelled context.
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 	p.mu.Lock()
 	live := p.conns[key][:0]
 	for _, pc := range p.conns[key] {
@@ -92,38 +108,26 @@ func (p *QUIC) Acquire(ctx context.Context, key string, dialFunc func(context.Co
 		conn, err := dialFunc(ctx, key)
 		if err != nil {
 			p.mu.Lock()
-			p.dialing[key]--
-			if p.dialing[key] == 0 {
-				delete(p.dialing, key)
-			}
+			p.decDialing(key)
 			p.mu.Unlock()
 			return nil, fmt.Errorf("client: dial %s: %w", key, err)
 		}
 		pc := &QUICConn{Conn: conn, addr: key}
 		p.mu.Lock()
-		p.dialing[key]--
+		p.decDialing(key)
 		// Pool was shut down while we were dialing — discard the connection.
 		if p.closed {
-			if p.dialing[key] == 0 {
-				delete(p.dialing, key)
-			}
 			p.mu.Unlock()
 			pc.close()
 			return nil, fmt.Errorf("client: pool shut down for %s", key)
 		}
 		if len(p.conns[key]) >= p.maxConns {
-			if p.dialing[key] == 0 {
-				delete(p.dialing, key)
-			}
 			p.mu.Unlock()
 			pc.close()
 			return nil, fmt.Errorf("client: pool filled during dial for %s", key)
 		}
 		p.conns[key] = append(p.conns[key], pc)
 		n := len(p.conns[key])
-		if p.dialing[key] == 0 {
-			delete(p.dialing, key)
-		}
 		p.mu.Unlock()
 		log.Debugf("UPSTREAM: dialed new QUIC connection to %s (pool=%d/%d)", key, n, p.maxConns)
 		return pc, nil
@@ -145,13 +149,15 @@ func (p *QUIC) WarmUp(ctx context.Context, key string, dialFunc func(context.Con
 // to call multiple times.
 func (p *QUIC) Shutdown() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.closed = true
-	for key, conns := range p.conns {
-		for _, pc := range conns {
-			pc.close()
-		}
-		delete(p.conns, key)
+	var all []*QUICConn
+	for _, conns := range p.conns {
+		all = append(all, conns...)
+	}
+	p.conns = make(map[string][]*QUICConn)
+	p.mu.Unlock()
+	for _, pc := range all {
+		pc.close()
 	}
 }
 

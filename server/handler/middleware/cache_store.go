@@ -56,10 +56,9 @@ func (m *CacheStore) Wrap(next handler.QueryHandler) handler.QueryHandler {
 
 func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	qr := qctx.ResolutionResult
-	qd := qctx.Req.Question[0]
-	qname := qd.Header().Name
-	qtype := dns.RRToType(qd)
-	qclass := qd.Header().Class
+	qname := qctx.Qname
+	qtype := qctx.Qtype
+	qclass := qctx.Req.Question[0].Header().Class
 	ecsOpt := qctx.ECSOpt
 	dnssecOK := qctx.ClientRequestedDNSSEC
 	validated := qr.Validated
@@ -145,10 +144,9 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 
 func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 	qr := qctx.ResolutionResult
-	qd := qctx.Req.Question[0]
-	qname := qd.Header().Name
-	qtype := dns.RRToType(qd)
-	qclass := qd.Header().Class
+	qname := qctx.Qname
+	qtype := qctx.Qtype
+	qclass := qctx.Req.Question[0].Header().Class
 	ecsOpt := qctx.ECSOpt
 	dnssecOK := qctx.ClientRequestedDNSSEC
 	queryErr := qr.Err
@@ -204,10 +202,9 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 }
 
 func (m *CacheStore) buildCIDRRefused(qctx *handler.QueryContext) *dns.Msg {
-	qd := qctx.Req.Question[0]
-	qname := qd.Header().Name
-	qtype := dns.RRToType(qd)
-	qclass := qd.Header().Class
+	qname := qctx.Qname
+	qtype := qctx.Qtype
+	qclass := qctx.Req.Question[0].Header().Class
 	ecsOpt := qctx.ECSOpt
 	dnssecOK := qctx.ClientRequestedDNSSEC
 

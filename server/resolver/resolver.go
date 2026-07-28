@@ -11,6 +11,7 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
+	"zjdns/internal/log"
 	"zjdns/server/defense"
 	"zjdns/server/resolver/dnssec"
 	"zjdns/server/upstream"
@@ -154,6 +155,18 @@ func (u *upstreamSet) store(s []*config.UpstreamServer) {
 func New(cfg *Config) *Resolver {
 	if cfg == nil {
 		return nil
+	}
+	if cfg.EDNS == nil {
+		log.Warnf("RESOLVER: EDNS handler is nil — resolver will panic on first query")
+	}
+	if cfg.BuildMsg == nil {
+		log.Warnf("RESOLVER: BuildMsg function is nil — resolver will panic on first query")
+	}
+	if cfg.QueryClient == nil {
+		log.Warnf("RESOLVER: QueryClient is nil — resolver will panic on first query")
+	}
+	if cfg.Cache == nil {
+		log.Warnf("RESOLVER: Cache is nil — resolver will panic on first query")
 	}
 	r := &Resolver{
 		queryClient:   cfg.QueryClient,

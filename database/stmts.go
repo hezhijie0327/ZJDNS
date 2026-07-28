@@ -53,6 +53,7 @@ func (db *DB) prepareStatements() error {
 		return err
 	}
 
+	// Must match zone.maxWildcardLabels (16).
 	db.StmtZoneWildcard, err = db.SQ.Prepare(
 		`SELECT qname, rcode, answer, authority, additional, match_tags
 		 FROM zone_entries WHERE is_wildcard = 1 AND qname IN (
@@ -64,8 +65,7 @@ func (db *DB) prepareStatements() error {
 		return err
 	}
 
-	// ipLatencyQuery uses 64 fixed placeholders so SQLite reuses the
-	// compiled query plan across all lookupIPLatencies calls.
+	// Must match cache.maxLatencyLookupIPs (64).
 	db.StmtIPLatency, err = db.SQ.Prepare(
 		`SELECT rdata_ip, latency_ms FROM ip_latency WHERE rdata_ip IN (` +
 			`?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,` +

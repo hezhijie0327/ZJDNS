@@ -17,6 +17,13 @@ import (
 // Dependencies bundles every dependency needed by the middleware chain.
 // It is constructed once at startup in server.New() and passed to
 // AssembleChain, which distributes the individual fields to each middleware.
+//
+// Required fields (must be non-nil):
+//   - Config, Cache, EDNS, Resolver
+//
+// Optional fields (nil-checked before use):
+//   - ZoneEvaluator, TagMatcher, Prober, PendingReqs, PendingRefrs,
+//     DNS64, Closed, RefreshGroup, RefreshCtx, Ctx, PrefetchCooldown
 type Dependencies struct {
 	// Core
 	Config        *config.ServerConfig
@@ -58,10 +65,11 @@ type Dependencies struct {
 //	DNS64         — AAAA synthesis
 //	Resolution    — terminal: upstream / recursive resolution
 func AssembleChain(deps *Dependencies) handler.QueryHandler {
-	// Innermost: no-op terminal.  Resolution is the real terminal —
-	// it ignores next and never calls this stub.
+	// Innermost: no-op terminal stub — not reached in normal operation
+	// (Resolution is always configured).  Resolution is the real terminal
+	// — it ignores next and never calls this stub.
 	var h handler.QueryHandler = handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
-		log.Debugf("QUERY: terminal handler reached — no resolution middleware configured")
+		log.Debugf("QUERY: terminal stub reached — not reached in normal operation (Resolution is always configured)")
 		qctx.Res = handler.BuildResponseMsg(qctx.Req)
 		qctx.Res.Rcode = dns.RcodeServerFailure
 		return nil

@@ -150,6 +150,9 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 		trackingID = uint16(c.nextID.Add(1) & dnsIDMask)
 	}
 	if trackingID != origTrackingID {
+		// Safety assertion: writeBuf was sized as DNSFramePrefixLen+len(msgData)
+		// and any valid DNS message after Pack() has at least 12 bytes (the DNS
+		// header), so this condition is never reached in practice.
 		if len(writeBuf) < zdnsutil.DNSFramePrefixLen+2 {
 			return nil, fmt.Errorf("client: writeBuf too small for trackingID update: %d bytes", len(writeBuf))
 		}

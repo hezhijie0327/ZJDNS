@@ -190,9 +190,8 @@ type LatencyProbeStep struct {
 // DNSCryptV2Prefix is the provider name prefix for DNSCrypt v2 certificates.
 const DNSCryptV2Prefix = "2.dnscrypt-cert."
 
-// IsEnabled reports whether DNSCrypt identity keys are configured.  Keys are
-// auto-generated when empty, so this is always true when the dnscrypt cert
-// block is present in config.
+// IsEnabled reports whether explicit DNSCrypt identity keys are provided in
+// config. Returns false when keys are empty (auto-generation applies at startup).
 func (d *DNSCryptCertificate) IsEnabled() bool {
 	return d.PublicKey != "" && d.PrivateKey != ""
 }

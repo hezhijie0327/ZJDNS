@@ -103,7 +103,8 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 	}
 
 	idleTimeout := config.DefaultDTLSIdleTimeout
-	buf := make([]byte, pool.UDPBufferSize)
+	buf := pool.DefaultBuffer.Get()
+	defer pool.DefaultBuffer.Put(buf)
 
 	for {
 		// Set read deadline for idle timeout (RFC 8094 §3.3).  When the

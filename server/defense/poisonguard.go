@@ -132,13 +132,11 @@ func (d *Detector) classify(zone, name string, rrtype uint16) Verdict {
 
 // classifyRoot validates responses from root servers.  Legitimate root
 // responses only contain:
-//   - Glue A/AAAA records for root-servers.net
+//   - Any record type for root-servers.net (SOA, RRSIG, NSEC, A, AAAA, etc.)
 //   - NS/DS records for TLDs (e.g. "com", "cn")
-//
-// Everything else (A/AAAA for non-TLDs, NS/DS for non-TLDs) is hijacking.
 func (d *Detector) classifyRoot(name string, rrtype uint16) Verdict {
 	// Glue records for root server hostnames.
-	if d.isRootServerGlue(name, rrtype) {
+	if d.isRootServerDomain(name) {
 		return VerdictClean
 	}
 
@@ -163,10 +161,7 @@ func (d *Detector) classifyTLD(zone, name string) Verdict {
 	return VerdictClean
 }
 
-func (d *Detector) isRootServerGlue(domain string, rrtype uint16) bool {
-	if rrtype != dns.TypeA && rrtype != dns.TypeAAAA {
-		return false
-	}
+func (d *Detector) isRootServerDomain(domain string) bool {
 	return dnsutil.IsBelow(dnsutil.Fqdn(rootServersDomain), dnsutil.Fqdn(domain))
 }
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
@@ -20,6 +21,7 @@ import (
 
 // Client executes encrypted DNS queries over the DNSCrypt v2 protocol.
 type Client struct {
+	cacheMu  sync.Mutex
 	cache    *lrumap.Map[string, *State]
 	getProxy func(*config.UpstreamServer) *socks5.Dialer
 }
@@ -100,8 +102,8 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 
 	var respPayload []byte
 	if useTCP {
-		if err := dnscryptcrypto.WritePrefixed(encrypted, conn); err != nil {
-			return nil, fmt.Errorf("writing dnscrypt TCP query: %w", err)
+		if writeErr := dnscryptcrypto.WritePrefixed(encrypted, conn); writeErr != nil {
+			return nil, fmt.Errorf("writing dnscrypt TCP query: %w", writeErr)
 		}
 		respPayload, err = dnscryptcrypto.ReadPrefixed(conn)
 		if err != nil {
@@ -212,5 +214,7 @@ func (c *Client) Close() {
 	if c == nil {
 		return
 	}
+	c.cacheMu.Lock()
 	c.cache = nil
+	c.cacheMu.Unlock()
 }

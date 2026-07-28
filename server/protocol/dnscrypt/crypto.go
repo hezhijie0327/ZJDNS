@@ -79,7 +79,10 @@ func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *d
 		if _, randErr := rand.Read(nonce[:]); randErr != nil {
 			return nil, fmt.Errorf("generating ticket nonce: %w", randErr)
 		}
-		sealed := dnscryptcrypto.PQSealTicket(s.ticketKey, s.ticketKeyID, nonce, plaintext)
+		sealed, err := dnscryptcrypto.PQSealTicket(s.ticketKey, s.ticketKeyID, nonce, plaintext)
+		if err != nil {
+			return nil, fmt.Errorf("sealing PQ ticket: %w", err)
+		}
 		r.PQControl = dnscryptcrypto.PQBuildControlBlock(sealed, uint32(config.DefaultDNSCryptPQTicketLifetime/time.Second))
 		log.Debugf("DNSCRYPT: PQ ticket issued (expires in %ds)", config.DefaultDNSCryptPQTicketLifetime/time.Second)
 	} else {

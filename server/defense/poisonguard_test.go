@@ -300,19 +300,16 @@ func TestIsTLD_Simple(t *testing.T) {
 	}
 }
 
-func TestIsRootServerGlue(t *testing.T) {
+func TestIsRootServerDomain(t *testing.T) {
 	d := newDetector()
-	if !d.isRootServerGlue("a.root-servers.net", dns.TypeA) {
-		t.Fatal("root server A glue should be recognized")
+	if !d.isRootServerDomain("a.root-servers.net") {
+		t.Fatal("root server domain should be recognized")
 	}
-	if !d.isRootServerGlue("a.root-servers.net", dns.TypeAAAA) {
-		t.Fatal("root server AAAA glue should be recognized")
+	if !d.isRootServerDomain("b.root-servers.net") {
+		t.Fatal("any root-servers.net domain should be recognized")
 	}
-	if d.isRootServerGlue("evil.com", dns.TypeA) {
-		t.Fatal("non-root-server name should not be root glue")
-	}
-	if d.isRootServerGlue("a.root-servers.net", dns.TypeCNAME) {
-		t.Fatal("non-A/AAAA should not be root glue")
+	if d.isRootServerDomain("evil.com") {
+		t.Fatal("non-root-server name should not match root domain check")
 	}
 }
 

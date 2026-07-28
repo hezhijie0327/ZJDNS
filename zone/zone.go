@@ -87,9 +87,8 @@ var wildcardArgsPool = sync.Pool{New: func() any { a := make([]any, maxWildcardL
 
 // New creates an Evaluator backed by the given database.
 // The caller is responsible for opening the database via database.Open()
-// before calling New.
-// New creates a zone Evaluator backed by the given database.
-// Panics if db is nil (caller must provide a valid database handle).
+// before calling New. Panics if db is nil (caller must provide a valid
+// database handle).
 func New(db *database.DB) *Evaluator {
 	if db == nil {
 		panic("zone: nil database")

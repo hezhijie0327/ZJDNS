@@ -8,7 +8,9 @@ import (
 
 func testEngine(t *testing.T, rules []config.RuleSet) *Engine {
 	t.Helper()
+	origVersion := database.Version
 	database.Version = "3.2.12"
+	t.Cleanup(func() { database.Version = origVersion })
 	db, err := database.Open(":memory:", 100, database.Options{MMapSizeMB: 1, CacheSizeMB: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -132,6 +134,8 @@ func TestTLDPlusOne(t *testing.T) {
 		{"google.com.", "google.com"},
 		{"com.", "com"},
 		{"www.sub.example.com.", "example.com"},
+		// Note: multi-part TLDs (.co.uk, .com.au, etc.) are not handled —
+		// see tldPlusOne godoc for rationale.
 	}
 	for _, tt := range tests {
 		if got := tldPlusOne(tt.in); got != tt.want {

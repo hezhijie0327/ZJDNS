@@ -73,6 +73,7 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 			// but the spec requires a fresh connection. This works because quic-go
 			// falls back to a full handshake on the existing conn when 0-RTT is
 			// rejected, but a spec-compliant implementation would dial a new one.
+			// resetQUICConfig clears the 0-RTT state to prevent further rejections.
 			if errors.Is(err, quic.Err0RTTRejected) {
 				c.resetQUICConfig("doq:" + key)
 				response, err = c.doQUICQuery(ctx, pc.Conn, msg, c.timeout)

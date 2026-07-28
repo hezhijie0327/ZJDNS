@@ -114,22 +114,19 @@ func shouldRetryHTTP(err error) bool {
 }
 
 func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxyURL string, tlsConfig *eTLS.Config) *http.Client {
+	// Extract the transport once — used in both non-cached and cached paths.
+	tr, ok := c.dohClient.Transport.(*eHTTP.Transport)
+	if !ok {
+		return &http.Client{Timeout: c.dohClient.Timeout, Transport: &eHTTP.CompatableTransport{}}
+	}
+
 	if c.dohTransports == nil {
-		tr, ok := c.dohClient.Transport.(*eHTTP.Transport)
-		if !ok {
-			return &http.Client{Timeout: c.dohClient.Timeout, Transport: &eHTTP.CompatableTransport{}}
-		}
 		return &http.Client{Timeout: c.dohClient.Timeout, Transport: &eHTTP.CompatableTransport{Transport: tr}}
 	}
 
 	key := transportKey(host, serverName, skipVerify, proxyURL)
 	if client, ok := c.dohTransports.Get(key); ok {
 		return client
-	}
-
-	tr, ok := c.dohClient.Transport.(*eHTTP.Transport)
-	if !ok {
-		return &http.Client{Timeout: c.dohClient.Timeout, Transport: &eHTTP.CompatableTransport{}}
 	}
 	transport := tr.Clone()
 	tlsCfg := tlsConfig.Clone()

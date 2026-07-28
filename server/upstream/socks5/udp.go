@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	zdnsutil "zjdns/internal/dnsutil"
 )
 
 // ---------------------------------------------------------------------------
@@ -177,11 +178,13 @@ func (d *Dialer) establishUDPRelay(ctx context.Context) error {
 	// fires. Using a select prevents the goroutine from leaking when the Dialer
 	// is garbage-collected without an explicit Close call.
 	go func() {
+		defer zdnsutil.HandlePanic("SOCKS5 UDP relay")
 		done := make(chan struct{})
 		go func() {
+			defer zdnsutil.HandlePanic("SOCKS5 UDP relay")
 			var buf [1]byte
 			_, _ = ctrlConn.Read(buf[:])
-			close(done)
+			defer close(done)
 		}()
 		select {
 		case <-done:
@@ -331,12 +334,12 @@ func (c *socks5UDPConn) Read(p []byte) (n int, err error) {
 
 	nr, err := c.conn.Read((*buf))
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("socks5: read: %w", err)
 	}
 
 	dg, _, err := parseDatagram((*buf)[:nr])
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("socks5: parse datagram: %w", err)
 	}
 	if len(p) < len(dg.data) {
 		return 0, io.ErrShortBuffer

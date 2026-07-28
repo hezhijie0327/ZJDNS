@@ -45,7 +45,7 @@ const (
 
 	DefaultTTL         = 10
 	DefaultStaleTTL    = 30
-	DefaultStaleMaxAge = 3 * 86400 // RFC 8767 §6: stale retention window (1–3 days recommended)
+	DefaultStaleMaxAge = 3 * 86400 // seconds — RFC 8767 §6: stale retention window (1–3 days recommended)
 
 	// DefaultMaxCacheableTTL caps the TTL of incoming records per RFC 8767 §4.
 	DefaultMaxCacheableTTL = 7 * 86400 // RFC 8767 §4: SHOULD cap at 604800 seconds (7 days)

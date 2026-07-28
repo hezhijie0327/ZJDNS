@@ -93,7 +93,7 @@ func TestResolveBindAddrs_SkipsOccupied(t *testing.T) {
 
 	addrs, err := ResolveBindAddrs("tcp", port)
 	if err != nil {
-		return // only loopback exists, all occupied
+		t.Skipf("no free addresses: %v", err)
 	}
 	for _, addr := range addrs {
 		if addr == "127.0.0.1:"+port {

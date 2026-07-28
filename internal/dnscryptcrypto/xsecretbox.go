@@ -53,12 +53,12 @@ func XchachaSharedKey(secretKey, publicKey [x25519.Size]byte) (sharedKey [Xchach
 // xchachaSeal encrypts and authenticates message using XChaCha20-Poly1305,
 // appending the result to out.  nonce must be XchachaNonceSize bytes long.
 // key must be XchachaKeySize bytes long.
-func XchachaSeal(out, nonce, message, key []byte) (res []byte) {
+func XchachaSeal(out, nonce, message, key []byte) (res []byte, err error) {
 	if len(nonce) != XchachaNonceSize {
-		panic("unsupported nonce size")
+		return nil, errors.New("dnscrypt: unsupported nonce size")
 	}
 	if len(key) != XchachaKeySize {
-		panic("unsupported key size")
+		return nil, errors.New("dnscrypt: unsupported key size")
 	}
 
 	var firstBlock [XchachaBlockSize]byte
@@ -92,17 +92,17 @@ func XchachaSeal(out, nonce, message, key []byte) (res []byte) {
 	hash.Sum(tag[:0])
 	copy(tagOut, tag[:])
 
-	return res
+	return res, nil
 }
 
 // xchachaOpen decrypts and authenticates a box using XChaCha20-Poly1305.
 // nonce must be XchachaNonceSize bytes, key must be XchachaKeySize bytes.
 func XchachaOpen(out, nonce, ciphertext, key []byte) (res []byte, err error) {
 	if len(nonce) != XchachaNonceSize {
-		panic("unsupported nonce size")
+		return nil, errors.New("dnscrypt: unsupported nonce size")
 	}
 	if len(key) != XchachaKeySize {
-		panic("unsupported key size")
+		return nil, errors.New("dnscrypt: unsupported key size")
 	}
 	if len(ciphertext) < poly1305.TagSize {
 		return nil, errCipherTextTooShort

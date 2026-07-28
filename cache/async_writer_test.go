@@ -119,16 +119,33 @@ func TestAsyncStatsWriter_NilSafety(t *testing.T) {
 	w.Close()
 }
 
-// NOTE(L8): buffer-size-1 test may race with goroutine consumption. Run with -count=5.
 func TestAsyncStatsWriter_ChannelFullDrops(t *testing.T) {
-	w, db := testWriter(t, 1) // buffer of 1 — second record drops immediately
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
 
-	// Fill the buffer.
-	w.Record(&RequestRecord{
+	// Create writer without starting the background goroutine so we can
+	// pre-fill the buffer and verify drop behavior deterministically.
+	w := &AsyncStatsWriter{
+		ch:       make(chan RequestRecord, 1),
+		flushSig: make(chan chan struct{}),
+		db:       db,
+		done:     make(chan struct{}),
+	}
+
+	// Pre-fill the buffer before the goroutine can consume.
+	w.ch <- RequestRecord{
 		Qname: "first.example.com.", Qtype: 1, Qclass: 1,
 		Protocol: "udp", Result: "hit", Rcode: 0,
-	})
-	// This should drop (channel full).
+	}
+
+	// Start the background goroutine now. The buffer is full, so the
+	// next Record call should drop.
+	go w.run()
+	t.Cleanup(func() { w.Close(); _ = db.Close() })
+
+	// Buffer is full — this record must be dropped.
 	w.Record(&RequestRecord{
 		Qname: "dropped.example.com.", Qtype: 1, Qclass: 1,
 		Protocol: "udp", Result: "error", Rcode: 2,
@@ -136,9 +153,9 @@ func TestAsyncStatsWriter_ChannelFullDrops(t *testing.T) {
 
 	w.Flush()
 
-	// Only the first record should be present.
+	// Only the first (pre-filled) record should be present.
 	var hitCount int64
-	err := db.SQ.QueryRow(
+	err = db.SQ.QueryRow(
 		`SELECT COALESCE(SUM(query_count), 0) FROM query_stats WHERE result='hit'`,
 	).Scan(&hitCount)
 	if err != nil {

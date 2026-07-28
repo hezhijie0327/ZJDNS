@@ -145,7 +145,10 @@ func (r *EncryptedResponse) Encrypt(
 
 	switch r.ESVersion {
 	case XChacha20Poly1305, XWingPQ:
-		response = XchachaSeal(response, r.Nonce[:], padded, sharedKey[:])
+		response, err = XchachaSeal(response, r.Nonce[:], padded, sharedKey[:])
+		if err != nil {
+			return nil, err
+		}
 	default:
 		return nil, ErrESVersion
 	}
@@ -199,7 +202,10 @@ func (r *EncryptedResponse) encryptPQResponse(
 			if err == nil {
 				switch r.ESVersion {
 				case XWingPQ:
-					response = XchachaSeal(response, r.Nonce[:], padded, sharedKey[:])
+					response, err = XchachaSeal(response, r.Nonce[:], padded, sharedKey[:])
+					if err != nil {
+						return nil, err
+					}
 					return response, nil
 				default:
 					return nil, ErrESVersion
@@ -218,7 +224,10 @@ func (r *EncryptedResponse) encryptPQResponse(
 					r.PQControl = nil // already withheld
 					switch r.ESVersion {
 					case XWingPQ:
-						response = XchachaSeal(response, r.Nonce[:], padded, sharedKey[:])
+						response, err = XchachaSeal(response, r.Nonce[:], padded, sharedKey[:])
+						if err != nil {
+							return nil, err
+						}
 						return response, nil
 					default:
 						return nil, ErrESVersion
@@ -238,7 +247,11 @@ func (r *EncryptedResponse) encryptPQResponse(
 	padded := Pad(payload, respMinLen)
 	switch r.ESVersion {
 	case XWingPQ:
-		response = XchachaSeal(response, r.Nonce[:], padded, sharedKey[:])
+		sealed, sealErr := XchachaSeal(response, r.Nonce[:], padded, sharedKey[:])
+		if sealErr != nil {
+			return nil, sealErr
+		}
+		response = sealed
 	default:
 		return nil, ErrESVersion
 	}
@@ -355,7 +368,10 @@ func (q *EncryptedQuery) Encrypt(
 
 	switch q.ESVersion {
 	case XChacha20Poly1305:
-		query = XchachaSeal(query, clientNonce[:], padded, sharedKey[:])
+		query, err = XchachaSeal(query, clientNonce[:], padded, sharedKey[:])
+		if err != nil {
+			return nil, Nonce{}, err
+		}
 	default:
 		return nil, Nonce{}, ErrESVersion
 	}
@@ -384,7 +400,11 @@ func (q *EncryptedQuery) EncryptPQ(
 			floor := max(q.MinQueryLen, PQMinPaddingResumed)
 			padded = PQPad(packet, floor)
 		}
-		ct := XchachaSeal(nil, clientNonce[:], padded, sharedKey[:])
+		var ct []byte
+		ct, err = XchachaSeal(nil, clientNonce[:], padded, sharedKey[:])
+		if err != nil {
+			return nil, Nonce{}, err
+		}
 		query = append(query, PQResumeMagic[:]...)
 		var tl [2]byte
 		binary.BigEndian.PutUint16(tl[:], uint16(len(q.PQTicket))) //nolint:gosec // G115: ticket bounded
@@ -400,7 +420,11 @@ func (q *EncryptedQuery) EncryptPQ(
 		return nil, Nonce{}, ErrInvalidQuery
 	}
 	padded := PQPad(packet, PQMinPaddingInitial)
-	ct := XchachaSeal(nil, clientNonce[:], padded, sharedKey[:])
+	var ct []byte
+	ct, err = XchachaSeal(nil, clientNonce[:], padded, sharedKey[:])
+	if err != nil {
+		return nil, Nonce{}, err
+	}
 	query = append(query, q.ClientMagic[:]...)
 	query = append(query, q.PQCiphertext...)
 	query = append(query, clientNonce[:NonceSize/2]...)

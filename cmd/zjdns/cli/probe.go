@@ -16,7 +16,7 @@ import (
 	eTLS "gitlab.com/go-extension/tls"
 )
 
-// Probe timeout and count constants.
+// Probe constants.
 const (
 	probeTLSHandshakeTimeout = 5 * time.Second
 	probeDefaultReadTimeout  = 5 * time.Second
@@ -156,7 +156,7 @@ func isTimeoutOrEOF(err error) bool {
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
-	return strings.Contains(err.Error(), "EOF") || strings.Contains(err.Error(), "broken pipe")
+	return errors.Is(err, io.EOF) || strings.Contains(err.Error(), "broken pipe")
 }
 
 // probePipeline tests whether the server supports RFC 7766 query pipelining.
@@ -194,16 +194,14 @@ func probePipeline(addr string) error {
 	fmt.Println()
 
 	// Read responses — they may arrive out of order.
-	// NOTE: OOO detection uses sequential ID-to-index mapping.  The loop
-	// reads sequentially from conn so responses normally arrive in the order
-	// they were sent. Out-of-order delivery manifests if readDNSMsg reads a
-	// response for a later query while the conn has buffered an earlier
-	// one — unlikely in practice. Use a map[key]=bool or a bitmap to detect
-	// OOO by ID presence instead of order.
+	// OOO detection uses a presence bitmap: track which message IDs have
+	// been received. Duplicate IDs or IDs outside the expected range
+	// indicate out-of-order or anomalous delivery.
 	ooo := false
 	received := 0
+	seen := make([]bool, probePipelineNumQueries)
 	start := time.Now()
-	for i := range domains {
+	for range domains {
 		_ = conn.SetReadDeadline(time.Now().Add(probePipelineReadTimeout))
 		resp, err := readDNSMsg(conn)
 		if err != nil {
@@ -215,14 +213,15 @@ func probePipeline(addr string) error {
 				fmt.Println("   (Servers that support pipelining process all queries before responding)")
 				return nil
 			}
-			return fmt.Errorf("read response #%d: %w", i, err)
+			return fmt.Errorf("read response: %w", err)
 		}
 		received++
 		latency := time.Since(start).Milliseconds()
 		fmt.Printf("  ← response #%d (%dms) rcode=%s\n", resp.ID, latency, dns.RcodeToString[resp.Rcode])
-		if resp.ID != uint16(i) {
+		if resp.ID >= uint16(probePipelineNumQueries) || seen[resp.ID] {
 			ooo = true
 		}
+		seen[resp.ID] = true
 	}
 
 	fmt.Println()

@@ -96,7 +96,10 @@ func (c *Client) state(
 	providerName = dnsutil.Fqdn(providerName)
 	cacheKey := addr + "|" + providerName
 
-	if state, ok := c.cache.Get(cacheKey); ok && time.Now().Before(state.expires) {
+	c.cacheMu.Lock()
+	state, ok := c.cache.Get(cacheKey)
+	c.cacheMu.Unlock()
+	if ok && time.Now().Before(state.expires) {
 		log.Debugf("UPSTREAM: DNSCrypt cert cache hit for %s", cacheKey)
 		return state, nil
 	}
@@ -194,10 +197,13 @@ func (c *Client) buildState(
 	}
 
 	cacheKey := addr + "|" + providerName
+	c.cacheMu.Lock()
 	if c.cache == nil {
+		c.cacheMu.Unlock()
 		return nil, errors.New("dnscrypt client closed")
 	}
 	c.cache.Set(cacheKey, state)
+	c.cacheMu.Unlock()
 
 	return state, nil
 }
@@ -228,7 +234,7 @@ func parseCert(
 		}
 		certStr := strings.Join(txt.Txt, "")
 		cert := &dnscryptcrypto.Certificate{}
-		if err := cert.UnmarshalBinary(dnscryptcrypto.UnpackTxtString(certStr)); err != nil {
+		if unmarshalErr := cert.UnmarshalBinary(dnscryptcrypto.UnpackTxtString(certStr)); unmarshalErr != nil {
 			continue
 		}
 		if !cert.IsDateValid() {

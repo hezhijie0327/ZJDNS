@@ -13,18 +13,24 @@ const (
 func (db *DB) migrate() error {
 	mmapSize := db.mmapSizeMB * 1024 * 1024
 	cacheSize := -db.cacheSizeMB * 1024
-	pragmaSQL := fmt.Sprintf(
-		"PRAGMA page_size = %d;"+
-			" PRAGMA cache_size = %d;"+
-			" PRAGMA mmap_size = %d;"+
-			" PRAGMA temp_store = MEMORY;"+
-			" PRAGMA foreign_keys = ON;"+
-			" PRAGMA wal_autocheckpoint = %d;"+
-			" PRAGMA journal_size_limit = %d;",
-		pageSize, cacheSize, mmapSize, walAutoCheckpointPages, mmapSize,
-	)
-	if _, err := db.SQ.Exec(pragmaSQL); err != nil {
-		log.Warnf("DB: pragma failed (non-fatal): %v", err)
+
+	// Execute each PRAGMA separately so a single failure is isolated and
+	// does not silently skip subsequent PRAGMAs.
+	for _, p := range []struct {
+		sql  string
+		name string
+	}{
+		{fmt.Sprintf("PRAGMA page_size = %d", pageSize), "page_size"},
+		{fmt.Sprintf("PRAGMA cache_size = %d", cacheSize), "cache_size"},
+		{fmt.Sprintf("PRAGMA mmap_size = %d", mmapSize), "mmap_size"},
+		{"PRAGMA temp_store = MEMORY", "temp_store"},
+		{"PRAGMA foreign_keys = ON", "foreign_keys"},
+		{fmt.Sprintf("PRAGMA wal_autocheckpoint = %d", walAutoCheckpointPages), "wal_autocheckpoint"},
+		{fmt.Sprintf("PRAGMA journal_size_limit = %d", mmapSize), "journal_size_limit"},
+	} {
+		if _, err := db.SQ.Exec(p.sql); err != nil {
+			log.Warnf("DB: PRAGMA %s failed (non-fatal): %v", p.name, err)
+		}
 	}
 
 	//nolint:gosec // G202: DDL migration with constant schema version

@@ -91,7 +91,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		fmt.Fprintf(os.Stderr, "  %s --version                    # Show version information\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --generate-config            # Generate example config\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --generate-config --dnscrypt --provider <name> [--addr <addr>]\n", fs.Name())
-		fmt.Fprintf(os.Stderr, "  %s --sql <db> <query> --rw       # Run read-write SQL (--rw before args)\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s --rw --sql <db> <query>        # Run read-write SQL (--rw MUST precede positional args)\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --sql <db> <query>            # Run read-only SQL query\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --dnsstamp --decode <stamp>  # Decode an sdns:// stamp to upstream JSON\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --dnsstamp --encode --proto <type> --stamp-addr <addr> [--provider-name <name>] [--public-key <hex>] [--path <path>] [--props <n>]\n", fs.Name())
