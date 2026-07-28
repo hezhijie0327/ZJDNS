@@ -128,6 +128,7 @@ func (s *Server) handleUDPPacket(ctx context.Context, b []byte, addr *net.UDPAdd
 		// be larger than the request.  If it is, set the TC flag to prompt the
 		// client to retry over TCP.
 		if len(reply) > len(b) {
+			origLen := len(reply)
 			truncated := &dns.Msg{}
 			truncated.Data = reply
 			if unpackErr := truncated.Unpack(); unpackErr == nil {
@@ -136,7 +137,7 @@ func (s *Server) handleUDPPacket(ctx context.Context, b []byte, addr *net.UDPAdd
 					reply = truncated.Data
 				}
 			}
-			log.Debugf("DNSCRYPT: UDP cert response (%d bytes) exceeds request (%d bytes) — returning TC", len(reply), len(b))
+			log.Debugf("DNSCRYPT: UDP cert response (%d bytes) exceeds request (%d bytes) — returning TC", origLen, len(b))
 		}
 		if _, err := udpConn.WriteToUDP(reply, addr); err != nil {
 			log.Debugf("DNSCRYPT: UDP write error to %s: %v", addr, err)

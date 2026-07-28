@@ -136,7 +136,7 @@ type UpstreamServer struct {
 	Proxy          string   `json:"proxy,omitzero"`
 	PublicKey      string   `json:"public_key,omitzero"`
 	PQDNSCrypt     *bool    `json:"pqdnscrypt,omitzero"`     // prefer PQ DNSCrypt certs (default true)
-	EphemeralKeys  bool     `json:"ephemeral_keys,omitzero"` // per-query X25519 keys for forward secrecy
+	EphemeralKeys  *bool    `json:"ephemeral_keys,omitzero"` // per-query X25519 keys for forward secrecy (default true)
 	Poisonguard    bool     `json:"poisonguard,omitzero"`
 	Spoofguard     bool     `json:"spoofguard,omitzero"`
 	Splitguard     bool     `json:"splitguard,omitzero"`

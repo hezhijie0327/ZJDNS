@@ -12,9 +12,15 @@ import (
 )
 
 // FetchCert sends a plain DNS query to addr and returns the unpacked response.
-// UDP is tried first; falls back to TCP on error (firewall blocking UDP, NAT
-// dropping fragments) or truncation per §10.3 of draft-denis-dprive-dnscrypt-10.
-func FetchCert(ctx context.Context, addr string, query []byte) (*dns.Msg, error) {
+// When preferTCP is true, the query goes directly over TCP — matching
+// dnscrypt-proxy's force_tcp behaviour.  Otherwise UDP is tried first; falls
+// back to TCP on error (firewall blocking UDP, NAT dropping fragments) or
+// truncation per §10.3 of draft-denis-dprive-dnscrypt-10.
+func FetchCert(ctx context.Context, addr string, query []byte, preferTCP bool) (*dns.Msg, error) {
+	if preferTCP {
+		return fetchCertOverTCP(ctx, addr, query)
+	}
+
 	resp, err := fetchCertOverUDP(ctx, addr, query)
 
 	// Fast path: UDP succeeded without truncation.

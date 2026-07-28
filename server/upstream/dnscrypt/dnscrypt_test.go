@@ -220,7 +220,7 @@ func TestDNSCryptCertificateHandshake(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	resp, err := FetchCert(ctx, addr, msg.Data)
+	resp, err := FetchCert(ctx, addr, msg.Data, false)
 	if err != nil {
 		t.Fatalf("FetchCert: %v", err)
 	}

@@ -47,7 +47,7 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 		return nil, fmt.Errorf("resolving dnscrypt stamp: %w", err)
 	}
 
-	state, err := c.state(ctx, stampAddr, providerName, publicKey, server)
+	state, err := c.state(ctx, stampAddr, providerName, publicKey, server, useTCP)
 	if err != nil {
 		return nil, fmt.Errorf("dnscrypt resolver state: %w", err)
 	}
@@ -201,7 +201,7 @@ func (c *Client) WarmUp(ctx context.Context, server *config.UpstreamServer) {
 		log.Debugf("UPSTREAM: DNSCrypt WarmUp failed for %s: %v", server.Address, err)
 		return
 	}
-	_, _ = c.state(ctx, addr, providerName, publicKey, server)
+	_, _ = c.state(ctx, addr, providerName, publicKey, server, server.Protocol == config.ProtoDNSCryptTCP)
 }
 
 // proxyDialer returns a cached SOCKS5Dialer for the server's proxy URL,

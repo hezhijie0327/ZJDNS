@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.7.15-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.7.16-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -123,6 +123,7 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 | `proxy` | string | SOCKS5 代理：`socks5://[user:pass@]host:port` |
 | `public_key` | string | DNSCrypt 公钥（hex） |
 | `pqdnscrypt` | bool | 优先使用后量子证书（默认 `true`） |
+| `ephemeral_keys` | bool | 每查询新 X25519 密钥对，前向安全（默认 `true`） |
 | `poisonguard` | bool | 递归越权检测 |
 | `spoofguard` | bool | UDP 多读防欺骗 |
 | `splitguard` | bool | TCP 分段防 RST |

@@ -510,7 +510,8 @@ func (s *Server) logServer(role string, server *config.UpstreamServer) {
 		protocol = "UDP"
 	}
 	info := fmt.Sprintf("%s (%s)", server.Address, protocol)
-	if server.SkipTLSVerify && zdnsutil.IsSecureProtocol(strings.ToLower(server.Protocol)) {
+	if server.SkipTLSVerify && zdnsutil.IsSecureProtocol(strings.ToLower(server.Protocol)) &&
+		server.Protocol != config.ProtoDNSCrypt && server.Protocol != config.ProtoDNSCryptTCP {
 		info += " [Skip TLS verification]"
 	}
 	if len(server.Match) > 0 {

@@ -186,9 +186,7 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 				}
 			}
 		}
-		if zdnsutil.IsSecureProtocol(protocol) && server.ServerName == "" && !strings.HasPrefix(server.Address, "sdns://") {
-			return fmt.Errorf("upstream server %d using %s requires server_name", i, server.Protocol)
-		}
+		// DNSCrypt-specific checks for stamp-free configs.
 		if (protocol == ProtoDNSCrypt || protocol == ProtoDNSCryptTCP) && !strings.HasPrefix(server.Address, "sdns://") {
 			if server.ServerName == "" {
 				return fmt.Errorf("upstream server %d using dnscrypt requires server_name (provider name)", i)
@@ -198,9 +196,16 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 			}
 		}
 
-		// Validate privacy profile for encrypted protocols (RFC 8310 §5-6).
+		// Generic server_name requirement for encrypted transports.
+		if zdnsutil.IsSecureProtocol(protocol) && server.ServerName == "" && !strings.HasPrefix(server.Address, "sdns://") {
+			return fmt.Errorf("upstream server %d using %s requires server_name", i, server.Protocol)
+		}
+
+		// Validate privacy profile for TLS-based protocols.
 		// Strict mode (default) rejects skip_tls_verify; opportunistic allows it.
-		if zdnsutil.IsSecureProtocol(protocol) && server.PrivacyProfile == PrivacyProfileStrict && server.SkipTLSVerify {
+		// DNSCrypt has its own key infrastructure and doesn't use TLS certificates.
+		if zdnsutil.IsSecureProtocol(protocol) && server.PrivacyProfile == PrivacyProfileStrict && server.SkipTLSVerify &&
+			protocol != ProtoDNSCrypt && protocol != ProtoDNSCryptTCP {
 			return fmt.Errorf("upstream server %d: privacy_profile=strict requires skip_tls_verify=false", i)
 		}
 

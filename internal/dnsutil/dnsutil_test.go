@@ -24,7 +24,7 @@ func TestIsSecureProtocol(t *testing.T) {
 		{"http-tlcp", true},
 		{"dtlcp", true},
 		{"dnscrypt", true},
-		{"dnscrypttcp", true},
+		{"dnscrypt-tcp", true},
 		{"udp", false},
 		{"tcp", false},
 		{"", false},

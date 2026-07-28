@@ -46,14 +46,13 @@ const (
 
 var dangerousPrefixes = []string{"/etc/", "/proc/", "/sys/", "/dev/", "/run/"}
 
-// IsSecureProtocol reports whether the protocol is a secure DNS transport.
-// Accepts both canonical names (tls, quic, https, http3) and user-facing
-// aliases (dot, doq, doh, doh3).  Strings are hardcoded because this
-// internal package cannot import config for the Proto* constants.
-// NOTE: When adding a new secure protocol, add it to this switch statement.
+// IsSecureProtocol reports whether the protocol is an encrypted DNS transport.
+// Accepts the config.Proto* constant values (e.g. "tls", "quic", "dnscrypt").
+// Strings are hardcoded because this internal package cannot import the config
+// package.  Keep in sync with the Proto* constants in config/defaults.go.
 func IsSecureProtocol(protocol string) bool {
 	switch protocol {
-	case "tls", "quic", "https", "http3", "dtls", "tlcp", "http-tlcp", "dtlcp", "dnscrypt", "dnscrypttcp":
+	case "tls", "quic", "https", "http3", "dtls", "tlcp", "http-tlcp", "dtlcp", "dnscrypt", "dnscrypt-tcp":
 		return true
 	default:
 		return false

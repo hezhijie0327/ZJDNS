@@ -37,7 +37,7 @@ type State struct {
 
 	minQueryLen   int
 	ewmaQuerySize float64                      // EWMA of encrypted response size
-	ephemeralKeys bool                         // per-query X25519 keys for forward secrecy
+	ephemeralKeys bool                         // per-query X25519 keys for forward secrecy (default true)
 	resolverPK    [dnscryptcrypto.KeySize]byte // resolver X25519 public key
 
 	// PQ fields — only set when the server offers a PQ certificate.
@@ -95,6 +95,7 @@ func (c *Client) state(
 	providerName string,
 	publicKey []byte,
 	server *config.UpstreamServer,
+	preferTCP bool,
 ) (*State, error) {
 	providerName = dnsutil.Fqdn(providerName)
 	cacheKey := addr + "|" + providerName
@@ -118,7 +119,7 @@ func (c *Client) state(
 		return nil, fmt.Errorf("packing cert query: %w", err)
 	}
 
-	resp, err := FetchCert(ctx, addr, certQuery.Data)
+	resp, err := FetchCert(ctx, addr, certQuery.Data, preferTCP)
 	if err != nil {
 		return nil, fmt.Errorf("fetching dnscrypt cert from %s: %w", addr, err)
 	}
@@ -143,7 +144,13 @@ func (c *Client) state(
 	if err != nil {
 		return nil, err
 	}
-	state.ephemeralKeys = server.EphemeralKeys
+	// Per-query X25519 ephemeral keys for forward secrecy (default true).
+	// Set "ephemeral_keys": false to reuse the same key pair across queries.
+	ephemeralKeys := true
+	if server.EphemeralKeys != nil {
+		ephemeralKeys = *server.EphemeralKeys
+	}
+	state.ephemeralKeys = ephemeralKeys
 	return state, nil
 }
 
