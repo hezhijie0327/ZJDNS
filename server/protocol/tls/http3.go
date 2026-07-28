@@ -31,7 +31,6 @@ func (s *Server) startDOH3Server(port string) error {
 		MaxIncomingStreams:    config.DefaultMaxIncomingStreams,
 		MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
 		Allow0RTT:             true,
-		EnableDatagrams:       true,
 		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
 	}
 

@@ -173,6 +173,18 @@ func (s *Server) sendDTLSResponse(conn net.Conn, response *dns.Msg) bool {
 		return true
 	}
 
+	// RFC 8094 §5: truncate if the datagram would exceed the assumed PMTU.
+	if safeMax := config.DefaultPMTU - config.DTLSDNSOverhead - zdnsutil.DNSFramePrefixLen; len(response.Data) > safeMax {
+		response.Truncated = true
+		response.Answer = nil
+		response.Ns = nil
+		response.Extra = nil
+		if err := response.Pack(); err != nil {
+			log.Debugf("TLS: DTLS repack after truncation: %v", err)
+			return true
+		}
+	}
+
 	respLen := len(response.Data)
 	if respLen > config.MaxDNSMessageSize {
 		log.Debugf("TLS: DTLS response too large (%d bytes)", respLen)

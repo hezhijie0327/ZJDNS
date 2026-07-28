@@ -175,15 +175,23 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		}
 
 		msgLength := binary.BigEndian.Uint16(lengthBuf)
-		if msgLength == 0 || msgLength > pool.SecureBufferSize-zdnsutil.DNSFramePrefixLen {
+		if msgLength == 0 || msgLength > dns.MaxMsgSize {
 			return
 		}
 
-		buf := pool.DefaultBuffer.Get()
-		msgBuf := buf[:msgLength]
+		var pooledBuf []byte // non-nil when using a pool buffer, for later Put
+		var msgBuf []byte
+		if int(msgLength) <= pool.SecureBufferSize {
+			pooledBuf = pool.DefaultBuffer.Get()
+			msgBuf = pooledBuf[:msgLength]
+		} else {
+			msgBuf = make([]byte, msgLength)
+		}
 		_, err = io.ReadFull(reader, msgBuf)
 		if err != nil {
-			pool.DefaultBuffer.Put(buf)
+			if pooledBuf != nil {
+				pool.DefaultBuffer.Put(pooledBuf)
+			}
 			return
 		}
 
@@ -191,14 +199,15 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		req.Data = msgBuf
 		if err := req.Unpack(); err != nil {
 			pool.DefaultMessage.Put(req)
-			pool.DefaultBuffer.Put(buf)
+			if pooledBuf != nil {
+				pool.DefaultBuffer.Put(pooledBuf)
+			}
 			continue
 		}
-		// buf must NOT be returned to the pool here: req.Data points into it
-		// and the query worker calls req.Unpack() again during processing.
-		// Returning buf early would zero req.Data, corrupting the re-unpack.
-		// Instead, buf ownership transfers to the worker goroutine.
-		pooled := true
+		// pooledBuf must NOT be returned to the pool here: req.Data points
+		// into it and the query worker calls req.Unpack() again during
+		// processing. Instead, ownership transfers to the worker goroutine.
+		isPooled := pooledBuf != nil
 
 		var clientIP net.IP
 		if addr := tlsConn.RemoteAddr(); addr != nil {
@@ -211,7 +220,9 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		case workerCap <- struct{}{}:
 		case <-connCtx.Done():
 			pool.DefaultMessage.Put(req)
-			pool.DefaultBuffer.Put(buf)
+			if pooledBuf != nil {
+				pool.DefaultBuffer.Put(pooledBuf)
+			}
 			return
 		}
 
@@ -264,6 +275,6 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 				// else: poolBuf was already returned, and writeBuf is a
 				// separately allocated slice that will be GC'd.
 			}
-		}(req, clientIP, buf, pooled)
+		}(req, clientIP, pooledBuf, isPooled)
 	}
 }

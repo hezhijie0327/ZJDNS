@@ -25,6 +25,9 @@ import (
 
 type pending struct {
 	resultCh chan *dns.Msg
+	qname    string // RFC 7766 §7: verify response matches query
+	qtype    uint16
+	qclass   uint16
 }
 
 // Conn is a pipelined TCP connection that multiplexes multiple in-flight
@@ -159,6 +162,13 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 		binary.BigEndian.PutUint16(writeBuf[zdnsutil.DNSFramePrefixLen:zdnsutil.DNSFramePrefixLen+2], trackingID)
 	}
 	c.inflight[trackingID] = &pending{resultCh: resultCh}
+	// RFC 7766 §7: store question to verify response matches.
+	if len(msg.Question) > 0 {
+		q := msg.Question[0]
+		c.inflight[trackingID].qname = q.Header().Name
+		c.inflight[trackingID].qtype = dns.RRToType(q)
+		c.inflight[trackingID].qclass = q.Header().Class
+	}
 	c.mu.Unlock()
 
 	defer func() {
@@ -261,6 +271,13 @@ func (c *Conn) readLoop() {
 		c.mu.RLock()
 		pq, ok := c.inflight[resp.ID]
 		c.mu.RUnlock()
+		// RFC 7766 §7: verify response question matches the query.
+		if ok && len(resp.Question) > 0 {
+			rq := resp.Question[0]
+			if !dns.EqualName(rq.Header().Name, pq.qname) || dns.RRToType(rq) != pq.qtype || rq.Header().Class != pq.qclass {
+				ok = false
+			}
+		}
 		if ok {
 			select {
 			case pq.resultCh <- resp:

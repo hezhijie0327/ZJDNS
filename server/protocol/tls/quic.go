@@ -225,6 +225,14 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		return
 	}
 
+	// RFC 9250 §4.5: 0-RTT MUST NOT carry non-replayable transactions.
+	// Only standard QUERY opcodes are safe for 0-RTT replay.
+	if conn.ConnectionState().Used0RTT && req.Opcode != dns.OpcodeQuery {
+		stream.CancelWrite(quic.StreamErrorCode(pool.QUICCodeProtocolError))
+		pool.DefaultMessage.Put(req)
+		return
+	}
+
 	clientIP := zdnsutil.ClientIPFromAddr(conn.RemoteAddr())
 	response := s.handler.ServeDNS(req, clientIP, true, config.ProtoQUIC)
 	// req is transferred to ServeDNS — response holds the result.
@@ -242,6 +250,8 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 
 func (s *Server) respondQUIC(stream *quic.Stream, response *dns.Msg) error {
 	if response == nil {
+		// RFC 9250 §4.3.2: signal transaction error via RESET_STREAM.
+		stream.CancelWrite(quic.StreamErrorCode(pool.QUICCodeInternalError))
 		return errors.New("response is nil")
 	}
 

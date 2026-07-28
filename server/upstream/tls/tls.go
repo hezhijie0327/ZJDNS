@@ -66,11 +66,11 @@ func (c *Client) dialTLSConn(ctx context.Context, addr string, tlsConfig *eTLS.C
 		_ = tc.SetKeepAlive(true)
 		_ = tc.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)
 	}
+	// Defer the handshake: the first Write on the TLS conn will trigger it.
+	// When ClientSessionCache has a valid session ticket, this allows TLS 1.3
+	// 0-RTT early data — the DNS query is sent as part of the ClientHello,
+	// saving one RTT on reconnection (RFC 8446 §2.3).
 	tlsConn := eTLS.Client(tcpConn, tlsConfig)
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		_ = tcpConn.Close()
-		return nil, err
-	}
 	return tlsConn, nil
 }
 

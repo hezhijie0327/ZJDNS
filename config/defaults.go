@@ -96,6 +96,11 @@ const (
 	DefaultHTTPReadHeaderTimeout  = 5 * time.Second  // HTTP header read (Slowloris protection)
 
 	DefaultDTLSIdleTimeout = 30 * time.Second // DTLS idle timeout (RFC 8094 §3.3)
+
+	// DefaultPMTU is the assumed path MTU when the actual value is unknown
+	// (RFC 8094 §5).  Safe DNS payload = PMTU − DTLSDNSOverhead − DNSFramePrefixLen.
+	DefaultPMTU     = 1280 // IPv6 minimum MTU
+	DTLSDNSOverhead = 59   // UDP(8) + DTLS body(~13) + MAC(~16) + IP min(20) + margin(2)
 )
 
 // =============================================================================

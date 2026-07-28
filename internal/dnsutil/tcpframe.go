@@ -100,11 +100,12 @@ func WriteTCPMsg(conn net.Conn, msg *dns.Msg) error {
 	if err := msg.Pack(); err != nil {
 		return err
 	}
-	length := uint16(len(msg.Data))                    //nolint:gosec // G115: DNS TCP message — protocol-bounded uint16
-	prefix := [2]byte{byte(length >> 8), byte(length)} //nolint:gosec // G115: DNS wire format — protocol-bounded byte
-	if _, err := conn.Write(prefix[:]); err != nil {
-		return err
-	}
-	_, err := conn.Write(msg.Data)
+	length := uint16(len(msg.Data)) //nolint:gosec // G115: DNS TCP message — protocol-bounded uint16
+	// RFC 7766 §8: pass length prefix and message in a single write.
+	buf := make([]byte, 2+len(msg.Data))
+	buf[0] = byte(length >> 8) //nolint:gosec // G115: DNS wire format — protocol-bounded byte
+	buf[1] = byte(length)      //nolint:gosec // G115: DNS wire format — protocol-bounded byte
+	copy(buf[2:], msg.Data)
+	_, err := conn.Write(buf)
 	return err
 }

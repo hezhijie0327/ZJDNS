@@ -144,6 +144,11 @@ func (s *Server) parseDOHRequest(r *http.Request, w http.ResponseWriter) (msg *d
 
 	req, err := dnshttp.Request(r)
 	if err != nil {
+		// RFC 8484 §4.2.1: POST with wrong Content-Type → 415.
+		if r.Method == http.MethodPost && r.Header.Get("Content-Type") != "" &&
+			r.Header.Get("Content-Type") != dnshttp.MimeType {
+			return nil, http.StatusUnsupportedMediaType
+		}
 		return nil, http.StatusBadRequest
 	}
 

@@ -129,7 +129,13 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 	if err != nil {
 		return nil, fmt.Errorf("open stream: %w", err)
 	}
-	defer func() { _ = stream.Close() }()
+	defer func() {
+		// RFC 9250 §4.3.1: cancel with DOQ_REQUEST_CANCELLED on shutdown.
+		if ctx.Err() != nil {
+			stream.CancelRead(quic.StreamErrorCode(pool.QUICCodeRequestCancelled))
+		}
+		_ = stream.Close()
+	}()
 
 	_ = stream.SetDeadline(time.Now().Add(timeout))
 
