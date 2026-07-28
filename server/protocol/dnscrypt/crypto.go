@@ -133,9 +133,11 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.Encrypte
 		return s.decryptPQResumed(b)
 	}
 
-	// Snapshot keys under read lock — rotateKeys() writes under write lock.
+	// Snapshot keys and shared key cache under read lock — rotateKeys()
+	// writes both under write lock.
 	s.mu.RLock()
 	keysSnapshot := s.keys
+	cacheSnapshot := s.sharedKeyCache
 	s.mu.RUnlock()
 
 	// Try each key pair newest-first: PQ first, then classical.
@@ -178,12 +180,12 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.Encrypte
 				// ClientPk is populated by Decrypt — read after return.
 				cpk := query.ClientPk
 				if query.SharedKey == [dnscryptcrypto.SharedKeySize]byte{} {
-					if cached, ok := s.sharedKeyCache.Get(cpk); ok {
+					if cached, ok := cacheSnapshot.Get(cpk); ok {
 						query.SharedKey = cached
 					} else {
 						sk, skErr := dnscryptcrypto.ComputeSharedKey(dnscryptcrypto.XChacha20Poly1305, &k.pair.Classical.ResolverSk, &cpk)
 						if skErr == nil {
-							s.sharedKeyCache.Set(cpk, sk)
+							cacheSnapshot.Set(cpk, sk)
 							query.SharedKey = sk
 						}
 					}

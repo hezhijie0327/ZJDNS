@@ -1,6 +1,7 @@
 package defense
 
 import (
+	"strings"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
@@ -166,5 +167,13 @@ func (d *Detector) isRootServerDomain(domain string) bool {
 }
 
 func (d *Detector) isTLD(domain string) bool {
-	return domain != "" && dnsutil.Labels(domain) == 1
+	// Normalise by stripping the trailing dot (if present) so that both
+	// "com" and "com." are recognised as TLDs while "example.com" is
+	// correctly excluded.  dnsutil.Labels("com") = 1, "com." = 2,
+	// "example.com" = 2, "example.com." = 3.
+	if domain == "" {
+		return false
+	}
+	domain = strings.TrimSuffix(domain, ".")
+	return dnsutil.Labels(domain) == 1
 }

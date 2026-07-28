@@ -192,7 +192,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	case msgLen == 0:
 		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "zero-length DNS message")
 		return
-	case msgLen > pool.SecureBufferSize-zdnsutil.DNSFramePrefixLen:
+	case msgLen > dns.MaxMsgSize:
 		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "message too large")
 		return
 	}

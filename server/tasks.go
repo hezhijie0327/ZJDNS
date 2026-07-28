@@ -58,7 +58,11 @@ func (s *Server) startCookieRotation() {
 
 // refreshECSOnce attempts a single ECS refresh and logs the result.
 func (s *Server) refreshECSOnce() {
-	ecsList, changed, err := s.handler.EDNS().RefreshDefaultECS()
+	ednsH := s.handler.EDNS()
+	if ednsH == nil {
+		return
+	}
+	ecsList, changed, err := ednsH.RefreshDefaultECS()
 	if err != nil {
 		log.Warnf("EDNS: default ECS refresh failed: %v", err)
 		return
@@ -106,13 +110,17 @@ func (s *Server) startPrefetchCooldownCleanup() {
 func (s *Server) startTCPWriteMuSweep() {
 	s.runBackgroundTicker("tcpWriteMu sweep", config.DefaultSweepInterval, func() {
 		cutoff := time.Now().Add(-config.DefaultTCPWriteMuStaleCutoff).UnixNano()
+		var stale []string
 		s.tcpWriteMu.Range(func(key, value any) bool {
 			entry, ok := value.(*tcpWriteEntry)
 			if !ok || entry.lastAccess.Load() < cutoff {
-				s.tcpWriteMu.Delete(key)
+				stale = append(stale, key.(string))
 			}
 			return true
 		})
+		for _, k := range stale {
+			s.tcpWriteMu.Delete(k)
+		}
 	})
 }
 

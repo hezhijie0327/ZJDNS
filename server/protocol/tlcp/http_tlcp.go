@@ -38,6 +38,7 @@ func (s *Server) startDOHServer() error {
 		dohSrv := &http.Server{
 			Handler:           http.HandlerFunc(s.serveDOH),
 			ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
+			WriteTimeout:      config.DefaultHTTPServerWriteTimeout,
 			IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
 			TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 		}
@@ -93,6 +94,7 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 
 	resp := s.handler.ServeDNS(msg, clientIP, true, config.ProtoHTTPTLCP)
 	if resp == nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 	defer pool.DefaultMessage.Put(resp)

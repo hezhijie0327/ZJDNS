@@ -226,7 +226,11 @@ func (c *Client) buildState(
 func (c *Client) deleteState(addr, providerName string) {
 	providerName = dnsutil.Fqdn(providerName)
 	cacheKey := addr + "|" + providerName
-	c.cache.Delete(cacheKey)
+	c.cacheMu.Lock()
+	if c.cache != nil {
+		c.cache.Delete(cacheKey)
+	}
+	c.cacheMu.Unlock()
 	log.Debugf("UPSTREAM: DNSCrypt cert cache invalidated for %s", cacheKey)
 }
 

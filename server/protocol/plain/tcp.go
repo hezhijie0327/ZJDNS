@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
@@ -29,8 +30,9 @@ func (s *Server) startTCP(g Group, ctx context.Context, handler dns.Handler) err
 		}
 
 		srv := &dns.Server{
-			Listener: &zdnsutil.TCPKeepAliveListener{Listener: listener},
-			Handler:  handler,
+			Listener:    &zdnsutil.TCPKeepAliveListener{Listener: listener},
+			Handler:     handler,
+			ReadTimeout: config.DefaultTCPIdleTimeout, // RFC 7766 §6.2.3
 		}
 		s.tcpServers = append(s.tcpServers, srv)
 		g.Go(func() error {

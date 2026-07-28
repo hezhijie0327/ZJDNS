@@ -71,6 +71,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	backgroundGroup, backgroundCtx := errgroup.WithContext(ctx)
 	cacheRefreshGroup, cacheRefreshCtx := errgroup.WithContext(ctx)
+	cacheRefreshGroup.SetLimit(config.DefaultCacheRefreshConcurrency)
 
 	s := &Server{
 		config:          cfg,
@@ -382,6 +383,7 @@ func (s *Server) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol
 
 // Start runs the DNS server and blocks until shutdown is triggered.
 func (s *Server) Start() error {
+	log.Infof("SERVER: Starting DNS server")
 	if s.handler.IsClosed() {
 		return errors.New("server is closed")
 	}

@@ -120,7 +120,7 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) 
 		signingSK:      signingSK,
 		rotateCh:       make(chan struct{}),
 		workerCap:      make(chan struct{}, config.DefaultMaxConcurrentStreams),
-		sharedKeyCache: lrumap.New[[32]byte, [32]byte](2000),
+		sharedKeyCache: lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize),
 	}
 
 	// Derive ticket key from the Ed25519 signing key for PQ resumption.
@@ -262,6 +262,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 	done := make(chan struct{})
 	go func() {
+		defer zdnsutil.HandlePanic("DNSCrypt shutdown wait")
 		prevWg.Wait()
 		close(done)
 	}()
@@ -328,7 +329,7 @@ func (s *Server) rotateKeys() {
 			buildCertTXTForCert(newPair.PQ),
 		},
 	}
-	s.sharedKeyCache = lrumap.New[[32]byte, [32]byte](2000)
+	s.sharedKeyCache = lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize)
 	s.keys = append([]keyEntry{entry}, s.keys...)
 
 	// Purge expired keys.

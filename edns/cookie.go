@@ -224,6 +224,7 @@ func rfc9018MAC(key *[16]byte, clientCookie []byte, reserved [3]byte, timestamp 
 		ip = clientIP.To16()
 		if ip == nil {
 			ip = net.IPv4zero.To4()
+			ipLen = 4 // ip is 4 bytes
 		}
 	} else {
 		ipLen = 4

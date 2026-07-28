@@ -102,7 +102,7 @@ drainLoop:
 	}
 
 	// Phase 2: ask goroutine to flush its internal batch.
-	done := make(chan struct{})
+	done := make(chan struct{}, 1) // buffered: prevents Flush → Close race hang
 	select {
 	case w.flushSig <- done:
 		<-done

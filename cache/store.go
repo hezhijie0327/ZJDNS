@@ -150,7 +150,8 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	// the msg.Get and this line without understanding the ordering.
 	msg.Data = wire
 	if err := msg.Unpack(); err != nil {
-		pool.DefaultMessage.Put(msg)
+		// Deferred Put (line below) returns msg to the pool — do not
+		// double-Put here.
 		log.Warnf("CACHE: unpack wire for entry %d (name=%s type=%d): %v", id, qname, qtype, err)
 		return nil, false, false
 	}

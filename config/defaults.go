@@ -83,12 +83,13 @@ const (
 // =============================================================================
 
 const (
-	DefaultHTTPIdleConnTimeout   = 5 * time.Minute  // HTTP transport idle connection
-	DefaultQUICKeepAlive         = 20 * time.Second // QUIC keep-alive period
-	DefaultQUICClientIdleTimeout = 60 * time.Second // client QUIC idle (must exceed KeepAlive)
-	DefaultQUICServerIdleTimeout = 30 * time.Second // server QUIC idle (RFC 9000 default)
-	DefaultTCPPoolIdleTimeout    = 60 * time.Second // TCP/DoT pool connection idle
-	DefaultTCPKeepAlivePeriod    = 30 * time.Second // TCP keep-alive probe interval
+	DefaultHTTPIdleConnTimeout   = 5 * time.Minute   // HTTP transport idle connection
+	DefaultQUICKeepAlive         = 20 * time.Second  // QUIC keep-alive period
+	DefaultQUICClientIdleTimeout = 60 * time.Second  // client QUIC idle (must exceed KeepAlive)
+	DefaultQUICServerIdleTimeout = 30 * time.Second  // server QUIC idle (RFC 9000 default)
+	DefaultTCPPoolIdleTimeout    = 60 * time.Second  // TCP/DoT pool connection idle
+	DefaultTCPKeepAlivePeriod    = 30 * time.Second  // TCP keep-alive probe interval
+	DefaultTCPIdleTimeout        = 120 * time.Second // RFC 7766 §6.2.3: plain TCP server idle timeout
 
 	DefaultHTTPServerIdleTimeout  = 60 * time.Second // HTTP keep-alive idle
 	DefaultHTTPServerWriteTimeout = 10 * time.Second // HTTP response write
@@ -141,12 +142,13 @@ const (
 // =============================================================================
 
 const (
-	DefaultMaxPipe              = 16  // max in-flight queries per TCP/DoT connection
-	DefaultMaxConns             = 4   // max connections per upstream
-	DefaultMaxConcurrentNS      = 6   // max concurrent NS queries during resolution
-	DefaultMaxProbes            = 16  // max concurrent latency probes
-	DefaultMaxIncomingStreams   = 256 // QUIC max incoming streams
-	DefaultMaxConcurrentStreams = 64
+	DefaultMaxPipe                 = 16  // max in-flight queries per TCP/DoT connection
+	DefaultMaxConns                = 4   // max connections per upstream
+	DefaultMaxConcurrentNS         = 6   // max concurrent NS queries during resolution
+	DefaultMaxProbes               = 16  // max concurrent latency probes
+	DefaultMaxIncomingStreams      = 256 // QUIC max incoming streams
+	DefaultMaxConcurrentStreams    = 64
+	DefaultCacheRefreshConcurrency = 64 // background cache refresh goroutine cap
 
 	DefaultServerGoroutineLimit = 1024
 	DefaultMinConcurrencyLimit  = 8
@@ -275,6 +277,7 @@ const (
 
 const (
 	DefaultDNSCryptCertificateTTL      = 24 * time.Hour
+	DefaultDNSCryptSharedKeyCacheSize  = 2048 // max cached shared keys per server
 	DefaultDNSCryptUDPSize             = 4096
 	DefaultDNSCryptCertificateCacheTTL = 1 * time.Hour
 	DefaultDNSCryptReadTimeout         = 2 * time.Second

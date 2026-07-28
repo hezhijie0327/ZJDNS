@@ -58,6 +58,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 		server := srv
 
 		g.Go(func() error {
+			defer zdnsutil.HandlePanic("UPSTREAM query")
 			select {
 			case <-groupCtx.Done():
 				return nil

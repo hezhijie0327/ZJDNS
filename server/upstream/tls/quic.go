@@ -35,28 +35,30 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 	}
 	proxyDialer := c.getProxy(server)
 
-	dialQUIC := func(dialCtx context.Context, addr string) (*quic.Conn, error) {
+	dialQUIC := func(dialCtx context.Context, _ string) (*quic.Conn, error) { // _ = poolKey (unused: we dial via key which is the real server addr)
 		dialTLS := tlsConfig.Clone()
 		dialTLS.NextProtos = config.NextProtoDOQ
 		timeoutCtx, cancel := context.WithTimeout(dialCtx, config.DefaultDNSQueryTimeout)
 		defer cancel()
 
+		// poolKey may contain proxy info (e.g. "host:port|socks5://...");
+		// the proxy path must resolve and dial the actual server address (key).
 		if proxyDialer != nil {
 			pconn, err := proxyDialer.ListenPacket(timeoutCtx)
 			if err != nil {
 				return nil, fmt.Errorf("proxy ListenPacket: %w", err)
 			}
-			remoteAddr, err := net.ResolveUDPAddr("udp", addr)
+			remoteAddr, err := net.ResolveUDPAddr("udp", key)
 			if err != nil {
 				_ = pconn.Close()
-				return nil, fmt.Errorf("resolve %s: %w", addr, err)
+				return nil, fmt.Errorf("resolve %s: %w", key, err)
 			}
 			return quic.Dial(timeoutCtx, pconn, remoteAddr, dialTLS, c.getQUICConfig("doq:"+key, tlsConfig.InsecureSkipVerify))
 		}
-		conn, err := quic.DialAddrEarly(timeoutCtx, addr, dialTLS, c.getQUICConfig("doq:"+key, tlsConfig.InsecureSkipVerify))
+		conn, err := quic.DialAddrEarly(timeoutCtx, key, dialTLS, c.getQUICConfig("doq:"+key, tlsConfig.InsecureSkipVerify))
 		if err == nil {
 			log.Debugf("UPSTREAM: DoQ negotiated for %s — cipher=%s resumed=%v 0-RTT=%v",
-				addr, tls.CipherSuiteName(conn.ConnectionState().TLS.CipherSuite),
+				key, tls.CipherSuiteName(conn.ConnectionState().TLS.CipherSuite),
 				conn.ConnectionState().TLS.DidResume, conn.ConnectionState().Used0RTT)
 		}
 		return conn, err

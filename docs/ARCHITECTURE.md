@@ -104,6 +104,54 @@ CREATE TABLE zone_entries (
 - **IP latency**: Per-IP keyed. `INSERT OR REPLACE` writes latency_ms + last_probe_time. All domains sharing a CDN IP reuse the same row.
 - **Dynamic queries**: `Store.Stats()` returns TXT records (overview, hits, errors, rcodes, poisoned, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.db.clear` / `zjdns.db.clear.{cache,stats,querylog,latency,zone,ruleset}`.
 
+
+## Defense Mechanisms
+
+ZJDNS implements four per-upstream defense mechanisms to detect and reject
+DNS pollution attacks. Each is enabled via `UpstreamServer` flags.
+
+| Mechanism | Layer | Algorithm |
+|-----------|-------|-----------|
+| **Hopguard** | UDP upstream | IP TTL fingerprint: auto-learn baseline, reject responses with TTL outside ±2 range |
+| **Spoofguard** | UDP upstream | Multi-read loop: reject `AR=0+NOERROR+EDNS`; accept `AN>=2`/`NS>0`/`AD=1`; collect ambiguous (≤500ms) → pick richest |
+| **Poisonguard** | Recursive | Zone-authority cross-validation on resolved answers |
+| **Splitguard** | TCP upstream | Random [1,N] payload segmentation with jitter |
+
+**Implementation locations:**
+- `server/defense/hopguard.go` — HopGuard TTL learning + validation
+- `server/defense/poisonguard.go` — PoisonGuard zone classification
+- `server/upstream/plain/udp.go` — SpoofGuard multi-read loop
+- `server/upstream/plain/tcp.go` — SplitGuard segmentation parameter
+- `server/upstream/pool/tcp.go` — SplitGuard via `WriteTCPMsgSegmented`
+
+### HopGuard
+
+Learns per-upstream TTL baseline from verified responses. After 32 samples,
+enforces ±2 TTL tolerance. State stored in bounded LRU map (capacity 256).
+
+### Poisonguard
+
+Classifies responses by delegation level:
+- **Root-level**: Only NS/DS for TLDs or glue for root-servers.net are legitimate
+- **TLD-level**: Only NS/DS sub-delegations or self-referencing A/AAAA are legitimate
+- **Authoritative-level**: Always `VerdictUncertain` — design limitation; authoritative
+  servers can legitimately return any record type
+
+### Spoofguard
+
+Implements a multi-read UDP loop. After sending a query, it reads up to N
+responses within a configurable collect window. Candidates are classified:
+- Immediate-reject: `AR=0+NOERROR+EDNS` (GFW signature)
+- Immediate-accept: `AN≥2` or `NS>0` or `AD=1`
+- Ambiguous: collect all, pick richest (most answer records + authority)
+
+### Splitguard
+
+For TCP upstream queries, segments the DNS message into random [1,4] byte
+chunks with inter-segment jitter. Prevents GFW from fingerprinting DNS-over-TCP
+traffic by breaking the predictable 2-byte length prefix pattern.
+
+
 ## DNSCrypt v2
 
 Full implementation with PQC support. Two crypto constructions: XWingPQ (default, X-Wing PQ/T hybrid KEM + XChacha20-Poly1305 AEAD) and XChacha20Poly1305 (X25519 + XChacha20-Poly1305). XSalsa20 removed.

@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"errors"
+	"fmt"
 	"sync"
 	"time"
 	"zjdns/config"
@@ -93,7 +93,7 @@ func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.
 		}
 	case <-timer.C:
 		log.Debugf("CACHE: pending-request follower timeout for %s (type=%s)", qname, dns.TypeToString[qtype])
-		return &resolver.QueryResult{Err: errors.New("pending request timeout")}, true
+		return &resolver.QueryResult{Err: fmt.Errorf("pending request timeout for %s %s", qname, dns.TypeToString[qtype])}, true
 	}
 	return actual.result, true
 }

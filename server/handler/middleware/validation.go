@@ -34,9 +34,29 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return nil
 		}
 
+		// Reject non-standard opcodes (RFC 6895 §3.1).
+		if req := qctx.Req; req.Opcode != dns.OpcodeQuery {
+			log.Debugf("QUERY: rejecting non-query opcode %d with NOTIMP", req.Opcode)
+			msg := pool.DefaultMessage.Get()
+			dnsutil.SetReply(msg, req)
+			msg.Rcode = dns.RcodeNotImplemented
+			qctx.Res = msg
+			return nil
+		}
+
 		qd := qctx.Req.Question[0]
 		qname := qd.Header().Name
 		qtype := dns.RRToType(qd)
+
+		// Reject non-IN query classes (RFC 6895 §3.1).
+		if qd.Header().Class != dns.ClassINET {
+			log.Debugf("QUERY: rejecting non-IN class %d for %s with REFUSED", qd.Header().Class, qname)
+			msg := pool.DefaultMessage.Get()
+			dnsutil.SetReply(msg, qctx.Req)
+			msg.Rcode = dns.RcodeRefused
+			qctx.Res = msg
+			return nil
+		}
 
 		if len(qname) <= config.MaxDomainLength &&
 			qtype != dns.TypeANY &&

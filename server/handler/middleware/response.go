@@ -19,6 +19,8 @@ type Response struct {
 	edns handler.EDNSHandler
 }
 
+var fallbackClientIP = net.ParseIP(config.FallbackClientIP) // pre-parsed to avoid per-query allocation
+
 // Wrap implements Wrapper.
 func (m *Response) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
@@ -81,7 +83,7 @@ func (m *Response) generateCookieStr(cookieOpt *edns.CookieOption, clientIP net.
 	}
 
 	if clientIP == nil {
-		clientIP = net.ParseIP(config.FallbackClientIP)
+		clientIP = fallbackClientIP
 	}
 
 	if len(cookieOpt.ClientCookie) != edns.DefaultCookieClientLen {

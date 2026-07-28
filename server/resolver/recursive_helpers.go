@@ -42,7 +42,11 @@ func (r *Recursive) collectBestNSMatch(response *dns.Msg, normalizedQname, query
 			pool.DefaultMessage.Put(response)
 			return "", nil, true, nil
 		}
-		nsSlice, extraSlice := response.Ns, response.Extra
+		// Deep-copy before Put — pooled message backing array is reused.
+		nsSlice := make([]dns.RR, len(response.Ns))
+		copy(nsSlice, response.Ns)
+		extraSlice := make([]dns.RR, len(response.Extra))
+		copy(extraSlice, response.Extra)
 		pool.DefaultMessage.Put(response)
 		return "", nil, false, &QueryResult{
 			Cacheable: true,

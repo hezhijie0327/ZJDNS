@@ -93,6 +93,9 @@ func (e *Evaluator) loadFile(tx *sql.Tx, parent *config.ZoneRule) (int, error) {
 			}
 
 			fields := strings.Fields(curRawName)
+			if len(fields) == 0 {
+				continue // bare "." or "*." with no following domain
+			}
 			curDomain = dnsutil.Canonical(fields[0])
 			curRawName = fields[0] // strip extra params (rcode= / match=) from domain
 			if isWildcard {

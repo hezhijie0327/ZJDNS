@@ -143,6 +143,9 @@ func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string,
 	}
 
 	crypto := r.resolver.validator.Crypto
+	if crypto == nil {
+		return
+	}
 
 	// Check cache first
 	if cached := crypto.ZoneKeys(zone); len(cached) > 0 {
@@ -216,6 +219,9 @@ func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string,
 // at a delegation point.
 func (r *Recursive) verifyDelegationDSRRSIG(response *dns.Msg, childZone string, chain *dnssecChain, dsRecords []*dns.DS) []*dns.DS {
 	crypto := r.resolver.validator.Crypto
+	if crypto == nil {
+		return nil
+	}
 	parentKeys := chain.zoneDNSKEYs
 	if len(parentKeys) == 0 {
 		parentKeys = chain.parentDNSKEYs
@@ -304,6 +310,9 @@ func (r *Recursive) verifyViaCDS(ctx context.Context, nameservers []string, zone
 
 func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, nameservers []string, question Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain) bool {
 	crypto := r.resolver.validator.Crypto
+	if crypto == nil {
+		return false
+	}
 	if len(response.Answer) == 0 {
 		return false
 	}

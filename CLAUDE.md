@@ -281,7 +281,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 - CNAME chain exceeded → SERVFAIL; FORMERR from auth → EDNS-free retry (RFC 6891 §6.2.2)
 
 ### Recursive Resolution
-- Root hints → TLD NS → authoritative NS walk with QNAME minimisation (RFC 9156, max 10 steps)
+- Root hints → TLD NS → authoritative NS walk with QNAME minimisation (RFC 9156, max 16 steps)
 - NS address latency-sorted cache; DNSSEC chain-of-trust at each delegation
 - Zone cut detection, lame delegation detection, glue record validation
 

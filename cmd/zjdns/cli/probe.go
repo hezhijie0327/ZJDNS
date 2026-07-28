@@ -70,7 +70,7 @@ func dialProbeTarget(addr string) (net.Conn, error) {
 		tlsCfg := &eTLS.Config{
 			MinVersion:         eTLS.VersionTLS12,
 			ServerName:         serverName,
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: true, // probe may test servers with self-signed certificates
 			CurvePreferences:   []eTLS.CurveID{},
 		}
 		tcpConn, err := net.Dial("tcp", host)
