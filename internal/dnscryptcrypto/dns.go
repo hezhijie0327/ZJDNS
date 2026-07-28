@@ -11,12 +11,27 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
-// normalize truncates the DNS response if it exceeds the client's EDNS buffer
-// size.  Following RFC 2181 §9, truncated responses must have TC=1 and empty
-// Answer/Ns/Extra sections — the client MUST retry over TCP.
-func Normalize(proto string, req, res *dns.Msg) {
-	size := DNSSize(proto, req)
-	size -= EDNSSize
+// Normalize truncates the DNS response if it exceeds the client's EDNS buffer
+// size or the DNSCrypt UDP wire budget.  Following RFC 2181 §9, truncated
+// responses must have TC=1 and empty Answer/Ns/Extra sections — the client MUST
+// retry over TCP.
+//
+// maxWireLen is the UDP anti-amplification budget — the encrypted response on the
+// wire MUST NOT exceed this value (§10.3).  Zero means unlimited (TCP).
+func Normalize(proto string, req, res *dns.Msg, maxWireLen int) {
+	var size int
+	if maxWireLen > 0 {
+		// UDP DNSCrypt: the wire budget is the binding constraint — the
+		// encrypted response MUST NOT exceed the query size (§10.3).  EDNS
+		// buffer is irrelevant because the DNS payload is encrypted.
+		size = maxWireLen - ResponseOverhead - 1
+	} else {
+		size = DNSSize(proto, req)
+		size -= EDNSSize
+	}
+	if size < dns.MinMsgSize {
+		size = dns.MinMsgSize
+	}
 	if res.Len() > size {
 		dnsutil.Truncate(res)
 	}

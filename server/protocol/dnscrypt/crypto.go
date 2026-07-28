@@ -11,6 +11,7 @@ import (
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP bool) (encrypted []byte, err error) {
@@ -27,6 +28,35 @@ func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP boo
 	maxWireLen := 0
 	if isUDP {
 		maxWireLen = q.ClientQueryLen
+	}
+
+	// §5.4.6 (UDP) & §5.4.7 (TCP) & §11.3 (PQ cert): truncate the DNS response
+	// (TC=1) if the encrypted form won't fit within the transport budget.
+	// The response MUST NOT be silently dropped — the client needs the TC
+	// signal to retry (§5.4.6: "A resolver MUST NOT stay silent instead").
+	budget := maxWireLen
+	if !isUDP && budget == 0 {
+		// §5.4.7: TCP encrypted responses MUST be < 4096 bytes.
+		budget = dnscryptcrypto.MaxDNSUDPPacketSize
+	}
+	if budget > 0 {
+		for {
+			minOverhead := dnscryptcrypto.MinResponseOverhead(q.ESVersion)
+			if len(packet)+minOverhead <= budget {
+				break // fits
+			}
+			if m.Truncated {
+				return nil, fmt.Errorf("%w: plaintext %d + overhead %d exceeds budget %d",
+					dnscryptcrypto.ErrResponseTooLarge, len(packet), minOverhead, budget)
+			}
+			log.Debugf("DNSCRYPT: response (%d bytes + %d overhead) exceeds budget (%d bytes) — truncating with TC",
+				len(packet), minOverhead, budget)
+			dnsutil.Truncate(m)
+			if packErr := m.Pack(); packErr != nil {
+				return nil, fmt.Errorf("packing truncated dns message: %w", packErr)
+			}
+			packet = m.Data
+		}
 	}
 
 	if q.ESVersion.IsPQ() {

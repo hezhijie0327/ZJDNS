@@ -171,8 +171,12 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 	if response.Truncated {
 		const maxQueryLen = 4096
 		state.mu.Lock()
-		if state.minQueryLen+64 <= maxQueryLen {
-			state.minQueryLen += 64
+		// §5.4.2: escalate by at least 64 bytes on TC.  We double each
+		// round to converge in O(log n) — matching dnscrypt-proxy's
+		// blindAdjust().  The +64 floor is the RFC minimum.
+		next := min(max(state.minQueryLen*2, state.minQueryLen+64), maxQueryLen)
+		if next > state.minQueryLen {
+			state.minQueryLen = next
 			log.Debugf("UPSTREAM: DNSCrypt min-query-len escalated to %d after TC", state.minQueryLen)
 			state.mu.Unlock()
 			// The padding envelope was too small for the response.

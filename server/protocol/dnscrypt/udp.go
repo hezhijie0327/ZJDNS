@@ -39,7 +39,7 @@ func (w *udpResponseWriter) LocalAddr() net.Addr  { return w.conn.LocalAddr() }
 func (w *udpResponseWriter) RemoteAddr() net.Addr { return w.addr }
 
 func (w *udpResponseWriter) WriteMsg(_ context.Context, m *dns.Msg) error {
-	dnscryptcrypto.Normalize("udp", w.req, m)
+	dnscryptcrypto.Normalize("udp", w.req, m, w.query.ClientQueryLen)
 	res, err := w.encrypt(m, w.query, true)
 	if err != nil {
 		return err

@@ -434,6 +434,10 @@ func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
 	m = nil // prevent defer from double-Put
 
 	// Build answer in per-window order: Classical[i] then PQ[i] (if it fits).
+	// When a PQ cert is omitted due to the UDP anti-amplification budget,
+	// set TC so the PQ-capable client retries over TCP (sec10.3).  Classical
+	// certs are always included even in a truncated response.
+	anyPQOmitted := false
 	for i, k := range keys {
 		remainingTTL := k.remainingTTL()
 		txt := &dns.TXT{
@@ -459,14 +463,20 @@ func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
 				},
 			}
 			reply.Answer = append(reply.Answer, txt)
+		} else {
+			anyPQOmitted = true
 		}
 	}
 
 	reply.Authoritative = true
 	reply.RecursionAvailable = true
 
-	log.Debugf("DNSCRYPT: handshake response — %d cert window(s) (%d TXT records)%s",
-		len(keys), len(reply.Answer), map[bool]string{true: " (UDP)", false: ""}[isUDP])
+	if anyPQOmitted {
+		reply.Truncated = true
+	}
+
+	log.Debugf("DNSCRYPT: handshake response — %d cert window(s) (%d TXT records, TC=%v)%s",
+		len(keys), len(reply.Answer), reply.Truncated, map[bool]string{true: " (UDP)", false: ""}[isUDP])
 
 	err = reply.Pack()
 	if err != nil {

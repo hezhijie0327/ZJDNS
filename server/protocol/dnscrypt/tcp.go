@@ -32,7 +32,7 @@ func (w *tcpResponseWriter) LocalAddr() net.Addr  { return w.conn.LocalAddr() }
 func (w *tcpResponseWriter) RemoteAddr() net.Addr { return w.conn.RemoteAddr() }
 
 func (w *tcpResponseWriter) WriteMsg(_ context.Context, m *dns.Msg) error {
-	dnscryptcrypto.Normalize("tcp", w.req, m)
+	dnscryptcrypto.Normalize("tcp", w.req, m, 0)
 	res, err := w.encrypt(m, w.query, false)
 	if err != nil {
 		return fmt.Errorf("encrypting response: %w", err)

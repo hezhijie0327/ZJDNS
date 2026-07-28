@@ -2,6 +2,7 @@ package dnscryptcrypto
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 )
@@ -18,8 +19,7 @@ import (
 // total padded length; when zero it defaults to the next multiple of 64.
 // minLen must be a multiple of 64 (caller's responsibility).
 func Pad(packet []byte, minLen int) (padded []byte) {
-	// Closest multiple of 64 >= (len(packet) + 1).
-	minSize := max(minLen, len(packet)+1+(64-(len(packet)+1)%64)%64)
+	minSize := max(minLen, (len(packet)+1+63)&^63)
 
 	packet = append(packet, 0x80)
 	if n := minSize - len(packet); n > 0 {
@@ -30,7 +30,7 @@ func Pad(packet []byte, minLen int) (padded []byte) {
 }
 
 // padTCP applies ISO/IEC 7816-4 padding with a randomly chosen length for
-// client queries over TCP, per §5.4.3 of draft-denis-dprive-dnscrypt-10.
+// client queries over TCP, per §5.4.3 of draft-denis-dprive-dnscrypt-11.
 // The padding length is randomly selected from 1 to 256 bytes (including the
 // leading 0x80), and the total length is rounded up to a multiple of 64.
 func PadTCP(packet []byte) (padded []byte, err error) {
@@ -52,6 +52,37 @@ func PadTCP(packet []byte) (padded []byte, err error) {
 	return packet, nil
 }
 
+// PadResponse deterministically pads a server response per §5.4.5 of
+// draft-denis-dprive-dnscrypt-11.  The padding length is derived from
+// SHA-256(sharedKey || clientNonce) so that retransmitted queries receive
+// identically padded responses — preventing padding from becoming a
+// linkable server behaviour.  Matches encrypted-dns-server's SipHash-based
+// approach (crypto.rs encrypt_into).
+func PadResponse(packet []byte, sharedKey *[SharedKeySize]byte, clientNonce []byte) []byte {
+	h := sha256.Sum256(append(sharedKey[:], clientNonce...))
+	padSize := 1 + int(h[0])                     // 1–256 bytes (§5.4.5)
+	target := (len(packet) + padSize + 63) &^ 63 // next 64-byte boundary
+	packet = append(packet, 0x80)
+	packet = append(packet, make([]byte, target-len(packet))...)
+	return packet
+}
+
+// PadResponseWithin is like PadResponse but never grows the plaintext beyond
+// maxLen: when the preferred size does not fit, the padding shrinks, down to
+// the lone 0x80 delimiter.  Fails when even that one byte would not fit.
+// Ref: encrypted-dns-server pq.rs pad7816_within().
+func PadResponseWithin(packet []byte, sharedKey *[SharedKeySize]byte, clientNonce []byte, maxLen int) ([]byte, error) {
+	if len(packet) >= maxLen {
+		return nil, ErrNoRoomForPadding
+	}
+	h := sha256.Sum256(append(sharedKey[:], clientNonce...))
+	padSize := 1 + int(h[0])
+	target := min((len(packet)+padSize+63)&^63, maxLen)
+	packet = append(packet, 0x80)
+	packet = append(packet, make([]byte, target-len(packet))...)
+	return packet, nil
+}
+
 // CryptoRandIntn returns a cryptographic random integer in [0, n).
 // n must be a power of 2 and ≤ 256.  Returns an error if n is invalid.
 // Uses modulo reduction (equivalent to masking for power-of-2 n).
@@ -65,22 +96,6 @@ func CryptoRandIntn(n int) (int, error) {
 	}
 	// Simple modulo reduction; n <= 256 so bias is negligible.
 	return int(uint64(b[0])|uint64(b[1])<<8) % n, nil //nolint:gosec // G115: n <= 256, result fits in int
-}
-
-// PadWithin is like Pad but never exceeds maxLen.  When the padded packet
-// would exceed maxLen, the padding shrinks down to the lone 0x80 delimiter.
-// Returns ErrNoRoomForPadding when even the delimiter would not fit — the
-// caller should either withhold optional data (e.g. a PQ ticket) or truncate
-// the DNS response.
-func PadWithin(packet []byte, minLen, maxLen int) ([]byte, error) {
-	if len(packet) >= maxLen {
-		return nil, ErrNoRoomForPadding
-	}
-	padded := Pad(packet, minLen)
-	if len(padded) > maxLen {
-		padded = padded[:maxLen]
-	}
-	return padded, nil
 }
 
 // encryptPadding computes the target wire query size and pads the plaintext

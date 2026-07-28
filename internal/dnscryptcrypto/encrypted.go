@@ -122,25 +122,22 @@ func (r *EncryptedResponse) Encrypt(
 		return r.encryptPQResponse(packet, sharedKey, isUDP, maxWireLen, response)
 	}
 
-	// Classical path: align to 64 bytes, pad to 256 over UDP for amplification
-	// protection.  Shrink padding when the response otherwise exceeds the UDP
-	// budget.
-	respMinLen := 0
-	if isUDP {
-		respMinLen = MinUDPQuestionSize
-	}
+	// Classical path: deterministic padding per §5.4.5 — derived from
+	// SHA-256(sharedKey || clientNonce) so retransmitted queries get
+	// identical padding.  Matches encrypted-dns-server's SipHash approach.
+	clientNonce := r.Nonce[:NonceSize/2]
 	var padded []byte
 	if maxWireLen > 0 {
 		maxPlaintext := maxWireLen - ResolverMagicSize - NonceSize - TagSize
 		if maxPlaintext < len(packet)+1 {
 			return nil, ErrResponseTooLarge
 		}
-		padded, err = PadWithin(packet, respMinLen, maxPlaintext)
+		padded, err = PadResponseWithin(packet, &sharedKey, clientNonce, maxPlaintext)
 		if err != nil {
 			return nil, fmt.Errorf("padding classical response: %w", err)
 		}
 	} else {
-		padded = Pad(packet, respMinLen)
+		padded = PadResponse(packet, &sharedKey, clientNonce)
 	}
 
 	switch r.ESVersion {
@@ -184,11 +181,7 @@ func (r *EncryptedResponse) encryptPQResponse(
 		return payload
 	}
 
-	respMinLen := 0
-	if isUDP {
-		respMinLen = MinUDPQuestionSize
-	}
-
+	clientNonce := r.Nonce[:NonceSize/2]
 	if maxWireLen > 0 {
 		// Maximum plaintext bytes after accounting for the AEAD tag and the
 		// unencrypted response header (ResolverMagic + Nonce).
@@ -198,7 +191,7 @@ func (r *EncryptedResponse) encryptPQResponse(
 		// the budget is roomy) the response fits with the preferred padding.
 		payload := buildPlaintext(len(r.PQControl) > 0)
 		if len(payload)+1 <= maxPlaintext {
-			padded, err := PadWithin(payload, respMinLen, maxPlaintext)
+			padded, err := PadResponseWithin(payload, &sharedKey, clientNonce, maxPlaintext)
 			if err == nil {
 				switch r.ESVersion {
 				case XWingPQ:
@@ -219,7 +212,7 @@ func (r *EncryptedResponse) encryptPQResponse(
 		if len(r.PQControl) > 0 {
 			payload = buildPlaintext(false)
 			if len(payload)+1 <= maxPlaintext {
-				padded, err := PadWithin(payload, respMinLen, maxPlaintext)
+				padded, err := PadResponseWithin(payload, &sharedKey, clientNonce, maxPlaintext)
 				if err == nil {
 					r.PQControl = nil // already withheld
 					switch r.ESVersion {
@@ -244,7 +237,7 @@ func (r *EncryptedResponse) encryptPQResponse(
 
 	// TCP: no budget constraint.
 	payload := buildPlaintext(len(r.PQControl) > 0)
-	padded := Pad(payload, respMinLen)
+	padded := PadResponse(payload, &sharedKey, clientNonce)
 	switch r.ESVersion {
 	case XWingPQ:
 		sealed, sealErr := XchachaSeal(response, r.Nonce[:], padded, sharedKey[:])

@@ -61,8 +61,8 @@ The DNSCrypt draft was downloaded from the IETF archive.
 | rfc9250.txt | DNS over Dedicated QUIC Connections |
 | rfc9461.txt | Service Binding and Parameter Specification via the DNS (SVCB) |
 | rfc9462.txt | Discovery of Designated Resolvers (DDR) |
-| draft-denis-dprive-dnscrypt-10.txt | The DNSCrypt Protocol |
-| draft-denis-dns-stamps-02.txt | DNS Stamps |
+| draft-denis-dprive-dnscrypt.txt | The DNSCrypt Protocol |
+| draft-denis-dns-stamps.txt | DNS Stamps |
 
 ## Update
 
@@ -73,8 +73,8 @@ for f in rfc*.txt; do
   n=$(echo $f | grep -oE '[0-9]+')
   curl -sL -o "$f" "https://www.rfc-editor.org/rfc/rfc${n}.txt"
 done
-curl -sL -o draft-denis-dprive-dnscrypt-10.txt \
-  "https://www.ietf.org/archive/id/draft-denis-dprive-dnscrypt-10.txt"
-curl -sL -o draft-denis-dns-stamps-02.txt \
+curl -sL -o draft-denis-dprive-dnscrypt.txt \
+  "https://www.ietf.org/archive/id/draft-denis-dprive-dnscrypt-11.txt"
+curl -sL -o draft-denis-dns-stamps.txt \
   "https://www.ietf.org/archive/id/draft-denis-dns-stamps-02.txt"
 ```

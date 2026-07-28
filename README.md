@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.7.10-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.7.11-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -62,7 +62,7 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 | DoQ | 853 | QUIC | [RFC 9250](docs/rfc/rfc9250.txt) |
 | DoH / DoH3 | 443 | HTTP/2 + HTTP/3 | [RFC 8484](docs/rfc/rfc8484.txt) / [RFC 9114](docs/rfc/rfc9114.txt) |
 | DTLS | 8853 | UDP + DTLS 1.2+ | [RFC 8094](docs/rfc/rfc8094.txt) |
-| DNSCrypt | 8443 | UDP/TCP + PQ KEM | [draft-denis-dprive-dnscrypt](docs/rfc/draft-denis-dprive-dnscrypt-10.txt) |
+| DNSCrypt | 8443 | UDP/TCP + PQ KEM | [draft-denis-dprive-dnscrypt](docs/rfc/draft-denis-dprive-dnscrypt.txt) |
 | TLCP DoT | 9853 | TCP + SM2/SM3/SM4 | GB/T 38636-2020 |
 | TLCP DoH | 9443 | HTTP + SM2/SM3/SM4 | GB/T 38636-2020 |
 | DTLCP | 9853 | UDP + SM2/SM3/SM4 | GM/T 0128-2023 |

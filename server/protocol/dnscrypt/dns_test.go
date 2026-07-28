@@ -76,7 +76,7 @@ func TestNormalize_UDP_Fits_NoTruncation(t *testing.T) {
 		t.Fatalf("Pack: %v", err)
 	}
 
-	dnscryptcrypto.Normalize("udp", req, res)
+	dnscryptcrypto.Normalize("udp", req, res, 0)
 
 	if res.Truncated {
 		t.Error("response should NOT be truncated when it fits in buffer")
@@ -93,7 +93,7 @@ func TestNormalize_UDP_Exceeds_Truncates(t *testing.T) {
 	t.Logf("response size: %d bytes, limit: %d - %d = %d",
 		res.Len(), dnscryptcrypto.DNSSize("udp", req), dnscryptcrypto.EDNSSize, dnscryptcrypto.DNSSize("udp", req)-dnscryptcrypto.EDNSSize)
 
-	dnscryptcrypto.Normalize("udp", req, res)
+	dnscryptcrypto.Normalize("udp", req, res, 0)
 
 	if !res.Truncated {
 		t.Error("response SHOULD be truncated when exceeding buffer")
@@ -117,7 +117,7 @@ func TestNormalize_TCP_NeverTruncates(t *testing.T) {
 		t.Fatalf("Pack: %v", err)
 	}
 
-	dnscryptcrypto.Normalize("tcp", req, res)
+	dnscryptcrypto.Normalize("tcp", req, res, 0)
 
 	if res.Truncated {
 		t.Error("TCP response should NEVER be truncated")
@@ -136,7 +136,7 @@ func TestNormalize_UDP_SmallResponse_NoTruncation(t *testing.T) {
 		t.Fatalf("Pack: %v", err)
 	}
 
-	dnscryptcrypto.Normalize("udp", req, res)
+	dnscryptcrypto.Normalize("udp", req, res, 0)
 
 	if res.Truncated {
 		t.Error("small response should NOT be truncated after EDNS overhead deduction")
@@ -153,7 +153,7 @@ func TestNormalize_TruncatePreservesQuestion(t *testing.T) {
 		t.Fatalf("Pack: %v", err)
 	}
 
-	dnscryptcrypto.Normalize("udp", req, res)
+	dnscryptcrypto.Normalize("udp", req, res, 0)
 
 	if len(res.Question) != 1 {
 		t.Fatalf("question should be preserved after truncation, got %d", len(res.Question))
@@ -171,7 +171,7 @@ func TestNormalize_TruncateRepackRoundTrip(t *testing.T) {
 	req.UDPSize = dns.MinMsgSize
 	res := buildBulkResponse(30)
 
-	dnscryptcrypto.Normalize("udp", req, res)
+	dnscryptcrypto.Normalize("udp", req, res, 0)
 
 	if err := res.Pack(); err != nil {
 		t.Fatalf("Pack after truncation: %v", err)

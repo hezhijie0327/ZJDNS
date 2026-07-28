@@ -18,11 +18,6 @@ type Nonce = [NonceSize]byte
 type CryptoConstruction uint16
 
 const (
-	// MinUDPQuestionSize is the minimum padded query size for UDP.  It must be
-	// a multiple of 64 bytes.  Some servers (e.g. Quad9) reject smaller padded
-	// queries.
-	MinUDPQuestionSize = 256
-
 	// MaxDNSUDPPacketSize is the largest UDP datagram worth sending over the
 	// public internet.  Matches dnscrypt-proxy and the common EDNS0 buffer of
 	// 4096 bytes.
@@ -137,6 +132,20 @@ var (
 // IsPQ reports whether the CryptoConstruction uses post-quantum key exchange.
 func (c CryptoConstruction) IsPQ() bool {
 	return c == XWingPQ
+}
+
+// MinResponseOverhead returns the minimum number of bytes the encrypted response
+// framing adds beyond the raw DNS payload.  Used for UDP anti-amplification
+// budget checks: the encrypted response MUST NOT exceed the client query wire size.
+//
+//	Classical (XChacha20Poly1305): 8 magic + 24 nonce + 16 tag + 1 pad delimiter = 49
+//	PQ (XWingPQ): 8 magic + 24 nonce + 16 tag + 2 control-len + 1 pad delimiter = 51
+func MinResponseOverhead(esVersion CryptoConstruction) int {
+	const base = ResolverMagicSize + NonceSize + TagSize + 1
+	if esVersion.IsPQ() {
+		return base + 2
+	}
+	return base
 }
 
 // String implements the fmt.Stringer interface for CryptoConstruction.
