@@ -22,10 +22,6 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		dnscryptProvider string
 		dnscryptAddr     string
 
-		// SQL
-		runKV  bool
-		kvDrop bool
-
 		// DNS stamp
 		runDNSStamp    bool
 		dnsStampDecode bool
@@ -59,8 +55,6 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	fs.StringVar(&dnscryptAddr, "addr", "127.0.0.1:8443", "Server address for DNSCrypt stamp")
 
 	// SQL
-	fs.BoolVar(&runKV, "kv", false, "Browse BadgerDB keys (--kv <db> [prefix])")
-	fs.BoolVar(&kvDrop, "drop", false, "Drop keys by prefix (--kv <db> <prefix> --drop)")
 
 	// DNS stamp
 	fs.BoolVar(&runDNSStamp, "dnsstamp", false, "Decode or encode an sdns:// DNS stamp")
@@ -91,8 +85,6 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		fmt.Fprintf(os.Stderr, "  %s --version                    # Show version information\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --generate-config            # Generate example config\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --generate-config --dnscrypt --provider <name> [--addr <addr>]\n", fs.Name())
-		fmt.Fprintf(os.Stderr, "  %s --kv <db> [prefix]            # Browse BadgerDB keys\n", fs.Name())
-		fmt.Fprintf(os.Stderr, "  %s --kv <db> <prefix> --drop     # Drop keys by prefix\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --dnsstamp --decode <stamp>  # Decode an sdns:// stamp to upstream JSON\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --dnsstamp --encode --proto <type> --stamp-addr <addr> [--provider-name <name>] [--public-key <hex>] [--path <path>] [--props <n>]\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --probe --pipeline    tcp://host:port  # Test RFC 7766 query pipelining\n", fs.Name())
@@ -185,33 +177,6 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 			}
 		default:
 			fmt.Fprintf(os.Stderr, "Usage: %s --dnsstamp --decode <stamp> | --dnsstamp --encode [options]\n", fs.Name())
-		}
-		return "", true
-	}
-
-	// --kv
-	if runKV {
-		args := fs.Args()
-		if len(args) < 1 {
-			fmt.Fprintf(os.Stderr, "Usage: %s --kv <db> [prefix] [--drop]\n", fs.Name())
-			return "", true
-		}
-		prefix := ""
-		if len(args) >= 2 {
-			prefix = args[1]
-		}
-		if kvDrop {
-			if prefix == "" {
-				fmt.Fprintf(os.Stderr, "--drop requires a prefix\n")
-				return "", true
-			}
-			if err := RunKVDrop(args[0], prefix); err != nil {
-				fmt.Fprintf(os.Stderr, "kv drop: %v\n", err)
-			}
-		} else {
-			if err := RunKV(args[0], prefix); err != nil {
-				fmt.Fprintf(os.Stderr, "kv: %v\n", err)
-			}
 		}
 		return "", true
 	}

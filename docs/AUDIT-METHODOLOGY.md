@@ -36,6 +36,7 @@
 | **函数排序** | 文件内声明顺序是否严格遵循 `type → const → var → func`（decorder 强制）；同一接收者的方法是否聚合而非散落；构造/初始化函数是否在最靠近类型的位置（即紧跟 var 块之后的第一个 func）；新增函数是否随机插入在无关函数之间 |
 | **Go 版本特性** | 代码是否采用了当前最低 Go 版本的语言/库特性；是否存在可用 `new(expr)`、`errors.AsType[T]`、`slices.Reverse` 等新版标准库替代的手写模式；`go fix` 现代器覆盖的迁移是否已应用 |
 | **流程图覆盖** | `docs/FLOWCHARTS.md` 是否覆盖全部核心功能和协议；新增特性/协议/中间件是否同步更新了流程图；mermaid 语法是否正确可渲染 |
+| **BadgerDB 存储** | TTL 使用是否正确（`WithTTL` + `IsDeletedOrExpired`）；`WriteBatch` vs `db.Update` 选择是否合理；key 编码是否二进制 BigEndian 一致；prefix scan 效率；`DropPrefix` 清理范围；`Sequence` bandwidth 和 crash 容忍；`UserMeta` 使用；是否存在应用层 zstd 双重压缩 |
 
 ### 1.2 审计架构
 
@@ -263,7 +264,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 | **并发安全** | 临界区过窄或缺失（锁-drop 窗口、无锁写入） | 锁保护区域明确注释；`go test -race` 作为 CI 必需项 |
 | **防御算法** | 状态机缺少逃逸路径、过度拒绝合法响应 | 每个防御模块必须有 fuzz 测试和边界条件用例 |
 | **死代码/冗余** | 重构后遗留（中间件、迁移、未用字段） | `staticcheck -checks U1000` 集成 CI |
-| **键值编码** | 编码格式不一致、分隔符缺失 | 统一使用 `database/keys.go` 编码函数；key 构造通过 `fmt.Sprintf` 模板 |
+| **键值编码** | 编码格式不一致、NUL 字节碰撞二进制字段、偏移计算错误 | 统一使用 `database/keys.go` 二进制 BigEndian 编码函数；二进制字段用 offset-based 解析（不用 NUL 分隔）；每对 encode/decode 必须有 round-trip 测试 |
 | **跨协议一致性** | 同类型 bug 在不同协议处理器中重复出现（DTLS/DTLCP 固定缓冲区） | 修复一个协议 bug 后，全局搜索相同模式到所有协议处理器 |
 | **Pool buffer 生命周期** | `response.Data` 指向已归还的 pool buffer（use-after-free） | `pool.Put` 前必须 `response.Data = nil`，参考 `tcp.go` 的 `resp.Data = nil` 模式 |
 | **TODO 管理** | TODO 注释累积但不实现，变成虚假安全感 | 每个 TODO 要么实现、要么改为 NOTE 并说明原因、要么删除 |
@@ -315,7 +316,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 2. **锁内不要做 IO**：在锁外关闭旧连接，在锁内操作数据结构
 3. **切片共享底层数组**：从 atomic pointer 获取的切片在修改前必须复制
 4. **多读循环必须检查 ctx.Done()**：每个 poll 迭代都应可取消
-5. **KV key 构造需要分隔符**：`fmt.Sprintf` 模板中的 `\x00` 是字段分隔符，缺失会导致前缀扫描错误
+5. **KV key 构造用二进制 BigEndian，不用 fmt.Sprintf**：字符串字段用 `\x00` 分隔，数值字段用 `binary.BigEndian.PutUint*` 写入固定偏移。二进制字段含 `0x00` 时 NUL 解析会错位——key 解析函数必须用 offset-based 而非 NUL 扫描。每对 encode/decode 必须对应
 6. **每查询一条日志原则**：hot-path（每次查询都经过的路径）只用 Debug；Info 仅用于状态变更（启动/关闭/重载）；Warn 用于可恢复异常且应带采样或限流；Error 仅用于不可恢复
 7. **日志必须含定位信息**：错误/Warn 日志至少包含 qname/qtype/server/error 中与上下文相关的字段；不要打印"query failed"而没说哪个查询
 8. **禁止 info/warn 在热路径**：`log.Infof` / `log.Warnf` 不得出现在每次查询都会执行的代码路径中（如 ServeDNS、middleware Wrap、upstream Exchange）。每查询超过一条 info/warn 即为刷屏
@@ -363,7 +364,50 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 24. **Goroutine 无回收**：`go func()` 后无任何机制等待其退出 — errgroup、WaitGroup、done channel 三者至少有一 |
 25. **Go 特性滞后**：手写 `for i := len(s)-1; i >= 0; i--` 反向迭代（用 `slices.Backward`）、`errors.As` 循环（用 `errors.AsType[T]`）、裸 `new(T)` 可简化为 `new(expr)` |
 
-### 6.3 持续改进
+### 6.3 BadgerDB 专项审计
+
+ZJDNS 使用 BadgerDB v4 LSM-tree KV 存储（`github.com/dgraph-io/badger/v4`）。以下 API 和行为是审计的关键基准。
+
+#### 6.3.1 BadgerDB API 参考
+
+| API | 用途 | 审计关注点 |
+|-----|------|-----------|
+| `db.View(fn)` | 只读事务 | 闭包内不应调用 `txn.Set`/`txn.Delete`（会 panic）。View 不阻塞 Update |
+| `db.Update(fn)` | 读写事务 | 同步提交，适合关键数据。不应在热路径用 `Update` 写大批量数据 |
+| `WriteBatch` | 异步批量写入 | 内部自动拆分大事务，异步提交。适合 stats 等 best-effort 数据。`wb.Set` 错误应检查 |
+| `Entry.WithTTL(d)` | 原生 TTL 过期 | LSM compaction 时自动清理。TTL 值 = DNS TTL + stale max age。ptr_map 条目必须同步设 TTL |
+| `Entry.WithMeta(b)` | 1 字节元数据 | ZJDNS 用 `UserMeta` 存 `validated` 标志（0/1）。`Item.UserMeta()` 读取 |
+| `Item.IsDeletedOrExpired()` | 条目有效性检查 | 遍历时过滤已过期/已删除条目，避免对僵尸条目操作 |
+| `Item.ExpiresAt()` | 读取 TTL 时间戳 | BadgerDB 原生 API，不需要在 value 里存 `expiresAt` |
+| `Item.KeyCopy(dst)` | 安全的 key 复制 | 跨迭代保存 key 时必须用 `KeyCopy`，`item.Key()` 仅在 `it.Next()` 前有效 |
+| `Sequence` | 单调递增 ID | bandwidth=1000（租约 1000 个 ID 后才写盘）。crash 时最多丢失 1000 个 ID，可接受 |
+| `DropPrefix(p)` | 批量删除 | 阻塞所有写入直到完成。适合管理操作，不适合热路径 |
+| `RunValueLogGC(ratio)` | vlog 垃圾回收 | ValueThreshold≥64KB 后 vlog 基本为空，不必定期调用 |
+| `Subscribe(ctx, cb, matches)` | 进程内 pub/sub | 不能用于跨实例缓存一致性。仅进程内通知 |
+| `Stream` / `StreamWriter` | 并发迭代 / 快速导入 | 适合备份恢复。Stream 产生无序输出。StreamWriter 覆盖已有数据 |
+| `MergeOperator` | 读-改-写优化 | 盲写增量，compaction 时合并。每个 key 一个 goroutine + ticker，不适合大量唯一 key 的 stats |
+| `WithValueThreshold(n)` | LSM inline 阈值 | 当前 64KB：DNS 值全部 inline，无 vlog IO |
+| `WithIndexCacheSize(n)` | Bloom filter 缓存 | 当前 64MB：移出 Go heap，减少 GC 压力 |
+| `WithNumVersionsToKeep(1)` | 禁用 MVCC | 每条 key 只保留最新版本，`DiscardEarlierVersions` 冗余 |
+| `WithDetectConflicts(false)` | 禁用冲突检测 | 缓存 upsert 模式，last-writer-wins 语义正确 |
+| `WithCompression(options.ZSTD)` | block 级 zstd | SSTable block 级压缩，应用层不应再做 zstd（双重压缩浪费 CPU） |
+
+#### 6.3.2 BadgerDB 常见反模式
+
+1. **应用层 zstd + BadgerDB zstd 双重压缩**：`zdnsutil.Compress` 后存入 BadgerDB，BadgerDB 再做 block 级 zstd。zstd 压缩已压缩数据无效，浪费 CPU。解法：直接存 raw wire，信任 BadgerDB block 级压缩
+2. **手写 TTL 驱逐替代原生 `WithTTL`**：自己扫描、排序、删除过期条目。`WithTTL` + `IsDeletedOrExpired` 更高效，compaction 自动回收空间
+3. **value 里存 `expiresAt` 冗余字段**：BadgerDB 原生 TTL 已管理物理过期，value 只需存 DNS TTL（用于 `RemainingTTL` 计算）
+4. **`fmt.Appendf` 构造 key**：每次分配 + reflect。应用层 key/value 编码都用 `binary.BigEndian.PutUint*` + `copy`，与 value 编码风格一致
+5. **NUL 分隔符解析二进制字段**：数值字段 BE 编码可能含 `0x00` 字节（如 qtype=A=1 编码为 `[0x00, 0x01]`）。NUL 扫描会将这些字节误认为分隔符。解法：固定偏移 offset-based 解析
+6. **绕过 `database.DB` 包装层直接访问 `.Badger`**：所有调用方应通过 `db.View`/`db.Update`/`db.DropPrefix` 等方法访问，统一内置 `IsClosed` 检查
+7. **stats 用 `db.Update` 同步事务而非 `WriteBatch`**：`Update` 同步提交，stats 写多了阻塞热路径。`WriteBatch` 异步提交 + 内存预聚合是正确方案
+8. **`Sequence` bandwidth 过大或过小**：bandwidth=1000 平衡 crash 容忍（最多丢 1000 个 ID）和写盘频率。bandwidth=1 每次 `Next()` 都写盘
+9. **`NumVersionsToKeep(1)` 与 `DiscardEarlierVersions` 同时使用**：前者已全局禁用 MVCC，后者完全冗余
+10. **prefix scan 不设 `PrefetchValues=false`**：只计数时不读 value，省一次 LSM 查找
+11. **`Item.Key()` 跨迭代使用**：`it.Next()` 后 key 可能被覆盖，跨迭代保存必须 `Item.KeyCopy(nil)`
+12. **`Entry.WithDiscard()` 标记而非 `txn.Delete`**：对于大批量删除，标记丢弃让 compaction 回收比立即删除更高效
+
+### 6.4 持续改进
 
 - 每次添加新协议处理器时，自动检查池归还纪律
 - 死代码检测集成到 CI（`staticcheck -checks U1000`）

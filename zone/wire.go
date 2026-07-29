@@ -5,8 +5,6 @@ import (
 	"strings"
 	"zjdns/config"
 
-	zdnsutil "zjdns/internal/dnsutil"
-
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
 	"codeberg.org/miekg/dns/rdata"
@@ -26,7 +24,7 @@ func packRRs(domain string, records []config.ZoneRecord) []byte {
 	if err := msg.Pack(); err != nil {
 		return nil
 	}
-	return zdnsutil.Compress(msg.Data)
+	return msg.Data
 }
 
 // unpackRRs decompresses a blob and unpacks the RRs from the dns.Msg.
@@ -34,12 +32,8 @@ func unpackRRs(blob []byte) []dns.RR {
 	if len(blob) == 0 {
 		return nil
 	}
-	wire, err := zdnsutil.Decompress(blob)
-	if err != nil {
-		return nil
-	}
 	msg := &dns.Msg{}
-	msg.Data = wire
+	msg.Data = blob
 	if err := msg.Unpack(); err != nil {
 		return nil
 	}

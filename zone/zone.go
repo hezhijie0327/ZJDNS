@@ -3,6 +3,7 @@
 package zone
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strconv"
@@ -372,6 +373,7 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 					return nil
 				})
 			}
+			it.Close()
 		}
 		return nil
 	})
@@ -382,54 +384,39 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 	return best
 }
 
-// extractMatchTagsFromZoneKey parses the match_tags from a zone key.
-// Key format: z:{w}\x00{qname}\x00{qtype:04x}\x00{qclass:04x}\x00{match_tags}
+// extractMatchTagsFromZoneKey parses the match_tags suffix from a zone key.
+// Key format: z:{w:1B}\x00{qname}\x00{qtype:2B}\x00{qclass:2B}\x00{match_tags}
 func extractMatchTagsFromZoneKey(key string) string {
-	// Key format: z:{w}\x00{qname}\x00{qtype:04x}\x00{qclass:04x}\x00{match_tags}
-	// match_tags is everything after the 4th \x00.
-	nul := 0
-	for i, c := range key {
-		if c == 0 {
-			nul++
-			if nul == 4 {
-				if i+1 < len(key) {
-					return key[i+1:]
-				}
-				return ""
-			}
-		}
+	qnameEnd := 4
+	for qnameEnd < len(key) && key[qnameEnd] != 0 {
+		qnameEnd++
+	}
+	// match_tags starts after: qnameEnd(NUL) + 1 + qtype(2) + NUL(1) + qclass(2) + NUL(1) = qnameEnd+7
+	tagsOff := qnameEnd + 7
+	if tagsOff < len(key) {
+		return key[tagsOff:]
 	}
 	return ""
 }
 
 // parseZoneKeyTypeClass extracts qtype and qclass from a zone key.
-// Key format: z:{w}\x00{qname}\x00{qtype:04x}\x00{qclass:04x}\x00{match_tags}
-//
-//nolint:gocritic // if-else chain is clearer than switch for sequential nul detection
+// Key format: z:{w:1B}\x00{qname}\x00{qtype:2B BE}\x00{qclass:2B BE}\x00{match_tags}
+// Uses offset-based parsing to avoid ambiguity from 0x00 bytes inside binary fields.
 func parseZoneKeyTypeClass(key string) (qtype, qclass uint16) {
-	// After 2nd \x00 comes qtype, after 3rd comes qclass.
-	nul := 0
-	start := 0
-	for i, c := range key {
-		if c == 0 {
-			nul++
-			switch nul {
-			case 2:
-				start = i + 1
-			case 3:
-				// qtype is key[start:i], which should be 4 hex chars
-				if i-start >= 4 {
-					qtype = uint16(parseHexIntStr(key[start : start+4])) //nolint:gosec // G115: protocol-bounded value fits target type
-				}
-				start = i + 1
-
-			case 4:
-				if i-start >= 4 {
-					qclass = uint16(parseHexIntStr(key[start : start+4])) //nolint:gosec // G115: protocol-bounded value fits target type
-				}
-				return qtype, qclass
-			}
-		}
+	// Skip "z:" (2) + wildcard byte (1) + NUL (1) = 4 bytes, then find qname end.
+	qnameEnd := 4
+	for qnameEnd < len(key) && key[qnameEnd] != 0 {
+		qnameEnd++
+	}
+	// qtype starts at qnameEnd+1, 2 bytes BE.
+	qtypeOff := qnameEnd + 1
+	if qtypeOff+2 <= len(key) {
+		qtype = binary.BigEndian.Uint16([]byte(key[qtypeOff : qtypeOff+2]))
+	}
+	// qclass starts at qtypeOff+2 (skip qtype) + 1 (skip NUL) = qtypeOff+3, 2 bytes BE.
+	qclassOff := qtypeOff + 3
+	if qclassOff+2 <= len(key) {
+		qclass = binary.BigEndian.Uint16([]byte(key[qclassOff : qclassOff+2]))
 	}
 	return qtype, qclass
 }
@@ -539,21 +526,4 @@ func parseMatchTags(raw []string) ([]matchTag, error) {
 		tags = append(tags, matchTag{tag: tag, negate: negate})
 	}
 	return tags, nil
-}
-
-// parseHexIntStr parses a hex string to int.
-func parseHexIntStr(s string) int {
-	var n int
-	for _, c := range s {
-		n *= 16
-		switch {
-		case c >= '0' && c <= '9':
-			n += int(c - '0')
-		case c >= 'a' && c <= 'f':
-			n += int(c - 'a' + 10)
-		case c >= 'A' && c <= 'F':
-			n += int(c - 'A' + 10)
-		}
-	}
-	return n
 }

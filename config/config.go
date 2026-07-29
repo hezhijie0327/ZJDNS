@@ -116,6 +116,7 @@ type DatabaseSettings struct {
 	DBPath           string `json:"db_path,omitzero"`             // database directory path
 	MemTableSizeMB   int    `json:"memtable_size_mb,omitzero"`    // BadgerDB memtable size (write buffer), 0 = default
 	BlockCacheSizeMB int    `json:"block_cache_size_mb,omitzero"` // BadgerDB block cache size (read cache), 0 = default
+	IndexCacheSizeMB int    `json:"index_cache_size_mb,omitzero"` // BadgerDB index cache size (bloom filters), 0 = default
 }
 
 // CacheSettings configures DNS response cache size and stale serving.

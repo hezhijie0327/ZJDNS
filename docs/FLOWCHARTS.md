@@ -30,11 +30,11 @@ graph TD
     INITDB --> INITMW[Build Middleware Chain<br/>9 Layers]
     INITMW --> INITHANDLER[Create Handler<br/>+ Resolver + Zone + Ruleset]
     INITHANDLER --> STARTPROTO[Start Protocol Listeners<br/>UDP TCP DoT DoH DoH3<br/>DoQ DTLS TLCP DTLCP<br/>DNSCrypt]
-    STARTPROTO --> BG[Start Background Tasks<br/>ECS Refresh · Cookie Rotate<br/>TCP WriteMu Sweep · Stats]
+    STARTPROTO --> BG[Start Background Tasks<br/>ECS Refresh · Cookie Rotate<br/>TCP WriteMu Sweep]
     BG --> RUNNING[Running<br/>accept queries]
     RUNNING --> SIG{Signal?}
     SIG -->|SIGINT/SIGTERM| SHUTDOWN[Mark Handler Closed<br/>Cancel Context<br/>Stop Protocol Listeners]
-    SHUTDOWN --> WAITBG[Wait Background Tasks<br/>Flush Stats · Close DB]
+    SHUTDOWN --> WAITBG[Wait Background Tasks<br/>Drain AsyncStatsWriter · Close DB]
     WAITBG --> EXIT[Exit]
     classDef start fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     classDef proc fill:#fef3c7,stroke:#f59e0b,color:#78350f
@@ -71,7 +71,7 @@ graph TD
     Q[Query] --> ECSCAND[Build ECS Fallback Candidates<br/>addr/prefix granularities<br/>+ empty-ECS for non-ECS entries]
     ECSCAND --> LOOP{Loop candidates}
     LOOP -->|next| QUERY[BadgerDB Key Lookup<br/>qname+qtype+qclass+ecs]
-    QUERY -->|found| DECOMP[zstd Decompress]
+    QUERY -->|found| UNPACK[dns.Msg Unpack]
     QUERY -->|not found| LOOP
     QUERY -->|error| MISS[Cache Miss]
     LOOP -->|exhausted| MISS
@@ -723,7 +723,7 @@ graph LR
     CH -->|default: drop| DROP[Drop under overload]
     CH -->|send| BG[Background Goroutine<br/>batch accumulate]
     BG --> TICKER{100ms Ticker<br/>or batch full 64}
-    TICKER -->|Fire| FLUSH[Batch INSERT<br/>query_stats + query_log]
+    TICKER -->|Fire| FLUSH[Aggregate in Memory<br/>WriteBatch Flush]
     FLUSH --> BG
     CLOSE[Close] --> DRAIN[Drain channel]
     DRAIN --> FLUSHLAST[Final Flush]

@@ -1,7 +1,6 @@
 package dnsutil
 
 import (
-	"crypto/rand"
 	"net/netip"
 	"testing"
 
@@ -13,58 +12,6 @@ type testTimeoutError struct{}
 
 func (e *testTimeoutError) Error() string { return "timeout" }
 func (e *testTimeoutError) Timeout() bool { return true }
-
-// ── zstd compression benchmarks ──────────────────────────────────────────────
-
-func BenchmarkCompress(b *testing.B) {
-	// Generate realistic DNS wire-format data (~512 bytes).
-	data := make([]byte, 512)
-	_, _ = rand.Read(data)
-	b.ResetTimer()
-	for b.Loop() {
-		_ = Compress(data)
-	}
-}
-
-func BenchmarkCompressSmall(b *testing.B) {
-	data := make([]byte, 64)
-	_, _ = rand.Read(data)
-	b.ResetTimer()
-	for b.Loop() {
-		_ = Compress(data)
-	}
-}
-
-func BenchmarkDecompress(b *testing.B) {
-	data := make([]byte, 512)
-	_, _ = rand.Read(data)
-	compressed := Compress(data)
-	b.ResetTimer()
-	for b.Loop() {
-		_, _ = Decompress(compressed)
-	}
-}
-
-func BenchmarkDecompressTo(b *testing.B) {
-	data := make([]byte, 512)
-	_, _ = rand.Read(data)
-	compressed := Compress(data)
-	dst := make([]byte, 0, 1024)
-	b.ResetTimer()
-	for b.Loop() {
-		_, _ = DecompressTo(compressed, dst)
-	}
-}
-
-func BenchmarkCompressDecompressRoundTrip(b *testing.B) {
-	data := make([]byte, 512)
-	_, _ = rand.Read(data)
-	b.ResetTimer()
-	for b.Loop() {
-		c := Compress(data)
-		_, _ = Decompress(c)
-	}
-}
 
 // ── Domain helpers ───────────────────────────────────────────────────────────
 

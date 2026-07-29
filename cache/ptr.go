@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"time"
 	"zjdns/database"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -11,8 +12,9 @@ import (
 
 // insertPtrMap inserts reverse-lookup entries into BadgerDB for a cache entry.
 // Deduplicates by (rdata_ip, name) — the same IP can appear across multiple
-// sections in a single response.
-func insertPtrMap(txn *badger.Txn, entryID uint64, rrs []dns.RR, expiresAt int64) error {
+// sections in a single response. Each ptr_map entry inherits the cache entry's
+// physical expiry so BadgerDB compaction can reclaim orphaned keys.
+func insertPtrMap(txn *badger.Txn, entryID uint64, rrs []dns.RR, now, ttlDuration int64) error {
 	type rec struct {
 		name    string
 		ttl     int32
@@ -41,9 +43,11 @@ func insertPtrMap(txn *badger.Txn, entryID uint64, rrs []dns.RR, expiresAt int64
 		key := r.rdataIP + "\x00" + r.name
 		if !seen[key] {
 			seen[key] = true
-			k := database.PtrMapKey(r.rdataIP, entryID, r.name)
-			v := database.EncodePtrMapValue(r.ttl, expiresAt)
-			if err := txn.Set(k, v); err != nil {
+			k := database.EIPReverseKey(r.rdataIP, entryID, r.name)
+			v := database.EncodePtrMapValue(r.ttl)
+			e := badger.NewEntry(k, v).
+				WithTTL(time.Duration(ttlDuration) * time.Second)
+			if err := txn.SetEntry(e); err != nil {
 				return err
 			}
 		}

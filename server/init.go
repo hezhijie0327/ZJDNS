@@ -65,20 +65,10 @@ func wireZoneDynamicContent(store cache.Store, rules []config.ZoneRule) {
 		switch rules[i].Name {
 		case config.DefaultProjectName + ".stats":
 			rules[i].DynamicContent = store.Stats
-		case config.DefaultProjectName + ".db.clear":
-			rules[i].DynamicContent = makeFlushFunc(store.Clear, "flushed")
 		case config.DefaultProjectName + ".db.clear.cache":
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("cache") }, "flushed")
 		case config.DefaultProjectName + ".db.clear.stats":
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("stats") }, "reset")
-		case config.DefaultProjectName + ".db.clear.querylog":
-			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("querylog") }, "flushed")
-		case config.DefaultProjectName + ".db.clear.latency":
-			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("latency") }, "flushed")
-		case config.DefaultProjectName + ".db.clear.zone":
-			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("zone") }, "flushed")
-		case config.DefaultProjectName + ".db.clear.ruleset":
-			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("ruleset") }, "flushed")
 		}
 	}
 }

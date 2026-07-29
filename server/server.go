@@ -137,6 +137,7 @@ func (s *Server) initDatabase(cfg *config.ServerConfig) (*database.DB, error) {
 		cfg.Server.Features.Cache.MaxEntries,
 		cfg.Server.Features.Database.MemTableSizeMB,
 		cfg.Server.Features.Database.BlockCacheSizeMB,
+		cfg.Server.Features.Database.IndexCacheSizeMB,
 	)
 }
 

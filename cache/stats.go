@@ -1,15 +1,14 @@
 package cache
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
-	"net"
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
 	"zjdns/internal/ttl"
 
-	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
 	"github.com/dgraph-io/badger/v4"
 )
@@ -43,11 +42,8 @@ func (c *Cache) RecordRequest(r *RequestRecord) {
 		return
 	}
 	_ = c.db.Badger.Update(func(txn *badger.Txn) error {
-		upsertQueryStats(txn, r.Result, r.Protocol, r.Rcode, r.DNSSECStatus, database.BoolToInt(r.Poisoned), r.ResponseTime)
-		if r.Result != "hit" {
-			_ = insertQueryLog(txn, c.db, qname, int(r.Qtype), int(r.Qclass), r.Protocol, r.Result,
-				r.Rcode, r.ResponseTime, r.Server, database.BoolToInt(r.Poisoned), r.DNSSECStatus)
-		}
+		upsertQueryStats(txn, r.Result, r.Protocol, r.Rcode, r.DNSSECStatus, r.Poisoned, r.ResponseTime)
+
 		return nil
 	})
 }
@@ -58,44 +54,39 @@ func (c *Cache) ReverseLookup(ip string) []LookupResult {
 		return nil
 	}
 
-	staleCutoff := log.NowUnix() - defaultStaleMaxAge
 	var results []LookupResult
 
 	_ = c.db.Badger.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
-		opts.Prefix = database.PtrMapIPPrefix(ip)
+		opts.Prefix = database.EIPReversePrefix(ip)
 		opts.PrefetchValues = true
 		it := txn.NewIterator(opts)
 		defer it.Close()
 
 		for it.Rewind(); it.Valid(); it.Next() {
 			item := it.Item()
-			var ttlVal int32
-			var expiresAt int64
-			_ = item.Value(func(v []byte) error {
-				ttlVal, expiresAt = database.DecodePtrMapValue(v)
-				return nil
-			})
-			if expiresAt < staleCutoff {
+			if item.IsDeletedOrExpired() {
 				continue
 			}
-			// Extract name from key: p:{ip}\x00{entry_id:016x}\x00{name}
+			var ttlVal int32
+			_ = item.Value(func(v []byte) error {
+				ttlVal = database.DecodePtrMapValue(v)
+				return nil
+			})
+			// Extract name from key: p:{ip}\x00{entry_id:8B BE}\x00{name}
 			k := string(item.Key())
-			// Find the second \x00 separator (after entry_id)
-			sep1 := 0
-			for i, c := range k {
-				if c == 0 {
-					if sep1 == 0 {
-						sep1 = i
-					} else {
-						name := k[i+1:]
-						results = append(results, LookupResult{
-							Name: name,
-							TTL:  ttl.RemainingTTL(0, int(ttlVal), uint32(config.DefaultStaleTTL)),
-						})
-						break
-					}
-				}
+			// Find first NUL after ip, then skip entryID (8B) + NUL (1B) = 9.
+			nameOff := 0
+			for nameOff < len(k) && k[nameOff] != 0 {
+				nameOff++
+			}
+			nameOff += 1 + 8 + 1 // skip NUL + entryID(8) + NUL
+			if nameOff < len(k) {
+				name := k[nameOff:]
+				results = append(results, LookupResult{
+					Name: name,
+					TTL:  ttl.RemainingTTL(0, int(ttlVal), uint32(config.DefaultStaleTTL)),
+				})
 			}
 		}
 		return nil
@@ -105,7 +96,7 @@ func (c *Cache) ReverseLookup(ip string) []LookupResult {
 
 // upsertQueryStats does a read-modify-write on a query_stats key within a
 // transaction. Called from both the async writer path and the sync fallback.
-func upsertQueryStats(txn *badger.Txn, result, protocol string, rcode int, dnssecStatus string, poisoned int, responseTime int64) {
+func upsertQueryStats(txn *badger.Txn, result, protocol string, rcode int, dnssecStatus string, poisoned bool, responseTime int64) {
 	statDay := log.NowUnix() / 86400
 	key := database.QueryStatsKey(statDay, result, protocol, rcode, dnssecStatus, poisoned)
 
@@ -122,25 +113,9 @@ func upsertQueryStats(txn *badger.Txn, result, protocol string, rcode int, dnsse
 	_ = txn.Set(key, database.EncodeQueryStatsValue(queryCount, totalMS))
 }
 
-// insertQueryLog writes a single query_log entry within a transaction.
-// Errors are silently discarded — audit logging is best-effort.
-func insertQueryLog(txn *badger.Txn, db *database.DB, qname string, qtype, qclass int, protocol, result string,
-	rcode int, responseMS int64, server string, poisoned int, dnssecStatus string,
-) error {
-	seq, err := db.NextQLogID()
-	if err != nil {
-		return err
-	}
-	key := database.QueryLogKey(log.NowUnix(), seq)
-	val := database.EncodeQueryLogValue(log.NowUnix(), qname, uint16(qtype), uint16(qclass), //nolint:gosec // G115: DNS type/class fits uint16
-		protocol, result, rcode, responseMS, server, poisoned, dnssecStatus)
-	return txn.Set(key, val)
-}
-
-// FlushDB truncates a single table: "stats" (query_stats), "querylog" (query_log),
-// "cache" (entries), "latency" (ip_latency), "zone" (zone_entries), or
-// "ruleset" (ruleset_entries). Uses db.DropPrefix — NOTE: this stops all
-// writes during the operation (admin tool, not hot-path).
+// FlushDB truncates a single table: "stats" (query_stats), "cache" (entries),
+// "zone" (zone_entries), or "ruleset" (ruleset_entries).
+// Uses db.DropPrefix — NOTE: this stops all writes during the operation.
 func (c *Cache) FlushDB(target string) (int64, error) {
 	if c.db.IsClosed() {
 		return 0, errCacheClosed
@@ -149,12 +124,8 @@ func (c *Cache) FlushDB(target string) (int64, error) {
 	switch target {
 	case "stats":
 		prefix = database.QueryStatsPrefix()
-	case "querylog":
-		prefix = database.QueryLogPrefix()
 	case "cache":
 		prefix = database.EntryKeyPrefix()
-	case "latency":
-		prefix = []byte("l:")
 	case "zone":
 		prefix = []byte("z:")
 	case "ruleset":
@@ -165,16 +136,13 @@ func (c *Cache) FlushDB(target string) (int64, error) {
 	if err := c.db.Badger.DropPrefix(prefix); err != nil {
 		return 0, fmt.Errorf("flushDB %s: %w", target, err)
 	}
-	if target == "cache" {
-		c.db.SetEntryCount(0)
-	}
 	log.Infof("CACHE: flushDB %s: done", target)
 	return 0, nil // DropPrefix doesn't return count
 }
 
-// Clear truncates all tables: entries, query_stats, query_log, ip_latency.
+// Clear truncates cache entries and query_stats.
 func (c *Cache) Clear() (int64, error) {
-	for _, target := range []string{"cache", "stats", "querylog", "latency"} {
+	for _, target := range []string{"cache", "stats"} {
 		if _, err := c.FlushDB(target); err != nil {
 			return 0, err
 		}
@@ -189,7 +157,21 @@ func (c *Cache) Stats() []string {
 		return nil
 	}
 
-	entries := c.db.EntryCount()
+	// Count cache entries via prefix scan — TTL makes atomic tracking unreliable.
+	var entries int64
+	_ = c.db.Badger.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = database.EntryKeyPrefix()
+		opts.PrefetchValues = false
+		it := txn.NewIterator(opts)
+		defer it.Close()
+		for it.Rewind(); it.Valid(); it.Next() {
+			if !it.Item().IsDeletedOrExpired() {
+				entries++
+			}
+		}
+		return nil
+	})
 
 	var total, hits, misses, stales, zones, errCount, blockedCount, badcookieCount int64
 	var udp, tcp, tls, quic, https, http3, dtls, dnscrypt, dnscryptTCP, tlcp, httpTLCP, dtlcp int64
@@ -315,55 +297,48 @@ func (c *Cache) Stats() []string {
 }
 
 // parseStatsKey extracts fields from a query_stats key.
-// Format: s:{stat_day:08x}\x00{result}\x00{protocol}\x00{rcode:04x}\x00{dnssec}\x00{poisoned}
+// Format: s:{stat_day:8B BE}\x00{result}\x00{protocol}\x00{rcode:2B BE}\x00{dnssec}\x00{poisoned:1B}
+// Uses offset-based parsing to avoid ambiguity from 0x00 bytes inside binary rcode.
 func parseStatsKey(key string) (result, protocol string, rcode int, dnssec string, poisoned bool) {
-	// Skip the "s:" prefix + 8 hex chars + \x00.
-	if len(key) < 12 {
+	// Skip "s:" (2) + stat_day (8) + NUL (1) = 11 bytes.
+	off := 11
+	if len(key) < off {
 		return "", "", 0, "", false
 	}
-	// Find the separators.
-	parts := splitByNul(key[11:]) // skip "s:" + 8 hex + NUL
-	// parts[0] = result, parts[1] = protocol, parts[2] = rcode(hex4), parts[3] = dnssec, parts[4] = poisoned
-	if len(parts) < 5 {
-		return "", "", 0, "", false
+	// Read result string until NUL.
+	result, off = readNulString(key, off)
+	// Read protocol string until NUL.
+	protocol, off = readNulString(key, off)
+	// Read rcode as 2 bytes BE.
+	if off+2 <= len(key) {
+		rcode = int(binary.BigEndian.Uint16([]byte(key[off : off+2])))
+		off += 2 + 1 // skip rcode + NUL
 	}
-	result = parts[0]
-	protocol = parts[1]
-	rcode = parseHexInt(parts[2])
-	dnssec = parts[3]
-	poisoned = parts[4] == "1"
+	// Read dnssec string until NUL.
+	dnssec, off = readNulString(key, off)
+	// Read poisoned as 1 byte.
+	if off < len(key) {
+		poisoned = key[off] == '1'
+	}
 	return result, protocol, rcode, dnssec, poisoned
 }
 
-// splitByNul splits a string by \x00 bytes.
-func splitByNul(s string) []string {
-	var parts []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == 0 {
-			parts = append(parts, s[start:i])
-			start = i + 1
-		}
+// readNulString reads a NUL-terminated string from key starting at off.
+// Returns the string (without NUL) and the next offset (after the NUL).
+func readNulString(key string, off int) (s string, nextOff int) {
+	if off >= len(key) {
+		return "", off
 	}
-	parts = append(parts, s[start:])
-	return parts
-}
-
-// parseHexInt parses a 4-digit hex string to int.
-func parseHexInt(s string) int {
-	var n int
-	for _, c := range s {
-		n *= 16
-		switch {
-		case c >= '0' && c <= '9':
-			n += int(c - '0')
-		case c >= 'a' && c <= 'f':
-			n += int(c - 'a' + 10)
-		case c >= 'A' && c <= 'F':
-			n += int(c - 'A' + 10)
-		}
+	end := off
+	for end < len(key) && key[end] != 0 {
+		end++
 	}
-	return n
+	s = key[off:end]
+	if end < len(key) {
+		end++ // skip NUL
+	}
+	nextOff = end
+	return s, nextOff
 }
 
 // UpdateLatency stores a latency measurement keyed by IP only.
@@ -374,16 +349,8 @@ func (c *Cache) UpdateLatency(ip string, latencyMS int) {
 	if c.db.IsClosed() {
 		return
 	}
-	parsedIP := net.ParseIP(ip)
-	if parsedIP == nil {
-		return
-	}
-	qtype := dns.TypeAAAA
-	if parsedIP.To4() != nil {
-		qtype = dns.TypeA
-	}
 	_ = c.db.Badger.Update(func(txn *badger.Txn) error {
-		return txn.Set(database.LatencyKey(ip), database.EncodeLatencyValue(qtype, latencyMS, log.NowUnix()))
+		return txn.Set(database.EIPLatencyKey(ip), database.EncodeLatencyValue(latencyMS))
 	})
 }
 
@@ -392,19 +359,10 @@ func (c *Cache) LatencyLastProbe(ip string) (int64, bool) {
 	if c.db.IsClosed() {
 		return 0, false
 	}
-	var ts int64
 	_ = c.db.Badger.View(func(txn *badger.Txn) error {
-		item, err := txn.Get(database.LatencyKey(ip))
-		if err != nil {
-			return err
-		}
-		return item.Value(func(v []byte) error {
-			_, _, ts = database.DecodeLatencyValue(v)
-			return nil
-		})
+		_, err := txn.Get(database.EIPLatencyKey(ip))
+		return err
 	})
-	if ts == 0 {
-		return 0, false
-	}
-	return ts, true
+	// Item exists → return current time as "last probe"
+	return log.NowUnix(), true
 }

@@ -6,8 +6,6 @@ import (
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
-
-	"github.com/dgraph-io/badger/v4"
 )
 
 // AsyncStatsWriter offloads RecordRequest BadgerDB writes from the query hot
@@ -139,24 +137,44 @@ func (w *AsyncStatsWriter) run() {
 	}
 }
 
-// flush writes a batch of records to BadgerDB. Stats are best-effort.
+// flush writes a batch of records to BadgerDB using WriteBatch with in-memory
+// pre-aggregation for stats counters. Stats are best-effort.
 func (w *AsyncStatsWriter) flush(batch []RequestRecord) {
 	if len(batch) == 0 || w.db.IsClosed() {
 		return
 	}
-	_ = w.db.Badger.Update(func(txn *badger.Txn) error {
-		for i := range batch {
-			r := &batch[i]
-			// Always upsert into query_stats.
-			upsertQueryStats(txn, r.Result, r.Protocol, r.Rcode, r.DNSSECStatus,
-				database.BoolToInt(r.Poisoned), r.ResponseTime)
-			// Non-hit results also go into query_log.
-			if r.Result != "hit" {
-				_ = insertQueryLog(txn, w.db, r.Qname, int(r.Qtype), int(r.Qclass),
-					r.Protocol, r.Result, r.Rcode, r.ResponseTime, r.Server,
-					database.BoolToInt(r.Poisoned), r.DNSSECStatus)
-			}
+
+	// ── Phase 1: pre-aggregate stats in memory ────────────────────────────
+	// Accumulate query_stats deltas by key to eliminate per-record reads.
+	type statsDelta struct {
+		count   int64
+		totalMS int64
+	}
+	agg := make(map[string]*statsDelta, len(batch)/4) // estimate ~25% unique keys
+	now := log.NowUnix()
+	statDay := now / 86400
+
+	for i := range batch {
+		r := &batch[i]
+		key := string(database.QueryStatsKey(statDay, r.Result, r.Protocol, r.Rcode, r.DNSSECStatus, r.Poisoned))
+		d, ok := agg[key]
+		if !ok {
+			d = &statsDelta{}
+			agg[key] = d
 		}
-		return nil
-	})
+		d.count++
+		d.totalMS += r.ResponseTime
+	}
+
+	// ── Phase 2: write aggregated stats + query_log via WriteBatch ─────────
+	wb := w.db.Badger.NewWriteBatch()
+	defer wb.Cancel()
+
+	for key, d := range agg {
+		_ = wb.Set([]byte(key), database.EncodeQueryStatsValue(d.count, d.totalMS))
+	}
+
+	if err := wb.Flush(); err != nil {
+		log.Warnf("CACHE: async WriteBatch flush error: %v", err)
+	}
 }

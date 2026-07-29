@@ -3,13 +3,12 @@ module zjdns
 go 1.26.4
 
 require (
-	codeberg.org/miekg/dns v0.6.85
+	codeberg.org/miekg/dns v0.6.86
 	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033
 	github.com/cloudflare/circl v1.6.5-0.20260725174654-c55f49e67f75
 	github.com/dgraph-io/badger/v4 v4.9.5
 	github.com/emmansun/gmsm v0.44.1
-	github.com/klauspost/compress v1.19.2-0.20260721100123-117430d3b0e3
-	github.com/pion/dtls/v3 v3.1.3-0.20260713182031-e1fb308f9f85
+	github.com/pion/dtls/v3 v3.1.3-0.20260729054933-69f11c432ea4
 	github.com/quic-go/quic-go v0.61.1-0.20260727032127-9bfbf4cd052b
 	gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f
 	gitlab.com/go-extension/tls v0.0.0-20260715144009-d75c84d8b9d2
@@ -30,6 +29,7 @@ require (
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
+	github.com/klauspost/compress v1.19.2-0.20260721100123-117430d3b0e3 // indirect
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/pmorjan/kmod v1.1.1 // indirect

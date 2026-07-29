@@ -87,20 +87,17 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## Version Bumping
 
-Use `sh scripts/bump-version.sh <patch|minor|major> <slug>`.
+```bash
+sh scripts/bump-version.sh <patch|minor|major>
+```
 
 | Component | Semantics |
 |-----------|-----------|
 | **Z (patch)** | Bug fixes, perf, refactors, lint, deps, small features |
-| **Y (minor)** | Large features, new protocols, new config options, schema changes |
+| **Y (minor)** | Large features, new protocols, new config options |
 | **X (major)** | Breaking changes, removed features |
 
 **Default to Z (patch).** Only bump Y for substantial features (new protocol, major config surface).
-
-**Always amend the version bump into the feature commit:**
-```bash
-git reset --soft HEAD~2 && git commit  # or git commit --amend for single commit
-```
 
 ## Build, Test & Lint
 
@@ -132,7 +129,7 @@ go test -bench=. -short -benchtime=500ms ./...                 # stable numbers
 go test -bench=BenchmarkServerProcessQuery -benchtime=3s ./cmd/zjdns  # integration QPS
 ```
 
-**99 benchmarks** across 14 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
+**~90 benchmarks** across 14 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
 
 ```bash
 # Update baseline
@@ -146,10 +143,6 @@ go test -bench=. -short -benchtime=500ms ./... \
 ### CLI Tools
 
 ```bash
-# Browse BadgerDB keys
-./zjdns --kv cache.db e:        # list all cache entries
-./zjdns --kv cache.db --drop e: # drop all cache entries (with confirmation)
-
 # DNS Stamp
 ./zjdns --dnsstamp --decode "sdns://..."       # decode to upstream JSON
 ./zjdns --dnsstamp --encode --proto doh \      # encode to sdns:// stamp
@@ -215,8 +208,8 @@ zjdns/
 ├── cmd/zjdns/          ← binary + CLI
 ├── config/             ← ServerConfig, ProtocolSettings, UpstreamServer, defaults
 ├── edns/               ← EDNS handler (ECS, Cookie, EDE, Padding)
-├── database/           ← Unified BadgerDB KV store (7 key prefixes, 2 ID sequences)
-├── cache/              ← DNS response cache (Store interface, BadgerDBCache, AsyncStatsWriter)
+├── database/           ← Unified BadgerDB KV store (5 key prefixes, 1 ID sequence)
+├── cache/              ← DNS response cache (Store interface, BadgerDB-backed Cache, AsyncStatsWriter)
 ├── ruleset/            ← CIDR + domain tag matching (binary radix trie)
 ├── zone/               ← DNS zone rules (Evaluator, zone-file import)
 ├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, ...
@@ -298,10 +291,10 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | `ServerConfig` | `config` | Top-level config; owns `ECSConfig`, `ProtocolSettings`, `CertificateSettings` |
 | `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `NoCache`, `Match`, `Proxy`, defense flags |
 | `ProtocolSettings` | `config` | Per-protocol port/endpoint: `UDP`, `TCP`, `TLS`, `QUIC`, `HTTPS`, `HTTP3`, `TLCP`, `DTLS`, `DTLCP`, `DNSCrypt` |
-| `DB` | `database` | Unified BadgerDB KV store; 7 key prefixes, 2 ID sequences |
-| `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Stats/Close |
+| `DB` | `database` | Unified BadgerDB KV store; 5 key prefixes, 1 ID sequence |
+| `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/UpdateLatency/LatencyLastProbe/FlushDB/Clear/Stats/Close |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL |
-| `AsyncStatsWriter` | `cache` | Background goroutine: non-blocking channel → batched BadgerDB writes |
+| `AsyncStatsWriter` | `cache` | Background goroutine: non-blocking channel → in-memory aggregation → WriteBatch |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `QueryContext` | `server/handler` | Mutable struct carrying all request state through the middleware chain |
 | `QueryHandler` | `server/handler` | Interface: `ServeDNS(ctx, qctx) error` |

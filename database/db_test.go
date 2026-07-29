@@ -7,32 +7,29 @@ import (
 )
 
 func TestOpen_Memory(t *testing.T) {
-	db, err := Open("", 100, 0, 0)
+	db, err := Open("", 100, 0, 0, 0)
 	if err != nil {
-		t.Fatalf("Open(:memory:) error: %v", err)
+		t.Fatalf("Open(:memory:, 0) error: %v", err)
 	}
-	defer func() { _ = db.Close() }()
 	if db.Badger == nil {
 		t.Fatal("db.Badger is nil")
 	}
 	if db.IsClosed() {
 		t.Error("newly opened db should not be closed")
 	}
+	_ = db.Close()
 }
 
 func TestOpen_DefaultOpts(t *testing.T) {
-	db, err := Open("", 0, 0, 0)
+	db, err := Open("", 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open with zero opts error: %v", err)
 	}
-	defer func() { _ = db.Close() }()
-	if db.MaxEntries() <= 0 {
-		t.Errorf("MaxEntries = %d, want > 0", db.MaxEntries())
-	}
+	_ = db.Close()
 }
 
 func TestClose(t *testing.T) {
-	db, err := Open("", 100, 0, 0)
+	db, err := Open("", 100, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -45,7 +42,7 @@ func TestClose(t *testing.T) {
 }
 
 func TestClose_DoubleClose(t *testing.T) {
-	db, err := Open("", 100, 0, 0)
+	db, err := Open("", 100, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -57,28 +54,8 @@ func TestClose_DoubleClose(t *testing.T) {
 	}
 }
 
-func TestEntryCount(t *testing.T) {
-	db, err := Open("", 100, 0, 0)
-	if err != nil {
-		t.Fatalf("Open error: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	if db.EntryCount() != 0 {
-		t.Errorf("initial EntryCount = %d, want 0", db.EntryCount())
-	}
-	db.AddEntryCount(5)
-	if db.EntryCount() != 5 {
-		t.Errorf("EntryCount after AddEntryCount(5) = %d, want 5", db.EntryCount())
-	}
-	db.SetEntryCount(10)
-	if db.EntryCount() != 10 {
-		t.Errorf("EntryCount after SetEntryCount(10) = %d, want 10", db.EntryCount())
-	}
-}
-
 func TestSequenceIDs(t *testing.T) {
-	db, err := Open("", 100, 0, 0)
+	db, err := Open("", 100, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -95,22 +72,10 @@ func TestSequenceIDs(t *testing.T) {
 	if id2 <= id1 {
 		t.Errorf("IDs should be monotonic: got %d then %d", id1, id2)
 	}
-
-	qid1, err := db.NextQLogID()
-	if err != nil {
-		t.Fatalf("NextQLogID error: %v", err)
-	}
-	qid2, err := db.NextQLogID()
-	if err != nil {
-		t.Fatalf("NextQLogID error: %v", err)
-	}
-	if qid2 <= qid1 {
-		t.Errorf("IDs should be monotonic: got %d then %d", qid1, qid2)
-	}
 }
 
 func TestKeyRoundTrip(t *testing.T) {
-	db, err := Open("", 100, 0, 0)
+	db, err := Open("", 100, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -160,14 +125,14 @@ func TestKeyRoundTrip(t *testing.T) {
 }
 
 func TestPtrMapKeyRoundTrip(t *testing.T) {
-	db, err := Open("", 100, 0, 0)
+	db, err := Open("", 100, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
-	key := PtrMapKey("1.2.3.4", 42, "example.com.")
-	val := EncodePtrMapValue(300, 1300)
+	key := EIPReverseKey("1.2.3.4", 42, "example.com.")
+	val := EncodePtrMapValue(300)
 
 	err = db.Badger.Update(func(txn *badger.Txn) error {
 		return txn.Set(key, val)
@@ -183,12 +148,9 @@ func TestPtrMapKeyRoundTrip(t *testing.T) {
 			return nil
 		}
 		return item.Value(func(v []byte) error {
-			ttl, expiresAt := DecodePtrMapValue(v)
+			ttl := DecodePtrMapValue(v)
 			if ttl != 300 {
 				t.Errorf("ttl = %d, want 300", ttl)
-			}
-			if expiresAt != 1300 {
-				t.Errorf("expiresAt = %d, want 1300", expiresAt)
 			}
 			return nil
 		})
@@ -199,12 +161,12 @@ func TestPtrMapKeyRoundTrip(t *testing.T) {
 
 	// Test prefix scan.
 	_ = db.Badger.Update(func(txn *badger.Txn) error {
-		return txn.Set(PtrMapKey("1.2.3.4", 43, "other.com."), EncodePtrMapValue(600, 1600))
+		return txn.Set(EIPReverseKey("1.2.3.4", 43, "other.com."), EncodePtrMapValue(600))
 	})
 
 	err = db.Badger.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
-		opts.Prefix = PtrMapIPPrefix("1.2.3.4")
+		opts.Prefix = EIPReversePrefix("1.2.3.4")
 		opts.PrefetchValues = true
 		it := txn.NewIterator(opts)
 		defer it.Close()
@@ -224,16 +186,10 @@ func TestPtrMapKeyRoundTrip(t *testing.T) {
 }
 
 func TestLatencyValueRoundTrip(t *testing.T) {
-	val := EncodeLatencyValue(28, 50, 2000)
-	qtype, lat, probe := DecodeLatencyValue(val)
-	if qtype != 28 {
-		t.Errorf("qtype = %d, want 28", qtype)
-	}
+	val := EncodeLatencyValue(50)
+	lat := DecodeLatencyValue(val)
 	if lat != 50 {
 		t.Errorf("latency = %d, want 50", lat)
-	}
-	if probe != 2000 {
-		t.Errorf("probe = %d, want 2000", probe)
 	}
 }
 
@@ -265,49 +221,11 @@ func TestZoneValueRoundTrip(t *testing.T) {
 	}
 }
 
-func TestEncodeDecodeQueryLogValue(t *testing.T) {
-	val := EncodeQueryLogValue(1000, "example.com.", 1, 1, "tls", "miss", 3, 25, "1.1.1.1", 1, "secure")
-	ts, qname, qtype, qclass, protocol, result, rcode, responseMS, server, poisoned, dnssec := DecodeQueryLogValue(val)
-	if ts != 1000 {
-		t.Errorf("ts = %d, want 1000", ts)
-	}
-	if qname != "example.com." {
-		t.Errorf("qname = %q, want %q", qname, "example.com.")
-	}
-	if qtype != 1 {
-		t.Errorf("qtype = %d, want 1", qtype)
-	}
-	if qclass != 1 {
-		t.Errorf("qclass = %d, want 1", qclass)
-	}
-	if protocol != "tls" {
-		t.Errorf("protocol = %q, want %q", protocol, "tls")
-	}
-	if result != "miss" {
-		t.Errorf("result = %q, want %q", result, "miss")
-	}
-	if rcode != 3 {
-		t.Errorf("rcode = %d, want 3", rcode)
-	}
-	if responseMS != 25 {
-		t.Errorf("responseMS = %d, want 25", responseMS)
-	}
-	if server != "1.1.1.1" {
-		t.Errorf("server = %q, want %q", server, "1.1.1.1")
-	}
-	if poisoned != 1 {
-		t.Errorf("poisoned = %d, want 1", poisoned)
-	}
-	if dnssec != "secure" {
-		t.Errorf("dnssec = %q, want %q", dnssec, "secure")
-	}
-}
-
 func TestOpen_Disk(t *testing.T) {
 	dir := t.TempDir()
-	db, err := Open(dir+"/test.db", 100, 0, 0)
+	db, err := Open(dir+"/test.db", 100, 0, 0, 0)
 	if err != nil {
-		t.Fatalf("Open(disk) error: %v", err)
+		t.Fatalf("Open(disk, 0) error: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
@@ -323,7 +241,7 @@ func TestOpen_Disk(t *testing.T) {
 	}
 
 	// Re-open and verify the data survived.
-	db2, err := Open(dir+"/test.db", 100, 0, 0)
+	db2, err := Open(dir+"/test.db", 100, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Re-open error: %v", err)
 	}

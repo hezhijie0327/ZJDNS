@@ -7,7 +7,7 @@ import (
 
 func testWriter(t *testing.T, bufSize int) (*AsyncStatsWriter, *database.DB) {
 	t.Helper()
-	db, err := database.Open("", 0, 0, 0)
+	db, err := database.Open("", 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestAsyncStatsWriter_NilSafety(t *testing.T) {
 }
 
 func TestAsyncStatsWriter_ChannelFullDrops(t *testing.T) {
-	db, err := database.Open("", 0, 0, 0)
+	db, err := database.Open("", 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
 	}

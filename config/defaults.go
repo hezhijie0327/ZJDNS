@@ -37,10 +37,7 @@ const (
 
 	DefaultBadgerMemTableSizeMB   = 32 // BadgerDB memtable size (write buffer)
 	DefaultBadgerBlockCacheSizeMB = 32 // BadgerDB block cache size (read cache)
-
-	DefaultQueryJournalRetention = 3 * 86400     // seconds — auto-cleanup window for query_stats + query_log
-	DefaultPruneInterval         = 1 * time.Hour // interval between PruneQueryJournal runs
-	DefaultPruneBatchSize        = 10000         // rows per iteration during prune
+	DefaultBadgerIndexCacheSizeMB = 64 // BadgerDB index cache size (bloom filters + table indices)
 
 	DefaultTTL         = 10
 	DefaultStaleTTL    = 30

@@ -1,21 +1,10 @@
 # bump-version.ps1 — bump ZJDNS version.
-# Usage:
-#   pwsh scripts/bump-version.ps1 patch   "add indexes"
-#   pwsh scripts/bump-version.ps1 minor   "new feature"
-#   pwsh scripts/bump-version.ps1 major   "breaking change"
-#
-# Conventions (see CLAUDE.md §Version Bumping):
-#   Z (patch) — bug fixes, perf improvements, refactors, linter fixes
-#   Y (minor) — new features, new config options, new protocols
-#   X (major) — breaking config/schema/API changes
+# Usage: pwsh scripts/bump-version.ps1 <patch|minor|major>
 
 param(
     [Parameter(Mandatory)]
     [ValidateSet("patch", "minor", "major")]
-    [string]$Bump,
-
-    [Parameter(Mandatory)]
-    [string]$Slug
+    [string]$Bump
 )
 
 $ErrorActionPreference = "Stop"

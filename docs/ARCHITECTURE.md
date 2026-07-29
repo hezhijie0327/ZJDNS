@@ -4,32 +4,30 @@ Detailed technical reference for ZJDNS. For working guidelines, see [CLAUDE.md](
 
 ## DB Schema
 
-The unified database (`database/`) uses BadgerDB v4 (LSM-tree key-value store) with 7 key prefixes:
+The unified database (`database/`) uses BadgerDB v4 (LSM-tree key-value store) with 5 key prefixes.
+All numeric fields use binary BigEndian encoding (not hex), consistent with value encoding.
 
-| Prefix | Purpose | Key Pattern | Value (big-endian binary) |
-|--------|---------|-------------|---------------------------|
-| `e:` | DNS response cache | `e:{qname}\x00{ecs_addr}\x00{ecs_prefix:04x}\x00{dnssec_ok}\x00{qtype:04x}\x00{qclass:04x}` | `[0:8]id [8:16]ts [16:20]ttl [20:]zstd_wire` |
-| `p:` | PTR reverse lookup | `p:{rdata_ip}\x00{entry_id:016x}\x00{name}` | `[0:4]ttl [4:12]expires_at` |
-| `l:` | Per-IP latency | `l:{rdata_ip}` | `[0:2]qtype [2:6]latency_ms [6:14]last_probe` |
-| `s:` | Per-day query stats | `s:{stat_day:08x}\x00{result}\x00{protocol}\x00{rcode:04x}\x00{dnssec}\x00{poisoned}` | `[0:8]query_count [8:16]total_ms` |
-| `q:` | Query audit log | `q:{timestamp:016x}\x00{seq:016x}` | variable (length-prefixed strings) |
-| `z:` | Zone rule entries | `z:{is_wildcard}\x00{qname}\x00{qtype:04x}\x00{qclass:04x}\x00{match_tags}` | `[0:2]rcode` + 3×zstd blobs |
+| Prefix | Purpose | Key Pattern | Value |
+|--------|---------|-------------|-------|
+| `e:` | DNS response cache | `e:{qname}\x00{ecs_addr}\x00{ecsPrefix:2B}\x00{dnssec:1B}\x00{qtype:2B}\x00{qclass:2B}` | `[0:8]id [8:16]ts [16:20]ttl [20:]raw_wire` |
+| `e:ip:` | IP reverse index + latency | `e:ip:{ip}\x00{entryID:8B}\x00{name}` / `e:ip:{ip}\x00_lat` | reverse: `[0:4]ttl` / latency: `[0:2]latency_ms` |
+| `s:` | Per-day query stats | `s:{stat_day:8B}\x00{result}\x00{protocol}\x00{rcode:2B}\x00{dnssec}\x00{poisoned:1B}` | `[0:8]query_count [8:16]total_ms` |
+| `z:` | Zone rule entries | `z:{is_wildcard:1B}\x00{qname}\x00{qtype:2B}\x00{qclass:2B}\x00{match_tags}` | `[0:2]rcode` + 3× length-prefixed blobs |
 | `r:` | Ruleset entries | `r:{type}\x00{value}\x00{tag}` | empty (key existence check) |
 
-`\x00` is the field separator. Integers are hex-encoded (zero-padded) for correct lexicographic sort order during prefix scans.
+`\x00` is the field separator for string fields. Binary fields use known offsets for parsing (NUL bytes inside binary integers would break separator-based parsing).
 
 ### Key Patterns
 
-- **Cache hit path**: `Get()` does a direct BadgerDB key lookup (`txn.Get()`) in a read-only View transaction (~0.1ms).
-- **Cache write path**: `Set()` packs wire format, zstd-compresses, writes entry + ptr_map entries + latency in a single Update transaction.
-- **TTL**: BadgerDB native TTL via `Entry.WithTTL()` — entries auto-expire after `entryTTL + DefaultStaleMaxAge` seconds. No manual stale-entry scanning needed.
-- **Eviction**: When `entryCount >= maxEntries * 9/10`, prefix scan on `e:` finds oldest entries, deletes them in a single Update transaction.
-- **Stats aggregation**: `Stats()` does a prefix scan over `s:` prefix (~500 rows) and aggregates in Go code. O(500) — sub-millisecond.
-- **Auto-increment IDs**: BadgerDB `Sequence` (bandwidth=1000) for entry IDs and query log IDs. Leases up to 1000 IDs in memory before a disk write.
-- **Zone queries**: `queryExact()` uses BadgerDB prefix scan on `z:0:{qname}\x00{qtype:04x}\x00{qclass:04x}\x00`. `queryWildcardBatch()` iterates up to 16 suffix candidates with individual prefix scans.
-- **NS latency cache**: NS/Root addresses as TypeA/TypeAAAA entries. Latency probed via `ProbeNSAddrs`, reordered by `sortAnswerByLatency` at `Get()` time.
-- **IP latency**: Per-IP keyed. Writes latency_ms + last_probe_time to `l:` prefix. All domains sharing a CDN IP reuse the same key.
-- **Dynamic queries**: `Store.Stats()` returns TXT records (overview, hits, errors, rcodes, poisoned, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.db.clear` / `zjdns.db.clear.{cache,stats,querylog,latency,zone,ruleset}`.
+- **Cache hit path**: `Get()` does a direct BadgerDB key lookup (`txn.Get()`) in a read-only View transaction. Raw DNS wire format is unpacked directly (no app-level decompression).
+- **Cache write path**: `Set()` packs wire format, writes entry + reverse index entries in a single Update transaction. Wire stored raw — BadgerDB block-level zstd handles compression.
+- **TTL**: BadgerDB native TTL via `Entry.WithTTL()` — entries auto-expire after `entryTTL + DefaultStaleMaxAge` seconds. Reverse index entries share the same TTL via `WithTTL`. No custom eviction code.
+- **Latency**: Stored under `e:ip:{ip}\x00_lat` with no TTL — overwritten on each probe, cleaned when `DropPrefix("e:")` runs. `LatencyLastProbe` checks key existence.
+- **Stats aggregation**: `Stats()` does a prefix scan over `s:` prefix (~500 rows) and aggregates in Go code. Async writer uses in-memory pre-aggregation + `WriteBatch`. Stats are best-effort.
+- **Auto-increment IDs**: BadgerDB `Sequence` (bandwidth=1000) for entry IDs. Leases up to 1000 IDs in memory before a disk write.
+- **Zone queries**: `queryExact()` uses BadgerDB prefix scan on `z:0\x00{qname}\x00{qtype:2B}\x00{qclass:2B}\x00`. `queryWildcardBatch()` iterates up to 16 suffix candidates in a single View transaction.
+- **Reverse lookup**: Prefix scan on `e:ip:{ip}\x00` returns all cached domains for an IP. Expired entries filtered by `IsDeletedOrExpired()`.
+- **CHAOS endpoints**: `ZJDNS.stats` (read-only), `ZJDNS.db.clear.cache` (clear `e:` + `e:ip:`), `ZJDNS.db.clear.stats` (reset `s:`). Zone/ruleset clearing is not exposed.
 
 
 ## Defense Mechanisms

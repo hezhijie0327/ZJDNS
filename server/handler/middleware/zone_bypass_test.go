@@ -18,7 +18,7 @@ import (
 // exempts tagged clients: clients WITH the tag never match the rule and fall
 // through to normal resolution; clients WITHOUT the tag match and are blocked.
 func TestZone_MatchNegation(t *testing.T) {
-	db, err := database.Open("", 0, 0, 0)
+	db, err := database.Open("", 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestZone_MatchNegation(t *testing.T) {
 // two /32 gateway IPs share a tag, zone rules use match=!tag to block
 // everyone except the gateways.
 func TestZone_MatchNegation_TwoIPs(t *testing.T) {
-	db, err := database.Open("", 0, 0, 0)
+	db, err := database.Open("", 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

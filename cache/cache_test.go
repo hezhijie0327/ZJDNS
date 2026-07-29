@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"bytes"
 	"fmt"
 	"net/netip"
 	"path/filepath"
@@ -12,12 +11,10 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/rdata"
-
-	zdnsutil "zjdns/internal/dnsutil"
 )
 
 func testStore() *Cache {
-	db, err := database.Open("", 0, 0, 0)
+	db, err := database.Open("", 0, 0, 0, 0)
 	if err != nil {
 		panic(err)
 	}
@@ -208,7 +205,7 @@ func TestClose(t *testing.T) {
 }
 
 func TestAsyncWriter_RecordAndFlush(t *testing.T) {
-	db, err := database.Open("", 0, 0, 0)
+	db, err := database.Open("", 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +224,7 @@ func TestAsyncWriter_RecordAndFlush(t *testing.T) {
 }
 
 func TestAsyncWriter_CloseDrain(t *testing.T) {
-	db, err := database.Open("", 0, 0, 0)
+	db, err := database.Open("", 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +308,7 @@ func TestDiskPersistence(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 
-	db, err := database.Open(dbPath, 500, 0, 0)
+	db, err := database.Open(dbPath, 500, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -321,7 +318,7 @@ func TestDiskPersistence(t *testing.T) {
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 	_ = mc.Close()
 
-	db2, err := database.Open(dbPath, 500, 0, 0)
+	db2, err := database.Open(dbPath, 500, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
@@ -334,31 +331,6 @@ func TestDiskPersistence(t *testing.T) {
 	}
 	if len(entry.Answer) != 1 {
 		t.Errorf("answer count = %d, want 1", len(entry.Answer))
-	}
-}
-
-func TestCompression_RoundTrip(t *testing.T) {
-	data := []byte("test data for compression round trip " + string(bytes.Repeat([]byte{0x41}, 100)))
-	compressed := zdnsutil.Compress(data)
-	if len(compressed) == 0 {
-		t.Fatal("compression produced empty output")
-	}
-	decompressed, err := zdnsutil.Decompress(compressed)
-	if err != nil {
-		t.Fatalf("decompress: %v", err)
-	}
-	if !bytes.Equal(decompressed, data) {
-		t.Error("compression round-trip mismatch")
-	}
-}
-
-func TestCompression_NilInput(t *testing.T) {
-	if zdnsutil.Compress(nil) != nil {
-		t.Error("Compress(nil) should return nil")
-	}
-	d, err := zdnsutil.Decompress(nil)
-	if err != nil || d != nil {
-		t.Error("Decompress(nil) should return nil, nil")
 	}
 }
 
@@ -384,7 +356,7 @@ func TestECSFallbackCandidates_Nil(t *testing.T) {
 }
 
 func BenchmarkStoreSetGet(b *testing.B) {
-	db, _ := database.Open("", 0, 0, 0)
+	db, _ := database.Open("", 0, 0, 0, 0)
 	mc := &Cache{db: db}
 	defer func() { _ = mc.Close() }()
 
@@ -397,7 +369,7 @@ func BenchmarkStoreSetGet(b *testing.B) {
 }
 
 func BenchmarkStoreParallel(b *testing.B) {
-	db, _ := database.Open("", 0, 0, 0)
+	db, _ := database.Open("", 0, 0, 0, 0)
 	mc := &Cache{db: db}
 	defer func() { _ = mc.Close() }()
 

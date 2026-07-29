@@ -382,7 +382,7 @@ func TestIsResponseValid_NXDOMAIN(t *testing.T) {
 // ── Full chain: DS → DNSKEY → answer ────────────────────────────────────────
 
 func testCache() cache.Store {
-	db, err := database.Open("", 0, 0, 0)
+	db, err := database.Open("", 0, 0, 0, 0)
 	if err != nil {
 		panic(err)
 	}

@@ -1,22 +1,13 @@
 #!/bin/sh
 # bump-version.sh — bump ZJDNS version.
-# Usage:
-#   sh scripts/bump-version.sh patch   "add performance indexes"    # 3.2.1 → 3.2.2
-#   sh scripts/bump-version.sh minor   "new DNSCrypt feature"       # 3.2.1 → 3.3.0
-#   sh scripts/bump-version.sh major   "breaking protocol change"   # 3.2.1 → 4.0.0
-#
-# Conventions (see CLAUDE.md §Version Bumping):
-#   Z (patch) — bug fixes, perf improvements, refactors, linter fixes
-#   Y (minor) — new features, new config options, new protocols
-#   X (major) — breaking config/schema/API changes
+# Usage: sh scripts/bump-version.sh <patch|minor|major>
 
 set -eu
 
 BUMP="${1:-}"
-SLUG="${2:-}"
 
-if [ -z "$BUMP" ] || [ -z "$SLUG" ]; then
-    echo "Usage: sh scripts/bump-version.sh <patch|minor|major> <slug>" >&2
+if [ -z "$BUMP" ]; then
+    echo "Usage: sh scripts/bump-version.sh <patch|minor|major>" >&2
     exit 1
 fi
 

@@ -1,11 +1,8 @@
 package cache
 
 import (
-	"fmt"
 	"net"
 	"slices"
-	"sync"
-	"sync/atomic"
 	"time"
 	"zjdns/config"
 	"zjdns/database"
@@ -24,7 +21,6 @@ import (
 // implements the Store interface.
 type Cache struct {
 	db          *database.DB
-	evictCount  atomic.Int64
 	asyncWriter *AsyncStatsWriter
 }
 
@@ -37,14 +33,7 @@ type ecsCandidate struct {
 const (
 	defaultStaleMaxAge  = int64(config.DefaultStaleMaxAge)
 	maxLatencyLookupIPs = 64 // cap per-Get latency lookups to bound iteration overhead
-	decompressBufCap    = 4096
 )
-
-// decompressBufPool reuses byte slices for zstd decompression on the
-// cache-hit hot path, reducing GC pressure (P3).
-var decompressBufPool = sync.Pool{
-	New: func() any { b := make([]byte, decompressBufCap); return &b },
-}
 
 // ECS fallback prefix boundaries — standard CIDR granularities most commonly
 // used by CDN and authoritative DNS operators (RFC 7871).
@@ -123,23 +112,8 @@ func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 		return nil, false, false
 	}
 
-	// Decompress and unpack the wire format into a dns.Msg.
-	dbuf, ok := decompressBufPool.Get().(*[]byte)
-	if !ok {
-		b := make([]byte, 0, decompressBufCap)
-		dbuf = &b
-	}
-	wire, err := zdnsutil.DecompressTo(msgWire, *dbuf)
-	if err != nil {
-		clear(*dbuf)
-		decompressBufPool.Put(dbuf)
-		log.Warnf("CACHE: decompress wire for entry %d (name=%s type=%d): %v", id, qname, qtype, err)
-		return nil, false, false
-	}
-	defer func() { clear(*dbuf); decompressBufPool.Put(dbuf) }()
-
 	msg := pool.DefaultMessage.Get()
-	msg.Data = wire
+	msg.Data = msgWire
 	if err := msg.Unpack(); err != nil {
 		log.Warnf("CACHE: unpack wire for entry %d (name=%s type=%d): %v", id, qname, qtype, err)
 		return nil, false, false
@@ -225,13 +199,12 @@ func (c *Cache) lookupIPLatencies(ips []string) map[string]int {
 
 	_ = c.db.Badger.View(func(txn *badger.Txn) error {
 		for _, ip := range ips {
-			item, err := txn.Get(database.LatencyKey(ip))
+			item, err := txn.Get(database.EIPLatencyKey(ip))
 			if err != nil {
 				continue
 			}
 			_ = item.Value(func(v []byte) error {
-				_, latMS, _ := database.DecodeLatencyValue(v)
-				latencies[ip] = latMS
+				latencies[ip] = database.DecodeLatencyValue(v)
 				return nil
 			})
 		}
@@ -270,13 +243,12 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	msg.Extra = additional
 	var msgWire []byte
 	if err := msg.Pack(); err == nil {
-		msgWire = zdnsutil.Compress(msg.Data)
+		msgWire = msg.Data
 	}
 	pool.DefaultMessage.Put(msg)
 
 	// ── Transaction ──────────────────────────────────────────────────────
 	var entryID uint64
-	expiresAt := now + int64(entryTTL) + defaultStaleMaxAge
 	ttlDurationSec := int64(entryTTL) + defaultStaleMaxAge
 
 	err := c.db.Badger.Update(func(txn *badger.Txn) error {
@@ -301,7 +273,7 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 		allRRs = append(allRRs, answer...)
 		allRRs = append(allRRs, authority...)
 		allRRs = append(allRRs, additional...)
-		if ptrErr := insertPtrMap(txn, id, allRRs, expiresAt); ptrErr != nil {
+		if ptrErr := insertPtrMap(txn, id, allRRs, now, ttlDurationSec); ptrErr != nil {
 			log.Warnf("CACHE: insert ptr_map failed (non-fatal): %v", ptrErr)
 		}
 
@@ -312,184 +284,7 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 		return 0
 	}
 
-	c.db.AddEntryCount(1)
-	c.evictIfNeeded()
 	return int64(entryID)
-}
-
-// ── Eviction ─────────────────────────────────────────────────────────────────
-
-func (c *Cache) evictIfNeeded() {
-	if c.db.MaxEntries() <= 0 {
-		return
-	}
-
-	count := c.db.EntryCount()
-	maxEntries := int64(c.db.MaxEntries())
-	if count < maxEntries*9/10 {
-		return
-	}
-
-	// Resync from DB every 20 evictions.
-	if count < 0 || c.evictCount.Load()%20 == 0 {
-		var n int64
-		_ = c.db.Badger.View(func(txn *badger.Txn) error {
-			opts := badger.DefaultIteratorOptions
-			opts.Prefix = database.EntryKeyPrefix()
-			opts.PrefetchValues = false
-			it := txn.NewIterator(opts)
-			defer it.Close()
-			for it.Rewind(); it.Valid(); it.Next() {
-				n++
-			}
-			return nil
-		})
-		c.db.SetEntryCount(n)
-		count = n
-	}
-
-	excess := count - maxEntries
-	if excess <= 0 {
-		return
-	}
-
-	c.evictOldest(excess)
-	c.evictCount.Add(1)
-}
-
-func (c *Cache) evictOldest(toEvict int64) {
-	type entryInfo struct {
-		key       []byte
-		timestamp int64
-	}
-
-	// Collect all entries with timestamps.
-	var entries []entryInfo
-	_ = c.db.Badger.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.Prefix = database.EntryKeyPrefix()
-		opts.PrefetchValues = true
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		entries = make([]entryInfo, 0, c.db.EntryCount())
-		for it.Rewind(); it.Valid(); it.Next() {
-			item := it.Item()
-			k := item.KeyCopy(nil)
-			_ = item.Value(func(v []byte) error {
-				_, ts, _, _ := database.DecodeEntryValue(v)
-				entries = append(entries, entryInfo{key: k, timestamp: ts})
-				return nil
-			})
-		}
-		return nil
-	})
-
-	if len(entries) == 0 {
-		return
-	}
-
-	// Sort by timestamp ascending (oldest first).
-	slices.SortStableFunc(entries, func(a, b entryInfo) int {
-		if a.timestamp < b.timestamp {
-			return -1
-		}
-		if a.timestamp > b.timestamp {
-			return 1
-		}
-		return 0
-	})
-
-	// Delete the oldest entries.
-	toDelete := min(int(toEvict), len(entries))
-
-	_ = c.db.Badger.Update(func(txn *badger.Txn) error {
-		for i := range toDelete {
-			if err := txn.Delete(entries[i].key); err != nil {
-				continue
-			}
-		}
-		return nil
-	})
-
-	n := int64(toDelete)
-	c.db.AddEntryCount(-n)
-	log.Debugf("CACHE: evicted %d entries (oldest, max=%d)", n, c.db.MaxEntries())
-}
-
-// ── PruneQueryJournal ────────────────────────────────────────────────────────
-
-// PruneQueryJournal removes query_stats rows with stat_day older than the
-// retention window and query_log rows with timestamp older than retentionSec.
-func (c *Cache) PruneQueryJournal(retentionSec int64) (int64, error) {
-	batchSize := int64(config.DefaultPruneBatchSize)
-	dayCutoff := log.NowUnix()/86400 - retentionSec/86400
-	var totalDeleted int64
-
-	// query_stats: delete by prefix scan + timestamp check.
-	err := c.db.Badger.Update(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.Prefix = database.QueryStatsPrefix()
-		opts.PrefetchValues = false
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		var keysToDelete [][]byte
-		for it.Rewind(); it.Valid(); it.Next() {
-			day, ok := database.ParseStatDay(it.Item().Key())
-			if ok && day < dayCutoff {
-				k := it.Item().KeyCopy(nil)
-				keysToDelete = append(keysToDelete, k)
-			}
-		}
-		for _, k := range keysToDelete {
-			if err := txn.Delete(k); err != nil {
-				continue
-			}
-			totalDeleted++
-		}
-		return nil
-	})
-	if err != nil {
-		return totalDeleted, fmt.Errorf("cleanup query_stats: %w", err)
-	}
-
-	// query_log: batched delete to avoid long write transactions.
-	for {
-		var batchDeleted int64
-		err := c.db.Badger.Update(func(txn *badger.Txn) error {
-			opts := badger.DefaultIteratorOptions
-			opts.Prefix = database.QueryLogPrefix()
-			opts.PrefetchValues = false
-			it := txn.NewIterator(opts)
-			defer it.Close()
-
-			var keysToDelete [][]byte
-			for it.Rewind(); it.Valid() && int64(len(keysToDelete)) < batchSize; it.Next() {
-				ts, ok := database.ParseQueryLogTimestamp(it.Item().Key())
-				if ok && ts < log.NowUnix()-retentionSec {
-					k := it.Item().KeyCopy(nil)
-					keysToDelete = append(keysToDelete, k)
-				}
-			}
-			for _, k := range keysToDelete {
-				if err := txn.Delete(k); err != nil {
-					continue
-				}
-				batchDeleted++
-			}
-			return nil
-		})
-		if err != nil {
-			return totalDeleted, fmt.Errorf("cleanup query_log: %w", err)
-		}
-		totalDeleted += batchDeleted
-		if batchDeleted < batchSize {
-			break
-		}
-	}
-
-	return totalDeleted, nil
 }
 
 // ── Set-path helpers ──────────────────────────────────────────────────────
