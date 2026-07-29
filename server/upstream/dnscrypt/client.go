@@ -135,25 +135,22 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 
 	if len(resp.PQControl) > 0 {
 		ticket, lifetime, parseErr := dnscryptcrypto.PQParseControlBlock(resp.PQControl)
-		if parseErr == nil && len(ticket) > 0 {
-			// Discard oversized tickets — a resumed query carrying this ticket
-			// plus the minimum padding floor would not fit in a UDP datagram.
-			if dnscryptcrypto.PQResumedOverhead(len(ticket))+dnscryptcrypto.PQMinPaddingResumed > dnscryptcrypto.MaxDNSUDPPacketSize {
-				log.Debugf("UPSTREAM: DNSCrypt discarded oversized PQ resumption ticket (%d bytes)", len(ticket))
+		if parseErr == nil && len(ticket) > 0 &&
+			dnscryptcrypto.PQResumedOverhead(len(ticket))+dnscryptcrypto.PQMinPaddingResumed <= dnscryptcrypto.MaxDNSUDPPacketSize {
+			state.mu.Lock()
+			pqResumeSecret, err := dnscryptcrypto.PQResumeSecret(state.sharedKey, state.clientMagic, clientNonce[:dnscryptcrypto.NonceSize/2])
+			if err != nil {
+				state.mu.Unlock()
+				log.Debugf("UPSTREAM: DNSCrypt PQ resume secret derivation failed: %v", err)
 			} else {
-				state.mu.Lock()
-				pqResumeSecret, err := dnscryptcrypto.PQResumeSecret(state.sharedKey, state.clientMagic, clientNonce[:dnscryptcrypto.NonceSize/2])
-				if err != nil {
-					state.mu.Unlock()
-					log.Debugf("UPSTREAM: DNSCrypt PQ resume secret derivation failed: %v", err)
-				} else {
-					state.pqResumeSecret = pqResumeSecret
-					state.pqTicket = ticket
-					state.pqTicketExpiry = time.Now().Add(time.Duration(lifetime) * time.Second)
-					state.mu.Unlock()
-					log.Debugf("UPSTREAM: DNSCrypt PQ resumption ticket stored (expires in %ds)", lifetime)
-				}
+				state.pqResumeSecret = pqResumeSecret
+				state.pqTicket = ticket
+				state.pqTicketExpiry = time.Now().Add(time.Duration(lifetime) * time.Second)
+				state.mu.Unlock()
+				log.Debugf("UPSTREAM: DNSCrypt PQ resumption ticket stored (expires in %ds)", lifetime)
 			}
+		} else if len(ticket) > 0 {
+			log.Debugf("UPSTREAM: DNSCrypt discarded oversized PQ resumption ticket (%d bytes)", len(ticket))
 		}
 	}
 

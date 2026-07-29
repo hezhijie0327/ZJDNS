@@ -304,7 +304,7 @@ func (c *Conn) close() {
 			default:
 			}
 		}
-		c.inflight = nil
+		c.inflight = make(map[uint16]*pending)
 		c.mu.Unlock()
 	})
 }

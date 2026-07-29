@@ -54,8 +54,6 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	fs.StringVar(&dnscryptProvider, "provider", "", "Provider name for DNSCrypt config")
 	fs.StringVar(&dnscryptAddr, "addr", "127.0.0.1:8443", "Server address for DNSCrypt stamp")
 
-	// SQL
-
 	// DNS stamp
 	fs.BoolVar(&runDNSStamp, "dnsstamp", false, "Decode or encode an sdns:// DNS stamp")
 	fs.BoolVar(&dnsStampDecode, "decode", false, "Decode mode for --dnsstamp")

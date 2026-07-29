@@ -36,7 +36,7 @@ func (c *Client) proxyDialer(server *config.UpstreamServer) *socks5.Dialer {
 
 // WarmUpConnections asynchronously pre-establishes transport-level connections
 // to all configured secure upstream servers.
-func (c *Client) WarmUpConnections(servers []config.UpstreamServer) {
+func (c *Client) WarmUpConnections(ctx context.Context, servers []config.UpstreamServer) {
 	for i := range servers {
 		if servers[i].IsRecursive() {
 			continue
@@ -48,7 +48,7 @@ func (c *Client) WarmUpConnections(servers []config.UpstreamServer) {
 		s := &servers[i]
 		c.warmWg.Go(func() {
 			defer zdnsutil.HandlePanic("connection pre-warm")
-			warmCtx, cancel := context.WithTimeout(context.Background(), c.timeout)
+			warmCtx, cancel := context.WithTimeout(ctx, c.timeout)
 			defer cancel()
 			c.warmUpConnection(warmCtx, s, protocol)
 		})

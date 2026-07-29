@@ -15,7 +15,6 @@
     },
     "features": {
       "cache": {
-        "max_entries": 1000
       }
     }
   },

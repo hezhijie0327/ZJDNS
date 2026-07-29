@@ -75,10 +75,6 @@ func New(db *database.DB) *Evaluator {
 	}
 }
 
-// Close releases resources. The underlying database is shared and should not be
-// closed here; this is a no-op provided for backward compatibility with tests.
-func (e *Evaluator) Close() error { return nil }
-
 // HasRules reports whether any zone rules are currently loaded.
 func (e *Evaluator) HasRules() bool { return e.ruleCount.Load() > 0 }
 
@@ -89,7 +85,7 @@ func (e *Evaluator) HasRules() bool { return e.ruleCount.Load() > 0 }
 // LoadRules validates and loads zone rules into BadgerDB.
 func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 	// Clear existing rules.
-	if err := e.db.Badger.DropPrefix([]byte("z:")); err != nil {
+	if err := e.db.DropPrefix([]byte("z:")); err != nil {
 		return fmt.Errorf("zone: clear: %w", err)
 	}
 	e.dynamics = make(map[string]*dynamicEntry)
@@ -117,7 +113,7 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 	}
 
 	total := int64(0)
-	err := e.db.Badger.Update(func(txn *badger.Txn) error {
+	err := e.db.Update(func(txn *badger.Txn) error {
 		for i := range content {
 			rule := &content[i]
 			if rule.File != "" {
@@ -266,10 +262,10 @@ func (e *Evaluator) queryExact(qname string, qtype, qclass uint16, matchedTags m
 	var best Result
 
 	prefix := database.ZoneExactPrefix(qname, qtype, qclass)
-	_ = e.db.Badger.View(func(txn *badger.Txn) error {
+	_ = e.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		opts.Prefix = prefix
-		opts.PrefetchValues = true
+		opts.PrefetchValues = false
 		it := txn.NewIterator(opts)
 		defer it.Close()
 
@@ -332,48 +328,9 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 	var bestScore int
 	var best Result
 
-	_ = e.db.Badger.View(func(txn *badger.Txn) error {
+	_ = e.db.View(func(txn *badger.Txn) error {
 		for _, suffix := range suffixes {
-			prefix := database.ZoneWildcardPrefix(suffix)
-			opts := badger.DefaultIteratorOptions
-			opts.Prefix = prefix
-			opts.PrefetchValues = true
-			it := txn.NewIterator(opts)
-			defer it.Close() //nolint:gocritic // defer in loop is required for per-suffix iteration
-
-			for it.Rewind(); it.Valid(); it.Next() {
-				item := it.Item()
-				k := string(item.Key())
-				kqtype, kqclass := parseZoneKeyTypeClass(k)
-				// Match qtype/qclass: concrete matches or sentinel (0/0).
-				if (kqtype != qtype || kqclass != qclass) && (kqtype != 0 || kqclass != 0) {
-					continue
-				}
-				_ = item.Value(func(v []byte) error {
-					rcode, answerBlob, authBlob, addlBlob := database.DecodeZoneValue(v)
-					tagsText := extractMatchTagsFromZoneKey(k)
-					score := matchScore(parseMatchTagsText(tagsText), matchedTags)
-					if score < 0 {
-						return nil
-					}
-					if score <= bestScore && best.Matched {
-						return nil
-					}
-					bestScore = score
-					best = Result{
-						Domain:     suffix,
-						Matched:    true,
-						Rcode:      rcode,
-						Answer:     unpackRRs(answerBlob),
-						Authority:  unpackRRs(authBlob),
-						Additional: unpackRRs(addlBlob),
-						CreatedAt:  loadedAt,
-						cachable:   score == 0,
-					}
-					return nil
-				})
-			}
-			it.Close()
+			e.scanWildcardSuffix(txn, suffix, qtype, qclass, matchedTags, &bestScore, &best, loadedAt)
 		}
 		return nil
 	})
@@ -382,6 +339,50 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 		return Result{Rcode: dns.RcodeSuccess}
 	}
 	return best
+}
+
+// scanWildcardSuffix scans a single wildcard suffix for matching zone rules.
+// Each call opens and closes its own iterator, so defer is safe here.
+func (e *Evaluator) scanWildcardSuffix(txn *badger.Txn, suffix string, qtype, qclass uint16, matchedTags map[string]bool, bestScore *int, best *Result, loadedAt int64) {
+	prefix := database.ZoneWildcardPrefix(suffix)
+	opts := badger.DefaultIteratorOptions
+	opts.Prefix = prefix
+	opts.PrefetchValues = false
+	it := txn.NewIterator(opts)
+	defer it.Close()
+
+	for it.Rewind(); it.Valid(); it.Next() {
+		item := it.Item()
+		k := string(item.Key())
+		kqtype, kqclass := parseZoneKeyTypeClass(k)
+		// Match qtype/qclass: concrete matches or sentinel (0/0).
+		if (kqtype != qtype || kqclass != qclass) && (kqtype != 0 || kqclass != 0) {
+			continue
+		}
+		_ = item.Value(func(v []byte) error {
+			rcode, answerBlob, authBlob, addlBlob := database.DecodeZoneValue(v)
+			tagsText := extractMatchTagsFromZoneKey(k)
+			score := matchScore(parseMatchTagsText(tagsText), matchedTags)
+			if score < 0 {
+				return nil
+			}
+			if score <= *bestScore && best.Matched {
+				return nil
+			}
+			*bestScore = score
+			*best = Result{
+				Domain:     suffix,
+				Matched:    true,
+				Rcode:      rcode,
+				Answer:     unpackRRs(answerBlob),
+				Authority:  unpackRRs(authBlob),
+				Additional: unpackRRs(addlBlob),
+				CreatedAt:  loadedAt,
+				cachable:   score == 0,
+			}
+			return nil
+		})
+	}
 }
 
 // extractMatchTagsFromZoneKey parses the match_tags suffix from a zone key.

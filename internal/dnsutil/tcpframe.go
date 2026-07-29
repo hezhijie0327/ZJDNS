@@ -5,12 +5,16 @@ import (
 	"io"
 	"math/rand/v2"
 	"net"
+	"sync"
 
 	"codeberg.org/miekg/dns"
 )
 
 // errFrameTooLarge is returned when a TCP DNS frame exceeds dns.MaxMsgSize.
 var errFrameTooLarge = errors.New("dns: TCP frame exceeds maximum message size")
+
+// tcpReadBufPool reuses read buffers for TCP DNS frames up to MaxMsgSize.
+var tcpReadBufPool = sync.Pool{New: func() any { b := make([]byte, dns.MaxMsgSize); return &b }}
 
 // ReadTCPMsg reads a DNS message prefixed with a 2-byte big-endian length
 // from conn (RFC 1035 §4.2.2).  Shared by server and upstream TLCP/TLS stacks.
@@ -29,7 +33,9 @@ func ReadTCPMsg(conn net.Conn) (*dns.Msg, error) {
 	if length > dns.MaxMsgSize {
 		return nil, &net.OpError{Op: "read", Net: "tcp", Err: errFrameTooLarge}
 	}
-	buf := make([]byte, length)
+	bufPtr := tcpReadBufPool.Get().(*[]byte)
+	defer tcpReadBufPool.Put(bufPtr)
+	buf := (*bufPtr)[:length]
 	if _, err := io.ReadFull(conn, buf); err != nil {
 		return nil, err
 	}

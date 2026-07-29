@@ -252,8 +252,8 @@ func (s *Server) handleDTLCPConnections(listener net.Listener) {
 					log.Debugf("TLCP: DTLCP accept temporary error: %v", err)
 					continue
 				}
-				log.Errorf("TLCP: DTLCP accept error: %v", err)
-				return
+				log.Warnf("TLCP: DTLCP accept error: %v", err)
+				continue
 			}
 		}
 

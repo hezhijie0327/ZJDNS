@@ -536,7 +536,6 @@ For interactive debugging, create `config.debug.json` (not committed):
     "features": {
       "dnssec_enforce": true,
       "cache": {
-        "max_entries": 10000,
         "db_path": "cache.db"
       },
       "latency_probe": [
@@ -587,14 +586,14 @@ dig @127.0.0.1 -p 15353 zjdns.db.clear.stats CH TXT +short
 ./zjdns -config <(echo '{"server":{"protocol":{"udp":"53535"}},"upstream":[{"address":"https://sm2.doh.pub/dns-query","protocol":"doh-tlcp","server_name":"sm2.doh.pub","skip_tls_verify":true}]}') &
 
 # Self-hosted TLCP server (self-signed SM2 certs)
-./zjdns -config <(echo '{"server":{"protocol":{"tlcp":"8530","http_tlcp":{"port":"4430","endpoint":"/dns-query"}},"certificate":{"domain":"tlcp.local","tlcp":{"self_signed":true}},"features":{"cache":{"max_entries":0}}},"upstream":[{"protocol": "recursive"}]}') &
+./zjdns -config <(echo '{"server":{"protocol":{"tlcp":"8530","http_tlcp":{"port":"4430","endpoint":"/dns-query"}},"certificate":{"domain":"tlcp.local","tlcp":{"self_signed":true}}},"upstream":[{"protocol": "recursive"}]}') &
 
 # TLCP HTTPS loopback
 ./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454"}},"upstream":[{"address":"https://127.0.0.1:4430/dns-query","protocol":"doh-tlcp","server_name":"ZJDNS TLCP","skip_tls_verify":true}]}') &
 dig @127.0.0.1 -p 55454 www.baidu.com A +short
 
 # DTLCP loopback (use [::1] on Windows)
-./zjdns -config <(echo '{"server":{"protocol":{"dtlcp":"8542"},"certificate":{"domain":"dtlcp.local","tlcp":{"self_signed":true}},"features":{"cache":{"max_entries":0}}},"upstream":[{"protocol": "recursive"}]}') &
+./zjdns -config <(echo '{"server":{"protocol":{"dtlcp":"8542"},"certificate":{"domain":"dtlcp.local","tlcp":{"self_signed":true}}},"upstream":[{"protocol": "recursive"}]}') &
 ./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454"}},"upstream":[{"address":"127.0.0.1:8542","protocol":"dtlcp","server_name":"dtlcp.local","skip_tls_verify":true}]}') &
 dig @127.0.0.1 -p 55454 www.baidu.com A +short
 ```

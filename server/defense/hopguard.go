@@ -62,6 +62,8 @@ func NewHopGuard() *HopGuard {
 // Enforcement phase: TTL must be within ±fluctuation of any trusted baseline.
 func (h *HopGuard) Validate(serverIP string, observed uint8) bool {
 	if h == nil || observed == 0 {
+		// TTL=0 is invalid at the network layer; passing here avoids
+		// rejecting responses due to a locally-misconfigured client.
 		return true
 	}
 
@@ -141,7 +143,8 @@ func (h *HopGuard) Feed(serverIP string, observed uint8) {
 }
 
 // Confident reports whether hopguard is fully armed for serverIP — the TTL
-// baseline is trusted and can be used for rejection decisions.
+// baseline is trusted and can be used for rejection decisions.  A nil receiver
+// (no HopGuard configured) always returns true — all TTLs are trusted.
 func (h *HopGuard) Confident(serverIP string) bool {
 	if h == nil {
 		return true

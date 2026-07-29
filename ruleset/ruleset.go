@@ -37,11 +37,11 @@ func New(db *database.DB) *Engine {
 // LoadRules stores RuleSet configurations into BadgerDB.
 func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 	// Clear existing rules.
-	if err := e.db.Badger.DropPrefix([]byte("r:")); err != nil {
+	if err := e.db.DropPrefix([]byte("r:")); err != nil {
 		return err
 	}
 
-	err := e.db.Badger.Update(func(txn *badger.Txn) error {
+	err := e.db.Update(func(txn *badger.Txn) error {
 		for _, rs := range rulesets {
 			for _, v := range rs.Rule {
 				if err := insertRule(txn, rs.Tag, rs.Type, v); err != nil {
@@ -69,7 +69,7 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 
 	// Count loaded rules.
 	var n int
-	_ = e.db.Badger.View(func(txn *badger.Txn) error {
+	_ = e.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		opts.Prefix = []byte("r:")
 		opts.PrefetchValues = false
@@ -89,7 +89,7 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 // loadIPRules loads all CIDR rules from BadgerDB into the in-memory trie.
 func (e *Engine) loadIPRules() {
 	e.ipTrie.reset()
-	_ = e.db.Badger.View(func(txn *badger.Txn) error {
+	_ = e.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		opts.Prefix = database.RuleSetTypePrefix("ip")
 		opts.PrefetchValues = false
@@ -139,7 +139,7 @@ func (e *Engine) Match(qname, ip string) map[string]bool {
 
 	// Domain: TLD+1 suffix lookup via BadgerDB prefix scan.
 	key := tldPlusOne(qname)
-	_ = e.db.Badger.View(func(txn *badger.Txn) error {
+	_ = e.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		opts.Prefix = database.RuleSetTypeValuePrefix("domain", key)
 		opts.PrefetchValues = false

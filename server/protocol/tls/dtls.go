@@ -78,8 +78,8 @@ func (s *Server) handleDTLSConnections(listener net.Listener) {
 					log.Debugf("TLS: DTLS accept temporary error: %v", err)
 					continue
 				}
-				log.Errorf("TLS: DTLS accept error: %v", err)
-				return
+				log.Warnf("TLS: DTLS accept error: %v", err)
+				continue
 			}
 		}
 
@@ -121,8 +121,8 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 			// Idle timeout — close connection per RFC 8094 §3.3 (pion/dtls
 			// sends a fatal alert on close).  Do NOT treat timeouts as
 			// temporary — that would keep idle connections alive forever.
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
+			netErr, ok := errors.AsType[net.Error](err)
+			if ok && netErr.Timeout() {
 				return
 			}
 			if !zdnsutil.IsTemporaryError(err) {

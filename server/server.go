@@ -132,12 +132,17 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 // initDatabase opens the BadgerDB database at the configured path.
 func (s *Server) initDatabase(cfg *config.ServerConfig) (*database.DB, error) {
+	dbCfg := &cfg.Server.Features.Database
 	return database.Open(
-		cfg.Server.Features.Database.DBPath,
-		cfg.Server.Features.Cache.MaxEntries,
-		cfg.Server.Features.Database.MemTableSizeMB,
-		cfg.Server.Features.Database.BlockCacheSizeMB,
-		cfg.Server.Features.Database.IndexCacheSizeMB,
+		dbCfg.DBPath,
+		dbCfg.MemTableSizeMB,
+		dbCfg.BlockCacheSizeMB,
+		dbCfg.IndexCacheSizeMB,
+		dbCfg.ValueThresholdBytes,
+		dbCfg.ValueLogFileSizeMB,
+		dbCfg.NumCompactors,
+		dbCfg.NumLevelZeroTables,
+		dbCfg.ZSTDCompressionLevel,
 	)
 }
 
@@ -234,7 +239,7 @@ func (s *Server) warmUpConnections(cfg *config.ServerConfig, queryClient *upstre
 	if len(cfg.Upstream) == 0 {
 		return
 	}
-	queryClient.WarmUpConnections(cfg.Upstream)
+	queryClient.WarmUpConnections(s.backgroundCtx, cfg.Upstream)
 }
 
 // initHandler builds the middleware chain and returns the assembled handler.
@@ -375,7 +380,7 @@ func (s *Server) initPprof(cfg *config.ServerConfig) {
 	}
 }
 
-// ServeDNS delegates to the query handler. Required by server/tls.DNSHandler
+// ServeDNS delegates to the query handler. Required by server/protocol/tls.DNSHandler
 // interface and external benchmarks.
 func (s *Server) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg {
 	return s.handler.ServeDNS(req, clientIP, isSecure, protocol)

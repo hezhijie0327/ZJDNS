@@ -69,7 +69,7 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				m.prefetchCooldown != nil && m.prefetchCooldown.ShouldStart(qname, log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds()) &&
 				m.tryStartRefresh(qname, qtype, qclass, ecsOpt) {
 				if m.refreshGroup != nil {
-					m.refreshGroup.Go(func() error {
+					_ = m.refreshGroup.TryGo(func() error {
 						defer zdnsutil.HandlePanic("Cache refresh: prefetch fresh-hit")
 						defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
 						_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt) // error logged inside
@@ -93,7 +93,7 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				// PreferStale: return stale immediately, refresh in background.
 				if m.tryStartRefresh(qname, qtype, qclass, ecsOpt) {
 					if m.refreshGroup != nil {
-						m.refreshGroup.Go(func() error {
+						_ = m.refreshGroup.TryGo(func() error {
 							defer zdnsutil.HandlePanic("Cache refresh: stale prefetch")
 							defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
 							_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt) // error logged inside
@@ -138,7 +138,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 	var refreshFinished atomic.Bool
 
 	if m.refreshGroup != nil {
-		m.refreshGroup.Go(func() error {
+		_ = m.refreshGroup.TryGo(func() error {
 			defer zdnsutil.HandlePanic("Cache refresh: foreground refresh")
 			defer close(done)
 			defer func() {
@@ -212,7 +212,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			EntryID:      entry.ID,
 		})
 		if m.refreshGroup != nil {
-			m.refreshGroup.Go(func() error {
+			_ = m.refreshGroup.TryGo(func() error {
 				defer zdnsutil.HandlePanic("Cache refresh: background update")
 				defer func() {
 					if refreshFinished.CompareAndSwap(false, true) {

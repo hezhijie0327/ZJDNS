@@ -152,7 +152,7 @@ func (w *AsyncStatsWriter) flush(batch []RequestRecord) {
 	}
 	agg := make(map[string]*statsDelta, len(batch)/4) // estimate ~25% unique keys
 	now := log.NowUnix()
-	statDay := now / 86400
+	statDay := now / 86400 // seconds per day
 
 	for i := range batch {
 		r := &batch[i]
@@ -167,11 +167,11 @@ func (w *AsyncStatsWriter) flush(batch []RequestRecord) {
 	}
 
 	// ── Phase 2: write aggregated stats + query_log via WriteBatch ─────────
-	wb := w.db.Badger.NewWriteBatch()
+	wb := w.db.NewWriteBatch()
 	defer wb.Cancel()
 
 	for key, d := range agg {
-		_ = wb.Set([]byte(key), database.EncodeQueryStatsValue(d.count, d.totalMS))
+		_ = wb.Set([]byte(key), database.EncodeQueryStatsValue(d.count, d.totalMS)) // _ = error: WriteBatch.Set only fails on OOM; best-effort stats
 	}
 
 	if err := wb.Flush(); err != nil {

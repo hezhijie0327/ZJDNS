@@ -138,5 +138,4 @@ Reuses SM2 certificate pair from TLCP. Wire format = DTLS (RFC 8094): 2-byte big
 
 ## Zone Rules (`zone/`)
 
-- **ZoneStorage interface**: `Evaluator` depends on `ZoneStorage` (not concrete `*database.DB`), following the same pattern as `ruleset.RuleSetStorage`. The interface provides `Exec`, `Begin`, `QueryZoneExact`, `QueryZoneWildcard`, and `Close`.
-- **Wildcard matching**: Batch IN query with fixed 16 placeholders via `StmtZoneWildcard` prepared statement — single query replaces the old per-label N-query loop.
+- **Storage**: `Evaluator` holds a `*database.DB` directly (shared with cache and ruleset). Zone rules are stored under the `z:` key prefix and queried via BadgerDB prefix scans (exact match → wildcard suffix batch with max 16 iterations).

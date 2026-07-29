@@ -46,7 +46,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		entryI, _ := s.tcpWriteMu.LoadOrStore(addr, &tcpWriteEntry{})
 		entry, ok := entryI.(*tcpWriteEntry)
 		if !ok {
-			log.Errorf("SERVER: unexpected type in tcpWriteMu for %s: %T", addr, entryI)
+			log.Warnf("SERVER: unexpected type in tcpWriteMu for %s: %T", addr, entryI)
 			return
 		}
 		entry.capacityOnce.Do(func() {

@@ -68,9 +68,13 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			default:
 			}
 
-			msg := baseMsg.Copy()
-			// Copy() creates a non-pool allocation; let GC collect it.
-			// baseMsg (from pool) is Put below via defer at line 45.
+			msg := pool.DefaultMessage.Get()
+			if len(baseMsg.Question) > 0 {
+				msg.Question = append(msg.Question, baseMsg.Question[0])
+			}
+			msg.RecursionDesired = baseMsg.RecursionDesired
+			msg.CheckingDisabled = baseMsg.CheckingDisabled
+			// Ownership transfers to ExecuteQuery; no defer Put needed.
 
 			subCtx, subCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
 			defer subCancel()
@@ -270,12 +274,18 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			go func() {
 				defer zdnsutil.HandlePanic("Resolve NS A")
 				defer wg.Done()
+				if queryCtx.Err() != nil {
+					return
+				}
 				ansARecords, _ = r.resolveNSAddrType(queryCtx, nsName, dns.TypeA, depth+1, forceTCP, &nsAddrs, &addrMu) // addrs captured via nsAddrs pointer
 			}()
 
 			go func() {
 				defer zdnsutil.HandlePanic("Resolve NS AAAA")
 				defer wg.Done()
+				if queryCtx.Err() != nil {
+					return
+				}
 				ansAAAARecords, _ = r.resolveNSAddrType(queryCtx, nsName, dns.TypeAAAA, depth+1, forceTCP, &nsAddrs, &addrMu)
 			}()
 

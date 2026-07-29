@@ -7,7 +7,7 @@
     },
     "features": {
       "dnssec_enforce": true,
-      "cache": { "max_entries": 1000 }
+      "cache": {}
     }
   },
   "upstream": [{ "protocol": "recursive", "poisonguard": false }]

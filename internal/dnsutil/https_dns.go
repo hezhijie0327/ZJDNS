@@ -78,7 +78,7 @@ func ExecuteDoHRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient
 
 // ServerDOHMsgAccept is a drop-in for dnshttp.MsgAcceptFunc that accepts
 // non-zero DNS message IDs.  The library default rejects queries with non-zero
-// IDs (designed for proxy/forwarder use per RFC 8484 §7), but real DNS clients
+// IDs (designed for proxy/forwarder use per RFC 8484 §4.1), but real DNS clients
 // always generate legitimate IDs — rejecting them would break server-side DoH.
 func ServerDOHMsgAccept(m *dns.Msg) dns.MsgAcceptAction {
 	if m.Response {

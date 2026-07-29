@@ -58,10 +58,6 @@ func validateConfig(cfg *ServerConfig) error {
 	if err := validateDatabase(cfg); err != nil {
 		return err
 	}
-	if err := validateCache(cfg); err != nil {
-		return err
-	}
-
 	if err := validatePorts(cfg); err != nil {
 		return err
 	}
@@ -261,13 +257,6 @@ func validateDatabase(cfg *ServerConfig) error {
 	return nil
 }
 
-func validateCache(cfg *ServerConfig) error {
-	if cfg.Server.Features.Cache.MaxEntries < 0 {
-		return errors.New("server.features.cache.max_entries must be zero or positive")
-	}
-	return nil
-}
-
 func validatePorts(cfg *ServerConfig) error {
 	proto := &cfg.Server.Protocol
 
@@ -348,7 +337,7 @@ func validateTLSCertificateConfig(cfg *ServerConfig) error {
 
 	// Only require cert validation if at least one TLS-based protocol is enabled.
 	proto := &cfg.Server.Protocol
-	tlsEnabled := proto.TLS != "" || proto.QUIC != "" || proto.HTTPS.Port != "" || proto.HTTP3.Port != ""
+	tlsEnabled := proto.TLS != "" || proto.QUIC != "" || proto.HTTPS.Port != "" || proto.HTTP3.Port != "" || proto.DTLS != ""
 	if !tlsEnabled {
 		return nil
 	}

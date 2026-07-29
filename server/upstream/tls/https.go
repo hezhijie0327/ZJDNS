@@ -101,8 +101,8 @@ func transportKey(host, serverName string, skipVerify bool, proxyURL string) str
 // shouldRetryHTTP checks whether an HTTP/2 error warrants recreating the client
 // and retrying.
 func shouldRetryHTTP(err error) bool {
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
+	netErr, ok := errors.AsType[net.Error](err)
+	if ok && netErr.Timeout() {
 		return true
 	}
 	// Also retry on transient operation errors (connection reset, etc.).

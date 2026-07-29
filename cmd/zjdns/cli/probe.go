@@ -152,8 +152,8 @@ func isTimeoutOrEOF(err error) bool {
 	if err == nil {
 		return false
 	}
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
+	netErr, ok := errors.AsType[net.Error](err)
+	if ok && netErr.Timeout() {
 		return true
 	}
 	return errors.Is(err, io.EOF) || strings.Contains(err.Error(), "broken pipe")

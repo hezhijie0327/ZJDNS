@@ -38,7 +38,6 @@ func EntryKey(qname, ecsAddr string, ecsPrefix int, dnssecOK bool, qtype, qclass
 	return entryKeyBytes(qname, ecsAddr, ecsPrefix, dnssec, qtype, qclass)
 }
 
-// EntryKeyPrefix returns the prefix for all cache entry keys.
 // EntryKeyPrefix returns the prefix for all cache entry keys (including the e:ip: sub-space).
 func EntryKeyPrefix() []byte { return []byte(prefixEntry) }
 
@@ -56,7 +55,12 @@ func entryKeyBytes(qname, ecsAddr string, ecsPrefix int, dnssec byte, qtype, qcl
 	off += copy(buf[off:], ecsAddr)
 	buf[off] = 0
 	off++
-	binary.BigEndian.PutUint16(buf[off:], uint16(ecsPrefix)) //nolint:gosec // G115: ECS prefix fits uint16
+	if ecsPrefix < 0 {
+		ecsPrefix = 0
+	} else if ecsPrefix > math.MaxUint16 {
+		ecsPrefix = math.MaxUint16
+	}
+	binary.BigEndian.PutUint16(buf[off:], uint16(ecsPrefix))
 	off += 2
 	buf[off] = 0
 	off++
@@ -141,7 +145,12 @@ func QueryStatsKey(statDay int64, result, protocol string, rcode int, dnssec str
 	off += copy(buf[off:], protocol)
 	buf[off] = 0
 	off++
-	binary.BigEndian.PutUint16(buf[off:], uint16(rcode)) //nolint:gosec // G115: DNS rcode fits uint16
+	if rcode < 0 {
+		rcode = 0
+	} else if rcode > math.MaxUint16 {
+		rcode = math.MaxUint16
+	}
+	binary.BigEndian.PutUint16(buf[off:], uint16(rcode))
 	off += 2
 	buf[off] = 0
 	off++
@@ -303,7 +312,12 @@ func DecodePtrMapValue(data []byte) (ttl int32) {
 //	Layout: [0:2]latency_ms uint16 BE
 func EncodeLatencyValue(latencyMS int) []byte {
 	buf := make([]byte, 2)
-	binary.BigEndian.PutUint16(buf[0:2], uint16(latencyMS)) //nolint:gosec // G115: latency fits uint16
+	if latencyMS < 0 {
+		latencyMS = 0
+	} else if latencyMS > math.MaxUint16 {
+		latencyMS = math.MaxUint16
+	}
+	binary.BigEndian.PutUint16(buf[0:2], uint16(latencyMS))
 	return buf
 }
 
@@ -342,7 +356,13 @@ func DecodeQueryStatsValue(data []byte) (queryCount, totalMS int64) {
 func EncodeZoneValue(rcode int, answer, authority, additional []byte) []byte {
 	size := 2 + 4 + len(answer) + 4 + len(authority) + 4 + len(additional)
 	buf := make([]byte, size)
-	binary.BigEndian.PutUint16(buf[0:2], uint16(rcode)) //nolint:gosec // G115: DNS rcode fits uint16
+	if rcode < 0 {
+		rcode = 0
+	}
+	if rcode > math.MaxUint16 {
+		rcode = math.MaxUint16
+	}
+	binary.BigEndian.PutUint16(buf[0:2], uint16(rcode))
 	off := 2
 	off = putBytesLE(buf, off, answer)
 	off = putBytesLE(buf, off, authority)
@@ -384,47 +404,6 @@ func getBytesLE(data []byte, off int) (b []byte, newOff int) {
 	b = make([]byte, n)
 	copy(b, data[off:off+n])
 	return b, off + n
-}
-
-// ── Key Parsing ───────────────────────────────────────────────────────────────
-
-// ParseStatDay extracts stat_day from a query_stats key for pruning.
-// Key format: s:{stat_day:8B BE}\x00...
-func ParseStatDay(key []byte) (int64, bool) {
-	if len(key) < 2+8 {
-		return 0, false
-	}
-	if string(key[:2]) != prefixQueryStats {
-		return 0, false
-	}
-	return int64(binary.BigEndian.Uint64(key[2:10])), true //nolint:gosec // G115: protocol-bounded value fits target type
-}
-
-// ParseStatDayFromKey is like ParseStatDay but ensures the key prefix matches.
-func ParseStatDayFromKey(key []byte) int64 {
-	v, _ := ParseStatDay(key)
-	return v
-}
-
-// StatsKeyDayCutoff returns the key prefix for stat_day values up to cutoff.
-func StatsKeyDayCutoff(cutoff int64) []byte {
-	buf := make([]byte, 2+8)
-	copy(buf[:2], prefixQueryStats)
-	binary.BigEndian.PutUint64(buf[2:10], uint64(cutoff)) //nolint:gosec // G115: protocol-bounded value fits target type
-	return buf
-}
-
-// MaxKey returns a key that sorts after all keys with the given prefix.
-func MaxKey(prefix []byte) []byte {
-	maxKey := make([]byte, len(prefix))
-	copy(maxKey, prefix)
-	for i := len(maxKey) - 1; i >= 0; i-- {
-		if maxKey[i] < math.MaxUint8 {
-			maxKey[i]++
-			return maxKey[:i+1]
-		}
-	}
-	return append(prefix, 0xFF)
 }
 
 // UserMetaValidated returns the UserMeta byte for the validated flag.

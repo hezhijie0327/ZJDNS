@@ -214,8 +214,8 @@ func IsTemporaryError(err error) bool {
 	if err == nil {
 		return false
 	}
-	var ne net.Error
-	if errors.As(err, &ne) && ne.Timeout() {
+	ne, ok := errors.AsType[net.Error](err)
+	if ok && ne.Timeout() {
 		return true
 	}
 	// Some wrapped errors (e.g., from quic-go or io.Pipe) do not implement

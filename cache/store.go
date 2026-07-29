@@ -83,7 +83,7 @@ func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	var msgWire []byte
 	found := false
 
-	_ = c.db.Badger.View(func(txn *badger.Txn) error {
+	_ = c.db.View(func(txn *badger.Txn) error {
 		for _, cand := range ecsFallbackCandidates(ecs) {
 			key := database.EntryKey(qname, cand.addr, cand.prefix, dnssecOK, qtype, qclass)
 			item, err := txn.Get(key)
@@ -197,7 +197,7 @@ func (c *Cache) lookupIPLatencies(ips []string) map[string]int {
 	}
 	latencies := make(map[string]int, min(len(ips), maxLatencyLookupIPs))
 
-	_ = c.db.Badger.View(func(txn *badger.Txn) error {
+	_ = c.db.View(func(txn *badger.Txn) error {
 		for _, ip := range ips {
 			item, err := txn.Get(database.EIPLatencyKey(ip))
 			if err != nil {
@@ -213,7 +213,8 @@ func (c *Cache) lookupIPLatencies(ips []string) map[string]int {
 	return latencies
 }
 
-// Set stores a DNS response in the cache. Wire format is zstd-compressed.
+// Set stores a DNS response in the cache. Wire format is raw DNS wire format
+// (BadgerDB handles block-level zstd compression at the SSTable layer).
 func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
 	answer, authority, additional []dns.RR, validated bool,
 ) int64 {
@@ -251,7 +252,7 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	var entryID uint64
 	ttlDurationSec := int64(entryTTL) + defaultStaleMaxAge
 
-	err := c.db.Badger.Update(func(txn *badger.Txn) error {
+	err := c.db.Update(func(txn *badger.Txn) error {
 		id, idErr := c.db.NextEntryID()
 		if idErr != nil {
 			return idErr
@@ -274,13 +275,13 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 		allRRs = append(allRRs, authority...)
 		allRRs = append(allRRs, additional...)
 		if ptrErr := insertPtrMap(txn, id, allRRs, now, ttlDurationSec); ptrErr != nil {
-			log.Warnf("CACHE: insert ptr_map failed (non-fatal): %v", ptrErr)
+			log.Warnf("CACHE: insert ptr_map failed for %s (non-fatal): %v", qname, ptrErr)
 		}
 
 		return nil
 	})
 	if err != nil {
-		log.Warnf("CACHE: insert entry failed: %v", err)
+		log.Warnf("CACHE: insert entry failed for %s (type=%d): %v", qname, qtype, err)
 		return 0
 	}
 

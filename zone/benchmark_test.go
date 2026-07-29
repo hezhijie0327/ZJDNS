@@ -11,9 +11,9 @@ import (
 
 func BenchmarkEvaluator_EvaluateExact(b *testing.B) {
 	log.Default.SetLevel(log.Error)
-	db, _ := database.Open("", 0, 0, 0, 0)
+	db, _ := database.Open("", 0, 0, 0, 0, 0, 0, 0, 0)
 	eval := New(db)
-	defer func() { _ = eval.Close() }()
+	defer func() { _ = db.Close() }()
 
 	_ = eval.LoadRules([]config.ZoneRule{
 		{
@@ -32,9 +32,9 @@ func BenchmarkEvaluator_EvaluateExact(b *testing.B) {
 
 func BenchmarkEvaluator_EvaluateWildcard(b *testing.B) {
 	log.Default.SetLevel(log.Error)
-	db, _ := database.Open("", 0, 0, 0, 0)
+	db, _ := database.Open("", 0, 0, 0, 0, 0, 0, 0, 0)
 	eval := New(db)
-	defer func() { _ = eval.Close() }()
+	defer func() { _ = db.Close() }()
 
 	_ = eval.LoadRules([]config.ZoneRule{
 		{
@@ -53,9 +53,9 @@ func BenchmarkEvaluator_EvaluateWildcard(b *testing.B) {
 
 func BenchmarkEvaluator_EvaluateMiss(b *testing.B) {
 	log.Default.SetLevel(log.Error)
-	db, _ := database.Open("", 0, 0, 0, 0)
+	db, _ := database.Open("", 0, 0, 0, 0, 0, 0, 0, 0)
 	eval := New(db)
-	defer func() { _ = eval.Close() }()
+	defer func() { _ = db.Close() }()
 
 	_ = eval.LoadRules([]config.ZoneRule{
 		{
@@ -85,10 +85,10 @@ func BenchmarkEvaluator_LoadRules(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		db, _ := database.Open("", 0, 0, 0, 0)
+		db, _ := database.Open("", 0, 0, 0, 0, 0, 0, 0, 0)
 		eval := New(db)
 		_ = eval.LoadRules(rules)
-		_ = eval.Close()
+		_ = db.Close()
 	}
 }
 

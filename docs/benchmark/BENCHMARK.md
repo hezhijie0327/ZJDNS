@@ -43,7 +43,7 @@ Minimal config for pure zone-lookup QPS:
           "answer": [{ "type": "A", "content": "1.2.3.4" }], "ttl": 3600 }
       ]
     },
-    "features": { "cache": { "max_entries": 0 } }
+    "features": { "cache": {} }
   }
 }
 

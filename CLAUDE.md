@@ -129,7 +129,7 @@ go test -bench=. -short -benchtime=500ms ./...                 # stable numbers
 go test -bench=BenchmarkServerProcessQuery -benchtime=3s ./cmd/zjdns  # integration QPS
 ```
 
-**~90 benchmarks** across 14 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
+**~84 benchmarks** across 14 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
 
 ```bash
 # Update baseline
@@ -212,7 +212,7 @@ zjdns/
 ├── cache/              ← DNS response cache (Store interface, BadgerDB-backed Cache, AsyncStatsWriter)
 ├── ruleset/            ← CIDR + domain tag matching (binary radix trie)
 ├── zone/               ← DNS zone rules (Evaluator, zone-file import)
-├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, ...
+├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, lrumap, siphash, ipttl, dns64, dnscryptcrypto
 └── server/
     ├── handler/        ← query pipeline adapter + QueryContext
     │   └── middleware/ ← 9 composable middleware + AssembleChain

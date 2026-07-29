@@ -33,11 +33,14 @@ const (
 // =============================================================================
 
 const (
-	DefaultMaxCacheEntries = 10000
-
-	DefaultBadgerMemTableSizeMB   = 32 // BadgerDB memtable size (write buffer)
-	DefaultBadgerBlockCacheSizeMB = 32 // BadgerDB block cache size (read cache)
-	DefaultBadgerIndexCacheSizeMB = 64 // BadgerDB index cache size (bloom filters + table indices)
+	DefaultBadgerMemTableSizeMB       = 8        // BadgerDB memtable size (write buffer)
+	DefaultBadgerBlockCacheSizeMB     = 8        // BadgerDB block cache size (read cache)
+	DefaultBadgerIndexCacheSizeMB     = 16       // BadgerDB index cache size (bloom filters + table indices)
+	DefaultBadgerNumCompactors        = 2        // BadgerDB compaction goroutines
+	DefaultBadgerNumLevelZeroTables   = 2        // BadgerDB L0 tables before compaction
+	DefaultBadgerZSTDCompressionLevel = 3        // BadgerDB zstd compression level (1=fast,3=balanced)
+	DefaultBadgerValueThreshold       = 64 << 10 // BadgerDB value inline threshold (64KB)
+	DefaultBadgerValueLogFileSizeMB   = 64       // BadgerDB vlog file size (64MB default)
 
 	DefaultTTL         = 10
 	DefaultStaleTTL    = 30
@@ -166,7 +169,7 @@ const (
 	DefaultMaxIdleConns          = 100
 	DefaultMaxIdleConnsPerHost   = 8
 	DefaultDOTWriteChannelSize   = 64
-	DefaultDOHMaxRequestSize     = 65535 // max DoH request body size (RFC 8484 §6)
+	DefaultDOHMaxRequestSize     = 65535 // max DoH request body size (RFC 8484 §4.2.1)
 
 	DefaultTokenStoreCapacity     = 32  // QUIC LRU token store capacity per key
 	DefaultTokenStoreMaxEntries   = 128 // QUIC LRU token store max total entries

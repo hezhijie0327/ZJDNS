@@ -63,7 +63,8 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
 	shouldAddEDNS := ecsOpt != nil || qctx.ClientRequestedDNSSEC || cookieStr != "" ||
 		qctx.EDE != nil || qctx.IsSecure || qctx.TCPKeepalive > 0 || len(qctx.Req.Pseudo) > 0
 
-	if shouldAddEDNS && m.edns != nil {
+	// BADCOOKIE responses already have EDNS applied by the EDNS middleware.
+	if shouldAddEDNS && m.edns != nil && msg.Rcode != dns.RcodeBadCookie {
 		m.edns.ApplyToMessage(msg, ecsOpt, qctx.IsSecure, cookieStr, qctx.EDE, false, clientWantsPadding, qctx.TCPKeepalive)
 	}
 

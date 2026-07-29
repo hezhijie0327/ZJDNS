@@ -7,7 +7,7 @@ import (
 )
 
 func TestOpen_Memory(t *testing.T) {
-	db, err := Open("", 100, 0, 0, 0)
+	db, err := Open("", 0, 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open(:memory:, 0) error: %v", err)
 	}
@@ -21,7 +21,7 @@ func TestOpen_Memory(t *testing.T) {
 }
 
 func TestOpen_DefaultOpts(t *testing.T) {
-	db, err := Open("", 0, 0, 0, 0)
+	db, err := Open("", 0, 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open with zero opts error: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestOpen_DefaultOpts(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	db, err := Open("", 100, 0, 0, 0)
+	db, err := Open("", 0, 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestClose(t *testing.T) {
 }
 
 func TestClose_DoubleClose(t *testing.T) {
-	db, err := Open("", 100, 0, 0, 0)
+	db, err := Open("", 0, 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestClose_DoubleClose(t *testing.T) {
 }
 
 func TestSequenceIDs(t *testing.T) {
-	db, err := Open("", 100, 0, 0, 0)
+	db, err := Open("", 0, 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestSequenceIDs(t *testing.T) {
 }
 
 func TestKeyRoundTrip(t *testing.T) {
-	db, err := Open("", 100, 0, 0, 0)
+	db, err := Open("", 0, 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestKeyRoundTrip(t *testing.T) {
 }
 
 func TestPtrMapKeyRoundTrip(t *testing.T) {
-	db, err := Open("", 100, 0, 0, 0)
+	db, err := Open("", 0, 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestZoneValueRoundTrip(t *testing.T) {
 
 func TestOpen_Disk(t *testing.T) {
 	dir := t.TempDir()
-	db, err := Open(dir+"/test.db", 100, 0, 0, 0)
+	db, err := Open(dir+"/test.db", 0, 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open(disk, 0) error: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestOpen_Disk(t *testing.T) {
 	}
 
 	// Re-open and verify the data survived.
-	db2, err := Open(dir+"/test.db", 100, 0, 0, 0)
+	db2, err := Open(dir+"/test.db", 0, 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Re-open error: %v", err)
 	}

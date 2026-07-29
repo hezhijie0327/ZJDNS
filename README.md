@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.8.0-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.8.2-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -80,8 +80,6 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 | `z:` | Zone 规则 |
 | `r:` | CIDR/域名规则集 |
 
-BadgerDB 调优：64KB value inline（无 vlog IO），64MB index cache（bloom filter 移出 GC 堆），`NumVersionsToKeep(1)` + `DetectConflicts(false)`。
-
 ### 规则集
 
 统一的 IP + 域名标签匹配引擎，上游可按标签分流、Zone 可按标签过滤：
@@ -151,8 +149,16 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
     "features": {
       "ecs_subnet": { "ipv4": "1.2.3.0/24", "ipv6": "2001:db8::/56" },
       "dns64": { "prefix": "64:ff9b::/96" },
-      "database": { "db_path": "/var/lib/zjdns/cache.db" },
-      "cache": { "max_entries": 10000, "prefer_stale": true },
+      "database": {
+        "db_path": "/var/lib/zjdns/cache.db",
+        "memtable_size_mb": 8,
+        "block_cache_size_mb": 8,
+        "index_cache_size_mb": 16,
+        "num_compactors": 2,
+        "num_level_zero_tables": 2,
+        "zstd_compression_level": 3
+      },
+      "cache": { "prefer_stale": true },
       "ktls": { "kernel_tx": true, "kernel_rx": false }
     }
   }

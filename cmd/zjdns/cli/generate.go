@@ -37,12 +37,16 @@ func generateExampleConfig() (string, error) {
 
 	cfg.Server.Features.KTLS = &config.KTLSSettings{KernelTX: true}
 	cfg.Server.Features.Database = config.DatabaseSettings{
-		DBPath:           "cache.db",
-		MemTableSizeMB:   config.DefaultBadgerMemTableSizeMB,
-		BlockCacheSizeMB: config.DefaultBadgerBlockCacheSizeMB,
+		DBPath:               "cache.db",
+		MemTableSizeMB:       config.DefaultBadgerMemTableSizeMB,
+		BlockCacheSizeMB:     config.DefaultBadgerBlockCacheSizeMB,
+		IndexCacheSizeMB:     config.DefaultBadgerIndexCacheSizeMB,
+		ValueThresholdBytes:  config.DefaultBadgerValueThreshold,
+		NumCompactors:        config.DefaultBadgerNumCompactors,
+		NumLevelZeroTables:   config.DefaultBadgerNumLevelZeroTables,
+		ZSTDCompressionLevel: config.DefaultBadgerZSTDCompressionLevel,
 	}
 	cfg.Server.Features.Cache = config.CacheSettings{
-		MaxEntries:  config.DefaultMaxCacheEntries,
 		PreferStale: true,
 	}
 	cfg.Server.Features.ECS = config.ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}

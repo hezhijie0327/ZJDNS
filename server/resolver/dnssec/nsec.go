@@ -169,16 +169,16 @@ func (c *CryptoValidator) isDenialOfExistenceValid(response *dns.Msg, qname stri
 	if valid := c.verifyNSEC3(authSigs, nsec3s, verifiedDNSKEYs, normalizedQname, qtype, denialType); valid {
 		// RFC 5155 §9.2: Opt-Out NSEC3 proofs suppress AD bit.
 		if hasOptOutInProof(nsec3s) {
-			return false, fmt.Errorf("NSEC3 Opt-Out proof for %s of %s — AD bit suppressed (RFC 5155 §9.2)", denialType, qname)
+			return false, fmt.Errorf("%w: NSEC3 Opt-Out proof for %s of %s — AD bit suppressed (RFC 5155 §9.2)", ErrBogusSignature, denialType, qname)
 		}
 
 		return true, nil
 	}
 	if len(nsec3s) > 0 {
-		return false, fmt.Errorf("NSEC3 records present but do not prove %s of %s (type=%s)", denialType, qname, dns.TypeToString[qtype])
+		return false, fmt.Errorf("%w: NSEC3 records present but do not prove %s of %s (type=%s)", ErrBogusSignature, denialType, qname, dns.TypeToString[qtype])
 	}
 
-	return false, fmt.Errorf("no signed NSEC/NSEC3 for %s", denialType)
+	return false, fmt.Errorf("%w: no signed NSEC/NSEC3 for %s", ErrBogusSignature, denialType)
 }
 
 func (c *CryptoValidator) isNXDOMAINValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {

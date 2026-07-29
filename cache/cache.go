@@ -52,7 +52,7 @@ type StoreLifecycle interface {
 	Close() error
 }
 
-// Store defines the full cache storage interface, composed from its role
+// Store defines the full cache storage interface. Defined in the producer package (cache) to avoid import cycles; consumers should depend on StoreReader/StoreWriter/StoreLifecycle., composed from its role
 // interfaces so consumers can depend on only the methods they need (C5).
 type Store interface {
 	StoreReader

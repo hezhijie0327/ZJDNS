@@ -25,7 +25,7 @@ type recordGroup struct {
 // Zone file import — domain headers + record lines
 // ---------------------------------------------------------------------------
 
-// loadFile parses a zone file and inserts entries directly into SQL.
+// loadFile parses a zone file and inserts entries into BadgerDB.
 func (e *Evaluator) loadFile(txn *badger.Txn, parent *config.ZoneRule) (int, error) {
 	//nolint:gosec // G304: user-configured file path
 	f, err := os.Open(parent.File)

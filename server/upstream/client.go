@@ -45,6 +45,7 @@ type Result struct {
 // Client manages outbound DNS queries across multiple transport protocols with
 // pooling. Protocol-specific logic is delegated to sub-packages.
 type Client struct {
+	closeOnce      sync.Once
 	timeout        time.Duration
 	plainClient    *plain.Client
 	tlsClient      *tlsclient.Client
@@ -285,28 +286,26 @@ func (c *Client) SetKTLS(tx, rx bool) {
 	c.tlsClient.SetKTLS(tx, rx)
 }
 
-// Close shuts down all pooled connections and transports.
+// Close shuts down all pooled connections and transports. Idempotent.
 func (c *Client) Close() {
 	if c == nil {
 		return
 	}
-
-	c.warmWg.Wait()
-
-	c.plainClient.Close()
-	c.tlsClient.Close()
-
-	if c.proxyDialers != nil {
-		c.proxyDialers.Range(func(key string, d *socks5.Dialer) bool {
-			if d != nil {
-				_ = d.Close()
-			}
-			return true
-		})
-		c.proxyDialers = nil
-	}
-
-	c.dnscryptClient.Close()
+	c.closeOnce.Do(func() {
+		c.warmWg.Wait()
+		c.plainClient.Close()
+		c.tlsClient.Close()
+		if c.proxyDialers != nil {
+			c.proxyDialers.Range(func(key string, d *socks5.Dialer) bool {
+				if d != nil {
+					_ = d.Close()
+				}
+				return true
+			})
+			c.proxyDialers = nil
+		}
+		c.dnscryptClient.Close()
+	})
 }
 
 // needsTCPFallback checks whether a UDP result should be retried over TCP.

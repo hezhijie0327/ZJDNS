@@ -179,8 +179,8 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 		}
 
 		if err != nil {
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
+			netErr, ok := errors.AsType[net.Error](err)
+			if ok && netErr.Timeout() {
 				now := time.Now()
 				if sg.last != nil || sg.nonEDNS != nil {
 					// Return the best candidate after the collect window expires.

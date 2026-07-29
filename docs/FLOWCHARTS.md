@@ -485,7 +485,7 @@ graph LR
 ```mermaid
 graph TD
     QUERY[Cache Hit<br/>with A/AAAA Records] --> EXTRACT[Extract All IPs<br/>from Answer Section]
-    EXTRACT --> BATCH[Batch SQL Lookup<br/>ip_latency table]
+    EXTRACT --> BATCH[Batch BadgerDB Lookup<br/>e:ip: prefix scan]
     BATCH -->|All Cached| SORT[Sort Records<br/>by Latency ASC]
     BATCH -->|Some Missing| PROBE[Background Probe<br/>per-IP concurrent]
 

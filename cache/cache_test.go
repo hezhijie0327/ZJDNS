@@ -14,11 +14,11 @@ import (
 )
 
 func testStore() *Cache {
-	db, err := database.Open("", 0, 0, 0, 0)
+	db, err := database.Open("", 0, 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		panic(err)
 	}
-	return &Cache{db: db}
+	return New(db)
 }
 
 func netParseIP(s string) netip.Addr { return netip.MustParseAddr(s) }
@@ -205,7 +205,7 @@ func TestClose(t *testing.T) {
 }
 
 func TestAsyncWriter_RecordAndFlush(t *testing.T) {
-	db, err := database.Open("", 0, 0, 0, 0)
+	db, err := database.Open("", 0, 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestAsyncWriter_RecordAndFlush(t *testing.T) {
 }
 
 func TestAsyncWriter_CloseDrain(t *testing.T) {
-	db, err := database.Open("", 0, 0, 0, 0)
+	db, err := database.Open("", 0, 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestDiskPersistence(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 
-	db, err := database.Open(dbPath, 500, 0, 0, 0)
+	db, err := database.Open(dbPath, 0, 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestDiskPersistence(t *testing.T) {
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 	_ = mc.Close()
 
-	db2, err := database.Open(dbPath, 500, 0, 0, 0)
+	db2, err := database.Open(dbPath, 0, 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestECSFallbackCandidates_Nil(t *testing.T) {
 }
 
 func BenchmarkStoreSetGet(b *testing.B) {
-	db, _ := database.Open("", 0, 0, 0, 0)
+	db, _ := database.Open("", 0, 0, 0, 0, 0, 0, 0, 0)
 	mc := &Cache{db: db}
 	defer func() { _ = mc.Close() }()
 
@@ -369,7 +369,7 @@ func BenchmarkStoreSetGet(b *testing.B) {
 }
 
 func BenchmarkStoreParallel(b *testing.B) {
-	db, _ := database.Open("", 0, 0, 0, 0)
+	db, _ := database.Open("", 0, 0, 0, 0, 0, 0, 0, 0)
 	mc := &Cache{db: db}
 	defer func() { _ = mc.Close() }()
 

@@ -113,15 +113,20 @@ type DDRSettings struct {
 // DatabaseSettings configures the shared BadgerDB database backing cache, zone,
 // and ruleset.
 type DatabaseSettings struct {
-	DBPath           string `json:"db_path,omitzero"`             // database directory path
-	MemTableSizeMB   int    `json:"memtable_size_mb,omitzero"`    // BadgerDB memtable size (write buffer), 0 = default
-	BlockCacheSizeMB int    `json:"block_cache_size_mb,omitzero"` // BadgerDB block cache size (read cache), 0 = default
-	IndexCacheSizeMB int    `json:"index_cache_size_mb,omitzero"` // BadgerDB index cache size (bloom filters), 0 = default
+	DBPath               string `json:"db_path,omitzero"`                // database directory path
+	MemTableSizeMB       int    `json:"memtable_size_mb,omitzero"`       // BadgerDB memtable size (write buffer), 0 = default
+	BlockCacheSizeMB     int    `json:"block_cache_size_mb,omitzero"`    // BadgerDB block cache size (read cache), 0 = default
+	IndexCacheSizeMB     int    `json:"index_cache_size_mb,omitzero"`    // BadgerDB index cache size (bloom filters), 0 = default
+	MaxCacheSizeMB       int    `json:"max_cache_size_mb,omitzero"`      // BadgerDB total cache budget (memtable+block+index), 0 = no limit
+	ValueThresholdBytes  int    `json:"value_threshold_bytes,omitzero"`  // BadgerDB value inline threshold, 0 = default(64KB)
+	ValueLogFileSizeMB   int    `json:"value_log_file_size_mb,omitzero"` // BadgerDB vlog file size, 0 = default(1GB)
+	NumCompactors        int    `json:"num_compactors,omitzero"`         // BadgerDB compaction goroutines, 0 = default(2)
+	NumLevelZeroTables   int    `json:"num_level_zero_tables,omitzero"`  // BadgerDB L0 tables before compaction, 0 = default(2)
+	ZSTDCompressionLevel int    `json:"zstd_compression_level,omitzero"` // BadgerDB zstd compression level 1-3, 0 = default(3)
 }
 
 // CacheSettings configures DNS response cache size and stale serving.
 type CacheSettings struct {
-	MaxEntries  int  `json:"max_entries,omitzero"`
 	PreferStale bool `json:"prefer_stale,omitzero"`
 }
 

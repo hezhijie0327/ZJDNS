@@ -50,11 +50,15 @@
       },
       "database": {
         "db_path": "cache.db",
-        "memtable_size_mb": 32,
-        "block_cache_size_mb": 32
+        "memtable_size_mb": 8,
+        "block_cache_size_mb": 8,
+        "index_cache_size_mb": 16,
+        "value_threshold_bytes": 65536,
+        "num_compactors": 2,
+        "num_level_zero_tables": 2,
+        "zstd_compression_level": 3
       },
       "cache": {
-        "max_entries": 10000,
         "prefer_stale": true
       },
       "latency_probe": [
@@ -120,13 +124,17 @@
       "address": "https://223.5.5.5:443/dns-query",
       "protocol": "https",
       "server_name": "dns.alidns.com",
-      "match": ["corp-net"]
+      "match": [
+        "corp-net"
+      ]
     },
     {
       "address": "https://223.6.6.6:443/dns-query",
       "protocol": "http3",
       "server_name": "dns.alidns.com",
-      "match": ["!corp-net"]
+      "match": [
+        "!corp-net"
+      ]
     },
     {
       "address": "sdns://AQMAAAAAAAAADDkuOS45Ljk6ODQ0MyBnyEe4yHWM0SAkVUO-dWdG3zTfHYTAC4xHA2jfgh2GPhkyLmRuc2NyeXB0LWNlcnQucXVhZDkubmV0"
@@ -137,7 +145,9 @@
   ],
   "zone": [
     {
-      "match": ["gateway"]
+      "match": [
+        "gateway"
+      ]
     },
     {
       "name": "blocked.com",
@@ -160,7 +170,10 @@
     },
     {
       "name": "*.cdn.example.com",
-      "match": ["corp-net", "!guest"],
+      "match": [
+        "corp-net",
+        "!guest"
+      ],
       "answer": [
         {
           "type": 1,
@@ -199,17 +212,25 @@
     {
       "tag": "corp-net",
       "type": "ip",
-      "rule": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+      "rule": [
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16"
+      ]
     },
     {
       "tag": "guest",
       "type": "ip",
-      "rule": ["0.0.0.0/0"]
+      "rule": [
+        "0.0.0.0/0"
+      ]
     },
     {
       "tag": "gateway",
       "type": "ip",
-      "rule": ["10.0.0.1/32"]
+      "rule": [
+        "10.0.0.1/32"
+      ]
     }
   ]
 }

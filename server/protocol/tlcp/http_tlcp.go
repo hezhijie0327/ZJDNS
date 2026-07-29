@@ -46,7 +46,7 @@ func (s *Server) startDOHServer() error {
 
 		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("TLCP DoH server")
-			if err := dohSrv.Serve(tlcpListener); err != nil && err != http.ErrServerClosed {
+			if err := dohSrv.Serve(tlcpListener); err != nil && err != http.ErrServerClosed && s.ctx.Err() == nil {
 				log.Errorf("TLCP: DoH serve error: %v", err)
 			}
 			return nil

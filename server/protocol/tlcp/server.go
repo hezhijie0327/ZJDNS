@@ -173,18 +173,21 @@ func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 
 	if s.dotPort != "" {
 		if err := s.startDOTServer(); err != nil {
+			s.cancel(fmt.Errorf("TLCP DoT startup: %w", err))
 			return fmt.Errorf("TLCP DoT startup: %w", err)
 		}
 	}
 
 	if s.dohPort != "" {
 		if err := s.startDOHServer(); err != nil {
+			s.cancel(fmt.Errorf("TLCP DoH startup: %w", err))
 			return fmt.Errorf("TLCP DoH startup: %w", err)
 		}
 	}
 
 	if s.dtlcpPort != "" {
 		if err := s.startDTLCPServer(); err != nil {
+			s.cancel(fmt.Errorf("TLCP DTLCP startup: %w", err))
 			return fmt.Errorf("TLCP DTLCP startup: %w", err)
 		}
 	}

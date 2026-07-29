@@ -20,6 +20,7 @@ import (
 // protocol packages independent of the handler/resolver graph.  The
 // server/upstream/dnscrypt → server/protocol/dnscrypt edge has been removed
 // by extracting shared types into internal/dnscryptcrypto/.
+// DNSHandler is the EDNS handler interface. Defined in the producer package (edns) to avoid import cycles; consumers accept this via dependency injection.
 type DNSHandler interface {
 	ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg
 }

@@ -113,7 +113,11 @@ func (s *Server) startTCPWriteMuSweep() {
 		s.tcpWriteMu.Range(func(key, value any) bool {
 			entry, ok := value.(*tcpWriteEntry)
 			if !ok || entry.lastAccess.Load() < cutoff {
-				stale = append(stale, key.(string))
+				keyStr, ok := key.(string)
+				if !ok {
+					return true
+				}
+				stale = append(stale, keyStr)
 			}
 			return true
 		})

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"time"
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
@@ -41,7 +42,7 @@ func (c *Cache) RecordRequest(r *RequestRecord) {
 	if c.db.IsClosed() {
 		return
 	}
-	_ = c.db.Badger.Update(func(txn *badger.Txn) error {
+	_ = c.db.Update(func(txn *badger.Txn) error {
 		upsertQueryStats(txn, r.Result, r.Protocol, r.Rcode, r.DNSSECStatus, r.Poisoned, r.ResponseTime)
 
 		return nil
@@ -56,7 +57,7 @@ func (c *Cache) ReverseLookup(ip string) []LookupResult {
 
 	var results []LookupResult
 
-	_ = c.db.Badger.View(func(txn *badger.Txn) error {
+	_ = c.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		opts.Prefix = database.EIPReversePrefix(ip)
 		opts.PrefetchValues = true
@@ -97,7 +98,7 @@ func (c *Cache) ReverseLookup(ip string) []LookupResult {
 // upsertQueryStats does a read-modify-write on a query_stats key within a
 // transaction. Called from both the async writer path and the sync fallback.
 func upsertQueryStats(txn *badger.Txn, result, protocol string, rcode int, dnssecStatus string, poisoned bool, responseTime int64) {
-	statDay := log.NowUnix() / 86400
+	statDay := log.NowUnix() / 86400 // seconds per day
 	key := database.QueryStatsKey(statDay, result, protocol, rcode, dnssecStatus, poisoned)
 
 	var queryCount, totalMS int64
@@ -133,7 +134,7 @@ func (c *Cache) FlushDB(target string) (int64, error) {
 	default:
 		return 0, fmt.Errorf("flushDB: unknown target %q", target)
 	}
-	if err := c.db.Badger.DropPrefix(prefix); err != nil {
+	if err := c.db.DropPrefix(prefix); err != nil {
 		return 0, fmt.Errorf("flushDB %s: %w", target, err)
 	}
 	log.Infof("CACHE: flushDB %s: done", target)
@@ -157,29 +158,13 @@ func (c *Cache) Stats() []string {
 		return nil
 	}
 
-	// Count cache entries via prefix scan — TTL makes atomic tracking unreliable.
-	var entries int64
-	_ = c.db.Badger.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.Prefix = database.EntryKeyPrefix()
-		opts.PrefetchValues = false
-		it := txn.NewIterator(opts)
-		defer it.Close()
-		for it.Rewind(); it.Valid(); it.Next() {
-			if !it.Item().IsDeletedOrExpired() {
-				entries++
-			}
-		}
-		return nil
-	})
-
 	var total, hits, misses, stales, zones, errCount, blockedCount, badcookieCount int64
 	var udp, tcp, tls, quic, https, http3, dtls, dnscrypt, dnscryptTCP, tlcp, httpTLCP, dtlcp int64
 	var noerr, formerr, servfail, nxdomain, notimp, refused, other int64
 	var secureCount, insecureCount, bogusCount, poisoned int64
 	var totalMS int64
 
-	_ = c.db.Badger.View(func(txn *badger.Txn) error {
+	_ = c.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		opts.Prefix = database.QueryStatsPrefix()
 		opts.PrefetchValues = true
@@ -283,7 +268,7 @@ func (c *Cache) Stats() []string {
 	}
 
 	return []string{
-		fmt.Sprintf("entries=%d total=%d avg=%.1fms", entries, total, avgMs),
+		fmt.Sprintf("total=%d avg=%.1fms", total, avgMs),
 		fmt.Sprintf("hits=%d misses=%d stales=%d zones=%d", hits, misses, stales, zones),
 		fmt.Sprintf("errors=%d blocked=%d badcookie=%d", errCount, blockedCount, badcookieCount),
 		fmt.Sprintf("noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d",
@@ -342,6 +327,8 @@ func readNulString(key string, off int) (s string, nextOff int) {
 }
 
 // UpdateLatency stores a latency measurement keyed by IP only.
+// Entries expire after 2× the minimum probe interval to prevent unbounded
+// accumulation of stale latency data.
 func (c *Cache) UpdateLatency(ip string, latencyMS int) {
 	if latencyMS < 0 {
 		latencyMS = 0
@@ -349,20 +336,32 @@ func (c *Cache) UpdateLatency(ip string, latencyMS int) {
 	if c.db.IsClosed() {
 		return
 	}
-	_ = c.db.Badger.Update(func(txn *badger.Txn) error {
-		return txn.Set(database.EIPLatencyKey(ip), database.EncodeLatencyValue(latencyMS))
+	_ = c.db.Update(func(txn *badger.Txn) error {
+		entry := badger.NewEntry(
+			database.EIPLatencyKey(ip),
+			database.EncodeLatencyValue(latencyMS),
+		).WithTTL(time.Duration(config.DefaultLatencyProbeMinInterval*2) * time.Second)
+		return txn.SetEntry(entry)
 	})
 }
 
-// LatencyLastProbe returns the last probe time for an IP.
+// LatencyLastProbe returns the last probe time for an IP. If no latency
+// data exists for the IP, it returns (0, false).
 func (c *Cache) LatencyLastProbe(ip string) (int64, bool) {
 	if c.db.IsClosed() {
 		return 0, false
 	}
-	_ = c.db.Badger.View(func(txn *badger.Txn) error {
+	var found bool
+	_ = c.db.View(func(txn *badger.Txn) error {
 		_, err := txn.Get(database.EIPLatencyKey(ip))
-		return err
+		if err != nil {
+			return nil //nolint:nilerr // key not found is not a View-level error — report via found=false
+		}
+		found = true
+		return nil
 	})
-	// Item exists → return current time as "last probe"
+	if !found {
+		return 0, false
+	}
 	return log.NowUnix(), true
 }

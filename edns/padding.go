@@ -37,7 +37,7 @@ func addPadding(msg *dns.Msg, isSecureConnection bool, blockSize int, clientWant
 	// returns uncompressed size which overestimates by 100+ bytes
 	// when name compression is active, causing padding to fall short
 	// of the target block size.
-	_ = msg.Pack()
+	_ = msg.Pack() // _ = error: OPT pseudo-record packing is infallible for static fields
 	currentSize := len(msg.Data)
 	targetSize := ((currentSize + blockSize - 1) / blockSize) * blockSize
 	paddingDataSize := targetSize - currentSize - paddingHeaderSize

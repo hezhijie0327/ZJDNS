@@ -41,11 +41,11 @@ type Server struct {
 	certificateCfg *config.DNSCryptCertificate
 	udpConns       []*net.UDPConn
 	tcpListeners   []net.Listener
-	wg             *sync.WaitGroup
 	tcpConns       map[net.Conn]struct{}
 	mu             sync.RWMutex
 	started        bool
 	ctx            context.Context
+	wg             *sync.WaitGroup
 	cancel         context.CancelCauseFunc
 
 	// signingSK is the Ed25519 provider identity key.  It stays fixed across
@@ -114,8 +114,8 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) 
 		providerName:   providerName,
 		certificateCfg: certificateCfg,
 		tcpConns:       make(map[net.Conn]struct{}),
-		wg:             &sync.WaitGroup{},
 		ctx:            ctx,
+		wg:             &sync.WaitGroup{},
 		cancel:         cancel,
 		signingSK:      signingSK,
 		rotateCh:       make(chan struct{}),
@@ -226,12 +226,10 @@ func (s *Server) rotationLoop() {
 	}
 }
 
-// Shutdown gracefully stops the DNSCrypt server.
-// The cancel and WaitGroup swap are performed under s.mu without
-// releasing the lock, so serveUDP/serveTCP always see a consistent
-// (cancelled ctx, correct wg) pair.  Any handler that reads s.wg
-// after the swap sees the fresh WaitGroup and exits immediately
-// because the context is already cancelled.
+// Shutdown gracefully stops the DNSCrypt server.  Connections are closed
+// and the context is cancelled to signal accept loops to exit.  s.wg is
+// read under s.mu via the getWG helper to avoid data races with serveTCP/
+// serveUDP which also access it.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	if !s.started {
@@ -251,19 +249,14 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	for conn := range s.tcpConns {
 		_ = conn.SetReadDeadline(time.Unix(1, 0))
 	}
-	// Cancel the context and swap the WaitGroup atomically under s.mu.
-	// Handlers that read s.wg after this point see a fresh WaitGroup;
-	// because the context is already cancelled, they return immediately
-	// rather than joining a WaitGroup that will never be waited on.
 	s.cancel(errors.New("dnscrypt server shutdown"))
-	prevWg := s.wg
-	s.wg = &sync.WaitGroup{}
+	wg := s.wg
 	s.mu.Unlock()
 
 	done := make(chan struct{})
 	go func() {
 		defer zdnsutil.HandlePanic("DNSCrypt shutdown wait")
-		prevWg.Wait()
+		wg.Wait()
 		close(done)
 	}()
 
@@ -352,7 +345,11 @@ func (s *Server) generateNewCertPair() (*dnscryptcrypto.CertPair, error) {
 	rc := ResolverConfig{
 		ProviderName: s.providerName,
 	}
-	rc.PublicKey = dnscryptcrypto.HexEncodeKey(s.signingSK.Public().(ed25519.PublicKey))
+	signingPK, ok := s.signingSK.Public().(ed25519.PublicKey)
+	if !ok {
+		return nil, errors.New("dnscrypt: signing key is not Ed25519")
+	}
+	rc.PublicKey = dnscryptcrypto.HexEncodeKey(signingPK)
 	rc.PrivateKey = dnscryptcrypto.HexEncodeKey(s.signingSK)
 
 	sk, pk, err := dnscryptcrypto.GenerateRandomKeyPair()

@@ -104,6 +104,65 @@ func (m *Logger) Level() Level {
 	return Level(m.level.Load())
 }
 
+// NewTimeCache creates and starts a new TimeCache.
+func NewTimeCache() *TimeCache {
+	t := &TimeCache{
+		ticker: time.NewTicker(time.Second),
+		done:   make(chan struct{}),
+	}
+	t.unixNano.Store(time.Now().UnixNano())
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// Log panic to stderr since the log package itself panicked.
+				fmt.Fprintf(os.Stderr, "PANIC: TimeCache: %v\n", r)
+			}
+		}()
+		for {
+			select {
+			case <-t.ticker.C:
+				t.unixNano.Store(time.Now().UnixNano())
+			case <-t.done:
+				return
+			}
+		}
+	}()
+
+	return t
+}
+
+// Now returns the current cached time.
+func (t *TimeCache) Now() time.Time {
+	return time.Unix(0, t.unixNano.Load())
+}
+
+// NowUnix returns the current cached Unix timestamp (seconds).
+func NowUnix() int64 {
+	return DefaultTimeCache.Now().Unix()
+}
+
+// NowUnixNano returns the current cached Unix timestamp (nanoseconds).
+func NowUnixNano() int64 {
+	return DefaultTimeCache.Now().UnixNano()
+}
+
+// Stop stops the time cache ticker and goroutine. It is safe to call multiple
+// times.
+func (t *TimeCache) Stop() {
+	if t == nil {
+		return
+	}
+	t.closeOnce.Do(func() {
+		if t.done != nil {
+			close(t.done)
+		}
+		if t.ticker != nil {
+			t.ticker.Stop()
+		}
+	})
+}
+
 // SetComponentFilter sets the component filter. If components is empty, all
 // components pass through (no filtering). Otherwise, only messages with a
 // matching "PREFIX:" prefix are emitted. Messages without a recognized prefix
@@ -311,63 +370,4 @@ func sanitizeLogMessage(msg string) string {
 		}
 	}
 	return string(b)
-}
-
-// NewTimeCache creates and starts a new TimeCache.
-func NewTimeCache() *TimeCache {
-	t := &TimeCache{
-		ticker: time.NewTicker(time.Second),
-		done:   make(chan struct{}),
-	}
-	t.unixNano.Store(time.Now().UnixNano())
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				// Log panic to stderr since the log package itself panicked.
-				fmt.Fprintf(os.Stderr, "PANIC: TimeCache: %v\n", r)
-			}
-		}()
-		for {
-			select {
-			case <-t.ticker.C:
-				t.unixNano.Store(time.Now().UnixNano())
-			case <-t.done:
-				return
-			}
-		}
-	}()
-
-	return t
-}
-
-// Now returns the current cached time.
-func (t *TimeCache) Now() time.Time {
-	return time.Unix(0, t.unixNano.Load())
-}
-
-// NowUnix returns the current cached Unix timestamp (seconds).
-func NowUnix() int64 {
-	return DefaultTimeCache.Now().Unix()
-}
-
-// NowUnixNano returns the current cached Unix timestamp (nanoseconds).
-func NowUnixNano() int64 {
-	return DefaultTimeCache.Now().UnixNano()
-}
-
-// Stop stops the time cache ticker and goroutine. It is safe to call multiple
-// times.
-func (t *TimeCache) Stop() {
-	if t == nil {
-		return
-	}
-	t.closeOnce.Do(func() {
-		if t.done != nil {
-			close(t.done)
-		}
-		if t.ticker != nil {
-			t.ticker.Stop()
-		}
-	})
 }

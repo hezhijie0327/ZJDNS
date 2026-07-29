@@ -4,15 +4,14 @@
 package ttl
 
 import (
-	"time"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
 )
 
 // NowUnix returns the current Unix timestamp. Override in tests for
 // deterministic results.  This is an exported var so that test packages
-// can inject a fixed time — production code should use log.NowUnix() instead.
-var NowUnix = func() int64 { return time.Now().Unix() }
+var NowUnix = log.NowUnix //nolint:gocritic // variable allows test override
 
 // IsExpired reports whether the TTL has elapsed relative to timestamp.
 func IsExpired(timestamp int64, ttlSeconds int) bool {
