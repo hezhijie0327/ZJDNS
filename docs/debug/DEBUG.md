@@ -577,7 +577,7 @@ dig @127.0.0.1 -p 15353 home.console.aliyun.com A
 # Stats + DB ops
 dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.db.clear.stats CH TXT +short
-./zjdns --sql cache.db "SELECT result, rcode, COUNT(*) FROM query_log GROUP BY result, rcode"
+./zjdns --kv cache.db q:
 ```
 
 ### TLCP (国密) Test
@@ -599,53 +599,46 @@ dig @127.0.0.1 -p 55454 www.baidu.com A +short
 dig @127.0.0.1 -p 55454 www.baidu.com A +short
 ```
 
-## SQL Debug Queries
+## BadgerDB Debug Queries
 
-日常排查用 SQL 查询，直接对 cache.db 执行（服务运行中可读，加 `--rw` 可写）：
+日常排查用 `--kv` 浏览 BadgerDB，会自动解码显示各前缀内容。无前缀时列出所有表的统计：
 
 ```bash
-# 必须指定 --sql 参数格式：./zjdns --sql <db_path> "<query>"
-# 或者 docker exec -it zjdns /zjdns --sql /data/cache.db "<query>"
+# 统计概览
+./zjdns --kv cache.db
 
-./zjdns --sql cache.db "SELECT qname, COUNT(*) AS cnt FROM query_log GROUP BY qname ORDER BY cnt DESC LIMIT 20"
+# 浏览指定前缀（自动解码显示）
+./zjdns --kv cache.db e:    # 缓存条目
+./zjdns --kv cache.db q:    # 查询日志（含 qname/rcode/result）
+./zjdns --kv cache.db s:    # 每日统计
+./zjdns --kv cache.db l:    # IP 延迟数据
+./zjdns --kv cache.db z:    # 区域规则
+./zjdns --kv cache.db r:    # Ruleset 规则
+
+# 删除指定前缀下所有 key（需确认）
+./zjdns --kv cache.db e: --drop
 ```
 
 ### 排查 SERVFAIL 域名
 
-找出**只出 SERVFAIL 从未成功**的域名——这种往往是被误判的 DNSSEC bogus、上游不通等问题：
-
 ```bash
-docker exec -it zjdns /zjdns --sql /data/cache.db "
-    SELECT qname, COUNT(*) AS servfail_count
-    FROM query_log
-    WHERE rcode = 2
-        AND qname NOT IN (
-            SELECT DISTINCT qname FROM query_log WHERE rcode = 0
-        )
-    GROUP BY qname
-    ORDER BY servfail_count DESC
-"
+# 列出所有查询日志，grep rcode=2 即 SERVFAIL
+./zjdns --kv cache.db q: | grep 'rcode=2'
+
+# 输出示例：
+# 2026-07-29 10:30:00 qname=nx-zzz.invalid.  qtype=1  result=miss  protocol=udp  rcode=2  server=223.5.5.5  2000ms
 ```
 
 ### 按 rcode 分布
 
 ```bash
-./zjdns --sql cache.db "
-    SELECT rcode, COUNT(*) AS cnt
-    FROM query_log
-    GROUP BY rcode
-    ORDER BY cnt DESC
-"
+# 统计各 rcode 出现次数
+./zjdns --kv cache.db q: | awk '{for(i=1;i<=NF;i++) if($i~/^rcode=/) print $i}' | sort | uniq -c | sort -rn
 ```
 
 ### 最近 SERVFAIL 详情
 
 ```bash
-./zjdns --sql cache.db "
-    SELECT timestamp, qname, qtype, server, response_ms
-    FROM query_log
-    WHERE rcode = 2
-    ORDER BY timestamp DESC
-    LIMIT 20
-"
+# 列出最近 SERVFAIL 查询的域名、上游服务器和耗时
+./zjdns --kv cache.db q: | grep 'rcode=2' | tail -20
 ```

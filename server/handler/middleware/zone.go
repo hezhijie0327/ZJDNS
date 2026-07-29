@@ -46,6 +46,7 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		m.cache.RecordRequest(&cache.RequestRecord{
 			Qname: qname, Qtype: qtype, Qclass: qclass,
 			Protocol: qctx.Protocol, Result: "zone", Rcode: zoneResult.Rcode,
+			ResponseTime: handler.ElapsedMS(qctx.StartTime),
 		})
 
 		qctx.ZoneMatched = true

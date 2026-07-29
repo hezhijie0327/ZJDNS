@@ -1,185 +1,145 @@
-// Package database provides a unified SQLite database backing all ZJDNS subsystems
-// (cache, zone). It manages connection lifecycle, schema migration, prepared
-// statements, and shared utilities for wire-format compression.
+// Package database provides a unified BadgerDB key-value store backing all
+// ZJDNS subsystems (cache, zone, ruleset). It manages connection lifecycle and
+// provides shared key construction, encoding/decoding, and sequence-based ID
+// generation utilities.
 package database
 
 import (
-	"database/sql"
 	"fmt"
 	"sync/atomic"
-
-	// database imports config for default values (cache sizes, connection limits,
-	// TTL parameters). This is NOT a DAG violation — config is Layer 1-2 and
-	// database is Layer 3. The dependency exists because Open() applies config
-	// defaults when explicit values are zero.
 	"zjdns/config"
 	"zjdns/internal/log"
 
-	_ "github.com/ncruces/go-sqlite3/driver"
+	"github.com/dgraph-io/badger/v4"
+	"github.com/dgraph-io/badger/v4/options"
 )
 
-// Options configures SQLite PRAGMA tunables.
-type Options struct {
-	MMapSizeMB  int
-	CacheSizeMB int
-}
-
-// DB is a unified SQLite database backing all ZJDNS subsystems (cache, zone).
-// Uses *sql.DB (goroutine-safe connection pool) for both file and in-memory
-// databases. :memory: is used for in-memory so all connections share the
-// same database (pinned to a single connection).
+// DB is a unified BadgerDB key-value store backing all ZJDNS subsystems
+// (cache, zone, ruleset). It wraps *badger.DB with entry counting, ID
+// sequences, and lifecycle management.
 type DB struct {
-	SQ     *sql.DB
-	dbPath string
-
-	mmapSizeMB  int
-	cacheSizeMB int
-	closed      int32
-
-	// Cache subsystem
+	Badger     *badger.DB
+	dbPath     string
 	maxEntries int
 	entryCount atomic.Int64
+	closed     int32
 
-	// Cache prepared statements
-	StmtEntry         *sql.Stmt
-	StmtQueryLog      *sql.Stmt
-	StmtQueryStats    *sql.Stmt
-	StmtInsertLatency *sql.Stmt
-	StmtLastProbe     *sql.Stmt
-
-	// Zone prepared statements
-	StmtZoneExact    *sql.Stmt
-	StmtZoneWildcard *sql.Stmt
-
-	// Latency prepared statements
-	StmtIPLatency *sql.Stmt
+	entrySeq *badger.Sequence
+	qlogSeq  *badger.Sequence
 }
 
-const dsnParams = "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000&_foreign_keys=ON&_txlock=immediate"
-
-// Open opens or creates the SQLite database at path. An empty path uses
-// :memory: (shared in-memory). maxEntries controls the cache eviction
-// threshold.
-func Open(path string, maxEntries int, opts Options) (*DB, error) {
+// Open opens or creates the BadgerDB database at path. An empty path uses an
+// in-memory database. maxEntries controls the cache eviction threshold.
+// memTableSizeMB and blockCacheSizeMB control BadgerDB memory usage; 0 uses defaults.
+func Open(path string, maxEntries, memTableSizeMB, blockCacheSizeMB int) (*DB, error) {
 	if maxEntries <= 0 {
 		maxEntries = config.DefaultMaxCacheEntries
 	}
-	if opts.MMapSizeMB <= 0 {
-		opts.MMapSizeMB = config.DefaultCacheMMapSizeMB
+	if memTableSizeMB <= 0 {
+		memTableSizeMB = config.DefaultBadgerMemTableSizeMB
 	}
-	if opts.CacheSizeMB <= 0 {
-		opts.CacheSizeMB = config.DefaultCacheCacheSizeMB
+	if blockCacheSizeMB <= 0 {
+		blockCacheSizeMB = config.DefaultBadgerBlockCacheSizeMB
 	}
 
-	var dsn string
+	var opts badger.Options
 	if path == "" {
-		dsn = ":memory:"
+		opts = badger.DefaultOptions("").WithInMemory(true).WithLogger(nil)
 	} else {
-		dsn = "file:" + path + "?" + dsnParams
+		opts = defaultDiskOptions(path, memTableSizeMB, blockCacheSizeMB)
 	}
 
-	sqldb, err := sql.Open("sqlite3", dsn)
+	bdb, err := badger.Open(opts)
 	if err != nil {
-		return nil, fmt.Errorf("sqlite open: %w", err)
-	}
-	if path == "" {
-		// :memory: — each connection gets its own DB, so pin to one.
-		sqldb.SetMaxOpenConns(1)
-		sqldb.SetMaxIdleConns(1)
-	} else {
-		sqldb.SetMaxOpenConns(config.DefaultCacheMaxOpenConns)
-		sqldb.SetMaxIdleConns(config.DefaultCacheMaxIdleConns)
+		return nil, fmt.Errorf("badger open: %w", err)
 	}
 
-	if err := sqldb.Ping(); err != nil {
-		_ = sqldb.Close()
-		return nil, fmt.Errorf("sqlite ping: %w", err)
+	// Initialize ID sequences. Bandwidth=1000 means up to 1000 IDs are
+	// leased in memory before a disk write is needed.
+	entrySeq, err := bdb.GetSequence([]byte(seqEntry), 1000)
+	if err != nil {
+		_ = bdb.Close()
+		return nil, fmt.Errorf("badger entry sequence: %w", err)
 	}
+	qlogSeq, err := bdb.GetSequence([]byte(seqQLog), 1000)
+	if err != nil {
+		_ = entrySeq.Release()
+		_ = bdb.Close()
+		return nil, fmt.Errorf("badger qlog sequence: %w", err)
+	}
+
+	// Count existing entries for the atomic counter.
+	var count int64
+	_ = bdb.View(func(txn *badger.Txn) error { // error always nil — entry counting is best-effort
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = EntryKeyPrefix()
+		opts.PrefetchValues = false
+		it := txn.NewIterator(opts)
+		defer it.Close()
+		for it.Rewind(); it.Valid(); it.Next() {
+			count++
+		}
+		return nil
+	})
 
 	db := &DB{
-		SQ:          sqldb,
-		dbPath:      path,
-		maxEntries:  maxEntries,
-		mmapSizeMB:  opts.MMapSizeMB,
-		cacheSizeMB: opts.CacheSizeMB,
+		Badger:     bdb,
+		dbPath:     path,
+		maxEntries: maxEntries,
+		entrySeq:   entrySeq,
+		qlogSeq:    qlogSeq,
 	}
-
-	if err := db.migrate(); err != nil {
-		_ = sqldb.Close()
-		return nil, fmt.Errorf("sqlite migrate: %w", err)
-	}
-
-	// Initialize entryCount from existing rows.
-	var count int64
-	if err := db.SQ.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&count); err == nil {
-		db.entryCount.Store(count)
-	}
-
-	if err := db.prepareStatements(); err != nil {
-		_ = sqldb.Close()
-		return nil, fmt.Errorf("sqlite prepare: %w", err)
-	}
+	db.entryCount.Store(count)
 
 	label := path
 	if label == "" {
 		label = "memory"
 	}
-	log.Infof("DB: SQLite database opened (db=%s, max_entries=%d, mmap_size=%dMB, cache_size=%dMB)",
-		label, maxEntries, opts.MMapSizeMB, opts.CacheSizeMB)
+	log.Infof("DB: BadgerDB opened (db=%s, max_entries=%d, entries=%d)",
+		label, maxEntries, count)
 	return db, nil
 }
 
-// Close closes the database, running PRAGMA optimize for disk-backed DBs before shutdown.
+// defaultDiskOptions returns BadgerDB options tuned for DNS cache workloads.
+func defaultDiskOptions(path string, memTableSizeMB, blockCacheSizeMB int) badger.Options {
+	return badger.DefaultOptions(path).
+		WithNumVersionsToKeep(1).                            // No MVCC overhead
+		WithDetectConflicts(false).                          // No concurrent-key conflicts (upsert pattern)
+		WithSyncWrites(false).                               // Cache is ephemeral; stats are best-effort
+		WithCompression(options.ZSTD).                       // Built-in zstd at SSTable level
+		WithZSTDCompressionLevel(3).                         // Balance speed vs ratio
+		WithValueThreshold(256).                             // Values ≤256B stored inline in LSM tree
+		WithValueLogFileSize(int64(memTableSizeMB*2) << 20). // 64MB vlog files
+		WithMemTableSize(int64(memTableSizeMB) << 20).       // 32MB memtable
+		WithBlockCacheSize(int64(blockCacheSizeMB) << 20).   // 32MB block cache
+		WithIndexCacheSize(0).                               // All in block cache
+		WithNumCompactors(2).                                // Reduce compaction CPU
+		WithNumLevelZeroTables(2).                           // Fewer L0 files
+		WithNumLevelZeroTablesStall(4).                      // Stall threshold
+		WithCompactL0OnClose(true).                          // Compact L0 on graceful shutdown
+		WithLogger(nil)                                      // Suppress BadgerDB's default logger
+}
+
+// Close releases the sequences and closes the database. Idempotent.
 func (db *DB) Close() error {
-	if db.SQ == nil {
+	if db.Badger == nil {
 		return nil
 	}
 	if !atomic.CompareAndSwapInt32(&db.closed, 0, 1) {
 		return nil
 	}
-	for _, stmt := range []*sql.Stmt{
-		db.StmtEntry, db.StmtQueryLog, db.StmtQueryStats,
-		db.StmtInsertLatency, db.StmtLastProbe,
-		db.StmtZoneExact, db.StmtZoneWildcard, db.StmtIPLatency,
-	} {
-		if stmt != nil {
-			_ = stmt.Close()
-		}
+	_ = db.entrySeq.Release()
+	_ = db.qlogSeq.Release()
+	if err := db.Badger.Close(); err != nil {
+		log.Errorf("DB: BadgerDB close failed: %v", err)
+		return fmt.Errorf("badger close: %w", err)
 	}
-	if db.dbPath != "" {
-		if _, err := db.SQ.Exec("PRAGMA optimize"); err != nil {
-			log.Warnf("DB: PRAGMA optimize failed: %v", err)
-		}
-	}
-	if err := db.SQ.Close(); err != nil {
-		log.Errorf("DB: sqlite close failed: %v", err)
-		return fmt.Errorf("sqlite close: %w", err)
-	}
-	log.Infof("DB: SQLite database shut down")
+	log.Infof("DB: BadgerDB shut down")
 	return nil
 }
 
-// SQLExec delegates to db.SQ.Exec, exposing a method that satisfies the
-// sqlExecutor interface defined by consumer packages (ruleset, zone).
-// Context-less variants are used intentionally: SQLite queries are fast (<1ms)
-// and context cancellation during shutdown is handled by closing the DB.
-func (db *DB) SQLExec(query string, args ...any) (sql.Result, error) {
-	return db.SQ.Exec(query, args...)
-}
-
-// SQLQueryRow delegates to db.SQ.QueryRow.
-// Context-less variant: see SQLExec for rationale.
-func (db *DB) SQLQueryRow(query string, args ...any) *sql.Row {
-	return db.SQ.QueryRow(query, args...)
-}
-
-// SQLQuery executes a query and returns the *sql.Rows for iteration.
-// Context-less variant: see SQLExec for rationale.
-func (db *DB) SQLQuery(query string, args ...any) (*sql.Rows, error) {
-	return db.SQ.Query(query, args...)
-}
-
-// Cache methods
+// IsClosed reports whether the database has been closed.
+func (db *DB) IsClosed() bool { return atomic.LoadInt32(&db.closed) != 0 }
 
 // AddEntryCount atomically adds delta to the entry counter.
 func (db *DB) AddEntryCount(delta int64) { db.entryCount.Add(delta) }
@@ -190,31 +150,15 @@ func (db *DB) EntryCount() int64 { return db.entryCount.Load() }
 // SetEntryCount atomically sets the entry counter to n.
 func (db *DB) SetEntryCount(n int64) { db.entryCount.Store(n) }
 
-// BeginTx starts a new SQL transaction.
-func (db *DB) BeginTx() (*sql.Tx, error) { return db.SQ.Begin() }
-
 // MaxEntries returns the maximum cache entries before eviction.
 func (db *DB) MaxEntries() int { return db.maxEntries }
 
-// QueryZoneExact runs the exact-match zone query via StmtZoneExact.
-// Satisfies zone.ZoneStorage.
-func (db *DB) QueryZoneExact(qname string, qtype, qclass int) (*sql.Rows, error) {
-	return db.StmtZoneExact.Query(qname, qtype, qclass)
+// NextEntryID returns the next monotonic entry ID from the sequence.
+func (db *DB) NextEntryID() (uint64, error) {
+	return db.entrySeq.Next()
 }
 
-// QueryZoneWildcard runs the wildcard-batch zone query via StmtZoneWildcard.
-// Satisfies zone.ZoneStorage.
-func (db *DB) QueryZoneWildcard(args []any) (*sql.Rows, error) {
-	return db.StmtZoneWildcard.Query(args...)
+// NextQLogID returns the next monotonic query log ID from the sequence.
+func (db *DB) NextQLogID() (uint64, error) {
+	return db.qlogSeq.Next()
 }
-
-// Begin starts a new SQL transaction. Satisfies zone.ZoneStorage.
-// Begin starts a new SQL transaction. Identical to BeginTx — both exist to
-// satisfy different consumer interfaces (zone.ZoneStorage and ruleset.RuleSetStorage).
-func (db *DB) Begin() (*sql.Tx, error) { return db.BeginTx() }
-
-// Exec executes a SQL statement. Satisfies zone.ZoneStorage.
-func (db *DB) Exec(query string, args ...any) (sql.Result, error) { return db.SQ.Exec(query, args...) }
-
-// IsClosed reports whether the database has been closed.
-func (db *DB) IsClosed() bool { return atomic.LoadInt32(&db.closed) != 0 }

@@ -50,8 +50,8 @@
       },
       "database": {
         "db_path": "cache.db",
-        "mmap_size_mb": 64,
-        "cache_size_mb": 32
+        "memtable_size_mb": 32,
+        "block_cache_size_mb": 32
       },
       "cache": {
         "max_entries": 10000,

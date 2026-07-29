@@ -14,8 +14,8 @@ RUN \
     && go get -u codeberg.org/miekg/dns@main \
     && go get -u gitee.com/Trisia/gotlcp@main \
     && go get -u github.com/cloudflare/circl@main \
+    && go get -u github.com/dgraph-io/badger/v4@main \
     && go get -u github.com/klauspost/compress@master \
-    && go get -u github.com/ncruces/go-sqlite3@main \
     && go get -u github.com/pion/dtls/v3@main \
     && go get -u github.com/quic-go/quic-go@master \
     && go get -u gitlab.com/go-extension/http@master \

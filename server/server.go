@@ -130,15 +130,14 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	return s, nil
 }
 
-// initDatabase opens the SQLite database with configured pragmas.
+// initDatabase opens the BadgerDB database at the configured path.
 func (s *Server) initDatabase(cfg *config.ServerConfig) (*database.DB, error) {
 	return database.Open(
 		cfg.Server.Features.Database.DBPath,
 		cfg.Server.Features.Cache.MaxEntries,
-		database.Options{
-			MMapSizeMB:  cfg.Server.Features.Database.MMapSizeMB,
-			CacheSizeMB: cfg.Server.Features.Database.CacheSizeMB,
-		})
+		cfg.Server.Features.Database.MemTableSizeMB,
+		cfg.Server.Features.Database.BlockCacheSizeMB,
+	)
 }
 
 // initEDNS creates the EDNS handler and auto-detects ECS subnets.

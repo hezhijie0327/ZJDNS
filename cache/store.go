@@ -1,13 +1,12 @@
 package cache
 
 import (
-	"database/sql"
-	"errors"
 	"fmt"
 	"net"
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
@@ -18,11 +17,12 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
+	"github.com/dgraph-io/badger/v4"
 )
 
-// SQLiteCache is a DNS response cache backed by a SQLite database managed by
-// the database package. It implements the Store interface.
-type SQLiteCache struct {
+// Cache is a DNS response cache backed by a BadgerDB key-value store. It
+// implements the Store interface.
+type Cache struct {
 	db          *database.DB
 	evictCount  atomic.Int64
 	asyncWriter *AsyncStatsWriter
@@ -36,7 +36,7 @@ type ecsCandidate struct {
 
 const (
 	defaultStaleMaxAge  = int64(config.DefaultStaleMaxAge)
-	maxLatencyLookupIPs = 64 // cap IN-clause IPs to bound SQL compilation overhead
+	maxLatencyLookupIPs = 64 // cap per-Get latency lookups to bound iteration overhead
 	decompressBufCap    = 4096
 )
 
@@ -46,13 +46,6 @@ var decompressBufPool = sync.Pool{
 	New: func() any { b := make([]byte, decompressBufCap); return &b },
 }
 
-// latencyArgsPool reuses [64]any arrays for the batched latency lookup query.
-// The fixed-size array is reused across calls so the per-Get() heap allocation
-// is eliminated.
-var latencyArgsPool = sync.Pool{
-	New: func() any { return new([maxLatencyLookupIPs]any) },
-}
-
 // ECS fallback prefix boundaries — standard CIDR granularities most commonly
 // used by CDN and authoritative DNS operators (RFC 7871).
 var (
@@ -60,62 +53,67 @@ var (
 	ipv6FallbackPrefixes = []int{56, 48, 32, 0}
 )
 
-// New creates a cache backed by the given database. The caller is responsible
-// for opening the database via database.Open() before calling New.
-// New creates a SQLite-backed DNS cache.  Panics if db is nil (caller must
+// New creates a BadgerDB-backed DNS cache. Panics if db is nil (caller must
 // provide a valid database handle — the server wiring always does).
-func New(db *database.DB) *SQLiteCache {
+func New(db *database.DB) *Cache {
 	if db == nil {
 		panic("cache: nil database")
 	}
-	return &SQLiteCache{
+	return &Cache{
 		db:          db,
 		asyncWriter: NewAsyncStatsWriter(db, config.DefaultAsyncStatsBufferSize),
 	}
 }
 
 // Close shuts down the async stats writer and then closes the database.
-func (s *SQLiteCache) Close() error {
-	s.asyncWriter.Close()
-	return s.db.Close()
+func (c *Cache) Close() error {
+	c.asyncWriter.Close()
+	return c.db.Close()
 }
 
 // Flush forces the async stats writer to write any buffered records immediately.
 // Primarily for tests that need to observe RecordRequest results synchronously.
-func (s *SQLiteCache) Flush() {
-	s.asyncWriter.Flush()
+func (c *Cache) Flush() {
+	c.asyncWriter.Flush()
 }
 
 // ── Store interface ──────────────────────────────────────────────────────────
 
 // Get retrieves a cached DNS response by decompressing and unpacking the stored
 // wire format. Returns the entry, whether it was found, and whether it's expired.
-func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool) {
-	if s.db.IsClosed() {
+func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool) {
+	if c.db.IsClosed() {
 		return nil, false, false
 	}
 
 	qname = dnsutil.Canonical(qname)
-	dnssecInt := database.BoolToInt(dnssecOK)
-	var id int64
+	var id uint64
 	var ts int64
-	var entryTTL int
-	var validated int
+	var entryTTL int32
+	var validated bool
 	var msgWire []byte
 	found := false
-	for _, c := range ecsFallbackCandidates(ecs) {
-		err := s.db.StmtEntry.QueryRow(
-			qname, int(qtype), int(qclass), c.addr, c.prefix, dnssecInt,
-		).Scan(&id, &ts, &entryTTL, &validated, &msgWire)
-		if err == nil {
+
+	_ = c.db.Badger.View(func(txn *badger.Txn) error {
+		for _, cand := range ecsFallbackCandidates(ecs) {
+			key := database.EntryKey(qname, cand.addr, cand.prefix, dnssecOK, qtype, qclass)
+			item, err := txn.Get(key)
+			if err != nil {
+				continue
+			}
+			validated = item.UserMeta() == 1
+			if err := item.Value(func(v []byte) error {
+				id, ts, entryTTL, msgWire = database.DecodeEntryValue(v)
+				return nil
+			}); err != nil {
+				continue
+			}
 			found = true
-			break
+			return nil
 		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			log.Warnf("CACHE: get query failed for %s (type=%d): %v", qname, qtype, err)
-			return nil, false, false
-		}
-	}
+		return nil
+	})
+
 	if !found {
 		log.Debugf("CACHE: miss for %s (type=%d)", qname, qtype)
 		return nil, false, false
@@ -126,9 +124,6 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	}
 
 	// Decompress and unpack the wire format into a dns.Msg.
-	// Use a pooled buffer as the decompression destination to reduce
-	// per-cache-hit heap allocations (P3).  The buffer is returned to
-	// the pool after entry fields are extracted and msg.Data is cleared.
 	dbuf, ok := decompressBufPool.Get().(*[]byte)
 	if !ok {
 		b := make([]byte, 0, decompressBufCap)
@@ -144,51 +139,37 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	defer func() { clear(*dbuf); decompressBufPool.Put(dbuf) }()
 
 	msg := pool.DefaultMessage.Get()
-	// Safety: msg.Data aliases the decompression buffer.  The LIFO defer
-	// chain guarantees msg.Put (which zeroes Data) runs before dbuf is
-	// returned to decompressBufPool.  Do not insert new logic between
-	// the msg.Get and this line without understanding the ordering.
 	msg.Data = wire
 	if err := msg.Unpack(); err != nil {
-		// Deferred Put (line below) returns msg to the pool — do not
-		// double-Put here.
 		log.Warnf("CACHE: unpack wire for entry %d (name=%s type=%d): %v", id, qname, qtype, err)
 		return nil, false, false
 	}
 	defer pool.DefaultMessage.Put(msg)
 
 	entry := &Entry{
-		ID:         id,
+		ID:         int64(id),
 		Answer:     msg.Answer,
 		Authority:  msg.Ns,
 		Additional: msg.Extra,
 		Timestamp:  ts,
-		TTL:        entryTTL,
-		Validated:  validated != 0,
+		TTL:        int(entryTTL),
+		Validated:  validated,
 	}
 
-	// Sort A/AAAA answer records by latency from ip_latency so the
-	// fastest IP is returned first. Latency is per-IP — all domains
-	// sharing the same IP reuse the same row.
-	s.sortAnswerByLatency(entry)
+	// Sort A/AAAA answer records by latency.
+	c.sortAnswerByLatency(entry)
 
-	isExpired := ttl.IsExpired(ts, entryTTL)
+	isExpired := ttl.IsExpired(ts, int(entryTTL))
 	return entry, true, isExpired
 }
 
 // sortAnswerByLatency reorders A/AAAA records in entry.Answer by probe
-// latency (fastest first), keeping non-A/AAAA records (CNAME, etc.) at the
-// front in their original wire-format order. Latency is per-IP — all domains
-// sharing the same IP reuse the same row. Idempotent when ≤1 A/AAAA.
-//
-// Uses a single pass over entry.Answer to separate A/AAAA from non-A/AAAA
-// records and collect IPs simultaneously, halving the iteration overhead.
-func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
+// latency (fastest first), keeping non-A/AAAA records at the front.
+func (c *Cache) sortAnswerByLatency(entry *Entry) {
 	if len(entry.Answer) <= 1 {
 		return
 	}
 
-	// Single pass: extract IP strings + collect for batch lookup.
 	rrToIP := make(map[dns.RR]string, len(entry.Answer))
 	ips := make([]string, 0, len(entry.Answer))
 	for _, rr := range entry.Answer {
@@ -201,14 +182,11 @@ func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
 		return
 	}
 
-	// Batch lookup: WHERE rdata_ip IN (?,?,...).
-	latencies := s.lookupIPLatencies(ips)
+	latencies := c.lookupIPLatencies(ips)
 	if len(latencies) == 0 {
 		return
 	}
 
-	// In-place sort using pre-computed IP strings — avoids O(n log n)
-	// type-switch calls inside the comparator.
 	slices.SortStableFunc(entry.Answer, func(a, b dns.RR) int {
 		aIP, aIsAddr := rrToIP[a]
 		bIP, bIsAddr := rrToIP[b]
@@ -238,59 +216,35 @@ func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
 	})
 }
 
-// lookupIPLatencies fetches latencies for a batch of IPs in a single query.
-// Caps at maxLatencyLookupIPs to bound SQL compilation overhead on unusually
-// large answer sets (64+ A/AAAA records).
-func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
+// lookupIPLatencies fetches latencies for a batch of IPs.
+func (c *Cache) lookupIPLatencies(ips []string) map[string]int {
 	if len(ips) > maxLatencyLookupIPs {
 		ips = ips[:maxLatencyLookupIPs]
 	}
-
-	// Query SQLite for latency data.
 	latencies := make(map[string]int, min(len(ips), maxLatencyLookupIPs))
-	argsPtr, ok := latencyArgsPool.Get().(*[maxLatencyLookupIPs]any)
-	if !ok {
-		a := [maxLatencyLookupIPs]any{}
-		argsPtr = &a
-	}
-	defer func() {
-		for i := range maxLatencyLookupIPs {
-			argsPtr[i] = nil
-		}
-		latencyArgsPool.Put(argsPtr)
-	}()
-	for i := range maxLatencyLookupIPs {
-		if i < len(ips) {
-			argsPtr[i] = ips[i]
-		} else {
-			argsPtr[i] = ""
-		}
-	}
 
-	rows, err := s.db.StmtIPLatency.Query(argsPtr[:]...)
-	if err != nil {
-		return latencies
-	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var ip string
-		var lat int
-		if err := rows.Scan(&ip, &lat); err == nil {
-			latencies[ip] = lat
+	_ = c.db.Badger.View(func(txn *badger.Txn) error {
+		for _, ip := range ips {
+			item, err := txn.Get(database.LatencyKey(ip))
+			if err != nil {
+				continue
+			}
+			_ = item.Value(func(v []byte) error {
+				_, latMS, _ := database.DecodeLatencyValue(v)
+				latencies[ip] = latMS
+				return nil
+			})
 		}
-	}
+		return nil
+	})
 	return latencies
 }
 
 // Set stores a DNS response in the cache. Wire format is zstd-compressed.
-// SQLite WAL mode serializes concurrent writers, so no app-level mutex is
-// needed.  Prep work (TTL calculation, wire packing, zstd compression) runs
-// outside the transaction so CPU-heavy steps can overlap across goroutines.
-func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
+func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
 	answer, authority, additional []dns.RR, validated bool,
 ) int64 {
-	if s.db.IsClosed() {
+	if c.db.IsClosed() {
 		return 0
 	}
 
@@ -300,15 +254,11 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 	qname = dnsutil.Canonical(qname)
-	dnssecInt := database.BoolToInt(dnssecOK)
 
-	// Strip EDNS OPT pseudo-record from additional before caching,
-	// since padding and other EDNS options have no semantic value and
-	// waste storage space (up to 468 bytes per encrypted response).
+	// Strip EDNS OPT pseudo-record from additional before caching.
 	additional = stripOPT(cloneRRs(additional))
 
-	// Clone records to prevent downstream mutations (e.g. restoreDomain
-	// rewriting rr.Header().Name) from corrupting the cache.
+	// Clone records to prevent downstream mutations from corrupting the cache.
 	answer = cloneRRs(answer)
 	authority = cloneRRs(authority)
 	additional = cloneRRs(additional)
@@ -325,79 +275,77 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	pool.DefaultMessage.Put(msg)
 
 	// ── Transaction ──────────────────────────────────────────────────────
-	// SQLite WAL mode serializes writers, so no application-level mutex is
-	// needed for concurrent Set() calls.
-	var entryID int64
-	tx, txErr := s.db.SQ.Begin()
-	if txErr == nil {
-		defer func() { _ = tx.Rollback() }()
+	var entryID uint64
+	expiresAt := now + int64(entryTTL) + defaultStaleMaxAge
+	ttlDurationSec := int64(entryTTL) + defaultStaleMaxAge
 
-		if txErr = tx.QueryRow(
-			`INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok,
-				timestamp, ttl, expires_at, validated, msg_wire)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			 RETURNING id`,
-			qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
-			now, entryTTL, now+int64(entryTTL), database.BoolToInt(validated),
-			msgWire,
-		).Scan(&entryID); txErr == nil {
-
-			// Populate ptr_map for reverse (PTR) lookups — best-effort:
-			// a failure here must not abort the transaction, because the
-			// cached entry is more valuable than reverse-lookup data.
-			allRRs := make([]dns.RR, 0, len(answer)+len(authority)+len(additional))
-			allRRs = append(allRRs, answer...)
-			allRRs = append(allRRs, authority...)
-			allRRs = append(allRRs, additional...)
-			if err := insertPtrMap(tx, entryID, allRRs); err != nil {
-				log.Warnf("CACHE: insert ptr_map failed (non-fatal): %v", err)
-			}
-
-			if txErr = tx.Commit(); txErr == nil {
-				s.db.AddEntryCount(1)
-			} else {
-				log.Warnf("CACHE: commit tx failed: %v", txErr)
-			}
+	err := c.db.Badger.Update(func(txn *badger.Txn) error {
+		id, idErr := c.db.NextEntryID()
+		if idErr != nil {
+			return idErr
 		}
-		if txErr != nil {
-			entryID = 0
-			log.Warnf("CACHE: insert entry failed: %v", txErr)
+		entryID = id
+
+		key := database.EntryKey(qname, ecsAddr, ecsPrefix, dnssecOK, qtype, qclass)
+		val := database.EncodeEntryValue(id, now, int32(entryTTL), msgWire) //nolint:gosec // G115: protocol-bounded value fits target type
+		entry := badger.NewEntry(key, val).
+			WithMeta(database.UserMetaValidated(validated)).
+			WithTTL(time.Duration(ttlDurationSec) * time.Second)
+
+		if err := txn.SetEntry(entry); err != nil {
+			return err
 		}
-	}
-	if txErr != nil {
+
+		// Populate ptr_map for reverse (PTR) lookups — best-effort.
+		allRRs := make([]dns.RR, 0, len(answer)+len(authority)+len(additional))
+		allRRs = append(allRRs, answer...)
+		allRRs = append(allRRs, authority...)
+		allRRs = append(allRRs, additional...)
+		if ptrErr := insertPtrMap(txn, id, allRRs, expiresAt); ptrErr != nil {
+			log.Warnf("CACHE: insert ptr_map failed (non-fatal): %v", ptrErr)
+		}
+
+		return nil
+	})
+	if err != nil {
+		log.Warnf("CACHE: insert entry failed: %v", err)
 		return 0
 	}
 
-	// evictIfNeeded re-syncs the entry count from the DB via SELECT COUNT(*)
-	// before deciding whether to evict, so any TOCTOU drift from concurrent
-	// inserts is corrected.
-	s.evictIfNeeded()
-	return entryID
+	c.db.AddEntryCount(1)
+	c.evictIfNeeded()
+	return int64(entryID)
 }
 
 // ── Eviction ─────────────────────────────────────────────────────────────────
 
-func (s *SQLiteCache) evictIfNeeded() {
-	if s.db.MaxEntries() <= 0 {
+func (c *Cache) evictIfNeeded() {
+	if c.db.MaxEntries() <= 0 {
 		return
 	}
 
-	// Fast path: the atomic counter is accurate for new-key inserts (the common
-	// case). Skip the DB COUNT(*) when comfortably below limit. INSERT OR REPLACE
-	// drift (replacing an existing row) is rare and self-correcting.
-	count := s.db.EntryCount()
-	maxEntries := int64(s.db.MaxEntries())
+	count := c.db.EntryCount()
+	maxEntries := int64(c.db.MaxEntries())
 	if count < maxEntries*9/10 {
 		return
 	}
 
-	// Use the atomic entry counter for fast-path checks; resync from DB
-	// every 20 evictions to correct drift from concurrent writers.
-	count = s.db.EntryCount()
-	if count < 0 || s.evictCount.Load()%20 == 0 {
-		if err := s.db.SQ.QueryRow("SELECT COUNT(*) FROM entries").Scan(&count); err == nil {
-			s.db.SetEntryCount(count)
-		}
+	// Resync from DB every 20 evictions.
+	if count < 0 || c.evictCount.Load()%20 == 0 {
+		var n int64
+		_ = c.db.Badger.View(func(txn *badger.Txn) error {
+			opts := badger.DefaultIteratorOptions
+			opts.Prefix = database.EntryKeyPrefix()
+			opts.PrefetchValues = false
+			it := txn.NewIterator(opts)
+			defer it.Close()
+			for it.Rewind(); it.Valid(); it.Next() {
+				n++
+			}
+			return nil
+		})
+		c.db.SetEntryCount(n)
+		count = n
 	}
 
 	excess := count - maxEntries
@@ -405,49 +353,138 @@ func (s *SQLiteCache) evictIfNeeded() {
 		return
 	}
 
-	s.evictOldest(excess)
-
-	// Throttle PRAGMA optimize to every 10th eviction to avoid per-eviction overhead.
-	if s.evictCount.Add(1)%10 == 0 {
-		_, _ = s.db.SQ.Exec("PRAGMA optimize") // _, _ = result, error: PRAGMA optimize is best-effort
-	}
+	c.evictOldest(excess)
+	c.evictCount.Add(1)
 }
 
+func (c *Cache) evictOldest(toEvict int64) {
+	type entryInfo struct {
+		key       []byte
+		timestamp int64
+	}
+
+	// Collect all entries with timestamps.
+	var entries []entryInfo
+	_ = c.db.Badger.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = database.EntryKeyPrefix()
+		opts.PrefetchValues = true
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		entries = make([]entryInfo, 0, c.db.EntryCount())
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			k := item.KeyCopy(nil)
+			_ = item.Value(func(v []byte) error {
+				_, ts, _, _ := database.DecodeEntryValue(v)
+				entries = append(entries, entryInfo{key: k, timestamp: ts})
+				return nil
+			})
+		}
+		return nil
+	})
+
+	if len(entries) == 0 {
+		return
+	}
+
+	// Sort by timestamp ascending (oldest first).
+	slices.SortStableFunc(entries, func(a, b entryInfo) int {
+		if a.timestamp < b.timestamp {
+			return -1
+		}
+		if a.timestamp > b.timestamp {
+			return 1
+		}
+		return 0
+	})
+
+	// Delete the oldest entries.
+	toDelete := min(int(toEvict), len(entries))
+
+	_ = c.db.Badger.Update(func(txn *badger.Txn) error {
+		for i := range toDelete {
+			if err := txn.Delete(entries[i].key); err != nil {
+				continue
+			}
+		}
+		return nil
+	})
+
+	n := int64(toDelete)
+	c.db.AddEntryCount(-n)
+	log.Debugf("CACHE: evicted %d entries (oldest, max=%d)", n, c.db.MaxEntries())
+}
+
+// ── PruneQueryJournal ────────────────────────────────────────────────────────
+
 // PruneQueryJournal removes query_stats rows with stat_day older than the
-// retention window (config.DefaultQueryJournalRetention) and query_log rows
-// with timestamp older than retentionSec.  Called periodically via the server
-// background ticker (config.DefaultPruneInterval).
-//
-// query_stats uses the PK prefix (stat_day is the leading column) for efficient
-// range deletion.  query_log deletion is batched (config.DefaultPruneBatchSize
-// rows per iteration) to avoid holding a write transaction open too long on
-// busy servers.
-func (s *SQLiteCache) PruneQueryJournal(retentionSec int64) (int64, error) {
+// retention window and query_log rows with timestamp older than retentionSec.
+func (c *Cache) PruneQueryJournal(retentionSec int64) (int64, error) {
 	batchSize := int64(config.DefaultPruneBatchSize)
 	dayCutoff := log.NowUnix()/86400 - retentionSec/86400
-
-	// query_stats: single DELETE using PK prefix seek (stat_day is leading column).
 	var totalDeleted int64
-	qsResult, err := s.db.SQ.Exec(`DELETE FROM query_stats WHERE stat_day < ?`, dayCutoff)
-	if err != nil {
-		return 0, fmt.Errorf("cleanup query_stats: %w", err)
-	}
-	qsN, _ := qsResult.RowsAffected()
-	totalDeleted += qsN
 
-	// query_log: batched DELETE to avoid long write transactions under heavy load.
+	// query_stats: delete by prefix scan + timestamp check.
+	err := c.db.Badger.Update(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = database.QueryStatsPrefix()
+		opts.PrefetchValues = false
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		var keysToDelete [][]byte
+		for it.Rewind(); it.Valid(); it.Next() {
+			day, ok := database.ParseStatDay(it.Item().Key())
+			if ok && day < dayCutoff {
+				k := it.Item().KeyCopy(nil)
+				keysToDelete = append(keysToDelete, k)
+			}
+		}
+		for _, k := range keysToDelete {
+			if err := txn.Delete(k); err != nil {
+				continue
+			}
+			totalDeleted++
+		}
+		return nil
+	})
+	if err != nil {
+		return totalDeleted, fmt.Errorf("cleanup query_stats: %w", err)
+	}
+
+	// query_log: batched delete to avoid long write transactions.
 	for {
-		result, err := s.db.SQ.Exec(
-			`DELETE FROM query_log WHERE rowid IN (`+
-				`SELECT rowid FROM query_log WHERE timestamp < unixepoch() - ? LIMIT ?`+
-				`)`, retentionSec, batchSize,
-		)
+		var batchDeleted int64
+		err := c.db.Badger.Update(func(txn *badger.Txn) error {
+			opts := badger.DefaultIteratorOptions
+			opts.Prefix = database.QueryLogPrefix()
+			opts.PrefetchValues = false
+			it := txn.NewIterator(opts)
+			defer it.Close()
+
+			var keysToDelete [][]byte
+			for it.Rewind(); it.Valid() && int64(len(keysToDelete)) < batchSize; it.Next() {
+				ts, ok := database.ParseQueryLogTimestamp(it.Item().Key())
+				if ok && ts < log.NowUnix()-retentionSec {
+					k := it.Item().KeyCopy(nil)
+					keysToDelete = append(keysToDelete, k)
+				}
+			}
+			for _, k := range keysToDelete {
+				if err := txn.Delete(k); err != nil {
+					continue
+				}
+				batchDeleted++
+			}
+			return nil
+		})
 		if err != nil {
 			return totalDeleted, fmt.Errorf("cleanup query_log: %w", err)
 		}
-		n, _ := result.RowsAffected()
-		totalDeleted += n
-		if n < batchSize {
+		totalDeleted += batchDeleted
+		if batchDeleted < batchSize {
 			break
 		}
 	}
@@ -455,77 +492,9 @@ func (s *SQLiteCache) PruneQueryJournal(retentionSec int64) (int64, error) {
 	return totalDeleted, nil
 }
 
-func (s *SQLiteCache) evictOldest(toEvict int64) {
-	tx, err := s.db.SQ.Begin()
-	if err != nil {
-		return
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Common cutoff: now minus staleMaxAge — used by all cleanup
-	// statements below to identify rows past the retention window.
-	staleCutoff := log.NowUnix() - defaultStaleMaxAge
-
-	// Clean up stale rows from tables with no FK cascade to entries.
-	// All three use the same staleCutoff — batched into a single Exec.
-	if _, err := tx.Exec(
-		`DELETE FROM ip_latency WHERE last_probe_time > 0 AND last_probe_time < ?; `+
-			`DELETE FROM query_log WHERE timestamp < ?`,
-		staleCutoff, staleCutoff,
-	); err != nil {
-		log.Debugf("CACHE: stale cleanup failed (non-fatal): %v", err)
-	}
-
-	// Two-phase eviction:
-	// Phase 1 — entries past serve-stale (expires_at < staleCutoff). These
-	// can no longer serve stale and are worthless. idx_entries_expires
-	// enables an index-assisted range scan for the WHERE filter.
-	// Phase 2 — if still over limit, evict the oldest entries regardless.
-	result, err := tx.Exec(
-		`DELETE FROM entries WHERE id IN (
-			SELECT id FROM entries WHERE expires_at < ?
-			ORDER BY timestamp ASC LIMIT ?
-		)`, staleCutoff, toEvict,
-	)
-	if err != nil {
-		return
-	}
-	phase1, _ := result.RowsAffected()
-	remaining := toEvict - phase1
-
-	if remaining > 0 {
-		result2, err2 := tx.Exec(
-			`DELETE FROM entries WHERE id IN (
-				SELECT id FROM entries ORDER BY timestamp ASC LIMIT ?
-			)`, remaining,
-		)
-		if err2 != nil {
-			return
-		}
-		phase2, _ := result2.RowsAffected()
-		totalEvicted := phase1 + phase2
-		if err := tx.Commit(); err != nil {
-			log.Warnf("CACHE: commit tx failed: %v", err)
-			return
-		}
-		s.db.AddEntryCount(-totalEvicted)
-		log.Debugf("CACHE: evicted %d entries (serve-stale=%d, oldest=%d, max=%d)", totalEvicted, phase1, phase2, s.db.MaxEntries())
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		log.Warnf("CACHE: commit tx failed: %v", err)
-		return
-	}
-	s.db.AddEntryCount(-phase1)
-	log.Debugf("CACHE: evicted %d entries (all serve-stale, max=%d)", phase1, s.db.MaxEntries())
-}
-
 // ── Set-path helpers ──────────────────────────────────────────────────────
 
-// minTTL returns the smallest positive TTL across all RR sections, falling
-// back to DefaultTTL when no TTLs are found.  The result is capped at
-// config.DefaultMaxCacheableTTL to prevent unbounded caching (RFC 8767 §4).
+// minTTL returns the smallest positive TTL across all RR sections.
 func minTTL(sections ...[]dns.RR) int {
 	minT := -1
 	for _, rrs := range sections {
@@ -555,8 +524,7 @@ func ecsParams(ecs *config.ECSOption) (addr string, prefix int) {
 	return ecs.Address.String(), int(ecs.SourcePrefix)
 }
 
-// maskIP applies a CIDR mask to ip, returning a new net.IP with its own
-// backing array so the caller cannot inadvertently mutate the original IP.
+// maskIP applies a CIDR mask to ip.
 func maskIP(ip net.IP, prefixBits int) net.IP {
 	bits := 128
 	if ip.To4() != nil {
@@ -573,8 +541,7 @@ func maskIP(ip net.IP, prefixBits int) net.IP {
 }
 
 // ecsFallbackCandidates generates ECS cache-key candidates from most specific
-// to least specific. nil ECS returns only the zero-value candidate (no fallback).
-// IPv4 falls back through /24, /16, /8, /0; IPv6 through /56, /48, /32, /0.
+// to least specific.
 func ecsFallbackCandidates(ecs *config.ECSOption) []ecsCandidate {
 	if ecs == nil {
 		return []ecsCandidate{{"", 0}}
@@ -597,9 +564,7 @@ func ecsFallbackCandidates(ecs *config.ECSOption) []ecsCandidate {
 	return candidates
 }
 
-// stripOPT removes EDNS OPT pseudo-records (TypeOPT) from an RR slice in-place.
-// These carry transport-layer padding which has no semantic value but can
-// occupy up to 468 bytes per encrypted response.
+// stripOPT removes EDNS OPT pseudo-records from an RR slice in-place.
 func stripOPT(rrs []dns.RR) []dns.RR {
 	n := 0
 	for _, rr := range rrs {

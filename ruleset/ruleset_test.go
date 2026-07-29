@@ -8,10 +8,7 @@ import (
 
 func testEngine(t *testing.T, rules []config.RuleSet) *Engine {
 	t.Helper()
-	origVersion := database.Version
-	database.Version = "3.2.12"
-	t.Cleanup(func() { database.Version = origVersion })
-	db, err := database.Open(":memory:", 100, database.Options{MMapSizeMB: 1, CacheSizeMB: 1})
+	db, err := database.Open("", 100, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

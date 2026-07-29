@@ -1,16 +1,12 @@
-// Package zone provides DNS zone-file-style query matching backed by SQLite.
-// Rules are loaded into a SQLite database at startup and queried
-// via B-tree indexed prepared statements — O(log n) per lookup with near-zero
-// Go heap footprint regardless of rule count.
+// Package zone provides DNS zone-file-style query matching backed by BadgerDB.
+// Rules are loaded into BadgerDB at startup and queried via prefix scans.
 package zone
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"zjdns/config"
 	"zjdns/database"
@@ -18,6 +14,7 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
+	"github.com/dgraph-io/badger/v4"
 )
 
 // ---------------------------------------------------------------------------
@@ -26,8 +23,8 @@ import (
 
 // matchTag is a parsed CIDR tag condition.
 type matchTag struct {
-	tag    string // bare tag name (without !)
-	negate bool   // true if !tag
+	tag    string
+	negate bool
 }
 
 // Result holds the outcome of a zone rule evaluation.
@@ -38,9 +35,9 @@ type Result struct {
 	Answer     []dns.RR
 	Authority  []dns.RR
 	Additional []dns.RR
-	CreatedAt  int64 // LoadRules timestamp for TTL cycling
+	CreatedAt  int64
 
-	cachable bool // internal: true when the winning rule has no match_tags
+	cachable bool
 }
 
 // dynamicEntry holds a dynamic content function and its record configs.
@@ -49,46 +46,24 @@ type dynamicEntry struct {
 	configs []config.ZoneRecord
 }
 
-// ZoneStorage is the interface for zone rule storage, following the same
-// pattern as ruleset.RuleSetStorage.  It allows zone.Evaluator to depend on
-// an abstraction rather than the concrete *database.DB type.
-type ZoneStorage interface {
-	Exec(query string, args ...any) (sql.Result, error)
-	Begin() (*sql.Tx, error)
-	QueryZoneExact(qname string, qtype, qclass int) (*sql.Rows, error)
-	QueryZoneWildcard(args []any) (*sql.Rows, error)
-	Close() error
-}
-
-// Evaluator manages zone rules backed by a ZoneStorage implementation.
-
+// Evaluator manages zone rules backed by BadgerDB.
 type Evaluator struct {
-	db        ZoneStorage
+	db        *database.DB
 	loadedAt  atomic.Int64
 	ruleCount atomic.Int64
-	dynamics  map[string]*dynamicEntry // qname → dynamic content
-	bypass    [][]matchTag             // global bypass rules (only Match, no Name/File)
+	dynamics  map[string]*dynamicEntry
+	bypass    [][]matchTag
 }
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-// wildcardPrefix marks a domain as a wildcard rule.
 const wildcardPrefix = "*."
 
-// maxWildcardLabels caps the number of suffix candidates in a wildcard batch
-// query.  DNS hostnames have at most 127 labels; 16 is a practical bound.  The
-// SQL statement uses a fixed placeholder count so SQLite can reuse the compiled
-// query plan across calls (P4).
 const maxWildcardLabels = 16
 
-var wildcardArgsPool = sync.Pool{New: func() any { a := make([]any, maxWildcardLabels+2); return &a }}
-
 // New creates an Evaluator backed by the given database.
-// The caller is responsible for opening the database via database.Open()
-// before calling New. Panics if db is nil (caller must provide a valid
-// database handle).
 func New(db *database.DB) *Evaluator {
 	if db == nil {
 		panic("zone: nil database")
@@ -99,10 +74,9 @@ func New(db *database.DB) *Evaluator {
 	}
 }
 
-// Close releases SQLite resources.
-func (e *Evaluator) Close() error {
-	return e.db.Close()
-}
+// Close releases resources. The underlying database is shared and should not be
+// closed here; this is a no-op provided for backward compatibility with tests.
+func (e *Evaluator) Close() error { return nil }
 
 // HasRules reports whether any zone rules are currently loaded.
 func (e *Evaluator) HasRules() bool { return e.ruleCount.Load() > 0 }
@@ -111,20 +85,15 @@ func (e *Evaluator) HasRules() bool { return e.ruleCount.Load() > 0 }
 // LoadRules
 // ---------------------------------------------------------------------------
 
-// LoadRules validates and loads zone rules into the SQLite database.
+// LoadRules validates and loads zone rules into BadgerDB.
 func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
-	if _, err := e.db.Exec(`DELETE FROM zone_entries`); err != nil {
+	// Clear existing rules.
+	if err := e.db.Badger.DropPrefix([]byte("z:")); err != nil {
 		return fmt.Errorf("zone: clear: %w", err)
 	}
-	// Clear dynamic content registrations.
 	e.dynamics = make(map[string]*dynamicEntry)
 
-	tx, err := e.db.Begin()
-	if err != nil {
-		return fmt.Errorf("zone: begin tx: %w", err)
-	}
-
-	// Collect global bypass rules: only Match, no Name/File/Answer/DynamicContent.
+	// Collect global bypass rules.
 	var bypass [][]matchTag
 	var content []config.ZoneRule
 	for i := range rules {
@@ -147,28 +116,28 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 	}
 
 	total := int64(0)
-	for i := range content {
-		rule := &content[i]
-		if rule.File != "" {
-			n, err := e.loadFile(tx, rule)
+	err := e.db.Badger.Update(func(txn *badger.Txn) error {
+		for i := range content {
+			rule := &content[i]
+			if rule.File != "" {
+				n, err := e.loadFile(txn, rule)
+				if err != nil {
+					return fmt.Errorf("zone file %q: %w", rule.File, err)
+				}
+				total += int64(n)
+				log.Infof("ZONE: loaded %d entries from %s", n, rule.File)
+				continue
+			}
+			n, err := e.loadInline(txn, rule)
 			if err != nil {
-				_ = tx.Rollback()
-				return fmt.Errorf("zone file %q: %w", rule.File, err)
+				return err
 			}
 			total += int64(n)
-			log.Infof("ZONE: loaded %d entries from %s", n, rule.File)
-			continue
 		}
-		n, err := e.loadInline(tx, rule)
-		if err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-		total += int64(n)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("zone: commit: %w", err)
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
 	e.ruleCount.Store(total)
@@ -177,7 +146,7 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 	return nil
 }
 
-func (e *Evaluator) loadInline(tx *sql.Tx, rule *config.ZoneRule) (int, error) {
+func (e *Evaluator) loadInline(txn *badger.Txn, rule *config.ZoneRule) (int, error) {
 	if rule.Name == "" {
 		return 0, errors.New("zone rule: name is required")
 	}
@@ -190,7 +159,6 @@ func (e *Evaluator) loadInline(tx *sql.Tx, rule *config.ZoneRule) (int, error) {
 		return 0, nil
 	}
 
-	// Dynamic content: store function in Go map.
 	normalizedName := dnsutil.Canonical(rule.Name)
 
 	if rule.DynamicContent != nil {
@@ -210,16 +178,26 @@ func (e *Evaluator) loadInline(tx *sql.Tx, rule *config.ZoneRule) (int, error) {
 			aw := packRRs(rule.Name, g.records)
 			auth := packRRs(rule.Name, rule.Authority)
 			addl := packRRs(rule.Name, rule.Additional)
-			if err := e.insertRow(tx, normalizedName, g.qtype, g.qclass, rule.Rcode, aw, auth, addl, matchTags, isWildcard); err != nil {
+			if err := e.insertRow(txn, normalizedName, g.qtype, g.qclass, rule.Rcode, aw, auth, addl, matchTags, isWildcard); err != nil {
 				return 0, err
 			}
 			count++
 		}
-	} else if rule.Rcode != dns.RcodeSuccess || rule.DynamicContent != nil {
-		// Sentinel entry for rcode-only or dynamic rules.
+	}
+	// Dynamic content rules always get a sentinel (qtype=0, qclass=0) so they
+	// are discoverable regardless of the query's DNS class (CHAOS vs IN).
+	if rule.DynamicContent != nil {
 		auth := packRRs(rule.Name, rule.Authority)
 		addl := packRRs(rule.Name, rule.Additional)
-		if err := e.insertRow(tx, normalizedName, 0, 0, rule.Rcode, nil, auth, addl, matchTags, isWildcard); err != nil {
+		if err := e.insertRow(txn, normalizedName, 0, 0, rule.Rcode, nil, auth, addl, matchTags, isWildcard); err != nil {
+			return 0, err
+		}
+		count++
+	} else if rule.Rcode != dns.RcodeSuccess && len(groups) == 0 {
+		// Rcode-only rule: sentinel entry matches any qtype/qclass.
+		auth := packRRs(rule.Name, rule.Authority)
+		addl := packRRs(rule.Name, rule.Additional)
+		if err := e.insertRow(txn, normalizedName, 0, 0, rule.Rcode, nil, auth, addl, matchTags, isWildcard); err != nil {
 			return 0, err
 		}
 		count++
@@ -228,18 +206,10 @@ func (e *Evaluator) loadInline(tx *sql.Tx, rule *config.ZoneRule) (int, error) {
 	return count, nil
 }
 
-func (e *Evaluator) insertRow(tx *sql.Tx, qname string, qtype, qclass uint16, rcode int, answer, authority, additional []byte, matchTags string, isWildcard bool) error {
-	w := 0
-	if isWildcard {
-		w = 1
-	}
-	_, err := tx.Exec(
-		`INSERT OR REPLACE INTO zone_entries
-		 (is_wildcard, qname, qtype, qclass, rcode, answer, authority, additional, match_tags)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		w, qname, qtype, qclass, rcode, answer, authority, additional, matchTags,
-	)
-	return err
+func (e *Evaluator) insertRow(txn *badger.Txn, qname string, qtype, qclass uint16, rcode int, answer, authority, additional []byte, matchTags string, isWildcard bool) error {
+	key := database.ZoneEntryKey(isWildcard, qname, qtype, qclass, matchTags)
+	val := database.EncodeZoneValue(rcode, answer, authority, additional)
+	return txn.Set(key, val)
 }
 
 // ---------------------------------------------------------------------------
@@ -247,8 +217,6 @@ func (e *Evaluator) insertRow(tx *sql.Tx, qname string, qtype, qclass uint16, rc
 // ---------------------------------------------------------------------------
 
 // Evaluate checks a query against loaded zone rules.
-// matchedTags is the set of ruleset tags the client IP/domain matched.
-// nil or empty map means no CIDR matching is active.
 func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map[string]bool) Result {
 	if qclass == 0 {
 		qclass = dns.ClassINET
@@ -257,7 +225,6 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 		return Result{Rcode: dns.RcodeSuccess}
 	}
 
-	// 0. Check global bypass rules — if any matches, skip zone entirely.
 	for i, tags := range e.bypass {
 		score := matchScore(tags, matchedTags)
 		log.Debugf("ZONE: bypass[%d] tags=%v client_tags=%v score=%d", i, tags, matchedTags, score)
@@ -273,68 +240,66 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 
 	qname = dnsutil.Canonical(qname)
 
-	// 1. Check dynamic content (Go map, not SQL).
 	if de, ok := e.dynamics[qname]; ok {
 		return e.evalDynamic(qname, qtype, qclass, de)
 	}
 
 	loadedAt := e.loadedAt.Load()
 
-	// 3. Exact composite key lookup.
+	// Exact composite key lookup.
 	if r := e.queryExact(qname, qtype, qclass, matchedTags, loadedAt); r.Matched {
 		return r
 	}
 
-	// 4. Sentinel key (rcode-only rules).
+	// Sentinel key (rcode-only rules).
 	if r := e.queryExact(qname, 0, 0, matchedTags, loadedAt); r.Matched {
 		return r
 	}
 
-	// 5. Wildcard suffix batch — single IN query replaces N per-label queries.
-	// ORDER BY length(qname) DESC, qtype DESC ensures the most specific
-	// suffix and the concrete qtype match (over qtype=0 sentinel) win.
-	r := e.queryWildcardBatch(qname, qtype, qclass, matchedTags, loadedAt)
-
-	return r
+	// Wildcard suffix batch.
+	return e.queryWildcardBatch(qname, qtype, qclass, matchedTags, loadedAt)
 }
 
 func (e *Evaluator) queryExact(qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
-	rows, err := e.db.QueryZoneExact(qname, int(qtype), int(qclass))
-	if err != nil {
-		return Result{Rcode: dns.RcodeSuccess}
-	}
-	defer func() { _ = rows.Close() }()
-
 	var bestScore int
 	var best Result
-	for rows.Next() {
-		var rcode int
-		var answerBlob, authBlob, addlBlob []byte
-		var tagsText string
-		if err := rows.Scan(&rcode, &answerBlob, &authBlob, &addlBlob, &tagsText); err != nil {
-			continue
-		}
 
-		score := matchScore(parseMatchTagsText(tagsText), matchedTags)
-		if score < 0 {
-			continue
-		}
-		if score <= bestScore && best.Matched {
-			continue // not better than current best
-		}
+	prefix := database.ZoneExactPrefix(qname, qtype, qclass)
+	_ = e.db.Badger.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = prefix
+		opts.PrefetchValues = true
+		it := txn.NewIterator(opts)
+		defer it.Close()
 
-		bestScore = score
-		best = Result{
-			Domain:     qname,
-			Matched:    true,
-			Rcode:      rcode,
-			Answer:     unpackRRs(answerBlob),
-			Authority:  unpackRRs(authBlob),
-			Additional: unpackRRs(addlBlob),
-			CreatedAt:  loadedAt,
-			cachable:   score == 0,
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			_ = item.Value(func(v []byte) error {
+				rcode, answerBlob, authBlob, addlBlob := database.DecodeZoneValue(v)
+				tagsText := extractMatchTagsFromZoneKey(string(item.Key()))
+				score := matchScore(parseMatchTagsText(tagsText), matchedTags)
+				if score < 0 {
+					return nil
+				}
+				if score <= bestScore && best.Matched {
+					return nil
+				}
+				bestScore = score
+				best = Result{
+					Domain:     qname,
+					Matched:    true,
+					Rcode:      rcode,
+					Answer:     unpackRRs(answerBlob),
+					Authority:  unpackRRs(authBlob),
+					Additional: unpackRRs(addlBlob),
+					CreatedAt:  loadedAt,
+					cachable:   score == 0,
+				}
+				return nil
+			})
 		}
-	}
+		return nil
+	})
 
 	if !best.Matched {
 		return Result{Rcode: dns.RcodeSuccess}
@@ -342,11 +307,7 @@ func (e *Evaluator) queryExact(qname string, qtype, qclass uint16, matchedTags m
 	return best
 }
 
-// queryWildcardBatch collects all suffix candidates from qname, issues a single
-// IN query ordered by specificity, and returns the first tag-matching row.
-// Replaces the per-label N-query loop (2 per suffix level) with one SQL query.
 func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
-	// Collect suffix candidates (e.g. "b.c.example.com", "c.example.com", "example.com").
 	suffixes := make([]string, 0, 8)
 	rest := qname
 	for {
@@ -363,66 +324,57 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 	if len(suffixes) == 0 {
 		return Result{Rcode: dns.RcodeSuccess}
 	}
-
-	// Cap at maxWildcardLabels and pad with empty strings so SQLite can
-	// reuse the compiled query plan across calls with different suffix counts.
 	if len(suffixes) > maxWildcardLabels {
 		suffixes = suffixes[:maxWildcardLabels]
 	}
-	argsPtr, ok := wildcardArgsPool.Get().(*[]any)
-	if !ok {
-		a := make([]any, maxWildcardLabels+2)
-		argsPtr = &a
-	}
-	args := (*argsPtr)[:maxWildcardLabels+2]
-	defer func() { wildcardArgsPool.Put(argsPtr) }()
-	for i := range maxWildcardLabels {
-		if i < len(suffixes) {
-			args[i] = suffixes[i]
-		} else {
-			args[i] = ""
-		}
-	}
-	args[maxWildcardLabels] = int(qtype)
-	args[maxWildcardLabels+1] = int(qclass)
-
-	rows, err := e.db.QueryZoneWildcard(args)
-	if err != nil {
-		return Result{Rcode: dns.RcodeSuccess}
-	}
-	defer func() { _ = rows.Close() }()
 
 	var bestScore int
 	var best Result
-	for rows.Next() {
-		var matchedQname string
-		var rcode int
-		var answerBlob, authBlob, addlBlob []byte
-		var tagsText string
-		if err := rows.Scan(&matchedQname, &rcode, &answerBlob, &authBlob, &addlBlob, &tagsText); err != nil {
-			continue
-		}
 
-		score := matchScore(parseMatchTagsText(tagsText), matchedTags)
-		if score < 0 {
-			continue
-		}
-		if score <= bestScore && best.Matched {
-			continue // not better than current best
-		}
+	_ = e.db.Badger.View(func(txn *badger.Txn) error {
+		for _, suffix := range suffixes {
+			prefix := database.ZoneWildcardPrefix(suffix)
+			opts := badger.DefaultIteratorOptions
+			opts.Prefix = prefix
+			opts.PrefetchValues = true
+			it := txn.NewIterator(opts)
+			defer it.Close() //nolint:gocritic // defer in loop is required for per-suffix iteration
 
-		bestScore = score
-		best = Result{
-			Domain:     matchedQname,
-			Matched:    true,
-			Rcode:      rcode,
-			Answer:     unpackRRs(answerBlob),
-			Authority:  unpackRRs(authBlob),
-			Additional: unpackRRs(addlBlob),
-			CreatedAt:  loadedAt,
-			cachable:   score == 0,
+			for it.Rewind(); it.Valid(); it.Next() {
+				item := it.Item()
+				k := string(item.Key())
+				kqtype, kqclass := parseZoneKeyTypeClass(k)
+				// Match qtype/qclass: concrete matches or sentinel (0/0).
+				if (kqtype != qtype || kqclass != qclass) && (kqtype != 0 || kqclass != 0) {
+					continue
+				}
+				_ = item.Value(func(v []byte) error {
+					rcode, answerBlob, authBlob, addlBlob := database.DecodeZoneValue(v)
+					tagsText := extractMatchTagsFromZoneKey(k)
+					score := matchScore(parseMatchTagsText(tagsText), matchedTags)
+					if score < 0 {
+						return nil
+					}
+					if score <= bestScore && best.Matched {
+						return nil
+					}
+					bestScore = score
+					best = Result{
+						Domain:     suffix,
+						Matched:    true,
+						Rcode:      rcode,
+						Answer:     unpackRRs(answerBlob),
+						Authority:  unpackRRs(authBlob),
+						Additional: unpackRRs(addlBlob),
+						CreatedAt:  loadedAt,
+						cachable:   score == 0,
+					}
+					return nil
+				})
+			}
 		}
-	}
+		return nil
+	})
 
 	if !best.Matched {
 		return Result{Rcode: dns.RcodeSuccess}
@@ -430,12 +382,61 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 	return best
 }
 
+// extractMatchTagsFromZoneKey parses the match_tags from a zone key.
+// Key format: z:{w}\x00{qname}\x00{qtype:04x}\x00{qclass:04x}\x00{match_tags}
+func extractMatchTagsFromZoneKey(key string) string {
+	// Key format: z:{w}\x00{qname}\x00{qtype:04x}\x00{qclass:04x}\x00{match_tags}
+	// match_tags is everything after the 4th \x00.
+	nul := 0
+	for i, c := range key {
+		if c == 0 {
+			nul++
+			if nul == 4 {
+				if i+1 < len(key) {
+					return key[i+1:]
+				}
+				return ""
+			}
+		}
+	}
+	return ""
+}
+
+// parseZoneKeyTypeClass extracts qtype and qclass from a zone key.
+// Key format: z:{w}\x00{qname}\x00{qtype:04x}\x00{qclass:04x}\x00{match_tags}
+//
+//nolint:gocritic // if-else chain is clearer than switch for sequential nul detection
+func parseZoneKeyTypeClass(key string) (qtype, qclass uint16) {
+	// After 2nd \x00 comes qtype, after 3rd comes qclass.
+	nul := 0
+	start := 0
+	for i, c := range key {
+		if c == 0 {
+			nul++
+			switch nul {
+			case 2:
+				start = i + 1
+			case 3:
+				// qtype is key[start:i], which should be 4 hex chars
+				if i-start >= 4 {
+					qtype = uint16(parseHexIntStr(key[start : start+4])) //nolint:gosec // G115: protocol-bounded value fits target type
+				}
+				start = i + 1
+
+			case 4:
+				if i-start >= 4 {
+					qclass = uint16(parseHexIntStr(key[start : start+4])) //nolint:gosec // G115: protocol-bounded value fits target type
+				}
+				return qtype, qclass
+			}
+		}
+	}
+	return qtype, qclass
+}
+
 func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicEntry) Result {
 	var contents []string
 	if len(de.configs) == 0 {
-		// No config records — invoke the dynamic function for every
-		// query (e.g. ZJDNS.db.clear.* rules that have no static
-		// answer records, only a DynamicContent function).
 		contents = de.fn()
 	} else {
 		for _, rec := range de.configs {
@@ -471,31 +472,25 @@ func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicE
 	return result
 }
 
-// matchScore returns a match quality score: positive tag matches score 2,
-// satisfied negations score 1, untagged rules score 0. Returns -1 if the
-// rule is rejected (required positive tag missing, or negated tag present).
-// When multiple rules match a query, the highest-scoring rule wins.
+// matchScore returns a match quality score.
 func matchScore(entryTags []matchTag, matchedTags map[string]bool) int {
 	if len(entryTags) == 0 {
-		return 0 // untagged — lowest priority
+		return 0
 	}
-	// When matchedTags is nil (no ruleset configured), nil-map reads
-	// return the zero value without panic — no allocation needed.
 	score := 0
 	for _, mt := range entryTags {
 		_, exists := matchedTags[mt.tag]
 		if !exists {
 			if mt.negate {
-				score++ // satisfied negation
+				score++
 				continue
 			}
-			return -1 // required positive tag missing → rejected
+			return -1
 		}
-		// tag exists on client
 		if mt.negate {
-			return -1 // negated tag present → rejected
+			return -1
 		}
-		score += 2 // positive match
+		score += 2
 	}
 	return score
 }
@@ -546,4 +541,19 @@ func parseMatchTags(raw []string) ([]matchTag, error) {
 	return tags, nil
 }
 
-// ---------------------------------------------------------------------------
+// parseHexIntStr parses a hex string to int.
+func parseHexIntStr(s string) int {
+	var n int
+	for _, c := range s {
+		n *= 16
+		switch {
+		case c >= '0' && c <= '9':
+			n += int(c - '0')
+		case c >= 'a' && c <= 'f':
+			n += int(c - 'a' + 10)
+		case c >= 'A' && c <= 'F':
+			n += int(c - 'A' + 10)
+		}
+	}
+	return n
+}

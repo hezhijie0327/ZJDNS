@@ -9,7 +9,7 @@ import (
 
 func BenchmarkEngine_Match(b *testing.B) {
 	log.Default.SetLevel(log.Error)
-	db, _ := database.Open("", 0, database.Options{})
+	db, _ := database.Open("", 0, 0, 0)
 	engine := New(db)
 	_ = engine.LoadRules([]config.RuleSet{
 		{Tag: "test", Type: "domain", Rule: []string{"example.com"}},
@@ -22,7 +22,7 @@ func BenchmarkEngine_Match(b *testing.B) {
 
 func BenchmarkEngine_MatchIP(b *testing.B) {
 	log.Default.SetLevel(log.Error)
-	db, _ := database.Open("", 0, database.Options{})
+	db, _ := database.Open("", 0, 0, 0)
 	engine := New(db)
 	_ = engine.LoadRules([]config.RuleSet{
 		{Tag: "lan", Type: "ip", Rule: []string{"192.168.0.0/16", "10.0.0.0/8"}},
@@ -35,7 +35,7 @@ func BenchmarkEngine_MatchIP(b *testing.B) {
 
 func BenchmarkEngine_HasIPTag(b *testing.B) {
 	log.Default.SetLevel(log.Error)
-	db, _ := database.Open("", 0, database.Options{})
+	db, _ := database.Open("", 0, 0, 0)
 	engine := New(db)
 	_ = engine.LoadRules([]config.RuleSet{
 		{Tag: "lan", Type: "ip", Rule: []string{"192.168.0.0/16"}},

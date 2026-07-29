@@ -60,7 +60,8 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				Qname: qname, Qtype: qtype, Qclass: qclass,
 				ECS: ecsOpt, DNSSECOK: dnssecOK,
 				Protocol: qctx.Protocol, Result: "hit", Rcode: dns.RcodeSuccess,
-				EntryID: entry.ID,
+				ResponseTime: handler.ElapsedMS(qctx.StartTime),
+				EntryID:      entry.ID,
 			})
 
 			// Prefetch if TTL is below threshold.
@@ -104,7 +105,8 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 					Qname: qname, Qtype: qtype, Qclass: qclass,
 					ECS: ecsOpt, DNSSECOK: dnssecOK,
 					Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
-					EntryID: entry.ID,
+					ResponseTime: handler.ElapsedMS(qctx.StartTime),
+					EntryID:      entry.ID,
 				})
 				return nil
 			}
@@ -116,7 +118,8 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 					Qname: qname, Qtype: qtype, Qclass: qclass,
 					ECS: ecsOpt, DNSSECOK: dnssecOK,
 					Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
-					EntryID: entry.ID,
+					ResponseTime: handler.ElapsedMS(qctx.StartTime),
+					EntryID:      entry.ID,
 				})
 				return nil
 			}
@@ -173,12 +176,21 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			if qr.Validated {
 				msg.AuthenticatedData = true
 			}
+			dnssecStatus := config.DNSSECStatusInsecure
+			switch {
+			case qr.Validated:
+				dnssecStatus = config.DNSSECStatusSecure
+			case m.resolver != nil && m.resolver.DNSSECEDECode() != 0:
+				dnssecStatus = config.DNSSECStatusBogus
+			}
 			qctx.Res = msg
 			qctx.CacheServed = false
 			m.store.RecordRequest(&cache.RequestRecord{
 				Qname: qctx.Qname, Qtype: qctx.Qtype, Qclass: qctx.Req.Question[0].Header().Class,
 				ECS: ecsOpt, DNSSECOK: qctx.ClientRequestedDNSSEC,
-				Protocol: qctx.Protocol, Result: "miss", Rcode: dns.RcodeSuccess,
+				Protocol: qctx.Protocol, Result: "miss", ResponseTime: handler.ElapsedMS(qctx.StartTime),
+				Rcode: dns.RcodeSuccess, Server: qr.Server, Poisoned: qr.Poisoned,
+				DNSSECStatus: dnssecStatus,
 			})
 		} else {
 			// Refresh failed — serve stale response.
@@ -186,7 +198,8 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 				Qname: qname, Qtype: qtype, Qclass: qclass,
 				ECS: ecsOpt, DNSSECOK: qctx.ClientRequestedDNSSEC,
 				Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
-				EntryID: entry.ID,
+				ResponseTime: handler.ElapsedMS(qctx.StartTime),
+				EntryID:      entry.ID,
 			})
 		}
 	case <-timer.C:
@@ -195,7 +208,8 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			Qname: qname, Qtype: qtype, Qclass: qclass,
 			ECS: ecsOpt, DNSSECOK: qctx.ClientRequestedDNSSEC,
 			Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
-			EntryID: entry.ID,
+			ResponseTime: handler.ElapsedMS(qctx.StartTime),
+			EntryID:      entry.ID,
 		})
 		if m.refreshGroup != nil {
 			m.refreshGroup.Go(func() error {

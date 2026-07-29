@@ -23,8 +23,8 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		dnscryptAddr     string
 
 		// SQL
-		runSQL bool
-		sqlRW  bool
+		runKV  bool
+		kvDrop bool
 
 		// DNS stamp
 		runDNSStamp    bool
@@ -59,8 +59,8 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	fs.StringVar(&dnscryptAddr, "addr", "127.0.0.1:8443", "Server address for DNSCrypt stamp")
 
 	// SQL
-	fs.BoolVar(&runSQL, "sql", false, "Run SQL query against database")
-	fs.BoolVar(&sqlRW, "rw", false, "Enable read-write mode for --sql")
+	fs.BoolVar(&runKV, "kv", false, "Browse BadgerDB keys (--kv <db> [prefix])")
+	fs.BoolVar(&kvDrop, "drop", false, "Drop keys by prefix (--kv <db> <prefix> --drop)")
 
 	// DNS stamp
 	fs.BoolVar(&runDNSStamp, "dnsstamp", false, "Decode or encode an sdns:// DNS stamp")
@@ -91,8 +91,8 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		fmt.Fprintf(os.Stderr, "  %s --version                    # Show version information\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --generate-config            # Generate example config\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --generate-config --dnscrypt --provider <name> [--addr <addr>]\n", fs.Name())
-		fmt.Fprintf(os.Stderr, "  %s --rw --sql <db> <query>        # Run read-write SQL (--rw MUST precede positional args)\n", fs.Name())
-		fmt.Fprintf(os.Stderr, "  %s --sql <db> <query>            # Run read-only SQL query\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s --kv <db> [prefix]            # Browse BadgerDB keys\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s --kv <db> <prefix> --drop     # Drop keys by prefix\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --dnsstamp --decode <stamp>  # Decode an sdns:// stamp to upstream JSON\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --dnsstamp --encode --proto <type> --stamp-addr <addr> [--provider-name <name>] [--public-key <hex>] [--path <path>] [--props <n>]\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --probe --pipeline    tcp://host:port  # Test RFC 7766 query pipelining\n", fs.Name())
@@ -132,7 +132,12 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 				fmt.Println(output)
 			}
 		} else {
-			fmt.Println(generateExampleConfig())
+			output, err := generateExampleConfig()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "generate-config: %v\n", err)
+			} else {
+				fmt.Println(output)
+			}
 		}
 		return "", true
 	}
@@ -184,20 +189,28 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		return "", true
 	}
 
-	// --sql
-	if runSQL {
+	// --kv
+	if runKV {
 		args := fs.Args()
-		if len(args) < 2 {
-			fmt.Fprintf(os.Stderr, "Usage: %s --sql <db> <query> [--rw]\n", fs.Name())
+		if len(args) < 1 {
+			fmt.Fprintf(os.Stderr, "Usage: %s --kv <db> [prefix] [--drop]\n", fs.Name())
 			return "", true
 		}
-		if sqlRW {
-			if err := RunSQLRW(args[0], args[1]); err != nil {
-				fmt.Fprintf(os.Stderr, "sql: %v\n", err)
+		prefix := ""
+		if len(args) >= 2 {
+			prefix = args[1]
+		}
+		if kvDrop {
+			if prefix == "" {
+				fmt.Fprintf(os.Stderr, "--drop requires a prefix\n")
+				return "", true
+			}
+			if err := RunKVDrop(args[0], prefix); err != nil {
+				fmt.Fprintf(os.Stderr, "kv drop: %v\n", err)
 			}
 		} else {
-			if err := RunSQL(args[0], args[1]); err != nil {
-				fmt.Fprintf(os.Stderr, "sql: %v\n", err)
+			if err := RunKV(args[0], prefix); err != nil {
+				fmt.Fprintf(os.Stderr, "kv: %v\n", err)
 			}
 		}
 		return "", true

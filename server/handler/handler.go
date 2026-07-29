@@ -152,6 +152,7 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 		msg.Rcode = dns.RcodeServerFailure
 		h.cache.RecordRequest(&cache.RequestRecord{
 			Result: "error", Protocol: protocol, Rcode: dns.RcodeServerFailure,
+			ResponseTime: ElapsedMS(qctx.StartTime),
 		})
 		return msg
 	}

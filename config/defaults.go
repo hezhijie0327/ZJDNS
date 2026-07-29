@@ -33,11 +33,10 @@ const (
 // =============================================================================
 
 const (
-	DefaultMaxCacheEntries   = 10000
-	DefaultCacheMMapSizeMB   = 64
-	DefaultCacheCacheSizeMB  = 32
-	DefaultCacheMaxOpenConns = 4 // SQLite WAL: single writer, readers served concurrently
-	DefaultCacheMaxIdleConns = 2
+	DefaultMaxCacheEntries = 10000
+
+	DefaultBadgerMemTableSizeMB   = 32 // BadgerDB memtable size (write buffer)
+	DefaultBadgerBlockCacheSizeMB = 32 // BadgerDB block cache size (read cache)
 
 	DefaultQueryJournalRetention = 3 * 86400     // seconds — auto-cleanup window for query_stats + query_log
 	DefaultPruneInterval         = 1 * time.Hour // interval between PruneQueryJournal runs

@@ -12,7 +12,7 @@ import (
 )
 
 func TestEvaluator_LoadRules(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestEvaluator_LoadRules(t *testing.T) {
 }
 
 func TestEvaluator_Evaluate_Answer(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestEvaluator_Evaluate_Answer(t *testing.T) {
 }
 
 func TestEvaluator_Evaluate_NoMatch(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestEvaluator_Evaluate_NoMatch(t *testing.T) {
 }
 
 func TestEvaluator_Evaluate_NXDOMAIN(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestEvaluator_Evaluate_NXDOMAIN(t *testing.T) {
 }
 
 func TestEvaluator_Evaluate_AuthorityAndAdditional(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestEvaluator_Evaluate_AuthorityAndAdditional(t *testing.T) {
 }
 
 func TestEvaluator_Evaluate_MultipleTypes(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestEvaluator_Evaluate_MultipleTypes(t *testing.T) {
 }
 
 func TestEvaluator_Wildcard(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestEvaluator_Wildcard(t *testing.T) {
 }
 
 func TestEvaluator_Wildcard_TypeFilter(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestEvaluator_Wildcard_TypeFilter(t *testing.T) {
 }
 
 func TestEvaluator_ExactWinsOverWildcard(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestEvaluator_ExactWinsOverWildcard(t *testing.T) {
 }
 
 func TestEvaluator_NoRules(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestEvaluator_NoRules(t *testing.T) {
 }
 
 func TestEvaluator_CreatedAt(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func TestEvaluator_CreatedAt(t *testing.T) {
 }
 
 func TestEvaluator_RcodeOnlyWithRecords(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestEvaluator_FileImport_Basic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +396,7 @@ func TestEvaluator_FileImport_Wildcard(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +423,7 @@ func TestEvaluator_FileImport_Comments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +450,7 @@ func TestEvaluator_FileImport_AuthorityAndAdditional(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +480,7 @@ func TestEvaluator_FileImport_AuthorityAndAdditional(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestEvaluator_MatchTags_PositiveMatch(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -521,7 +521,7 @@ func TestEvaluator_MatchTags_PositiveMatch(t *testing.T) {
 }
 
 func TestEvaluator_MatchTags_Negate(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -577,7 +577,7 @@ func TestEvaluator_MatchTags_Negate(t *testing.T) {
 // one with a negative tag, one with a positive tag. The old QueryRow
 // approach only checked one row arbitrarily.
 func TestEvaluator_MatchTags_MixedSameQType(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -668,7 +668,7 @@ func TestEvaluator_MatchTags_MixedSameQType(t *testing.T) {
 
 // TestEvaluator_MatchTags_MultiAnd verifies AND logic: all tags must be satisfied.
 func TestEvaluator_MatchTags_MultiAnd(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -713,7 +713,7 @@ func TestEvaluator_MatchTags_MultiAnd(t *testing.T) {
 
 // TestEvaluator_MatchTags_Wildcard verifies that match_tags work on wildcard rules.
 func TestEvaluator_MatchTags_Wildcard(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -762,7 +762,7 @@ func TestEvaluator_MatchTags_Wildcard(t *testing.T) {
 // TestEvaluator_MatchTags_NoTagsMatchesAll verifies that a rule without match_tags
 // matches all clients regardless of their tags.
 func TestEvaluator_MatchTags_NoTagsMatchesAll(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -788,7 +788,7 @@ func TestEvaluator_MatchTags_NoTagsMatchesAll(t *testing.T) {
 }
 
 func TestEvaluator_TTLCyclical(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -831,7 +831,7 @@ func TestEvaluator_TTLCyclical(t *testing.T) {
 //  4. .svc.example.com match=tag_b → 10.192.39.1  (subnet B)
 //  5. .svc.example.com match=tag_b rcode=3 → ""   (AAAA blocked, subnet B)
 func TestEvaluator_MatchScore_Priority(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -975,7 +975,7 @@ func TestEvaluator_MatchScore_Priority(t *testing.T) {
 //	rule 2: match=net_10_192_0_0                   → 10.192.7.1  (subnet A)
 //	rule 3: match=net_10_192_32_0                  → 10.192.39.1 (subnet B)
 func TestEvaluator_MatchTags_SubnetPriority(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1066,7 +1066,7 @@ func TestEvaluator_MatchTags_SubnetPriority(t *testing.T) {
 // TestEvaluator_BypassRule verifies that a rule with only Match (no Name/File)
 // acts as a global bypass: matching clients skip all zone rules.
 func TestEvaluator_BypassRule(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1098,7 +1098,7 @@ func TestEvaluator_BypassRule(t *testing.T) {
 
 // TestEvaluator_BypassRule_Negate verifies bypass with !tag.
 func TestEvaluator_BypassRule_Negate(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1126,7 +1126,7 @@ func TestEvaluator_BypassRule_Negate(t *testing.T) {
 
 // TestEvaluator_BypassOnly verifies bypass rules work with no content rules.
 func TestEvaluator_BypassOnly(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1151,7 +1151,7 @@ func TestEvaluator_BypassOnly(t *testing.T) {
 
 // TestEvaluator_BypassMulti verifies multiple bypass rules.
 func TestEvaluator_BypassMulti(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1194,7 +1194,7 @@ func TestEvaluator_BypassWithFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1234,7 +1234,7 @@ func TestEvaluator_FileMatchNegate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := database.Open("", 0, database.Options{})
+	db, err := database.Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

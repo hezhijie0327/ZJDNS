@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"zjdns/cmd/zjdns/cli"
 	"zjdns/config"
-	"zjdns/database"
 	"zjdns/internal/log"
 	"zjdns/server"
 )
@@ -17,7 +16,6 @@ func main() {
 	// All three os.Exit(1) calls below follow the same pattern and are safe
 	// because this package has no defers.
 	versionStr := getVersion()
-	database.Version = Version
 	configFile, exitAfter := cli.ParseFlags(os.Args, versionStr)
 	if exitAfter {
 		return

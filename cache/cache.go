@@ -1,4 +1,4 @@
-// Package cache provides the DNS response cache interface backed by SQLite.
+// Package cache provides the DNS response cache interface backed by BadgerDB.
 package cache
 
 import (

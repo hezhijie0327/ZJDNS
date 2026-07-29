@@ -3,12 +3,12 @@ module zjdns
 go 1.26.4
 
 require (
-	codeberg.org/miekg/dns v0.6.85-0.20260719080845-1db1230d9666
+	codeberg.org/miekg/dns v0.6.85
 	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033
 	github.com/cloudflare/circl v1.6.5-0.20260725174654-c55f49e67f75
-	github.com/emmansun/gmsm v0.44.0
+	github.com/dgraph-io/badger/v4 v4.9.5
+	github.com/emmansun/gmsm v0.44.1
 	github.com/klauspost/compress v1.19.2-0.20260721100123-117430d3b0e3
-	github.com/ncruces/go-sqlite3 v0.35.3-0.20260721171147-1c3fb78d91a3
 	github.com/pion/dtls/v3 v3.1.3-0.20260713182031-e1fb308f9f85
 	github.com/quic-go/quic-go v0.61.1-0.20260727032127-9bfbf4cd052b
 	gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f
@@ -22,10 +22,14 @@ require (
 	github.com/RyuaNerin/go-krypto v1.3.0 // indirect
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488 // indirect
+	github.com/dgraph-io/ristretto/v2 v2.4.2 // indirect
 	github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d // indirect
-	github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35303 // indirect
-	github.com/ncruces/julianday v1.0.0 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/go-logr/logr v1.4.4 // indirect
+	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/pmorjan/kmod v1.1.1 // indirect
@@ -36,7 +40,12 @@ require (
 	gitlab.com/go-extension/hash v0.0.0-20250912170447-263d1d8375e4 // indirect
 	gitlab.com/go-extension/rand v0.0.0-20240303103951-707937a049b5 // indirect
 	gitlab.com/go-extension/utils v0.0.0-20251006173700-b62b19cda891 // indirect
+	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+	go.opentelemetry.io/otel v1.44.0 // indirect
+	go.opentelemetry.io/otel/metric v1.44.0 // indirect
+	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.uber.org/mock v0.6.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 )

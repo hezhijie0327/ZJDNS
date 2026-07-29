@@ -37,9 +37,9 @@ func generateExampleConfig() (string, error) {
 
 	cfg.Server.Features.KTLS = &config.KTLSSettings{KernelTX: true}
 	cfg.Server.Features.Database = config.DatabaseSettings{
-		DBPath:      "cache.db",
-		MMapSizeMB:  config.DefaultCacheMMapSizeMB,
-		CacheSizeMB: config.DefaultCacheCacheSizeMB,
+		DBPath:           "cache.db",
+		MemTableSizeMB:   config.DefaultBadgerMemTableSizeMB,
+		BlockCacheSizeMB: config.DefaultBadgerBlockCacheSizeMB,
 	}
 	cfg.Server.Features.Cache = config.CacheSettings{
 		MaxEntries:  config.DefaultMaxCacheEntries,

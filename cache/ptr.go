@@ -1,22 +1,21 @@
 package cache
 
 import (
-	"database/sql"
-	"strings"
-	"zjdns/internal/log"
+	"zjdns/database"
 
 	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
+	"github.com/dgraph-io/badger/v4"
 )
 
-// insertPtrMap inserts reverse-lookup entries into ptr_map for a cache entry.
+// insertPtrMap inserts reverse-lookup entries into BadgerDB for a cache entry.
 // Deduplicates by (rdata_ip, name) — the same IP can appear across multiple
 // sections in a single response.
-func insertPtrMap(tx *sql.Tx, entryID int64, rrs []dns.RR) error {
+func insertPtrMap(txn *badger.Txn, entryID uint64, rrs []dns.RR, expiresAt int64) error {
 	type rec struct {
 		name    string
-		ttl     int
+		ttl     int32
 		rdataIP string
 	}
 	var recs []rec
@@ -29,35 +28,25 @@ func insertPtrMap(tx *sql.Tx, entryID int64, rrs []dns.RR) error {
 			continue
 		}
 		recs = append(recs, rec{
-			name: rr.Header().Name, ttl: int(rr.Header().TTL), rdataIP: ip,
+			name: rr.Header().Name, ttl: int32(rr.Header().TTL), rdataIP: ip, //nolint:gosec // G115: protocol-bounded value fits target type
 		})
 	}
 	if len(recs) == 0 {
 		return nil
 	}
 
-	// Deduplicate by (rdata_ip, name) — same IP can appear in the same section.
+	// Deduplicate by (rdata_ip, name).
 	seen := make(map[string]bool, len(recs))
-	var unique []rec
 	for _, r := range recs {
 		key := r.rdataIP + "\x00" + r.name
 		if !seen[key] {
 			seen[key] = true
-			unique = append(unique, r)
+			k := database.PtrMapKey(r.rdataIP, entryID, r.name)
+			v := database.EncodePtrMapValue(r.ttl, expiresAt)
+			if err := txn.Set(k, v); err != nil {
+				return err
+			}
 		}
-	}
-
-	placeholders := make([]string, len(unique))
-	args := make([]any, 0, len(unique)*4)
-	for i, r := range unique {
-		placeholders[i] = "(?, ?, ?, ?)"
-		args = append(args, r.rdataIP, entryID, r.name, r.ttl)
-	}
-	stmt := `INSERT OR REPLACE INTO ptr_map (rdata_ip, entry_id, name, ttl) VALUES ` + //nolint:gosec // G202: parameterized placeholders, no user input
-		strings.Join(placeholders, ",")
-	if _, err := tx.Exec(stmt, args...); err != nil {
-		log.Warnf("CACHE: insert ptr_map failed: %v", err)
-		return err
 	}
 	return nil
 }

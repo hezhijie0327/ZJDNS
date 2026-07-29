@@ -97,10 +97,6 @@ Use `sh scripts/bump-version.sh <patch|minor|major> <slug>`.
 
 **Default to Z (patch).** Only bump Y for substantial features (new protocol, major config surface).
 
-**After bumping (if schema changed):**
-- New tables/columns via `CREATE TABLE IF NOT EXISTS` → no migration needed; use `--no-migration`
-- `ALTER TABLE` / data migrations → add migration func to `database/migration.go` + entry in `migrations` slice + SQL file in `database/migrations/`
-
 **Always amend the version bump into the feature commit:**
 ```bash
 git reset --soft HEAD~2 && git commit  # or git commit --amend for single commit
@@ -150,8 +146,9 @@ go test -bench=. -short -benchtime=500ms ./... \
 ### CLI Tools
 
 ```bash
-# SQL query (read-only; add --rw for writes)
-./zjdns --sql cache.db "SELECT e.qname, e.rcode, e.validated, e.msg_wire FROM entries e"
+# Browse BadgerDB keys
+./zjdns --kv cache.db e:        # list all cache entries
+./zjdns --kv cache.db --drop e: # drop all cache entries (with confirmation)
 
 # DNS Stamp
 ./zjdns --dnsstamp --decode "sdns://..."       # decode to upstream JSON
@@ -170,7 +167,7 @@ pwsh scripts/install-hook.ps1                  # Windows
 
 Module path: `zjdns` (Go 1.26.4, pure Go — `CGO_ENABLED=0` compatible).
 
-Key dependencies: `codeberg.org/miekg/dns` (DNS), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/http` (eHTTP — net/http with native eTLS for DoH), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/pion/dtls/v3` (DTLS 1.2+), `github.com/ncruces/go-sqlite3` (pure-Go SQLite), `github.com/cloudflare/circl` (X-Wing PQ/T KEM for DNSCrypt), `gitee.com/Trisia/gotlcp` (TLCP + DTLCP — SM2/SM3/SM4, pure Go).
+Key dependencies: `codeberg.org/miekg/dns` (DNS), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/http` (eHTTP — net/http with native eTLS for DoH), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/pion/dtls/v3` (DTLS 1.2+), `github.com/dgraph-io/badger/v4` (embedded KV store), `github.com/cloudflare/circl` (X-Wing PQ/T KEM for DNSCrypt), `gitee.com/Trisia/gotlcp` (TLCP + DTLCP — SM2/SM3/SM4, pure Go).
 
 ## Coding Standards
 
@@ -218,8 +215,8 @@ zjdns/
 ├── cmd/zjdns/          ← binary + CLI
 ├── config/             ← ServerConfig, ProtocolSettings, UpstreamServer, defaults
 ├── edns/               ← EDNS handler (ECS, Cookie, EDE, Padding)
-├── database/           ← Unified SQLite DB (schema, migration, prepared stmts)
-├── cache/              ← DNS response cache (Store interface, SQLiteCache, AsyncStatsWriter)
+├── database/           ← Unified BadgerDB KV store (7 key prefixes, 2 ID sequences)
+├── cache/              ← DNS response cache (Store interface, BadgerDBCache, AsyncStatsWriter)
 ├── ruleset/            ← CIDR + domain tag matching (binary radix trie)
 ├── zone/               ← DNS zone rules (Evaluator, zone-file import)
 ├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, ...
@@ -301,10 +298,10 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | `ServerConfig` | `config` | Top-level config; owns `ECSConfig`, `ProtocolSettings`, `CertificateSettings` |
 | `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `NoCache`, `Match`, `Proxy`, defense flags |
 | `ProtocolSettings` | `config` | Per-protocol port/endpoint: `UDP`, `TCP`, `TLS`, `QUIC`, `HTTPS`, `HTTP3`, `TLCP`, `DTLS`, `DTLCP`, `DNSCrypt` |
-| `DB` | `database` | Unified SQLite DB; WAL mode, 8 prepared stmts |
+| `DB` | `database` | Unified BadgerDB KV store; 7 key prefixes, 2 ID sequences |
 | `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Stats/Close |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL |
-| `AsyncStatsWriter` | `cache` | Background goroutine: non-blocking channel → batched SQLite writes |
+| `AsyncStatsWriter` | `cache` | Background goroutine: non-blocking channel → batched BadgerDB writes |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `QueryContext` | `server/handler` | Mutable struct carrying all request state through the middleware chain |
 | `QueryHandler` | `server/handler` | Interface: `ServeDNS(ctx, qctx) error` |

@@ -1,7 +1,6 @@
-# bump-version.ps1 — bump ZJDNS version and optionally create a migration skeleton.
+# bump-version.ps1 — bump ZJDNS version.
 # Usage:
-#   pwsh scripts/bump-version.ps1 patch   "add indexes"                        # + migration
-#   pwsh scripts/bump-version.ps1 patch   "merge files"   -NoMigration         # no SQL file
+#   pwsh scripts/bump-version.ps1 patch   "add indexes"
 #   pwsh scripts/bump-version.ps1 minor   "new feature"
 #   pwsh scripts/bump-version.ps1 major   "breaking change"
 #
@@ -16,10 +15,7 @@ param(
     [string]$Bump,
 
     [Parameter(Mandatory)]
-    [string]$Slug,
-
-    [Parameter()]
-    [switch]$NoMigration
+    [string]$Slug
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,30 +45,9 @@ $content = $content -replace "Version\s+=\s+`"$Current`"", "Version     = `"$New
 Set-Content $VersionFile $content -NoNewline
 Write-Host "Bumped $VersionFile"
 
-# ── Bump README version badge ──────────────────────────────────────────────
+# ── Bump README version badge ────────────────────────────────────────────
 $Readme = "README.md"
 $readmeContent = Get-Content $Readme -Raw
 $readmeContent = $readmeContent -replace "Version-\d+\.\d+\.\d+-", "Version-$New-"
 Set-Content $Readme $readmeContent -NoNewline
 Write-Host "Bumped $Readme"
-
-# ── Create migration SQL archive ─────────────────────────────────────────
-if (-not $NoMigration) {
-    $MigrationFile = "database/migrations/${New}_${Slug}.sql"
-    New-Item -ItemType Directory -Force -Path "database/migrations" | Out-Null
-    Set-Content $MigrationFile @"
--- $New : $Slug
--- TODO: add migration SQL here
-"@
-    Write-Host "Created $MigrationFile"
-
-    $Var = "migrateV${Major}_${Minor}_${Patch}"
-    Write-Host ""
-    Write-Host "Next steps:"
-    Write-Host "  1. Edit $MigrationFile with the actual SQL"
-    Write-Host "  2. Add migration entry to database/migration.go:"
-    Write-Host "     {`"$New`", `"$Slug`", $Var},"
-    Write-Host "  3. Implement the $Var function"
-} else {
-    Write-Host "(skipped migration SQL — schema unchanged)"
-}

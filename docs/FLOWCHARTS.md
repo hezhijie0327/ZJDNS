@@ -26,7 +26,7 @@ graph LR
 ```mermaid
 graph TD
     START[New Server] --> LOADCONF[Load Config<br/>+ Validate]
-    LOADCONF --> INITDB[Open SQLite DB<br/>Run Migrations]
+    LOADCONF --> INITDB[Open BadgerDB<br/>KV Store]
     INITDB --> INITMW[Build Middleware Chain<br/>9 Layers]
     INITMW --> INITHANDLER[Create Handler<br/>+ Resolver + Zone + Ruleset]
     INITHANDLER --> STARTPROTO[Start Protocol Listeners<br/>UDP TCP DoT DoH DoH3<br/>DoQ DTLS TLCP DTLCP<br/>DNSCrypt]
@@ -70,7 +70,7 @@ graph LR
 graph TD
     Q[Query] --> ECSCAND[Build ECS Fallback Candidates<br/>addr/prefix granularities<br/>+ empty-ECS for non-ECS entries]
     ECSCAND --> LOOP{Loop candidates}
-    LOOP -->|next| QUERY[SQLite Lookup<br/>qname+qtype+qclass+ecs]
+    LOOP -->|next| QUERY[BadgerDB Key Lookup<br/>qname+qtype+qclass+ecs]
     QUERY -->|found| DECOMP[zstd Decompress]
     QUERY -->|not found| LOOP
     QUERY -->|error| MISS[Cache Miss]
@@ -387,7 +387,7 @@ graph TD
 graph TD
     Q[Query] --> BYPASS{Bypass Rules<br/>Match?}
     BYPASS -->|Yes| NEXT[Skip Zone -> Next]
-    BYPASS -->|No| LOAD[Load Rules from SQLite<br/>Exact + Wildcard + File]
+    BYPASS -->|No| LOAD[Load Rules from BadgerDB<br/>Exact + Wildcard + File]
     LOAD --> MATCH[Intersect with<br/>Client Match Tags<br/>CIDR + Domain]
     MATCH -->|No Match| NOMATCH[No Match -> Next]
     MATCH -->|Match| SCORE[Score by Tag Priority]
@@ -464,7 +464,7 @@ graph LR
         CFG --> IP[IP CIDR Rules<br/>Binary Radix Trie]
     end
     subgraph Match
-        Q[Query] --> DOMQ[Domain Lookup<br/>SQLite PK Prefix Seek]
+        Q[Query] --> DOMQ[Domain Lookup<br/>BadgerDB Prefix Scan]
         Q --> IPQ[IP Lookup<br/>O-128 Trie Walk]
         DOMQ --> TAGS[Collect Tags]
         IPQ --> TAGS

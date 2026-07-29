@@ -110,11 +110,12 @@ type DDRSettings struct {
 	IPv6 string `json:"ipv6,omitzero"`
 }
 
-// DatabaseSettings configures the shared SQLite database backing cache and zone.
+// DatabaseSettings configures the shared BadgerDB database backing cache, zone,
+// and ruleset.
 type DatabaseSettings struct {
-	DBPath      string `json:"db_path,omitzero"`       // database file path
-	MMapSizeMB  int    `json:"mmap_size_mb,omitzero"`  // SQLite mmap_size PRAGMA
-	CacheSizeMB int    `json:"cache_size_mb,omitzero"` // SQLite cache_size PRAGMA
+	DBPath           string `json:"db_path,omitzero"`             // database directory path
+	MemTableSizeMB   int    `json:"memtable_size_mb,omitzero"`    // BadgerDB memtable size (write buffer), 0 = default
+	BlockCacheSizeMB int    `json:"block_cache_size_mb,omitzero"` // BadgerDB block cache size (read cache), 0 = default
 }
 
 // CacheSettings configures DNS response cache size and stale serving.

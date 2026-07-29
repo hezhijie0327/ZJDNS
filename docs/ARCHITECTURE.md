@@ -4,104 +4,31 @@ Detailed technical reference for ZJDNS. For working guidelines, see [CLAUDE.md](
 
 ## DB Schema
 
-The unified database (`database/`) contains eight SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
+The unified database (`database/`) uses BadgerDB v4 (LSM-tree key-value store) with 7 key prefixes:
 
-```sql
--- DNS response cache. Uniqueness: (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok).
-CREATE TABLE entries (
-    qname      TEXT NOT NULL,
-    qtype      INTEGER NOT NULL,
-    qclass     INTEGER NOT NULL DEFAULT 1,
-    ecs_addr   TEXT NOT NULL DEFAULT '',
-    ecs_prefix INTEGER NOT NULL DEFAULT 0,
-    dnssec_ok  INTEGER NOT NULL DEFAULT 0 CHECK (dnssec_ok IN (0, 1)),
-    timestamp  INTEGER NOT NULL,
-    ttl        INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL DEFAULT 0,
-    validated  INTEGER NOT NULL DEFAULT 0 CHECK (validated IN (0, 1)),
-    msg_wire   BLOB,
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
-);
-CREATE INDEX idx_entries_expires_ts ON entries(expires_at, timestamp);
-CREATE INDEX idx_entries_timestamp ON entries(timestamp);
+| Prefix | Purpose | Key Pattern | Value (big-endian binary) |
+|--------|---------|-------------|---------------------------|
+| `e:` | DNS response cache | `e:{qname}\x00{ecs_addr}\x00{ecs_prefix:04x}\x00{dnssec_ok}\x00{qtype:04x}\x00{qclass:04x}` | `[0:8]id [8:16]ts [16:20]ttl [20:]zstd_wire` |
+| `p:` | PTR reverse lookup | `p:{rdata_ip}\x00{entry_id:016x}\x00{name}` | `[0:4]ttl [4:12]expires_at` |
+| `l:` | Per-IP latency | `l:{rdata_ip}` | `[0:2]qtype [2:6]latency_ms [6:14]last_probe` |
+| `s:` | Per-day query stats | `s:{stat_day:08x}\x00{result}\x00{protocol}\x00{rcode:04x}\x00{dnssec}\x00{poisoned}` | `[0:8]query_count [8:16]total_ms` |
+| `q:` | Query audit log | `q:{timestamp:016x}\x00{seq:016x}` | variable (length-prefixed strings) |
+| `z:` | Zone rule entries | `z:{is_wildcard}\x00{qname}\x00{qtype:04x}\x00{qclass:04x}\x00{match_tags}` | `[0:2]rcode` + 3×zstd blobs |
+| `r:` | Ruleset entries | `r:{type}\x00{value}\x00{tag}` | empty (key existence check) |
 
--- Query statistics: per-day aggregated counters for all results.  Auto-pruned
--- by config.DefaultQueryJournalRetention.  Stats() reads this single table.
-CREATE TABLE query_stats (
-    stat_day    INTEGER NOT NULL,   -- unixepoch() / 86400
-    result      TEXT NOT NULL,      -- 'hit','miss','stale','zone','error','blocked','badcookie'
-    protocol    TEXT NOT NULL,
-    rcode       INTEGER NOT NULL DEFAULT 0,
-    dnssec      TEXT NOT NULL DEFAULT '',  -- 'secure','insecure','bogus','' for hits
-    poisoned      INTEGER NOT NULL DEFAULT 0,
-    query_count INTEGER NOT NULL DEFAULT 0,
-    total_ms    INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (stat_day, result, protocol, rcode, dnssec, poisoned)
-) WITHOUT ROWID;
-
--- Query log: per-event audit trail for non-hit queries.  qname/qtype/qclass
--- stored directly (denormalized) — no JOIN needed for debugging.
-CREATE TABLE query_log (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp   INTEGER NOT NULL,
-    qname       TEXT NOT NULL DEFAULT '',
-    qtype       INTEGER NOT NULL DEFAULT 0,
-    qclass      INTEGER NOT NULL DEFAULT 1,
-    protocol    TEXT NOT NULL,
-    result      TEXT NOT NULL,
-    rcode       INTEGER NOT NULL DEFAULT 0,
-    response_ms INTEGER NOT NULL DEFAULT 0,
-    server      TEXT NOT NULL DEFAULT '',
-    poisoned    INTEGER NOT NULL DEFAULT 0,
-    dnssec      TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX idx_query_log_ts ON query_log(timestamp);
-
--- PTR reverse-lookup (IP → domain).
-CREATE TABLE ptr_map (
-    rdata_ip TEXT NOT NULL,
-    entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-    name     TEXT NOT NULL,
-    ttl      INTEGER NOT NULL,
-    PRIMARY KEY (rdata_ip, entry_id, name)
-) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS idx_ptr_map_entry_id ON ptr_map(entry_id);
-
--- Per-IP latency measurements. Keyed by rdata_ip only.
-CREATE TABLE ip_latency (
-    rdata_ip        TEXT NOT NULL,
-    qtype           INTEGER NOT NULL DEFAULT 0,
-    latency_ms      INTEGER NOT NULL,
-    last_probe_time INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (rdata_ip)
-) WITHOUT ROWID;
-CREATE INDEX idx_ip_latency_probe ON ip_latency(last_probe_time);
-
--- Zone entries (same DB file, shared zstd compression).
-CREATE TABLE zone_entries (
-    is_wildcard INTEGER NOT NULL DEFAULT 0,
-    qname      TEXT NOT NULL,
-    qtype      INTEGER NOT NULL DEFAULT 0,
-    qclass     INTEGER NOT NULL DEFAULT 0,
-    rcode      INTEGER NOT NULL DEFAULT 0,
-    answer     BLOB,               -- zstd-compressed answer RRs
-    authority  BLOB,               -- zstd-compressed authority RRs
-    additional BLOB,               -- zstd-compressed additional RRs
-    match_tags TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (is_wildcard, qname, qtype, qclass, match_tags)
-) WITHOUT ROWID;
-```
+`\x00` is the field separator. Integers are hex-encoded (zero-padded) for correct lexicographic sort order during prefix scans.
 
 ### Key Patterns
 
-- **Cache hit path**: `Get()` decompresses zstd + `Msg.Unpack()` (~0.5ms).
-- **RecordRequest**: All results → `query_stats` (per-day upsert, ~500 row sliding window). Non-hit events also → `query_log` (audit trail with denormalized qname/qtype/qclass, no JOIN needed).
-- **Stats aggregation**: `Stats()` uses a single scan of `query_stats` with CASE expressions (result + protocol + rcode + dnssec + poisoned distributions computed inline). ~500 rows regardless of query volume.
-- **Pruning**: `PruneQueryJournal` runs at `config.DefaultPruneInterval`, deleting `query_stats` rows past `config.DefaultQueryJournalRetention` (PK prefix seek) and `query_log` rows via batched delete (`config.DefaultPruneBatchSize` rows per iteration, using `idx_query_log_ts`). Fallback cleanup via `config.DefaultStaleMaxAge` in `evictOldest`.
-- **Eviction**: On `Set()` when count > maxEntries. Prefers past serve-stale, then oldest. `ON DELETE CASCADE` for ptr_map. Stale ip_latency + query_log rows pruned during eviction.
+- **Cache hit path**: `Get()` does a direct BadgerDB key lookup (`txn.Get()`) in a read-only View transaction (~0.1ms).
+- **Cache write path**: `Set()` packs wire format, zstd-compresses, writes entry + ptr_map entries + latency in a single Update transaction.
+- **TTL**: BadgerDB native TTL via `Entry.WithTTL()` — entries auto-expire after `entryTTL + DefaultStaleMaxAge` seconds. No manual stale-entry scanning needed.
+- **Eviction**: When `entryCount >= maxEntries * 9/10`, prefix scan on `e:` finds oldest entries, deletes them in a single Update transaction.
+- **Stats aggregation**: `Stats()` does a prefix scan over `s:` prefix (~500 rows) and aggregates in Go code. O(500) — sub-millisecond.
+- **Auto-increment IDs**: BadgerDB `Sequence` (bandwidth=1000) for entry IDs and query log IDs. Leases up to 1000 IDs in memory before a disk write.
+- **Zone queries**: `queryExact()` uses BadgerDB prefix scan on `z:0:{qname}\x00{qtype:04x}\x00{qclass:04x}\x00`. `queryWildcardBatch()` iterates up to 16 suffix candidates with individual prefix scans.
 - **NS latency cache**: NS/Root addresses as TypeA/TypeAAAA entries. Latency probed via `ProbeNSAddrs`, reordered by `sortAnswerByLatency` at `Get()` time.
-- **IP latency**: Per-IP keyed. `INSERT OR REPLACE` writes latency_ms + last_probe_time. All domains sharing a CDN IP reuse the same row.
+- **IP latency**: Per-IP keyed. Writes latency_ms + last_probe_time to `l:` prefix. All domains sharing a CDN IP reuse the same key.
 - **Dynamic queries**: `Store.Stats()` returns TXT records (overview, hits, errors, rcodes, poisoned, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.db.clear` / `zjdns.db.clear.{cache,stats,querylog,latency,zone,ruleset}`.
 
 

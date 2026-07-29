@@ -6,20 +6,21 @@ import (
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
+
+	"github.com/dgraph-io/badger/v4"
 )
 
-// AsyncStatsWriter offloads RecordRequest SQLite writes from the query hot path
-// onto a background goroutine.  A buffered channel decouples producers (query
-// handlers) from the consumer (the writer goroutine).  When the channel is full,
-// records are dropped — stats are best-effort.
+// AsyncStatsWriter offloads RecordRequest BadgerDB writes from the query hot
+// path onto a background goroutine. A buffered channel decouples producers
+// (query handlers) from the consumer (the writer goroutine). When the channel
+// is full, records are dropped — stats are best-effort.
 //
 // Shutdown: Close() closes the record channel, the goroutine drains buffered
-// records and flushes them, then exits.  Close() blocks until the goroutine
-// returns.  Close is idempotent via sync.Once.
+// records and flushes them, then exits. Close() blocks until the goroutine
+// returns. Close is idempotent via sync.Once.
 //
 // Flush() is a two-phase operation: it drains the channel directly, then signals
-// the background goroutine to flush its internal batch.  This ensures all
-// in-flight records are written before Flush returns.
+// the background goroutine to flush its internal batch.
 type AsyncStatsWriter struct {
 	ch        chan RequestRecord
 	flushSig  chan chan struct{} // send done chan → goroutine flushes batch → close(done)
@@ -29,7 +30,7 @@ type AsyncStatsWriter struct {
 }
 
 // NewAsyncStatsWriter creates an AsyncStatsWriter and starts its background
-// goroutine.  bufferSize controls how many records can be queued before
+// goroutine. bufferSize controls how many records can be queued before
 // producers start dropping.
 func NewAsyncStatsWriter(db *database.DB, bufferSize int) *AsyncStatsWriter {
 	w := &AsyncStatsWriter{
@@ -42,9 +43,8 @@ func NewAsyncStatsWriter(db *database.DB, bufferSize int) *AsyncStatsWriter {
 	return w
 }
 
-// Record enqueues a request record for asynchronous writing.  When the channel
-// is full the record is silently dropped — stats are best-effort.  The record
-// is copied by value so the caller may reuse the backing memory.
+// Record enqueues a request record for asynchronous writing. When the channel
+// is full the record is silently dropped — stats are best-effort.
 func (w *AsyncStatsWriter) Record(r *RequestRecord) {
 	if w == nil {
 		return
@@ -60,9 +60,7 @@ func (w *AsyncStatsWriter) Record(r *RequestRecord) {
 	}
 }
 
-// Close shuts down the writer.  It closes the record channel to signal the
-// background goroutine, which drains buffered records, flushes them, and exits.
-// Close blocks until the goroutine has finished.  Idempotent.
+// Close shuts down the writer. Idempotent.
 func (w *AsyncStatsWriter) Close() {
 	if w == nil {
 		return
@@ -73,11 +71,7 @@ func (w *AsyncStatsWriter) Close() {
 	})
 }
 
-// Flush writes all pending records synchronously.  Phase 1 drains any records
-// buffered in the channel and writes them directly.  Phase 2 signals the
-// background goroutine to flush its internal batch.  SQLite WAL mode serialises
-// concurrent writers, so this is safe to call while the background goroutine is
-// running.
+// Flush writes all pending records synchronously.
 func (w *AsyncStatsWriter) Flush() {
 	if w == nil {
 		return
@@ -89,7 +83,6 @@ drainLoop:
 		select {
 		case r, ok := <-w.ch:
 			if !ok {
-				// Channel closed — nothing left to drain.
 				break drainLoop
 			}
 			pending = append(pending, r)
@@ -102,20 +95,15 @@ drainLoop:
 	}
 
 	// Phase 2: ask goroutine to flush its internal batch.
-	done := make(chan struct{}, 1) // buffered: prevents Flush → Close race hang
+	done := make(chan struct{}, 1)
 	select {
 	case w.flushSig <- done:
 		<-done
 	default:
-		// Goroutine busy — records in its batch will be written by ticker or
-		// next Flush.  This path is only reached under extreme load.
 	}
 }
 
-// run is the background goroutine.  It accumulates records into a batch and
-// flushes when the batch is full, a flush is requested, or a ticker fires.
-// When the record channel is closed, remaining records are drained and flushed,
-// then the goroutine exits.
+// run is the background goroutine.
 func (w *AsyncStatsWriter) run() {
 	defer close(w.done)
 
@@ -128,7 +116,6 @@ func (w *AsyncStatsWriter) run() {
 		select {
 		case r, ok := <-w.ch:
 			if !ok {
-				// Channel closed: flush remaining and exit.
 				w.flush(batch)
 				return
 			}
@@ -152,34 +139,24 @@ func (w *AsyncStatsWriter) run() {
 	}
 }
 
-// flush writes a batch of records to the database.  Errors are intentionally
-// discarded — stats are best-effort and must never block or fail the query path.
-// Individual writes are used rather than a transaction to keep the background
-// goroutine simple — WAL-mode serialisation is sufficient.
+// flush writes a batch of records to BadgerDB. Stats are best-effort.
 func (w *AsyncStatsWriter) flush(batch []RequestRecord) {
 	if len(batch) == 0 || w.db.IsClosed() {
 		return
 	}
-	for i := range batch {
-		r := &batch[i]
-
-		// Always upsert into query_stats (per-day aggregated counters).
-		// Error discarded — stats are best-effort and non-critical.
-		_, _ = w.db.StmtQueryStats.Exec( // _, _ = result, error: background stats write, non-critical
-			r.Result, r.Protocol, r.Rcode, r.DNSSECStatus,
-			database.BoolToInt(r.Poisoned),
-			r.ResponseTime,
-		)
-
-		// Non-hit results also go into query_log for the audit trail.
-		// Error discarded — stats are best-effort and non-critical.
-		if r.Result != "hit" {
-			_, _ = w.db.StmtQueryLog.Exec( // _, _ = result, error: background stats write, non-critical
-				log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass),
-				r.Protocol, r.Result, r.Rcode, r.ResponseTime, r.Server,
-				database.BoolToInt(r.Poisoned),
-				r.DNSSECStatus,
-			)
+	_ = w.db.Badger.Update(func(txn *badger.Txn) error {
+		for i := range batch {
+			r := &batch[i]
+			// Always upsert into query_stats.
+			upsertQueryStats(txn, r.Result, r.Protocol, r.Rcode, r.DNSSECStatus,
+				database.BoolToInt(r.Poisoned), r.ResponseTime)
+			// Non-hit results also go into query_log.
+			if r.Result != "hit" {
+				_ = insertQueryLog(txn, w.db, r.Qname, int(r.Qtype), int(r.Qclass),
+					r.Protocol, r.Result, r.Rcode, r.ResponseTime, r.Server,
+					database.BoolToInt(r.Poisoned), r.DNSSECStatus)
+			}
 		}
-	}
+		return nil
+	})
 }

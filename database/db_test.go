@@ -2,16 +2,18 @@ package database
 
 import (
 	"testing"
+
+	"github.com/dgraph-io/badger/v4"
 )
 
 func TestOpen_Memory(t *testing.T) {
-	db, err := Open("", 100, Options{MMapSizeMB: 1, CacheSizeMB: 1})
+	db, err := Open("", 100, 0, 0)
 	if err != nil {
 		t.Fatalf("Open(:memory:) error: %v", err)
 	}
 	defer func() { _ = db.Close() }()
-	if db.SQ == nil {
-		t.Fatal("db.SQ is nil")
+	if db.Badger == nil {
+		t.Fatal("db.Badger is nil")
 	}
 	if db.IsClosed() {
 		t.Error("newly opened db should not be closed")
@@ -19,7 +21,7 @@ func TestOpen_Memory(t *testing.T) {
 }
 
 func TestOpen_DefaultOpts(t *testing.T) {
-	db, err := Open("", 0, Options{})
+	db, err := Open("", 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Open with zero opts error: %v", err)
 	}
@@ -30,7 +32,7 @@ func TestOpen_DefaultOpts(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	db, err := Open("", 100, Options{MMapSizeMB: 1, CacheSizeMB: 1})
+	db, err := Open("", 100, 0, 0)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -43,55 +45,20 @@ func TestClose(t *testing.T) {
 }
 
 func TestClose_DoubleClose(t *testing.T) {
-	db, err := Open("", 100, Options{MMapSizeMB: 1, CacheSizeMB: 1})
+	db, err := Open("", 100, 0, 0)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Errorf("first Close error: %v", err)
 	}
-	// Second Close should be a no-op
 	if err := db.Close(); err != nil {
 		t.Errorf("second Close error: %v", err)
 	}
 }
 
-func TestPreparedStatements(t *testing.T) {
-	db, err := Open("", 100, Options{MMapSizeMB: 1, CacheSizeMB: 1})
-	if err != nil {
-		t.Fatalf("Open error: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	if db.StmtEntry == nil {
-		t.Error("StmtEntry is nil")
-	}
-	if db.StmtQueryLog == nil {
-		t.Error("StmtQueryLog is nil")
-	}
-	if db.StmtQueryStats == nil {
-		t.Error("StmtQueryStats is nil")
-	}
-	if db.StmtInsertLatency == nil {
-		t.Error("StmtInsertLatency is nil")
-	}
-	if db.StmtLastProbe == nil {
-		t.Error("StmtLastProbe is nil")
-	}
-
-	if db.StmtZoneExact == nil {
-		t.Error("StmtZoneExact is nil")
-	}
-	if db.StmtZoneWildcard == nil {
-		t.Error("StmtZoneWildcard is nil")
-	}
-	if db.StmtIPLatency == nil {
-		t.Error("StmtIPLatency is nil")
-	}
-}
-
 func TestEntryCount(t *testing.T) {
-	db, err := Open("", 100, Options{MMapSizeMB: 1, CacheSizeMB: 1})
+	db, err := Open("", 100, 0, 0)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -110,125 +77,272 @@ func TestEntryCount(t *testing.T) {
 	}
 }
 
-func TestSQLiteWALConcurrentWrites(t *testing.T) {
-	db, err := Open("", 100, Options{MMapSizeMB: 1, CacheSizeMB: 1})
+func TestSequenceIDs(t *testing.T) {
+	db, err := Open("", 100, 0, 0)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
-	// Verify that two concurrent transactions can both commit successfully
-	// — SQLite WAL mode serializes writers, no app-level mutex needed.
-	tx1, err := db.BeginTx()
+	id1, err := db.NextEntryID()
 	if err != nil {
-		t.Fatalf("BeginTx error: %v", err)
+		t.Fatalf("NextEntryID error: %v", err)
 	}
-	if _, err := tx1.Exec(`CREATE TABLE IF NOT EXISTS test_wal (id INTEGER PRIMARY KEY, val TEXT)`); err != nil {
-		_ = tx1.Rollback()
-		t.Fatalf("Create table error: %v", err)
+	id2, err := db.NextEntryID()
+	if err != nil {
+		t.Fatalf("NextEntryID error: %v", err)
 	}
-	if err := tx1.Commit(); err != nil {
-		t.Fatalf("Commit error: %v", err)
+	if id2 <= id1 {
+		t.Errorf("IDs should be monotonic: got %d then %d", id1, id2)
 	}
 
-	tx2, err := db.BeginTx()
+	qid1, err := db.NextQLogID()
 	if err != nil {
-		t.Fatalf("BeginTx error: %v", err)
+		t.Fatalf("NextQLogID error: %v", err)
 	}
-	_, err = tx2.Exec(`INSERT INTO test_wal (id, val) VALUES (1, 'hello')`)
+	qid2, err := db.NextQLogID()
 	if err != nil {
-		_ = tx2.Rollback()
-		t.Fatalf("Insert error: %v", err)
+		t.Fatalf("NextQLogID error: %v", err)
 	}
-	if err := tx2.Commit(); err != nil {
-		t.Fatalf("Commit error: %v", err)
+	if qid2 <= qid1 {
+		t.Errorf("IDs should be monotonic: got %d then %d", qid1, qid2)
 	}
 }
 
-func TestBeginTx(t *testing.T) {
-	db, err := Open("", 100, Options{MMapSizeMB: 1, CacheSizeMB: 1})
+func TestKeyRoundTrip(t *testing.T) {
+	db, err := Open("", 100, 0, 0)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
-	tx, err := db.BeginTx()
+	// Write an entry and read it back.
+	key := EntryKey("example.com.", "", 0, false, 1, 1)
+	val := EncodeEntryValue(42, 1000, 300, []byte("test-wire"))
+	entry := badger.NewEntry(key, val).WithMeta(UserMetaValidated(true))
+
+	err = db.Badger.Update(func(txn *badger.Txn) error {
+		return txn.SetEntry(entry)
+	})
 	if err != nil {
-		t.Fatalf("BeginTx error: %v", err)
+		t.Fatalf("SetEntry error: %v", err)
 	}
-	if err := tx.Commit(); err != nil {
-		t.Errorf("tx.Commit error: %v", err)
+
+	err = db.Badger.View(func(txn *badger.Txn) error {
+		item, e := txn.Get(key)
+		if e != nil {
+			t.Errorf("Get error: %v", e)
+			return nil
+		}
+		if item.UserMeta() != 1 {
+			t.Errorf("UserMeta = %d, want 1", item.UserMeta())
+		}
+		return item.Value(func(v []byte) error {
+			id, ts, ttl, wire := DecodeEntryValue(v)
+			if id != 42 {
+				t.Errorf("id = %d, want 42", id)
+			}
+			if ts != 1000 {
+				t.Errorf("ts = %d, want 1000", ts)
+			}
+			if ttl != 300 {
+				t.Errorf("ttl = %d, want 300", ttl)
+			}
+			if string(wire) != "test-wire" {
+				t.Errorf("wire = %q, want %q", wire, "test-wire")
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("View error: %v", err)
 	}
 }
 
-func TestSQLExec(t *testing.T) {
-	db, err := Open("", 100, Options{MMapSizeMB: 1, CacheSizeMB: 1})
+func TestPtrMapKeyRoundTrip(t *testing.T) {
+	db, err := Open("", 100, 0, 0)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
-	_, err = db.SQLExec("SELECT 1")
+	key := PtrMapKey("1.2.3.4", 42, "example.com.")
+	val := EncodePtrMapValue(300, 1300)
+
+	err = db.Badger.Update(func(txn *badger.Txn) error {
+		return txn.Set(key, val)
+	})
 	if err != nil {
-		t.Errorf("SQLExec error: %v", err)
+		t.Fatalf("Set error: %v", err)
+	}
+
+	err = db.Badger.View(func(txn *badger.Txn) error {
+		item, e := txn.Get(key)
+		if e != nil {
+			t.Errorf("Get error: %v", e)
+			return nil
+		}
+		return item.Value(func(v []byte) error {
+			ttl, expiresAt := DecodePtrMapValue(v)
+			if ttl != 300 {
+				t.Errorf("ttl = %d, want 300", ttl)
+			}
+			if expiresAt != 1300 {
+				t.Errorf("expiresAt = %d, want 1300", expiresAt)
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("View error: %v", err)
+	}
+
+	// Test prefix scan.
+	_ = db.Badger.Update(func(txn *badger.Txn) error {
+		return txn.Set(PtrMapKey("1.2.3.4", 43, "other.com."), EncodePtrMapValue(600, 1600))
+	})
+
+	err = db.Badger.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = PtrMapIPPrefix("1.2.3.4")
+		opts.PrefetchValues = true
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		count := 0
+		for it.Rewind(); it.Valid(); it.Next() {
+			count++
+		}
+		if count != 2 {
+			t.Errorf("prefix scan count = %d, want 2", count)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("View error: %v", err)
 	}
 }
 
-func TestSQLQueryRow(t *testing.T) {
-	db, err := Open("", 100, Options{MMapSizeMB: 1, CacheSizeMB: 1})
-	if err != nil {
-		t.Fatalf("Open error: %v", err)
+func TestLatencyValueRoundTrip(t *testing.T) {
+	val := EncodeLatencyValue(28, 50, 2000)
+	qtype, lat, probe := DecodeLatencyValue(val)
+	if qtype != 28 {
+		t.Errorf("qtype = %d, want 28", qtype)
 	}
-	defer func() { _ = db.Close() }()
-
-	row := db.SQLQueryRow("SELECT 1")
-	var n int
-	if err := row.Scan(&n); err != nil {
-		t.Errorf("SQLQueryRow scan error: %v", err)
+	if lat != 50 {
+		t.Errorf("latency = %d, want 50", lat)
 	}
-	if n != 1 {
-		t.Errorf("got %d, want 1", n)
+	if probe != 2000 {
+		t.Errorf("probe = %d, want 2000", probe)
 	}
 }
 
-func TestSQLQuery(t *testing.T) {
-	db, err := Open("", 100, Options{MMapSizeMB: 1, CacheSizeMB: 1})
-	if err != nil {
-		t.Fatalf("Open error: %v", err)
+func TestQueryStatsValueRoundTrip(t *testing.T) {
+	val := EncodeQueryStatsValue(10, 500)
+	count, ms := DecodeQueryStatsValue(val)
+	if count != 10 {
+		t.Errorf("count = %d, want 10", count)
 	}
-	defer func() { _ = db.Close() }()
-
-	rows, err := db.SQLQuery("SELECT 1 AS n")
-	if err != nil {
-		t.Fatalf("SQLQuery error: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-	if !rows.Next() {
-		t.Fatal("expected at least one row")
-	}
-	var n int
-	if err := rows.Scan(&n); err != nil {
-		t.Errorf("scan error: %v", err)
+	if ms != 500 {
+		t.Errorf("ms = %d, want 500", ms)
 	}
 }
 
-func TestZoneStorageMethods(t *testing.T) {
-	db, err := Open("", 100, Options{MMapSizeMB: 1, CacheSizeMB: 1})
+func TestZoneValueRoundTrip(t *testing.T) {
+	val := EncodeZoneValue(3, []byte("ans"), []byte("auth"), []byte("add"))
+	rcode, ans, auth, add := DecodeZoneValue(val)
+	if rcode != 3 {
+		t.Errorf("rcode = %d, want 3", rcode)
+	}
+	if string(ans) != "ans" {
+		t.Errorf("answer = %q, want %q", ans, "ans")
+	}
+	if string(auth) != "auth" {
+		t.Errorf("authority = %q, want %q", auth, "auth")
+	}
+	if string(add) != "add" {
+		t.Errorf("additional = %q, want %q", add, "add")
+	}
+}
+
+func TestEncodeDecodeQueryLogValue(t *testing.T) {
+	val := EncodeQueryLogValue(1000, "example.com.", 1, 1, "tls", "miss", 3, 25, "1.1.1.1", 1, "secure")
+	ts, qname, qtype, qclass, protocol, result, rcode, responseMS, server, poisoned, dnssec := DecodeQueryLogValue(val)
+	if ts != 1000 {
+		t.Errorf("ts = %d, want 1000", ts)
+	}
+	if qname != "example.com." {
+		t.Errorf("qname = %q, want %q", qname, "example.com.")
+	}
+	if qtype != 1 {
+		t.Errorf("qtype = %d, want 1", qtype)
+	}
+	if qclass != 1 {
+		t.Errorf("qclass = %d, want 1", qclass)
+	}
+	if protocol != "tls" {
+		t.Errorf("protocol = %q, want %q", protocol, "tls")
+	}
+	if result != "miss" {
+		t.Errorf("result = %q, want %q", result, "miss")
+	}
+	if rcode != 3 {
+		t.Errorf("rcode = %d, want 3", rcode)
+	}
+	if responseMS != 25 {
+		t.Errorf("responseMS = %d, want 25", responseMS)
+	}
+	if server != "1.1.1.1" {
+		t.Errorf("server = %q, want %q", server, "1.1.1.1")
+	}
+	if poisoned != 1 {
+		t.Errorf("poisoned = %d, want 1", poisoned)
+	}
+	if dnssec != "secure" {
+		t.Errorf("dnssec = %q, want %q", dnssec, "secure")
+	}
+}
+
+func TestOpen_Disk(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir+"/test.db", 100, 0, 0)
 	if err != nil {
-		t.Fatalf("Open error: %v", err)
+		t.Fatalf("Open(disk) error: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
-	// Exec
-	_, err = db.Exec("SELECT 1")
+	// Write something and verify it persists.
+	err = db.Badger.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte("test-key"), []byte("test-value"))
+	})
 	if err != nil {
-		t.Errorf("Exec error: %v", err)
+		t.Fatalf("Set error: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close error: %v", err)
 	}
 
-	// Begin
-	tx, err := db.Begin()
+	// Re-open and verify the data survived.
+	db2, err := Open(dir+"/test.db", 100, 0, 0)
 	if err != nil {
-		t.Fatalf("Begin error: %v", err)
+		t.Fatalf("Re-open error: %v", err)
 	}
-	_ = tx.Commit()
+	defer func() { _ = db2.Close() }()
+
+	err = db2.Badger.View(func(txn *badger.Txn) error {
+		item, e := txn.Get([]byte("test-key"))
+		if e != nil {
+			t.Errorf("Get after reopen: %v", e)
+			return nil
+		}
+		return item.Value(func(v []byte) error {
+			if string(v) != "test-value" {
+				t.Errorf("value = %q, want %q", v, "test-value")
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("View error: %v", err)
+	}
 }

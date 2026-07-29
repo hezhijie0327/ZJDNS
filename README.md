@@ -14,7 +14,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
 
-高性能递归 DNS 服务器，内置 DNS 防污染、SQLite 缓存、DNSSEC、全协议加密传输（TLS/QUIC/HTTPS/HTTP3/DTLS/(PQ)DNSCrypt/TLCP/DTLCP）及 KTLS 内核卸载。
+高性能递归 DNS 服务器，内置 DNS 防污染、BadgerDB 缓存、DNSSEC、全协议加密传输（TLS/QUIC/HTTPS/HTTP3/DTLS/(PQ)DNSCrypt/TLCP/DTLCP）及 KTLS 内核卸载。
 
 ## 快速开始
 
@@ -77,7 +77,7 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 - **TLS 隐私 Profile**：[RFC 8310](docs/rfc/rfc8310.txt) Strict/Opportunistic 模式可配
 
 ### 缓存与数据库
-基于 SQLite WAL + mmap 的统一数据库（[八表设计](docs/ARCHITECTURE.md#db-schema)），zstd 压缩存储，缓存命中 ~0.5ms。A/AAAA 记录按延迟探测排序。异步统计写入（non-blocking channel + 后台 goroutine）。懒惰过期 + 条数上限淘汰。
+基于 BadgerDB LSM-tree KV 存储（[键值布局](docs/ARCHITECTURE.md#db-schema)），zstd 压缩，缓存命中 ~0.1ms。A/AAAA 记录按延迟探测排序。异步统计写入（non-blocking channel + 后台 goroutine）。BadgerDB 原生 TTL + 条数上限淘汰。
 
 ### 规则集
 统一的 IP + 域名标签匹配引擎，上游可按标签分流、Zone 可按标签过滤：
@@ -187,8 +187,9 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 ./zjdns --dnsstamp --encode --proto doh \             # 编码为 sdns://
     --stamp-addr 9.9.9.9 --provider-name dns.quad9.net:443 --path /dns-query
 
-# SQL 查询（只读；加 --rw 允许写）
-./zjdns --sql cache.db "SELECT e.qname, e.rcode FROM entries e"
+# BadgerDB 键值浏览
+./zjdns --kv cache.db e:        # 列出所有缓存条目
+./zjdns --kv cache.db e: --drop # 清空缓存（确认后执行）
 
 # 探测上游能力
 ./zjdns --probe --pipeline    tcp://8.8.8.8:53       # [RFC 7766](docs/rfc/rfc7766.txt) 管线化
