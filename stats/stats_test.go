@@ -9,17 +9,26 @@ func TestCollector_Stats(t *testing.T) {
 	c.Record(&Request{Protocol: "udp", Result: "stale", Rcode: 0, ResponseTime: 10})
 
 	lines := c.Stats()
-	if len(lines) != 7 {
-		t.Fatalf("expected 7 lines, got %d: %v", len(lines), lines)
+	if len(lines) != 6 {
+		t.Fatalf("expected 6 lines, got %d: %v", len(lines), lines)
 	}
-	if !contains(lines[0], "total=3") || !contains(lines[0], "p50=") {
-		t.Errorf("line 0: %s", lines[0])
+	if !contains(lines[0], "p50=5ms p95=10ms p99=10ms") {
+		t.Errorf("line 0 (latency): %s", lines[0])
 	}
-	if !contains(lines[1], "hit=33.3%(1)") {
-		t.Errorf("line 1: %s", lines[1])
+	if !contains(lines[1], "hit=1(33.3%)") {
+		t.Errorf("line 1 (results): %s", lines[1])
 	}
-	if !contains(lines[3], "noerr=2") || !contains(lines[3], "nx=1") {
-		t.Errorf("line 3 (rcode): %s", lines[3])
+	if !contains(lines[2], "noerr=2(66.7%)") || !contains(lines[2], "nx=1(33.3%)") {
+		t.Errorf("line 2 (rcodes): %s", lines[2])
+	}
+	if !contains(lines[3], "udp=2(66.7%)") || !contains(lines[3], "tcp=1(33.3%)") {
+		t.Errorf("line 3 (protocols): %s", lines[3])
+	}
+	if !contains(lines[4], "secure=0(0.0%)") || !contains(lines[4], "insecure=0(0.0%)") {
+		t.Errorf("line 4 (dnssec): %s", lines[4])
+	}
+	if !contains(lines[5], "poisoned=0(0.0%)") {
+		t.Errorf("line 5 (poisoned): %s", lines[5])
 	}
 }
 

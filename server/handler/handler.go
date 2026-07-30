@@ -156,6 +156,11 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 		h.stats.Record(&stats.Request{Result: "error", Protocol: protocol, Rcode: dns.RcodeServerFailure, ResponseTime: ElapsedMS(qctx.StartTime)})
 		return msg
 	}
+	// BADCOOKIE responses are short-circuited by the EDNS middleware before
+	// any stats-recording middleware; record them here.
+	if qctx.Res != nil && qctx.Res.Rcode == dns.RcodeBadCookie {
+		h.stats.Record(&stats.Request{Result: "badcookie", Protocol: protocol, Rcode: dns.RcodeBadCookie, ResponseTime: ElapsedMS(qctx.StartTime)})
+	}
 
 	if qctx.Res != nil && log.IsDebug() {
 		qname := qctx.Qname
