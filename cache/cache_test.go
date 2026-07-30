@@ -204,65 +204,6 @@ func TestClose(t *testing.T) {
 	_ = mc.Close()
 }
 
-func TestStats_InMemoryRecordAndRead(t *testing.T) {
-	db2, _ := database.Open("", nil)
-	mc := New(db2)
-	defer func() { _ = mc.Close() }()
-
-	for range 50 {
-		mc.RecordRequest(&RequestRecord{
-			Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
-			Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess,
-		})
-	}
-	for range 30 {
-		mc.RecordRequest(&RequestRecord{
-			Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
-			Protocol: "tcp", Result: "miss", Rcode: dns.RcodeNameError,
-		})
-	}
-
-	stats := mc.Stats()
-	if len(stats) == 0 {
-		t.Fatal("Stats() returned empty")
-	}
-
-	// Verify total is 80.
-	found := false
-	for _, s := range stats {
-		if s[:5] == "total" {
-			found = true
-			if !contains(s, "80") {
-				t.Errorf("expected total=80, got %s", s)
-			}
-			break
-		}
-	}
-	if !found {
-		t.Error("missing total line in stats")
-	}
-}
-
-func TestStats_NilSafety(t *testing.T) {
-	c := &Cache{}
-	c.RecordRequest(&RequestRecord{
-		Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
-		Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess,
-	})
-	if s := c.Stats(); s != nil {
-		t.Errorf("Stats() with nil statsMap should return nil, got %v", s)
-	}
-}
-
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
 func TestEntry_IsExpired(t *testing.T) {
 	e := &Entry{Timestamp: time.Now().Unix() - 100, TTL: 10}
 	if !e.IsExpired() {
@@ -420,42 +361,4 @@ func TestProcessRecords_NoDNSSEC(t *testing.T) {
 	if result[0].Header().TTL != 10 {
 		t.Errorf("TTL = %d, want 10", result[0].Header().TTL)
 	}
-}
-
-func TestStats_ParseKey(t *testing.T) {
-	key := statsKey(20000, "hit", "udp", 0, "insecure", false)
-	result, protocol, rcode, dnssec, poisoned := parseStatsKey(key)
-	if result != "hit" {
-		t.Errorf("result = %q, want hit", result)
-	}
-	if protocol != "udp" {
-		t.Errorf("protocol = %q, want udp", protocol)
-	}
-	if rcode != 0 {
-		t.Errorf("rcode = %d, want 0", rcode)
-	}
-	if dnssec != "insecure" {
-		t.Errorf("dnssec = %q, want insecure", dnssec)
-	}
-	if poisoned {
-		t.Error("poisoned should be false")
-	}
-}
-
-func TestStats_ParseKeyPoisoned(t *testing.T) {
-	key := statsKey(19000, "error", "tcp", 2, "", true)
-	_, _, _, _, poisoned := parseStatsKey(key)
-	if !poisoned {
-		t.Error("poisoned should be true")
-	}
-}
-
-func TestStats_RecordRequestNil(t *testing.T) {
-	db, _ := database.Open("", nil)
-	c := New(db)
-	defer func() { _ = c.Close() }()
-	// nil record should not panic.
-	c.RecordRequest(nil)
-	// empty record should not panic.
-	c.RecordRequest(&RequestRecord{})
 }

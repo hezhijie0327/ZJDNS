@@ -11,6 +11,7 @@ import (
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
 	"zjdns/server/resolver/dnssec"
+	"zjdns/stats"
 
 	"codeberg.org/miekg/dns"
 )
@@ -21,6 +22,7 @@ import (
 // On resolution errors it attempts a stale-cache fallback.
 type CacheStore struct {
 	store    cache.Store
+	stats    *stats.Collector
 	prober   handler.LatencyProber
 	resolver handler.Resolver
 }
@@ -95,7 +97,7 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	}
 
 	// Cache population.
-	var entryID int64
+	var _ int64
 	if cacheable {
 		// RFC 4035 §5.3.3: cap TTL of authenticated RRsets.
 		if validated {
@@ -103,18 +105,11 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 		}
 
 		log.Debugf("CACHE: populating cache for %s", qname)
-		entryID = m.store.Set(qname, qtype, qclass, ecsOpt, dnssecOK, qr.Answer, qr.Authority, qr.Additional, validated)
+		_ = m.store.Set(qname, qtype, qclass, ecsOpt, dnssecOK, qr.Answer, qr.Authority, qr.Additional, validated)
 	}
 
 	// Request log.
-	m.store.RecordRequest(&cache.RequestRecord{
-		Qname: qname, Qtype: qtype, Qclass: qclass,
-		ECS: ecsOpt, DNSSECOK: dnssecOK,
-		Protocol: qctx.Protocol, Result: "miss", ResponseTime: handler.ElapsedMS(qctx.StartTime),
-		Rcode: dns.RcodeSuccess, Server: qr.Server, Poisoned: qr.Poisoned,
-		DNSSECStatus: dnssecStatus,
-		EntryID:      entryID,
-	})
+	m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "miss", ResponseTime: handler.ElapsedMS(qctx.StartTime), Rcode: dns.RcodeSuccess, Poisoned: qr.Poisoned, DNSSECStatus: dnssecStatus})
 
 	// Latency probe.
 	if m.prober != nil {
@@ -153,13 +148,7 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 	if entry, found, isExpired := m.store.Get(qname, qtype, qclass, ecsOpt, dnssecOK); found {
 		if !isExpired || entry.CanServeExpired(config.DefaultStaleMaxAge) {
 			log.Debugf("CACHE: serving cached result for %s, ttl_remaining=%d", qname, entry.RemainingTTL())
-			m.store.RecordRequest(&cache.RequestRecord{
-				Qname: qname, Qtype: qtype, Qclass: qclass,
-				ECS: ecsOpt, DNSSECOK: dnssecOK,
-				Protocol: qctx.Protocol, Result: "error", Rcode: dns.RcodeServerFailure,
-				ResponseTime: handler.ElapsedMS(qctx.StartTime),
-				EntryID:      entry.ID,
-			})
+			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "error", Rcode: dns.RcodeServerFailure, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
 			return m.buildFromCacheEntry(qctx, entry, isExpired)
 		}
 	}
@@ -187,13 +176,7 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 		}
 	}
 
-	m.store.RecordRequest(&cache.RequestRecord{
-		Qname: qname, Qtype: qtype, Qclass: qclass,
-		ECS: ecsOpt, DNSSECOK: dnssecOK,
-		Protocol: qctx.Protocol, Result: "error", Rcode: dns.RcodeServerFailure,
-		ResponseTime: handler.ElapsedMS(qctx.StartTime),
-		DNSSECStatus: dnssecStatus,
-	})
+	m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "error", Rcode: dns.RcodeServerFailure, ResponseTime: handler.ElapsedMS(qctx.StartTime), DNSSECStatus: dnssecStatus})
 
 	qctx.EDE = &dns.EDE{InfoCode: edeCode, ExtraText: ""}
 	return msg
@@ -202,9 +185,6 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 func (m *CacheStore) buildCIDRRefused(qctx *handler.QueryContext) *dns.Msg {
 	qname := qctx.Qname
 	qtype := qctx.Qtype
-	qclass := qctx.Req.Question[0].Header().Class
-	ecsOpt := qctx.ECSOpt
-	dnssecOK := qctx.ClientRequestedDNSSEC
 
 	log.Debugf("RESULT: %s %s | rcode=REFUSED, blocked by CIDR filtering", qname, dns.TypeToString[qtype])
 
@@ -213,12 +193,7 @@ func (m *CacheStore) buildCIDRRefused(qctx *handler.QueryContext) *dns.Msg {
 
 	qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorBlocked, ExtraText: ""}
 
-	m.store.RecordRequest(&cache.RequestRecord{
-		Qname: qname, Qtype: qtype, Qclass: qclass,
-		ECS: ecsOpt, DNSSECOK: dnssecOK,
-		Protocol: qctx.Protocol, Result: "blocked", Rcode: dns.RcodeRefused,
-		ResponseTime: handler.ElapsedMS(qctx.StartTime),
-	})
+	m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "blocked", Rcode: dns.RcodeRefused, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
 
 	return msg
 }

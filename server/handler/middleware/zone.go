@@ -7,6 +7,7 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/ttl"
 	"zjdns/server/handler"
+	"zjdns/stats"
 
 	"codeberg.org/miekg/dns"
 )
@@ -19,6 +20,7 @@ type Zone struct {
 	evaluator  handler.ZoneEvaluator
 	tagMatcher func(qname string, ip net.IP) map[string]bool
 	cache      cache.Store
+	stats      *stats.Collector
 }
 
 // Wrap implements Wrapper.
@@ -43,11 +45,7 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 
 		log.Debugf("ZONE: matched rule for %s -> domain=%s rcode=%d", qname, zoneResult.Domain, zoneResult.Rcode)
 
-		m.cache.RecordRequest(&cache.RequestRecord{
-			Qname: qname, Qtype: qtype, Qclass: qclass,
-			Protocol: qctx.Protocol, Result: "zone", Rcode: zoneResult.Rcode,
-			ResponseTime: handler.ElapsedMS(qctx.StartTime),
-		})
+		m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "zone", Rcode: zoneResult.Rcode, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
 
 		qctx.ZoneMatched = true
 		qctx.ZoneResult = &zoneResult

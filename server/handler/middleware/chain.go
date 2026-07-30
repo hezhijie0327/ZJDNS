@@ -9,6 +9,7 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/pending"
 	"zjdns/server/handler"
+	"zjdns/stats"
 
 	"codeberg.org/miekg/dns"
 	"golang.org/x/sync/errgroup"
@@ -40,6 +41,9 @@ type Dependencies struct {
 
 	// Optional features
 	DNS64 *dns64.Synthesizer
+
+	// Stats
+	Stats *stats.Collector
 
 	// Lifecycle
 	Closed           func() bool
@@ -100,6 +104,7 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	// Cache lookup: short-circuits on fresh/stale hit.
 	h = (&CacheLookup{
 		store:            deps.Cache,
+		stats:            deps.Stats,
 		closed:           deps.Closed,
 		prefetchCooldown: deps.PrefetchCooldown,
 		pendingRefreshes: deps.PendingRefrs,
@@ -121,6 +126,7 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 			evaluator:  deps.ZoneEvaluator,
 			tagMatcher: deps.TagMatcher,
 			cache:      deps.Cache,
+			stats:      deps.Stats,
 		}).Wrap(h)
 	}
 
@@ -130,6 +136,7 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	// Cache storage: runs after resolution, writes to cache + starts probes.
 	h = (&CacheStore{
 		store:    deps.Cache,
+		stats:    deps.Stats,
 		prober:   deps.Prober,
 		resolver: deps.Resolver,
 	}).Wrap(h)

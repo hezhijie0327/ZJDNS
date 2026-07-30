@@ -12,7 +12,6 @@ import (
 
 // ---------------------------------------------------------------------------
 // Wire encoding: raw DNS wire format (dns.Msg.Pack()).
-// BadgerDB applies block-level zstd compression at the SSTable layer.
 // ---------------------------------------------------------------------------
 
 // packRRs builds RRs from config, packs into a dns.Msg, and compresses.

@@ -12,6 +12,7 @@ import (
 	"zjdns/internal/pending"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
+	"zjdns/stats"
 
 	"codeberg.org/miekg/dns"
 	"golang.org/x/sync/errgroup"
@@ -24,6 +25,7 @@ import (
 //   - Miss or expired-and-cannot-serve: sets CacheEntry and delegates to next.
 type CacheLookup struct {
 	store            cache.Store
+	stats            *stats.Collector
 	closed           func() bool
 	prefetchCooldown *handler.PrefetchCooldown
 	pendingRefreshes *pending.Group[handler.PendingKey]
@@ -56,13 +58,7 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			qctx.Res = m.buildResponse(qctx, entry, false)
 			qctx.CacheServed = true
 
-			m.store.RecordRequest(&cache.RequestRecord{
-				Qname: qname, Qtype: qtype, Qclass: qclass,
-				ECS: ecsOpt, DNSSECOK: dnssecOK,
-				Protocol: qctx.Protocol, Result: "hit", Rcode: dns.RcodeSuccess,
-				ResponseTime: handler.ElapsedMS(qctx.StartTime),
-				EntryID:      entry.ID,
-			})
+			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "hit", Rcode: dns.RcodeSuccess, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
 
 			// Prefetch if TTL is below threshold.
 			if m.closed != nil && !m.closed() && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) &&
@@ -101,26 +97,14 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 						})
 					}
 				}
-				m.store.RecordRequest(&cache.RequestRecord{
-					Qname: qname, Qtype: qtype, Qclass: qclass,
-					ECS: ecsOpt, DNSSECOK: dnssecOK,
-					Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
-					ResponseTime: handler.ElapsedMS(qctx.StartTime),
-					EntryID:      entry.ID,
-				})
+				m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
 				return nil
 			}
 
 			// Default: try a quick foreground refresh, fall back to stale.
 			refreshed := m.closed != nil && !m.closed() && m.tryStartRefresh(qname, qtype, qclass, ecsOpt)
 			if !refreshed {
-				m.store.RecordRequest(&cache.RequestRecord{
-					Qname: qname, Qtype: qtype, Qclass: qclass,
-					ECS: ecsOpt, DNSSECOK: dnssecOK,
-					Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
-					ResponseTime: handler.ElapsedMS(qctx.StartTime),
-					EntryID:      entry.ID,
-				})
+				m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
 				return nil
 			}
 
@@ -185,32 +169,14 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			}
 			qctx.Res = msg
 			qctx.CacheServed = false
-			m.store.RecordRequest(&cache.RequestRecord{
-				Qname: qctx.Qname, Qtype: qctx.Qtype, Qclass: qctx.Req.Question[0].Header().Class,
-				ECS: ecsOpt, DNSSECOK: qctx.ClientRequestedDNSSEC,
-				Protocol: qctx.Protocol, Result: "miss", ResponseTime: handler.ElapsedMS(qctx.StartTime),
-				Rcode: dns.RcodeSuccess, Server: qr.Server, Poisoned: qr.Poisoned,
-				DNSSECStatus: dnssecStatus,
-			})
+			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "miss", ResponseTime: handler.ElapsedMS(qctx.StartTime), Rcode: dns.RcodeSuccess, Poisoned: qr.Poisoned, DNSSECStatus: dnssecStatus})
 		} else {
 			// Refresh failed — serve stale response.
-			m.store.RecordRequest(&cache.RequestRecord{
-				Qname: qname, Qtype: qtype, Qclass: qclass,
-				ECS: ecsOpt, DNSSECOK: qctx.ClientRequestedDNSSEC,
-				Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
-				ResponseTime: handler.ElapsedMS(qctx.StartTime),
-				EntryID:      entry.ID,
-			})
+			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
 		}
 	case <-timer.C:
 		// Stale response stays in qctx.Res.  Background refresh continues.
-		m.store.RecordRequest(&cache.RequestRecord{
-			Qname: qname, Qtype: qtype, Qclass: qclass,
-			ECS: ecsOpt, DNSSECOK: qctx.ClientRequestedDNSSEC,
-			Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
-			ResponseTime: handler.ElapsedMS(qctx.StartTime),
-			EntryID:      entry.ID,
-		})
+		m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
 		if m.refreshGroup != nil {
 			_ = m.refreshGroup.TryGo(func() error {
 				defer zdnsutil.HandlePanic("Cache refresh: background update")

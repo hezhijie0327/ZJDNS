@@ -8,25 +8,6 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// RequestRecord captures per-request metadata. Every request upserts into
-// query_stats (per-day aggregated counters). Non-hit results also insert a
-// row into query_log for the audit trail.
-type RequestRecord struct {
-	Qname        string // normalized FQDN
-	Qtype        uint16
-	Qclass       uint16
-	ECS          *config.ECSOption // for resolving entry_id FK; nil if none
-	DNSSECOK     bool              // for resolving entry_id FK
-	Protocol     string            // 'udp','tcp','tls','quic','https','http3','dtls','dnscrypt','dnscrypt-tcp','tlcp','http-tlcp','dtlcp'
-	Result       string            // 'hit','miss','stale','zone','error'
-	ResponseTime int64             // milliseconds
-	Rcode        int               // DNS response code
-	Server       string            // upstream server identifier
-	Poisoned     bool              // true when DNS poison was detected
-	DNSSECStatus string            // 'secure','insecure','bogus', or ''
-	EntryID      int64             // pre-resolved entry ID from Get()/Set(); 0 = no cache entry (zone/error)
-}
-
 // StoreReader is the read-only subset of Store.  Consumers that only need
 // cache lookups should depend on this interface rather than the full Store.
 type StoreReader interface {
@@ -40,7 +21,6 @@ type StoreReader interface {
 type StoreWriter interface {
 	Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
 		answer, authority, additional []dns.RR, validated bool) int64
-	RecordRequest(r *RequestRecord)
 	UpdateLatency(ip string, latencyMS int)
 }
 
@@ -48,7 +28,6 @@ type StoreWriter interface {
 type StoreLifecycle interface {
 	FlushDB(target string) (int64, error)
 	Clear() (int64, error)
-	Stats() []string
 	Close() error
 }
 

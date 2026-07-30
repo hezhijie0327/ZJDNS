@@ -7,7 +7,6 @@ import (
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
-	"zjdns/internal/lrumap"
 	"zjdns/internal/pool"
 	"zjdns/internal/ttl"
 
@@ -18,12 +17,9 @@ import (
 	"github.com/dgraph-io/badger/v4"
 )
 
-// Cache is a DNS response cache backed by a BadgerDB key-value store. It
-// implements the Store interface. Stats are stored in an in-memory LRU map
-// instead of BadgerDB — they are best-effort and reset on restart.
+// Cache is a DNS response cache backed by a BadgerDB key-value store.
 type Cache struct {
-	db       *database.DB
-	statsMap *lrumap.Map[string, *statsEntry]
+	db *database.DB
 }
 
 // ecsCandidate is a single ECS cache-key candidate used during fallback lookup.
@@ -50,10 +46,7 @@ func New(db *database.DB) *Cache {
 	if db == nil {
 		panic("cache: nil database")
 	}
-	return &Cache{
-		db:       db,
-		statsMap: lrumap.New[string, *statsEntry](statsMapCapacity),
-	}
+	return &Cache{db: db}
 }
 
 // Close closes the database.

@@ -27,6 +27,7 @@ import (
 	"zjdns/server/resolver/dnssec"
 	"zjdns/server/resolver/probe"
 	"zjdns/server/upstream"
+	"zjdns/stats"
 	"zjdns/zone"
 
 	"codeberg.org/miekg/dns"
@@ -90,6 +91,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	cacheStore := cache.New(db)
+	statsCollector := stats.New()
 	zoneEvaluator := zone.New()
 
 	ednsH, err := s.initEDNS(cfg)
@@ -98,7 +100,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("EDNS handler init: %w", err)
 	}
 
-	rulesetEngine, err := s.initZoneAndRulesets(cfg, cacheStore, zoneEvaluator, db)
+	rulesetEngine, err := s.initZoneAndRulesets(cfg, cacheStore, statsCollector, zoneEvaluator, db)
 	if err != nil {
 		cancel(err)
 		return nil, err
@@ -114,7 +116,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	s.warmUpConnections(cfg, queryClient)
 
-	h := s.initHandler(cfg, cacheStore, ednsH, zoneEvaluator, dnsResolver, rulesetEngine, cacheRefreshGroup, cacheRefreshCtx, backgroundCtx)
+	h := s.initHandler(cfg, cacheStore, statsCollector, ednsH, zoneEvaluator, dnsResolver, rulesetEngine, cacheRefreshGroup, cacheRefreshCtx, backgroundCtx)
 
 	s.handler = h
 
@@ -148,8 +150,8 @@ func (s *Server) initEDNS(cfg *config.ServerConfig) (*edns.Handler, error) {
 // initZoneAndRulesets loads zone-file rules and CIDR/domain matching rulesets
 // from config.  Returns the ruleset engine (nil if none configured) and any
 // fatal error from loading.
-func (s *Server) initZoneAndRulesets(cfg *config.ServerConfig, cacheStore cache.Store, zoneEvaluator *zone.Evaluator, db *database.DB) (*ruleset.Engine, error) {
-	wireZoneDynamicContent(cacheStore, cfg.Zone)
+func (s *Server) initZoneAndRulesets(cfg *config.ServerConfig, cacheStore cache.Store, statsCollector *stats.Collector, zoneEvaluator *zone.Evaluator, db *database.DB) (*ruleset.Engine, error) {
+	wireZoneDynamicContent(cacheStore, statsCollector, cfg.Zone)
 
 	if len(cfg.Zone) > 0 {
 		if err := zoneEvaluator.LoadRules(cfg.Zone); err != nil {
@@ -237,7 +239,7 @@ func (s *Server) warmUpConnections(cfg *config.ServerConfig, queryClient *upstre
 }
 
 // initHandler builds the middleware chain and returns the assembled handler.
-func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, ednsH *edns.Handler, zoneEvaluator *zone.Evaluator, dnsResolver *resolver.Resolver, rulesetEngine *ruleset.Engine, cacheRefreshGroup *errgroup.Group, cacheRefreshCtx, backgroundCtx context.Context) *handler.Handler {
+func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, statsCollector *stats.Collector, ednsH *edns.Handler, zoneEvaluator *zone.Evaluator, dnsResolver *resolver.Resolver, rulesetEngine *ruleset.Engine, cacheRefreshGroup *errgroup.Group, cacheRefreshCtx, backgroundCtx context.Context) *handler.Handler {
 	var prober handler.LatencyProber
 	if len(cfg.Server.Features.LatencyProbe) > 0 {
 		prober = probe.New(
@@ -271,6 +273,7 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 		RefreshGroup:     cacheRefreshGroup,
 		RefreshCtx:       cacheRefreshCtx,
 		Ctx:              ctx,
+		Stats:            statsCollector,
 		PrefetchCooldown: prefetchCooldown,
 	}
 
@@ -300,7 +303,7 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 	chain := middleware.AssembleChain(deps)
 
 	h := handler.NewHandler(
-		chain, ednsH, cacheStore, prober, dnsResolver,
+		chain, ednsH, cacheStore, statsCollector, prober, dnsResolver,
 		cacheRefreshGroup, prefetchCooldown, ctx,
 	)
 	isClosed = h.IsClosed

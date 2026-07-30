@@ -4,7 +4,9 @@ Detailed technical reference for ZJDNS. For working guidelines, see [CLAUDE.md](
 
 ## DB Schema
 
-The unified database (`database/`) uses BadgerDB v4 (LSM-tree key-value store) with 4 key prefixes. Stats are stored in-memory (LRU map), not in BadgerDB.
+BadgerDB (`database/`) stores only DNS response cache entries and latency probes.
+Zone rules (`zone/`), rulesets (`ruleset/`), and query stats (`stats/`) are all
+in-memory data structures — loaded from config at startup, O(1) lookups, no persistence.
 All numeric fields use binary BigEndian encoding (not hex), consistent with value encoding.
 
 | Prefix | Purpose | Key Pattern | Value |
@@ -22,7 +24,7 @@ All numeric fields use binary BigEndian encoding (not hex), consistent with valu
 - **Cache write path**: `Set()` packs wire format, writes entry + reverse index entries in a single Update transaction. Wire stored raw — BadgerDB block-level zstd handles compression.
 - **TTL**: BadgerDB native TTL via `Entry.WithTTL()` — entries auto-expire after `entryTTL + DefaultStaleMaxAge` seconds. Reverse index entries share the same TTL via `WithTTL`. No custom eviction code.
 - **Latency**: Stored under `e:ip:{ip}\x00_lat` with no TTL — overwritten on each probe, cleaned when `DropPrefix("e:")` runs. `LatencyLastProbe` checks key existence.
-- **Stats aggregation**: In-memory LRU map (5000 entries, ~7 days). `RecordRequest()` upserts directly — no channel, no goroutine, no BadgerDB persistence. `Stats()` iterates the map. Stats are best-effort and reset on restart.
+- **Stats aggregation**: `stats.Collector` — plain `map[string]*entry` + `sync.Mutex`. `Record()` upserts directly with lock. `Stats()` iterates the map. All-time counters, reset via `Reset()`. No channel, no goroutine, no persistence.
 - **Auto-increment IDs**: BadgerDB `Sequence` (bandwidth=1000) for entry IDs. Leases up to 1000 IDs in memory before a disk write.
 - **Zone queries**: `queryExact()` uses BadgerDB prefix scan on `z:0\x00{qname}\x00{qtype:2B}\x00{qclass:2B}\x00`. `queryWildcardBatch()` iterates up to 16 suffix candidates in a single View transaction.
 - **Reverse lookup**: Prefix scan on `e:ip:{ip}\x00` returns all cached domains for an IP. Expired entries filtered by `IsDeletedOrExpired()`.

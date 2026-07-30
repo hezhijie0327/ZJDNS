@@ -209,7 +209,8 @@ zjdns/
 ├── config/             ← ServerConfig, ProtocolSettings, UpstreamServer, defaults
 ├── edns/               ← EDNS handler (ECS, Cookie, EDE, Padding)
 ├── database/           ← Unified BadgerDB KV store (5 key prefixes, 1 ID sequence)
-├── cache/              ← DNS response cache (Store interface, BadgerDB-backed Cache, AsyncStatsWriter)
+├── cache/              ← DNS response cache (Store interface, BadgerDB-backed Cache)
+├── stats/              ← In-memory query statistics (Collector: map+mutex, no persistence)
 ├── ruleset/            ← CIDR + domain tag matching (binary radix trie)
 ├── zone/               ← DNS zone rules (Evaluator, zone-file import)
 ├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, lrumap, siphash, ipttl, dns64, dnscryptcrypto
@@ -226,7 +227,7 @@ zjdns/
 
 ```
 Foundation (zero zjdns imports):
-  internal/log, internal/pool, internal/ipdetect, internal/stamp, ...
+  internal/log, internal/pool, internal/ipdetect, internal/stamp, stats, ...
 
 Layer 1–2: internal/dnsutil, config, internal/latency
 
@@ -242,7 +243,9 @@ Top layer (wiring):
 ```
 
 Key rules:
-- Domain packages never import other domain packages (known exceptions: `edns→config`, `cache→database`, `cache→config`, `zone→database`, `zone→config`, `ruleset→database`, `ruleset→config`)
+- Domain packages never import other domain packages (known exceptions: `edns→config`, `cache→database`, `cache→config`, `zone→config`, `ruleset→config`)
+- Zone/ruleset are pure in-memory (no longer import database)
+- Stats is a zero-dependency foundation package
 - `internal/` packages never import domain packages (except `internal/latency→config`)
 - Type aliases: `edns.ECSOption = config.ECSOption`, `handler.Question = resolver.Question` (intentional — avoids conversion at boundaries)
 
@@ -292,9 +295,9 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `NoCache`, `Match`, `Proxy`, defense flags |
 | `ProtocolSettings` | `config` | Per-protocol port/endpoint: `UDP`, `TCP`, `TLS`, `QUIC`, `HTTPS`, `HTTP3`, `TLCP`, `DTLS`, `DTLCP`, `DNSCrypt` |
 | `DB` | `database` | Unified BadgerDB KV store; 5 key prefixes, 1 ID sequence |
-| `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/UpdateLatency/LatencyLastProbe/FlushDB/Clear/Stats/Close |
+| `Store` | `cache` | Interface: Get/Set/ReverseLookup/UpdateLatency/LatencyLastProbe/FlushDB/Clear/Close |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL |
-| `AsyncStatsWriter` | `cache` | Background goroutine: non-blocking channel → in-memory aggregation → WriteBatch |
+| `Collector` | `stats` | In-memory stats: map+mutex, Record()/Stats()/Reset() |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `QueryContext` | `server/handler` | Mutable struct carrying all request state through the middleware chain |
 | `QueryHandler` | `server/handler` | Interface: `ServeDNS(ctx, qctx) error` |

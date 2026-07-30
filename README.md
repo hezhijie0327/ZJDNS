@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.8.3-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.8.4-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -67,18 +67,6 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 - **DNS64**：[RFC 6147](docs/rfc/rfc6147.txt)，AAAA 无记录时从 A 合成（默认前缀 `64:ff9b::/96`）
 - **SOCKS5 代理**：每上游可选，TCP CONNECT + UDP ASSOCIATE（[RFC 1928](docs/rfc/rfc1928.txt)/[RFC 1929](docs/rfc/rfc1929.txt)）
 - **TLS 隐私 Profile**：[RFC 8310](docs/rfc/rfc8310.txt) Strict/Opportunistic 模式可配
-
-### 存储引擎
-
-基于 BadgerDB v4 LSM-tree KV 存储，5 个 key 前缀，纯二进制 BigEndian key 编码，block 级 zstd 压缩：
-
-| 前缀 | 用途 |
-|------|------|
-| `e:` | DNS 响应缓存（原生 `WithTTL` 过期） |
-| `e:ip:` | IP 反查索引 + 延迟探测结果（共享 `e:` 生命周期，`DropPrefix("e:")` 一并清理） |
-| `s:` | 每日聚合统计（异步 WriteBatch + 内存预聚合） |
-| `z:` | Zone 规则 |
-| `r:` | CIDR/域名规则集 |
 
 ### 规则集
 

@@ -1,0 +1,112 @@
+package cache
+
+import (
+	"errors"
+	"fmt"
+	"time"
+	"zjdns/config"
+	"zjdns/database"
+	"zjdns/internal/log"
+	"zjdns/internal/ttl"
+
+	"github.com/dgraph-io/badger/v4"
+)
+
+var errCacheClosed = errors.New("cache closed")
+
+// ReverseLookup returns all cached domain names mapped to the given IP address.
+func (c *Cache) ReverseLookup(ip string) []LookupResult {
+	if ip == "" || c.db.IsClosed() {
+		return nil //nolint:nilerr // key not found
+	}
+	var results []LookupResult
+	_ = c.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = database.EIPReversePrefix(ip)
+		opts.PrefetchValues = true
+		it := txn.NewIterator(opts)
+		defer it.Close()
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			if item.IsDeletedOrExpired() {
+				continue
+			}
+			var ttlVal int32
+			_ = item.Value(func(v []byte) error { ttlVal = database.DecodePtrMapValue(v); return nil })
+			k := string(item.Key())
+			nameOff := 0
+			for nameOff < len(k) && k[nameOff] != 0 {
+				nameOff++
+			}
+			nameOff += 1 + 8 + 1
+			if nameOff < len(k) {
+				results = append(results, LookupResult{Name: k[nameOff:], TTL: ttl.RemainingTTL(0, int(ttlVal), uint32(config.DefaultStaleTTL))})
+			}
+		}
+		return nil //nolint:nilerr // key not found
+	})
+	return results
+}
+
+// FlushDB truncates a table: "cache", "zone", or "ruleset".
+func (c *Cache) FlushDB(target string) (int64, error) {
+	if c.db.IsClosed() {
+		return 0, errCacheClosed
+	}
+	switch target {
+	case "cache":
+		if err := c.db.DropPrefix(database.EntryKeyPrefix()); err != nil {
+			return 0, fmt.Errorf("flushDB cache: %w", err)
+		}
+	case "zone":
+		if err := c.db.DropPrefix([]byte("z:")); err != nil {
+			return 0, fmt.Errorf("flushDB zone: %w", err)
+		}
+	case "ruleset":
+		if err := c.db.DropPrefix([]byte("r:")); err != nil {
+			return 0, fmt.Errorf("flushDB ruleset: %w", err)
+		}
+	default:
+		return 0, fmt.Errorf("flushDB: unknown target %q", target)
+	}
+	log.Infof("CACHE: flushDB %s: done", target)
+	return 0, nil
+}
+
+// Clear truncates cache entries.
+func (c *Cache) Clear() (int64, error) { return c.FlushDB("cache") }
+
+// UpdateLatency stores a latency measurement keyed by IP.
+func (c *Cache) UpdateLatency(ip string, latencyMS int) {
+	if latencyMS < 0 {
+		latencyMS = 0
+	}
+	if c.db.IsClosed() {
+		return
+	}
+	_ = c.db.Update(func(txn *badger.Txn) error {
+		e := badger.NewEntry(database.EIPLatencyKey(ip), database.EncodeLatencyValue(latencyMS)).
+			WithTTL(time.Duration(config.DefaultLatencyProbeMinInterval*2) * time.Second)
+		return txn.SetEntry(e)
+	})
+}
+
+// LatencyLastProbe returns the last probe time for an IP.
+func (c *Cache) LatencyLastProbe(ip string) (int64, bool) {
+	if c.db.IsClosed() {
+		return 0, false
+	}
+	var found bool
+	_ = c.db.View(func(txn *badger.Txn) error {
+		_, err := txn.Get(database.EIPLatencyKey(ip))
+		if err != nil {
+			return nil //nolint:nilerr // key not found
+		}
+		found = true
+		return nil //nolint:nilerr // key not found
+	})
+	if !found {
+		return 0, false
+	}
+	return log.NowUnix(), true
+}

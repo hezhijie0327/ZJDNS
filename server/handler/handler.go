@@ -15,6 +15,7 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server/resolver"
+	"zjdns/stats"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -45,6 +46,7 @@ type Handler struct {
 	chain             QueryHandler
 	edns              *edns.Handler
 	cache             cache.Store
+	stats             *stats.Collector
 	prober            LatencyProber
 	resolver          Resolver
 	cacheRefreshGroup *errgroup.Group
@@ -54,11 +56,12 @@ type Handler struct {
 
 // NewHandler creates a Handler from the assembled middleware chain and
 // essential dependencies.
-func NewHandler(chain QueryHandler, ednsH *edns.Handler, cacheStore cache.Store, prober LatencyProber, dnsResolver Resolver, refreshGroup *errgroup.Group, pfCooldown *PrefetchCooldown, ctx context.Context) *Handler {
+func NewHandler(chain QueryHandler, ednsH *edns.Handler, cacheStore cache.Store, statsCollector *stats.Collector, prober LatencyProber, dnsResolver Resolver, refreshGroup *errgroup.Group, pfCooldown *PrefetchCooldown, ctx context.Context) *Handler {
 	return &Handler{
 		chain:             chain,
 		edns:              ednsH,
 		cache:             cacheStore,
+		stats:             statsCollector,
 		prober:            prober,
 		resolver:          dnsResolver,
 		cacheRefreshGroup: refreshGroup,
@@ -150,10 +153,7 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	if err != nil && qctx.Res == nil {
 		msg := BuildResponseMsg(req)
 		msg.Rcode = dns.RcodeServerFailure
-		h.cache.RecordRequest(&cache.RequestRecord{
-			Result: "error", Protocol: protocol, Rcode: dns.RcodeServerFailure,
-			ResponseTime: ElapsedMS(qctx.StartTime),
-		})
+		h.stats.Record(&stats.Request{Result: "error", Protocol: protocol, Rcode: dns.RcodeServerFailure, ResponseTime: ElapsedMS(qctx.StartTime)})
 		return msg
 	}
 
