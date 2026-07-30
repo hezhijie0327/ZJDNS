@@ -575,7 +575,7 @@ dig @127.0.0.1 -p 15353 home.console.aliyun.com A
 
 # Stats + DB ops
 dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
-dig @127.0.0.1 -p 15353 zjdns.db.clear.stats CH TXT +short
+dig @127.0.0.1 -p 15353 zjdns.stats.clear CH TXT +short
 ./zjdns --kv cache.db q:
 ```
 

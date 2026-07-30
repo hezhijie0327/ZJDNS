@@ -48,7 +48,7 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		qname := qd.Header().Name
 		qtype := dns.RRToType(qd)
 
-		// Allow CHAOS class for ZJDNS introspection queries (stats, db.clear, etc.).
+		// Allow CHAOS class for ZJDNS introspection queries (stats, etc.).
 		// Other non-IN classes are rejected per RFC 6895 §3.1.
 		if qd.Header().Class != dns.ClassINET && qd.Header().Class != dns.ClassCHAOS {
 			log.Debugf("QUERY: rejecting non-IN/CHAOS class %d for %s with REFUSED", qd.Header().Class, qname)

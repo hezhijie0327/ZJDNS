@@ -158,7 +158,7 @@ type ZoneRule struct {
 	Additional []ZoneRecord `json:"additional,omitzero"`
 
 	// DynamicContent, when set, provides a function that returns TXT record
-	// values at query time (e.g. for stats / db clear operations).
+	// values at query time (e.g. for stats operations).
 	DynamicContent func() []string `json:"-"`
 }
 

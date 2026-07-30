@@ -60,20 +60,19 @@ func makeFlushFunc(op func() (int64, error), verb string) func() []string {
 }
 
 // wireZoneDynamicContent assigns dynamic content functions to zone rules that
-// reference .stats, .stats.cache, .stats.rcode, .stats.protocol, .stats.security,
-// .stats.errors, .db.clear, and related CHAOS names.
+// reference .stats, .cache, and related CHAOS names.
 func wireZoneDynamicContent(store cache.Store, statsCollector *stats.Collector, rules []config.ZoneRule) {
 	for i := range rules {
 		switch rules[i].Name {
 		case config.DefaultProjectName + ".stats":
 			rules[i].DynamicContent = statsCollector.Stats
-		case config.DefaultProjectName + ".db.clear.cache":
+		case config.DefaultProjectName + ".stats.clear":
+			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { statsCollector.Reset(); return int64(0), nil }, "reset")
+		case config.DefaultProjectName + ".cache.clear":
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) {
 				statsCollector.Reset()
 				return store.FlushDB("cache")
 			}, "flushed")
-		case config.DefaultProjectName + ".db.clear.stats":
-			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { statsCollector.Reset(); return int64(0), nil }, "reset")
 		}
 	}
 }

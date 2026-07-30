@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.8.9-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.8.10-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -193,9 +193,9 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 ## CHAOS 内省
 
 ```bash
-dig @127.0.0.1 -p 53 CHAOS TXT ZJDNS.stats             # 统计：命中率、协议分布、Rcode、DNSSEC
-dig @127.0.0.1 -p 53 CHAOS TXT ZJDNS.db.clear.cache    # 清空缓存（e: + e:ip:）
-dig @127.0.0.1 -p 53 CHAOS TXT ZJDNS.db.clear.stats    # 重置统计
+dig @127.0.0.1 -p 53 CHAOS TXT ZJDNS.stats          # 统计：命中率、协议分布、Rcode、DNSSEC
+dig @127.0.0.1 -p 53 CHAOS TXT ZJDNS.stats.clear    # 重置统计
+dig @127.0.0.1 -p 53 CHAOS TXT ZJDNS.cache.clear    # 清空缓存（e: + e:ip:）
 ```
 
 ## 构建与测试

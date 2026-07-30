@@ -27,7 +27,7 @@ All numeric fields use binary BigEndian encoding (not hex), consistent with valu
 - **Zone queries**: `Evaluator.Evaluate()` does in-memory exact-match lookup on `exact` map (O(1)), then wildcard suffix search on `wildcards` map (max 16 iterations). No BadgerDB — pure WORM maps.
 - **Ruleset matching**: `Engine.Match()` does CIDR via binary radix trie (O(128)) and domain suffix via map lookup (O(1)). All in-memory, loaded from config at startup.
 - **Reverse lookup**: Prefix scan on `e:ip:{ip}\x00` returns all cached domains for an IP. Expired entries filtered by `IsDeletedOrExpired()`.
-- **CHAOS endpoints**: `ZJDNS.stats` (read-only), `ZJDNS.db.clear.cache` (clear `e:` + `e:ip:`), `ZJDNS.db.clear.stats` (reset `s:`). Zone/ruleset clearing is not exposed.
+- **CHAOS endpoints**: `ZJDNS.stats` (read-only), `ZJDNS.cache.clear` (clear `e:` + `e:ip:`), `ZJDNS.stats.clear` (reset `s:`). Zone/ruleset clearing is not exposed.
 
 ### DB Configuration
 
