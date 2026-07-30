@@ -12,7 +12,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"github.com/dgraph-io/badger/v4"
 )
 
 type recordGroup struct {
@@ -26,7 +25,7 @@ type recordGroup struct {
 // ---------------------------------------------------------------------------
 
 // loadFile parses a zone file and inserts entries into BadgerDB.
-func (e *Evaluator) loadFile(txn *badger.Txn, parent *config.ZoneRule) (int, error) {
+func (e *Evaluator) loadFile(parent *config.ZoneRule) (int, error) {
 	//nolint:gosec // G304: user-configured file path
 	f, err := os.Open(parent.File)
 	if err != nil {
@@ -58,20 +57,14 @@ func (e *Evaluator) loadFile(txn *badger.Txn, parent *config.ZoneRule) (int, err
 				aw := packRRs(curRawName, g.records)
 				auth := packRRs(curRawName, curAuth)
 				addl := packRRs(curRawName, curAddl)
-				if err := e.insertRow(txn, curDomain, g.qtype, g.qclass, curRcode, aw, auth, addl, curTags, curWildcard); err != nil {
-					log.Warnf("ZONE: insert row failed: %v", err)
-				} else {
-					count++
-				}
+				e.store(curWildcard, exactKey(curDomain, g.qtype, g.qclass), zoneRule{matchTags: parseMatchTagsText(curTags), rcode: curRcode, answer: aw, authority: auth, additional: addl})
+				count++
 			}
 		} else if curRcode != dns.RcodeSuccess {
 			auth := packRRs(curRawName, curAuth)
 			addl := packRRs(curRawName, curAddl)
-			if err := e.insertRow(txn, curDomain, 0, 0, curRcode, nil, auth, addl, curTags, curWildcard); err != nil {
-				log.Warnf("ZONE: insert row failed: %v", err)
-			} else {
-				count++
-			}
+			e.store(curWildcard, exactKey(curDomain, 0, 0), zoneRule{matchTags: parseMatchTagsText(curTags), rcode: curRcode, authority: auth, additional: addl})
+			count++
 		}
 	}
 

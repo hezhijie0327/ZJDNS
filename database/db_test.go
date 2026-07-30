@@ -193,23 +193,6 @@ func TestLatencyValueRoundTrip(t *testing.T) {
 	}
 }
 
-func TestZoneValueRoundTrip(t *testing.T) {
-	val := EncodeZoneValue(3, []byte("ans"), []byte("auth"), []byte("add"))
-	rcode, ans, auth, add := DecodeZoneValue(val)
-	if rcode != 3 {
-		t.Errorf("rcode = %d, want 3", rcode)
-	}
-	if string(ans) != "ans" {
-		t.Errorf("answer = %q, want %q", ans, "ans")
-	}
-	if string(auth) != "auth" {
-		t.Errorf("authority = %q, want %q", auth, "auth")
-	}
-	if string(add) != "add" {
-		t.Errorf("additional = %q, want %q", add, "add")
-	}
-}
-
 func TestOpen_Disk(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(dir+"/test.db", nil)

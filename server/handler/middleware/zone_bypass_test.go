@@ -24,7 +24,7 @@ func TestZone_MatchNegation(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	engine := ruleset.New(db)
+	engine := ruleset.New()
 	if err := engine.LoadRules([]config.RuleSet{
 		{Tag: "admin", Type: "ip", Rule: []string{"127.0.0.1/32"}},
 	}); err != nil {
@@ -32,7 +32,7 @@ func TestZone_MatchNegation(t *testing.T) {
 	}
 
 	// No bypass_tags — use match=!admin on the zone rule.
-	evaluator := zone.New(db)
+	evaluator := zone.New()
 	if err := evaluator.LoadRules([]config.ZoneRule{
 		{Name: "example.com", Match: []string{"!admin"}, Rcode: dns.RcodeNameError},
 	}); err != nil {
@@ -87,7 +87,7 @@ func TestZone_MatchNegation_TwoIPs(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	engine := ruleset.New(db)
+	engine := ruleset.New()
 	if err := engine.LoadRules([]config.RuleSet{
 		{Tag: "net_gateway", Type: "ip", Rule: []string{
 			"10.192.0.1/32",
@@ -97,7 +97,7 @@ func TestZone_MatchNegation_TwoIPs(t *testing.T) {
 		t.Fatalf("LoadRules: %v", err)
 	}
 
-	evaluator := zone.New(db)
+	evaluator := zone.New()
 	if err := evaluator.LoadRules([]config.ZoneRule{
 		{Name: "example.com", Match: []string{"!net_gateway"}, Rcode: dns.RcodeNameError},
 	}); err != nil {

@@ -205,12 +205,8 @@ func TestClose(t *testing.T) {
 }
 
 func TestStats_InMemoryRecordAndRead(t *testing.T) {
-	db, err := database.Open("", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	mc := New(db)
+	db2, _ := database.Open("", nil)
+	mc := New(db2)
 	defer func() { _ = mc.Close() }()
 
 	for range 50 {
@@ -424,4 +420,42 @@ func TestProcessRecords_NoDNSSEC(t *testing.T) {
 	if result[0].Header().TTL != 10 {
 		t.Errorf("TTL = %d, want 10", result[0].Header().TTL)
 	}
+}
+
+func TestStats_ParseKey(t *testing.T) {
+	key := statsKey(20000, "hit", "udp", 0, "insecure", false)
+	result, protocol, rcode, dnssec, poisoned := parseStatsKey(key)
+	if result != "hit" {
+		t.Errorf("result = %q, want hit", result)
+	}
+	if protocol != "udp" {
+		t.Errorf("protocol = %q, want udp", protocol)
+	}
+	if rcode != 0 {
+		t.Errorf("rcode = %d, want 0", rcode)
+	}
+	if dnssec != "insecure" {
+		t.Errorf("dnssec = %q, want insecure", dnssec)
+	}
+	if poisoned {
+		t.Error("poisoned should be false")
+	}
+}
+
+func TestStats_ParseKeyPoisoned(t *testing.T) {
+	key := statsKey(19000, "error", "tcp", 2, "", true)
+	_, _, _, _, poisoned := parseStatsKey(key)
+	if !poisoned {
+		t.Error("poisoned should be true")
+	}
+}
+
+func TestStats_RecordRequestNil(t *testing.T) {
+	db, _ := database.Open("", nil)
+	c := New(db)
+	defer func() { _ = c.Close() }()
+	// nil record should not panic.
+	c.RecordRequest(nil)
+	// empty record should not panic.
+	c.RecordRequest(&RequestRecord{})
 }

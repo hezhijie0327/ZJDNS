@@ -13,10 +13,8 @@ import (
 
 // Key prefix constants.
 const (
-	prefixEntry   = "e:"
-	eipPrefix     = "e:ip:"
-	prefixZone    = "z:"
-	prefixRuleSet = "r:"
+	prefixEntry = "e:"
+	eipPrefix   = "e:ip:"
 )
 
 // Sequence keys for auto-incrementing IDs via badger.Sequence.
@@ -122,105 +120,6 @@ func EIPLatencyKey(ip string) []byte {
 	return buf
 }
 
-// ZoneEntryKey builds a zone rule entry key.
-//
-//	Layout: z:{is_wildcard:1B}\x00{qname}\x00{qtype:2B BE}\x00{qclass:2B BE}\x00{match_tags}
-func ZoneEntryKey(isWildcard bool, qname string, qtype, qclass uint16, matchTags string) []byte {
-	w := byte('0')
-	if isWildcard {
-		w = '1'
-	}
-	totalLen := len(prefixZone) + 1 + 1 + len(qname) + 1 + 2 + 1 + 2 + 1 + len(matchTags)
-	buf := make([]byte, totalLen)
-	off := 0
-	off += copy(buf[off:], prefixZone)
-	buf[off] = w
-	off++
-	buf[off] = 0
-	off++
-	off += copy(buf[off:], qname)
-	buf[off] = 0
-	off++
-	binary.BigEndian.PutUint16(buf[off:], qtype)
-	off += 2
-	buf[off] = 0
-	off++
-	binary.BigEndian.PutUint16(buf[off:], qclass)
-	off += 2
-	buf[off] = 0
-	off++
-	copy(buf[off:], matchTags)
-	return buf
-}
-
-// ZoneExactPrefix returns the prefix for exact-match zone lookups.
-func ZoneExactPrefix(qname string, qtype, qclass uint16) []byte {
-	totalLen := 4 + len(qname) + 1 + 2 + 1 + 2 + 1
-	buf := make([]byte, totalLen)
-	off := 0
-	off += copy(buf[off:], "z:0\x00")
-	off += copy(buf[off:], qname)
-	buf[off] = 0
-	off++
-	binary.BigEndian.PutUint16(buf[off:], qtype)
-	off += 2
-	buf[off] = 0
-	off++
-	binary.BigEndian.PutUint16(buf[off:], qclass)
-	off += 2
-	buf[off] = 0
-	return buf
-}
-
-// ZoneWildcardPrefix returns the prefix for wildcard zone lookups on a suffix.
-func ZoneWildcardPrefix(suffix string) []byte {
-	buf := make([]byte, 4+len(suffix)+1)
-	off := copy(buf, "z:1\x00")
-	off += copy(buf[off:], suffix)
-	buf[off] = 0
-	return buf
-}
-
-// RuleSetKey builds a ruleset entry key.
-//
-//	Layout: r:{type}\x00{value}\x00{tag}
-func RuleSetKey(kind, value, tag string) []byte {
-	totalLen := len(prefixRuleSet) + len(kind) + 1 + len(value) + 1 + len(tag)
-	buf := make([]byte, totalLen)
-	off := 0
-	off += copy(buf[off:], prefixRuleSet)
-	off += copy(buf[off:], kind)
-	buf[off] = 0
-	off++
-	off += copy(buf[off:], value)
-	buf[off] = 0
-	off++
-	copy(buf[off:], tag)
-	return buf
-}
-
-// RuleSetTypePrefix returns the prefix for all rules of a given type.
-func RuleSetTypePrefix(kind string) []byte {
-	buf := make([]byte, len(prefixRuleSet)+len(kind)+1)
-	off := copy(buf, prefixRuleSet)
-	off += copy(buf[off:], kind)
-	buf[off] = 0
-	return buf
-}
-
-// RuleSetTypeValuePrefix returns the prefix for domain rule lookups.
-func RuleSetTypeValuePrefix(kind, value string) []byte {
-	buf := make([]byte, len(prefixRuleSet)+len(kind)+1+len(value)+1)
-	off := 0
-	off += copy(buf[off:], prefixRuleSet)
-	off += copy(buf[off:], kind)
-	buf[off] = 0
-	off++
-	off += copy(buf[off:], value)
-	buf[off] = 0
-	return buf
-}
-
 // ── Value Encoding ────────────────────────────────────────────────────────────
 
 // EncodeEntryValue packs cache entry metadata + wire format.
@@ -288,62 +187,7 @@ func DecodeLatencyValue(data []byte) (latencyMS int) {
 	return latencyMS
 }
 
-// EncodeZoneValue packs zone rule response data.
-//
-//	Layout: [0:2]rcode uint16 BE, then 3× length-prefixed blobs (uint32 LE len + data)
-func EncodeZoneValue(rcode int, answer, authority, additional []byte) []byte {
-	size := 2 + 4 + len(answer) + 4 + len(authority) + 4 + len(additional)
-	buf := make([]byte, size)
-	if rcode < 0 {
-		rcode = 0
-	}
-	if rcode > math.MaxUint16 {
-		rcode = math.MaxUint16
-	}
-	binary.BigEndian.PutUint16(buf[0:2], uint16(rcode))
-	off := 2
-	off = putBytesLE(buf, off, answer)
-	off = putBytesLE(buf, off, authority)
-	_ = putBytesLE(buf, off, additional)
-	return buf
-}
-
-// DecodeZoneValue unpacks a zone value.
-func DecodeZoneValue(data []byte) (rcode int, answer, authority, additional []byte) {
-	if len(data) < 2 {
-		return 0, nil, nil, nil
-	}
-	rcode = int(binary.BigEndian.Uint16(data[0:2]))
-	off := 2
-	answer, off = getBytesLE(data, off)
-	authority, off = getBytesLE(data, off)
-	additional, _ = getBytesLE(data, off)
-	return rcode, answer, authority, additional
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-func putBytesLE(buf []byte, off int, b []byte) int {
-	binary.LittleEndian.PutUint32(buf[off:off+4], uint32(len(b))) //nolint:gosec // G115: protocol-bounded value fits target type
-	off += 4
-	copy(buf[off:], b)
-	return off + len(b)
-}
-
-func getBytesLE(data []byte, off int) (b []byte, newOff int) {
-	if off+4 > len(data) {
-		return nil, off
-	}
-	n := int(binary.LittleEndian.Uint32(data[off : off+4]))
-	off += 4
-	if off+n > len(data) {
-		return nil, off
-	}
-	b = make([]byte, n)
-	copy(b, data[off:off+n])
-	return b, off + n
-}
-
 // UserMetaValidated returns the UserMeta byte for the validated flag.
 func UserMetaValidated(validated bool) byte {
 	if validated {

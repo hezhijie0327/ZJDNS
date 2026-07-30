@@ -3,17 +3,11 @@ package ruleset
 import (
 	"testing"
 	"zjdns/config"
-	"zjdns/database"
 )
 
 func testEngine(t *testing.T, rules []config.RuleSet) *Engine {
 	t.Helper()
-	db, err := database.Open("", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	e := New(db)
+	e := New()
 	if err := e.LoadRules(rules); err != nil {
 		t.Fatal(err)
 	}
@@ -151,3 +145,23 @@ func TestNew_InvalidPrefix(t *testing.T) {
 }
 
 // ── Match Cache ────────────────────────────────────────────────────────────────
+
+func TestEngine_UnifiedTags(t *testing.T) {
+	e := New()
+	err := e.LoadRules([]config.RuleSet{
+		{Tag: "corp", Type: "ip", Rule: []string{"10.0.0.0/8"}},
+		{Tag: "corp", Type: "domain", Rule: []string{"corp.com"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both IP and domain rules share the same tag registry.
+	matched, exists := e.MatchIP("10.1.2.3", "corp")
+	if !matched || !exists {
+		t.Error("IP rule for corp should match")
+	}
+	tags := e.Match("www.corp.com.", "8.8.8.8")
+	if !tags["corp"] {
+		t.Error("domain rule for corp should match")
+	}
+}

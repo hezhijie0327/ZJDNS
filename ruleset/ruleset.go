@@ -1,6 +1,7 @@
 // Package ruleset provides tag-based matching for client IP (CIDR) and query
-// domain (suffix). Both match types are backed by BadgerDB for consistent
-// querying and persistence. Rules are loaded at startup from config.
+// domain (suffix). IP rules use a binary radix trie O(128); domain rules use a
+// suffix map O(1). Both share a single tag registry. All data is in-memory,
+// loaded from config at startup.
 package ruleset
 
 import (
@@ -8,173 +9,94 @@ import (
 	"os"
 	"strings"
 	"zjdns/config"
-	"zjdns/database"
 	"zjdns/internal/log"
-
-	"github.com/dgraph-io/badger/v4"
 )
 
 // Engine matches queries against rule sets to produce tags.
-// IP rules use an in-memory binary radix trie for O(128) matching.
-// Domain rules use BadgerDB prefix scans.
 type Engine struct {
-	db     *database.DB
-	tags   map[string]bool
-	ipTrie ipTrie
+	tags        map[string]bool     // all registered tags
+	domainRules map[string][]string // suffix → matching tags
+	ipTrie      ipTrie              // CIDR → tags
 }
 
-// New creates a ruleset Engine backed by the given database.
-func New(db *database.DB) *Engine {
-	if db == nil {
-		panic("ruleset: nil database")
-	}
+// New creates a ruleset Engine.
+func New() *Engine {
 	return &Engine{
-		db:   db,
-		tags: make(map[string]bool),
+		tags:        make(map[string]bool),
+		domainRules: make(map[string][]string),
 	}
 }
 
-// LoadRules stores RuleSet configurations into BadgerDB.
+// LoadRules loads RuleSet configurations into in-memory data structures.
 func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
-	// Clear existing rules.
-	if err := e.db.DropPrefix([]byte("r:")); err != nil {
-		return err
-	}
+	e.tags = make(map[string]bool)
+	e.domainRules = make(map[string][]string)
+	e.ipTrie.reset()
 
-	err := e.db.Update(func(txn *badger.Txn) error {
-		for _, rs := range rulesets {
-			for _, v := range rs.Rule {
-				if err := insertRule(txn, rs.Tag, rs.Type, v); err != nil {
+	for _, rs := range rulesets {
+		e.tags[rs.Tag] = true
+		for _, v := range rs.Rule {
+			if err := e.insertRule(rs.Tag, rs.Type, v); err != nil {
+				return err
+			}
+		}
+		if rs.File != "" {
+			lines, err := readDomainFile(rs.File)
+			if err != nil {
+				return err
+			}
+			for _, line := range lines {
+				if err := e.insertRule(rs.Tag, rs.Type, line); err != nil {
 					return err
 				}
 			}
-			if rs.File != "" {
-				lines, err := readDomainFile(rs.File)
-				if err != nil {
-					return err
-				}
-				for _, line := range lines {
-					if err := insertRule(txn, rs.Tag, rs.Type, line); err != nil {
-						return err
-					}
-				}
-			}
-			e.tags[rs.Tag] = true
 		}
-		return nil
-	})
-	if err != nil {
-		return err
 	}
 
-	// Count loaded rules.
-	var n int
-	_ = e.db.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.Prefix = []byte("r:")
-		opts.PrefetchValues = false
-		it := txn.NewIterator(opts)
-		defer it.Close()
-		for it.Rewind(); it.Valid(); it.Next() {
-			n++
-		}
-		return nil
-	})
-	log.Infof("RULESET: %d rules loaded into %d tags", n, len(e.tags))
-
-	e.loadIPRules()
+	log.Infof("RULESET: %d tags loaded, %d domain suffixes", len(e.tags), len(e.domainRules))
 	return nil
 }
 
-// loadIPRules loads all CIDR rules from BadgerDB into the in-memory trie.
-func (e *Engine) loadIPRules() {
-	e.ipTrie.reset()
-	_ = e.db.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.Prefix = database.RuleSetTypePrefix("ip")
-		opts.PrefetchValues = false
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		for it.Rewind(); it.Valid(); it.Next() {
-			k := string(it.Item().Key())
-			// Key: r:ip\x00{value}\x00{tag}
-			parts := splitRuleSetKey(k)
-			if len(parts) < 3 {
-				continue
-			}
-			value, tag := parts[1], parts[2]
-			_, n, err := net.ParseCIDR(value)
-			if err != nil {
-				continue
-			}
-			e.ipTrie.insert(n, tag)
+func (e *Engine) insertRule(tag, typ, value string) error {
+	switch typ {
+	case "ip":
+		_, n, err := net.ParseCIDR(value)
+		if err != nil {
+			log.Warnf("RULESET: skipping invalid CIDR rule %s=%s: %v", tag, value, err)
+			return nil
 		}
-		return nil
-	})
-}
-
-// splitRuleSetKey splits a ruleset key "r:{type}\x00{value}\x00{tag}" into parts.
-func splitRuleSetKey(k string) []string {
-	// Skip the "r:" prefix.
-	if !strings.HasPrefix(k, "r:") {
-		return nil
+		e.ipTrie.insert(n, tag)
+	case "domain":
+		key := domainKey(value)
+		e.domainRules[key] = append(e.domainRules[key], tag)
 	}
-	rest := k[2:]
-	var parts []string
-	start := 0
-	for i := 0; i < len(rest); i++ {
-		if rest[i] == 0 {
-			parts = append(parts, rest[start:i])
-			start = i + 1
-		}
-	}
-	parts = append(parts, rest[start:])
-	return parts
+	return nil
 }
 
 // Match returns all tags that match the given query name and client IP.
 func (e *Engine) Match(qname, ip string) map[string]bool {
-	var tags map[string]bool
+	var result map[string]bool
 
-	// Domain: TLD+1 suffix lookup via BadgerDB prefix scan.
-	key := tldPlusOne(qname)
-	_ = e.db.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.Prefix = database.RuleSetTypeValuePrefix("domain", key)
-		opts.PrefetchValues = false
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		for it.Rewind(); it.Valid(); it.Next() {
-			k := string(it.Item().Key())
-			parts := splitRuleSetKey(k)
-			if len(parts) >= 3 {
-				tag := parts[2]
-				if tag != "" {
-					if tags == nil {
-						tags = make(map[string]bool)
-					}
-					tags[tag] = true
-				}
-			}
+	// Domain: O(1) suffix map lookup.
+	if tags := e.domainRules[tldPlusOne(qname)]; len(tags) > 0 {
+		result = make(map[string]bool, len(tags))
+		for _, t := range tags {
+			result[t] = true
 		}
-		return nil
-	})
+	}
 
-	// IP: binary radix trie — O(128) regardless of rule count.
+	// IP: binary radix trie O(128).
 	parsedIP := net.ParseIP(ip)
-	if parsedIP == nil {
-		return tags
-	}
-	for _, t := range e.ipTrie.match(parsedIP) {
-		if tags == nil {
-			tags = make(map[string]bool)
+	if parsedIP != nil {
+		for _, t := range e.ipTrie.match(parsedIP) {
+			if result == nil {
+				result = make(map[string]bool)
+			}
+			result[t] = true
 		}
-		tags[t] = true
 	}
 
-	return tags
+	return result
 }
 
 // HasIPTag reports whether a tag has CIDR rules for IP-based filtering.
@@ -212,23 +134,6 @@ func (e *Engine) MatchIP(ip, tag string) (matched, exists bool) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// insertRule validates and inserts a single ruleset entry into a transaction.
-func insertRule(txn *badger.Txn, tag, typ, value string) error {
-	if typ == "ip" {
-		if _, _, err := net.ParseCIDR(value); err != nil {
-			log.Warnf("RULESET: skipping invalid CIDR rule %s=%s: %v", tag, value, err)
-			return nil
-		}
-	}
-	entryKey := value
-	if typ == "domain" {
-		entryKey = domainKey(value)
-	}
-	key := database.RuleSetKey(typ, entryKey, tag)
-	return txn.Set(key, nil)
-}
-
-// readDomainFile reads a line-delimited domain file, skipping comments.
 func readDomainFile(path string) ([]string, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // G304: path from trusted config file
 	if err != nil {
@@ -246,14 +151,12 @@ func readDomainFile(path string) ([]string, error) {
 	return result, nil
 }
 
-// domainKey normalizes a domain pattern to its TLD+1 key.
 func domainKey(p string) string {
 	p = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(p)), ".")
 	p = strings.TrimPrefix(p, "*.")
 	return p
 }
 
-// tldPlusOne extracts the effective TLD+1 (registrable domain) for domain matching.
 func tldPlusOne(name string) string {
 	n := strings.TrimSuffix(strings.ToLower(name), ".")
 

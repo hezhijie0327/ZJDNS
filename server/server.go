@@ -90,7 +90,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	cacheStore := cache.New(db)
-	zoneEvaluator := zone.New(db)
+	zoneEvaluator := zone.New()
 
 	ednsH, err := s.initEDNS(cfg)
 	if err != nil {
@@ -159,7 +159,7 @@ func (s *Server) initZoneAndRulesets(cfg *config.ServerConfig, cacheStore cache.
 
 	var engine *ruleset.Engine
 	if len(cfg.RuleSet) > 0 {
-		engine = ruleset.New(db)
+		engine = ruleset.New()
 		if err := engine.LoadRules(cfg.RuleSet); err != nil {
 			return nil, fmt.Errorf("load ruleset: %w", err)
 		}
