@@ -7,6 +7,7 @@ import (
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 	"zjdns/internal/pool"
 	"zjdns/internal/ttl"
 
@@ -18,10 +19,11 @@ import (
 )
 
 // Cache is a DNS response cache backed by a BadgerDB key-value store. It
-// implements the Store interface.
+// implements the Store interface. Stats are stored in an in-memory LRU map
+// instead of BadgerDB — they are best-effort and reset on restart.
 type Cache struct {
-	db          *database.DB
-	asyncWriter *AsyncStatsWriter
+	db       *database.DB
+	statsMap *lrumap.Map[string, *statsEntry]
 }
 
 // ecsCandidate is a single ECS cache-key candidate used during fallback lookup.
@@ -49,21 +51,14 @@ func New(db *database.DB) *Cache {
 		panic("cache: nil database")
 	}
 	return &Cache{
-		db:          db,
-		asyncWriter: NewAsyncStatsWriter(db, config.DefaultAsyncStatsBufferSize),
+		db:       db,
+		statsMap: lrumap.New[string, *statsEntry](statsMapCapacity),
 	}
 }
 
-// Close shuts down the async stats writer and then closes the database.
+// Close closes the database.
 func (c *Cache) Close() error {
-	c.asyncWriter.Close()
 	return c.db.Close()
-}
-
-// Flush forces the async stats writer to write any buffered records immediately.
-// Primarily for tests that need to observe RecordRequest results synchronously.
-func (c *Cache) Flush() {
-	c.asyncWriter.Flush()
 }
 
 // ── Store interface ──────────────────────────────────────────────────────────

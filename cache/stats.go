@@ -1,52 +1,72 @@
 package cache
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 	"zjdns/internal/ttl"
 
-	"codeberg.org/miekg/dns/dnsutil"
 	"github.com/dgraph-io/badger/v4"
 )
 
+// statsEntry holds in-memory query_stats counters for a single composite key.
+type statsEntry struct {
+	count   int64
+	totalMS int64
+}
+
+const statsMapCapacity = 5000 // ~7 days of stats at ~500 unique keys/day
+
 var errCacheClosed = errors.New("cache closed")
 
-// RecordRequest logs a request outcome asynchronously. The record is queued
-// into a background writer goroutine that upserts into query_stats (per-day
-// aggregated counters) and, for non-hit results, inserts a row into query_log
-// for the audit trail. Hits are only in query_stats.
-//
-// When the async writer's channel is full the record is silently dropped —
-// stats are best-effort and must never block the query hot path.
-//
-// When the async writer is nil (e.g., in tests), RecordRequest falls back to
-// synchronous writes so callers can observe results immediately.
+// statsKey builds the in-memory aggregation key for query_stats.
+func statsKey(statDay int64, result, protocol string, rcode int, dnssecStatus string, poisoned bool) string {
+	// Compact format: "{day}|{result}|{protocol}|{rcode}|{dnssec}|{poisoned}"
+	poisonedByte := '0'
+	if poisoned {
+		poisonedByte = '1'
+	}
+	return fmt.Sprintf("%d|%s|%s|%d|%s|%c", statDay, result, protocol, rcode, dnssecStatus, poisonedByte)
+}
+
+// parseStatsKey reverses statsKey back into its components.
+// Key format: "{statDay}|{result}|{protocol}|{rcode}|{dnssec}|{poisoned}"
+func parseStatsKey(key string) (result, protocol string, rcode int, dnssec string, poisoned bool) {
+	parts := strings.SplitN(key, "|", 6)
+	if len(parts) < 6 {
+		return "", "", 0, "", false
+	}
+	result = parts[1]
+	protocol = parts[2]
+	rcode, _ = strconv.Atoi(parts[3])
+	dnssec = parts[4]
+	poisoned = parts[5] == "1"
+	return result, protocol, rcode, dnssec, poisoned
+}
+
+// RecordRequest upserts per-day aggregated stats counters into an in-memory
+// LRU map. Stats are best-effort — the LRU evicts old entries under memory
+// pressure, and concurrent updates to the same key may drop a rare increment.
 func (c *Cache) RecordRequest(r *RequestRecord) {
-	if r == nil {
+	if r == nil || c.statsMap == nil {
 		return
 	}
-	qname := dnsutil.Canonical(r.Qname)
-	if c.asyncWriter != nil {
-		rec := *r
-		rec.Qname = qname
-		c.asyncWriter.Record(&rec)
-		return
-	}
+	now := log.NowUnix()
+	key := statsKey(now/86400, r.Result, r.Protocol, r.Rcode, r.DNSSECStatus, r.Poisoned)
 
-	// Synchronous fallback when no async writer is configured.
-	if c.db.IsClosed() {
-		return
+	entry, _ := c.statsMap.Get(key)
+	if entry == nil {
+		entry = &statsEntry{}
 	}
-	_ = c.db.Update(func(txn *badger.Txn) error {
-		upsertQueryStats(txn, r.Result, r.Protocol, r.Rcode, r.DNSSECStatus, r.Poisoned, r.ResponseTime)
-
-		return nil
-	})
+	entry.count++
+	entry.totalMS += r.ResponseTime
+	c.statsMap.Set(key, entry)
 }
 
 // ReverseLookup returns all cached domain names mapped to the given IP address.
@@ -72,11 +92,9 @@ func (c *Cache) ReverseLookup(ip string) []LookupResult {
 			var ttlVal int32
 			_ = item.Value(func(v []byte) error {
 				ttlVal = database.DecodePtrMapValue(v)
-				return nil
+				return nil //nolint:nilerr // key not found is not a View-level error — report via found=false
 			})
-			// Extract name from key: p:{ip}\x00{entry_id:8B BE}\x00{name}
 			k := string(item.Key())
-			// Find first NUL after ip, then skip entryID (8B) + NUL (1B) = 9.
 			nameOff := 0
 			for nameOff < len(k) && k[nameOff] != 0 {
 				nameOff++
@@ -95,66 +113,51 @@ func (c *Cache) ReverseLookup(ip string) []LookupResult {
 	return results
 }
 
-// upsertQueryStats does a read-modify-write on a query_stats key within a
-// transaction. Called from both the async writer path and the sync fallback.
-func upsertQueryStats(txn *badger.Txn, result, protocol string, rcode int, dnssecStatus string, poisoned bool, responseTime int64) {
-	statDay := log.NowUnix() / 86400 // seconds per day
-	key := database.QueryStatsKey(statDay, result, protocol, rcode, dnssecStatus, poisoned)
-
-	var queryCount, totalMS int64
-	item, err := txn.Get(key)
-	if err == nil {
-		_ = item.Value(func(v []byte) error {
-			queryCount, totalMS = database.DecodeQueryStatsValue(v)
-			return nil
-		})
-	}
-	queryCount++
-	totalMS += responseTime
-	_ = txn.Set(key, database.EncodeQueryStatsValue(queryCount, totalMS))
-}
-
-// FlushDB truncates a single table: "stats" (query_stats), "cache" (entries),
-// "zone" (zone_entries), or "ruleset" (ruleset_entries).
-// Uses db.DropPrefix — NOTE: this stops all writes during the operation.
+// FlushDB truncates a single table: "cache" (entries), "zone" (zone_entries),
+// or "ruleset" (ruleset_entries). "stats" is no longer persisted — it's a no-op.
 func (c *Cache) FlushDB(target string) (int64, error) {
 	if c.db.IsClosed() {
 		return 0, errCacheClosed
 	}
-	var prefix []byte
 	switch target {
 	case "stats":
-		prefix = database.QueryStatsPrefix()
+		// Stats are in-memory only; just log and return.
+		log.Infof("CACHE: flushDB stats: in-memory LRU, no persistence to clear")
+		return 0, nil
 	case "cache":
-		prefix = database.EntryKeyPrefix()
+		if err := c.db.DropPrefix(database.EntryKeyPrefix()); err != nil {
+			return 0, fmt.Errorf("flushDB cache: %w", err)
+		}
 	case "zone":
-		prefix = []byte("z:")
+		if err := c.db.DropPrefix([]byte("z:")); err != nil {
+			return 0, fmt.Errorf("flushDB zone: %w", err)
+		}
 	case "ruleset":
-		prefix = []byte("r:")
+		if err := c.db.DropPrefix([]byte("r:")); err != nil {
+			return 0, fmt.Errorf("flushDB ruleset: %w", err)
+		}
 	default:
 		return 0, fmt.Errorf("flushDB: unknown target %q", target)
 	}
-	if err := c.db.DropPrefix(prefix); err != nil {
-		return 0, fmt.Errorf("flushDB %s: %w", target, err)
-	}
 	log.Infof("CACHE: flushDB %s: done", target)
-	return 0, nil // DropPrefix doesn't return count
+	return 0, nil
 }
 
-// Clear truncates cache entries and query_stats.
+// Clear truncates cache entries and resets in-memory stats.
 func (c *Cache) Clear() (int64, error) {
-	for _, target := range []string{"cache", "stats"} {
-		if _, err := c.FlushDB(target); err != nil {
-			return 0, err
-		}
+	if _, err := c.FlushDB("cache"); err != nil {
+		return 0, err
+	}
+	// Reset in-memory stats by creating a fresh map.
+	if c.statsMap != nil {
+		c.statsMap = lrumap.New[string, *statsEntry](statsMapCapacity)
 	}
 	return 0, nil
 }
 
-// Stats returns aggregated cache statistics as formatted TXT records.
-// Uses a single prefix scan over query_stats (~500 rows).
+// Stats returns aggregated cache statistics from the in-memory LRU map.
 func (c *Cache) Stats() []string {
-	if c.db.IsClosed() {
+	if c.statsMap == nil {
 		return nil
 	}
 
@@ -164,102 +167,89 @@ func (c *Cache) Stats() []string {
 	var secureCount, insecureCount, bogusCount, poisoned int64
 	var totalMS int64
 
-	_ = c.db.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.Prefix = database.QueryStatsPrefix()
-		opts.PrefetchValues = true
-		it := txn.NewIterator(opts)
-		defer it.Close()
+	c.statsMap.Range(func(key string, e *statsEntry) bool {
+		total += e.count
+		totalMS += e.totalMS
 
-		for it.Rewind(); it.Valid(); it.Next() {
-			_ = it.Item().Value(func(v []byte) error {
-				qc, tms := database.DecodeQueryStatsValue(v)
-				total += qc
-				totalMS += tms
-
-				k := string(it.Item().Key())
-				result, protocol, rcode, dnssec, isPoisoned := parseStatsKey(k)
-				if result == "" {
-					return nil
-				}
-
-				switch result {
-				case "hit":
-					hits += qc
-				case "miss":
-					misses += qc
-				case "stale":
-					stales += qc
-				case "zone":
-					zones += qc
-				case "error":
-					errCount += qc
-				case "blocked":
-					blockedCount += qc
-				case "badcookie":
-					badcookieCount += qc
-				}
-
-				switch protocol {
-				case "udp":
-					udp += qc
-				case "tcp":
-					tcp += qc
-				case "tls":
-					tls += qc
-				case "quic":
-					quic += qc
-				case "https":
-					https += qc
-				case "http3":
-					http3 += qc
-				case "dtls":
-					dtls += qc
-				case "dnscrypt":
-					dnscrypt += qc
-				case "dnscrypt-tcp":
-					dnscryptTCP += qc
-				case "tlcp":
-					tlcp += qc
-				case "http-tlcp":
-					httpTLCP += qc
-				case "dtlcp":
-					dtlcp += qc
-				}
-
-				switch rcode {
-				case 0:
-					noerr += qc
-				case 1:
-					formerr += qc
-				case 2:
-					servfail += qc
-				case 3:
-					nxdomain += qc
-				case 4:
-					notimp += qc
-				case 5:
-					refused += qc
-				default:
-					other += qc
-				}
-
-				switch dnssec {
-				case "secure":
-					secureCount += qc
-				case "insecure":
-					insecureCount += qc
-				case "bogus":
-					bogusCount += qc
-				}
-
-				if isPoisoned {
-					poisoned += qc
-				}
-				return nil
-			})
+		result, protocol, rcode, dnssec, isPoisoned := parseStatsKey(key)
+		if result == "" {
+			return true
 		}
-		return nil
+
+		switch result {
+		case "hit":
+			hits += e.count
+		case "miss":
+			misses += e.count
+		case "stale":
+			stales += e.count
+		case "zone":
+			zones += e.count
+		case "error":
+			errCount += e.count
+		case "blocked":
+			blockedCount += e.count
+		case "badcookie":
+			badcookieCount += e.count
+		}
+
+		switch protocol {
+		case "udp":
+			udp += e.count
+		case "tcp":
+			tcp += e.count
+		case "tls":
+			tls += e.count
+		case "quic":
+			quic += e.count
+		case "https":
+			https += e.count
+		case "http3":
+			http3 += e.count
+		case "dtls":
+			dtls += e.count
+		case "dnscrypt":
+			dnscrypt += e.count
+		case "dnscrypt-tcp":
+			dnscryptTCP += e.count
+		case "tlcp":
+			tlcp += e.count
+		case "http-tlcp":
+			httpTLCP += e.count
+		case "dtlcp":
+			dtlcp += e.count
+		}
+
+		switch rcode {
+		case 0:
+			noerr += e.count
+		case 1:
+			formerr += e.count
+		case 2:
+			servfail += e.count
+		case 3:
+			nxdomain += e.count
+		case 4:
+			notimp += e.count
+		case 5:
+			refused += e.count
+		default:
+			other += e.count
+		}
+
+		switch dnssec {
+		case "secure":
+			secureCount += e.count
+		case "insecure":
+			insecureCount += e.count
+		case "bogus":
+			bogusCount += e.count
+		}
+
+		if isPoisoned {
+			poisoned += e.count
+		}
+		return true
 	})
 
 	var avgMs float64
@@ -281,54 +271,7 @@ func (c *Cache) Stats() []string {
 	}
 }
 
-// parseStatsKey extracts fields from a query_stats key.
-// Format: s:{stat_day:8B BE}\x00{result}\x00{protocol}\x00{rcode:2B BE}\x00{dnssec}\x00{poisoned:1B}
-// Uses offset-based parsing to avoid ambiguity from 0x00 bytes inside binary rcode.
-func parseStatsKey(key string) (result, protocol string, rcode int, dnssec string, poisoned bool) {
-	// Skip "s:" (2) + stat_day (8) + NUL (1) = 11 bytes.
-	off := 11
-	if len(key) < off {
-		return "", "", 0, "", false
-	}
-	// Read result string until NUL.
-	result, off = readNulString(key, off)
-	// Read protocol string until NUL.
-	protocol, off = readNulString(key, off)
-	// Read rcode as 2 bytes BE.
-	if off+2 <= len(key) {
-		rcode = int(binary.BigEndian.Uint16([]byte(key[off : off+2])))
-		off += 2 + 1 // skip rcode + NUL
-	}
-	// Read dnssec string until NUL.
-	dnssec, off = readNulString(key, off)
-	// Read poisoned as 1 byte.
-	if off < len(key) {
-		poisoned = key[off] == '1'
-	}
-	return result, protocol, rcode, dnssec, poisoned
-}
-
-// readNulString reads a NUL-terminated string from key starting at off.
-// Returns the string (without NUL) and the next offset (after the NUL).
-func readNulString(key string, off int) (s string, nextOff int) {
-	if off >= len(key) {
-		return "", off
-	}
-	end := off
-	for end < len(key) && key[end] != 0 {
-		end++
-	}
-	s = key[off:end]
-	if end < len(key) {
-		end++ // skip NUL
-	}
-	nextOff = end
-	return s, nextOff
-}
-
 // UpdateLatency stores a latency measurement keyed by IP only.
-// Entries expire after 2× the minimum probe interval to prevent unbounded
-// accumulation of stale latency data.
 func (c *Cache) UpdateLatency(ip string, latencyMS int) {
 	if latencyMS < 0 {
 		latencyMS = 0
@@ -345,8 +288,7 @@ func (c *Cache) UpdateLatency(ip string, latencyMS int) {
 	})
 }
 
-// LatencyLastProbe returns the last probe time for an IP. If no latency
-// data exists for the IP, it returns (0, false).
+// LatencyLastProbe returns the last probe time for an IP.
 func (c *Cache) LatencyLastProbe(ip string) (int64, bool) {
 	if c.db.IsClosed() {
 		return 0, false

@@ -4,14 +4,13 @@ Detailed technical reference for ZJDNS. For working guidelines, see [CLAUDE.md](
 
 ## DB Schema
 
-The unified database (`database/`) uses BadgerDB v4 (LSM-tree key-value store) with 5 key prefixes.
+The unified database (`database/`) uses BadgerDB v4 (LSM-tree key-value store) with 4 key prefixes. Stats are stored in-memory (LRU map), not in BadgerDB.
 All numeric fields use binary BigEndian encoding (not hex), consistent with value encoding.
 
 | Prefix | Purpose | Key Pattern | Value |
 |--------|---------|-------------|-------|
 | `e:` | DNS response cache | `e:{qname}\x00{ecs_addr}\x00{ecsPrefix:2B}\x00{dnssec:1B}\x00{qtype:2B}\x00{qclass:2B}` | `[0:8]id [8:16]ts [16:20]ttl [20:]raw_wire` |
 | `e:ip:` | IP reverse index + latency | `e:ip:{ip}\x00{entryID:8B}\x00{name}` / `e:ip:{ip}\x00_lat` | reverse: `[0:4]ttl` / latency: `[0:2]latency_ms` |
-| `s:` | Per-day query stats | `s:{stat_day:8B}\x00{result}\x00{protocol}\x00{rcode:2B}\x00{dnssec}\x00{poisoned:1B}` | `[0:8]query_count [8:16]total_ms` |
 | `z:` | Zone rule entries | `z:{is_wildcard:1B}\x00{qname}\x00{qtype:2B}\x00{qclass:2B}\x00{match_tags}` | `[0:2]rcode` + 3× length-prefixed blobs |
 | `r:` | Ruleset entries | `r:{type}\x00{value}\x00{tag}` | empty (key existence check) |
 
@@ -23,12 +22,44 @@ All numeric fields use binary BigEndian encoding (not hex), consistent with valu
 - **Cache write path**: `Set()` packs wire format, writes entry + reverse index entries in a single Update transaction. Wire stored raw — BadgerDB block-level zstd handles compression.
 - **TTL**: BadgerDB native TTL via `Entry.WithTTL()` — entries auto-expire after `entryTTL + DefaultStaleMaxAge` seconds. Reverse index entries share the same TTL via `WithTTL`. No custom eviction code.
 - **Latency**: Stored under `e:ip:{ip}\x00_lat` with no TTL — overwritten on each probe, cleaned when `DropPrefix("e:")` runs. `LatencyLastProbe` checks key existence.
-- **Stats aggregation**: `Stats()` does a prefix scan over `s:` prefix (~500 rows) and aggregates in Go code. Async writer uses in-memory pre-aggregation + `WriteBatch`. Stats are best-effort.
+- **Stats aggregation**: In-memory LRU map (5000 entries, ~7 days). `RecordRequest()` upserts directly — no channel, no goroutine, no BadgerDB persistence. `Stats()` iterates the map. Stats are best-effort and reset on restart.
 - **Auto-increment IDs**: BadgerDB `Sequence` (bandwidth=1000) for entry IDs. Leases up to 1000 IDs in memory before a disk write.
 - **Zone queries**: `queryExact()` uses BadgerDB prefix scan on `z:0\x00{qname}\x00{qtype:2B}\x00{qclass:2B}\x00`. `queryWildcardBatch()` iterates up to 16 suffix candidates in a single View transaction.
 - **Reverse lookup**: Prefix scan on `e:ip:{ip}\x00` returns all cached domains for an IP. Expired entries filtered by `IsDeletedOrExpired()`.
 - **CHAOS endpoints**: `ZJDNS.stats` (read-only), `ZJDNS.db.clear.cache` (clear `e:` + `e:ip:`), `ZJDNS.db.clear.stats` (reset `s:`). Zone/ruleset clearing is not exposed.
 
+### DB Configuration
+
+The `database.Options` struct exposes 3 memory budget knobs. All other BadgerDB
+settings are hardcoded as correct for DNS cache workloads. Pass `nil` to
+`database.Open()` for full defaults.
+
+| Field | Default | BadgerDB Setting | Purpose |
+|---|---|---|---|
+| `MemTableSizeMB` | 4 | `WithMemTableSize` | Single memtable write buffer (MB) |
+| `BlockCacheSizeMB` | 4 | `WithBlockCacheSize` | SSTable block read cache (MB) |
+| `IndexCacheSizeMB` | 8 | `WithIndexCacheSize` | Bloom filter + table index cache (MB) |
+
+Hardcoded constants:
+`ValueThreshold=64KB`, `ValueLogFileSize=64MB`, `MaxLevels=7`,
+`BaseLevelSizeMB=4`, `NumMemtables=2`, `NumCompactors=2`,
+`NumLevelZeroTables=2`, `NumGoroutines=2`, `ZSTDCompressionLevel=3`,
+`NumVersionsToKeep=1`, `DetectConflicts=false`, `SyncWrites=false`,
+`Compression=ZSTD`, `CompactL0OnClose=true`, `BaseTableSize=1MB`,
+`ValueLogMaxEntries=100K`.
+
+Config JSON:
+
+```json
+{
+  "database": {
+    "db_path": "/var/lib/zjdns/cache.db",
+    "memtable_size_mb": 4,
+    "block_cache_size_mb": 4,
+    "index_cache_size_mb": 8
+  }
+}
+```
 
 ## Defense Mechanisms
 

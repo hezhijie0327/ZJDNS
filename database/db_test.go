@@ -7,7 +7,7 @@ import (
 )
 
 func TestOpen_Memory(t *testing.T) {
-	db, err := Open("", 0, 0, 0, 0, 0, 0, 0, 0)
+	db, err := Open("", nil)
 	if err != nil {
 		t.Fatalf("Open(:memory:, 0) error: %v", err)
 	}
@@ -21,7 +21,7 @@ func TestOpen_Memory(t *testing.T) {
 }
 
 func TestOpen_DefaultOpts(t *testing.T) {
-	db, err := Open("", 0, 0, 0, 0, 0, 0, 0, 0)
+	db, err := Open("", nil)
 	if err != nil {
 		t.Fatalf("Open with zero opts error: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestOpen_DefaultOpts(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	db, err := Open("", 0, 0, 0, 0, 0, 0, 0, 0)
+	db, err := Open("", nil)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestClose(t *testing.T) {
 }
 
 func TestClose_DoubleClose(t *testing.T) {
-	db, err := Open("", 0, 0, 0, 0, 0, 0, 0, 0)
+	db, err := Open("", nil)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestClose_DoubleClose(t *testing.T) {
 }
 
 func TestSequenceIDs(t *testing.T) {
-	db, err := Open("", 0, 0, 0, 0, 0, 0, 0, 0)
+	db, err := Open("", nil)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestSequenceIDs(t *testing.T) {
 }
 
 func TestKeyRoundTrip(t *testing.T) {
-	db, err := Open("", 0, 0, 0, 0, 0, 0, 0, 0)
+	db, err := Open("", nil)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestKeyRoundTrip(t *testing.T) {
 }
 
 func TestPtrMapKeyRoundTrip(t *testing.T) {
-	db, err := Open("", 0, 0, 0, 0, 0, 0, 0, 0)
+	db, err := Open("", nil)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -193,17 +193,6 @@ func TestLatencyValueRoundTrip(t *testing.T) {
 	}
 }
 
-func TestQueryStatsValueRoundTrip(t *testing.T) {
-	val := EncodeQueryStatsValue(10, 500)
-	count, ms := DecodeQueryStatsValue(val)
-	if count != 10 {
-		t.Errorf("count = %d, want 10", count)
-	}
-	if ms != 500 {
-		t.Errorf("ms = %d, want 500", ms)
-	}
-}
-
 func TestZoneValueRoundTrip(t *testing.T) {
 	val := EncodeZoneValue(3, []byte("ans"), []byte("auth"), []byte("add"))
 	rcode, ans, auth, add := DecodeZoneValue(val)
@@ -223,7 +212,7 @@ func TestZoneValueRoundTrip(t *testing.T) {
 
 func TestOpen_Disk(t *testing.T) {
 	dir := t.TempDir()
-	db, err := Open(dir+"/test.db", 0, 0, 0, 0, 0, 0, 0, 0)
+	db, err := Open(dir+"/test.db", nil)
 	if err != nil {
 		t.Fatalf("Open(disk, 0) error: %v", err)
 	}
@@ -241,7 +230,7 @@ func TestOpen_Disk(t *testing.T) {
 	}
 
 	// Re-open and verify the data survived.
-	db2, err := Open(dir+"/test.db", 0, 0, 0, 0, 0, 0, 0, 0)
+	db2, err := Open(dir+"/test.db", nil)
 	if err != nil {
 		t.Fatalf("Re-open error: %v", err)
 	}

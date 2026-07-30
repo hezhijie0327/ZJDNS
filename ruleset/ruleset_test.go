@@ -8,7 +8,7 @@ import (
 
 func testEngine(t *testing.T, rules []config.RuleSet) *Engine {
 	t.Helper()
-	db, err := database.Open("", 0, 0, 0, 0, 0, 0, 0, 0)
+	db, err := database.Open("", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

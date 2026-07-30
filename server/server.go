@@ -133,17 +133,11 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 // initDatabase opens the BadgerDB database at the configured path.
 func (s *Server) initDatabase(cfg *config.ServerConfig) (*database.DB, error) {
 	dbCfg := &cfg.Server.Features.Database
-	return database.Open(
-		dbCfg.DBPath,
-		dbCfg.MemTableSizeMB,
-		dbCfg.BlockCacheSizeMB,
-		dbCfg.IndexCacheSizeMB,
-		dbCfg.ValueThresholdBytes,
-		dbCfg.ValueLogFileSizeMB,
-		dbCfg.NumCompactors,
-		dbCfg.NumLevelZeroTables,
-		dbCfg.ZSTDCompressionLevel,
-	)
+	return database.Open(dbCfg.DBPath, &database.Options{
+		MemTableSizeMB:   dbCfg.MemTableSizeMB,
+		BlockCacheSizeMB: dbCfg.BlockCacheSizeMB,
+		IndexCacheSizeMB: dbCfg.IndexCacheSizeMB,
+	})
 }
 
 // initEDNS creates the EDNS handler and auto-detects ECS subnets.

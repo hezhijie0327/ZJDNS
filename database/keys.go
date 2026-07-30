@@ -13,11 +13,10 @@ import (
 
 // Key prefix constants.
 const (
-	prefixEntry      = "e:"
-	eipPrefix        = "e:ip:"
-	prefixQueryStats = "s:"
-	prefixZone       = "z:"
-	prefixRuleSet    = "r:"
+	prefixEntry   = "e:"
+	eipPrefix     = "e:ip:"
+	prefixZone    = "z:"
+	prefixRuleSet = "r:"
 )
 
 // Sequence keys for auto-incrementing IDs via badger.Sequence.
@@ -122,47 +121,6 @@ func EIPLatencyKey(ip string) []byte {
 	buf[off] = 't'
 	return buf
 }
-
-// QueryStatsKey builds a per-day aggregated stats key.
-//
-//	Layout: s:{stat_day:8B BE}\x00{result}\x00{protocol}\x00{rcode:2B BE}\x00{dnssec}\x00{poisoned:1B}
-func QueryStatsKey(statDay int64, result, protocol string, rcode int, dnssec string, poisoned bool) []byte {
-	poisonedByte := byte('0')
-	if poisoned {
-		poisonedByte = '1'
-	}
-	totalLen := len(prefixQueryStats) + 8 + 1 + len(result) + 1 + len(protocol) + 1 + 2 + 1 + len(dnssec) + 1 + 1
-	buf := make([]byte, totalLen)
-	off := 0
-	off += copy(buf[off:], prefixQueryStats)
-	binary.BigEndian.PutUint64(buf[off:], uint64(statDay)) //nolint:gosec // G115: protocol-bounded value fits target type
-	off += 8
-	buf[off] = 0
-	off++
-	off += copy(buf[off:], result)
-	buf[off] = 0
-	off++
-	off += copy(buf[off:], protocol)
-	buf[off] = 0
-	off++
-	if rcode < 0 {
-		rcode = 0
-	} else if rcode > math.MaxUint16 {
-		rcode = math.MaxUint16
-	}
-	binary.BigEndian.PutUint16(buf[off:], uint16(rcode))
-	off += 2
-	buf[off] = 0
-	off++
-	off += copy(buf[off:], dnssec)
-	buf[off] = 0
-	off++
-	buf[off] = poisonedByte
-	return buf
-}
-
-// QueryStatsPrefix returns the prefix for all query_stats keys.
-func QueryStatsPrefix() []byte { return []byte(prefixQueryStats) }
 
 // ZoneEntryKey builds a zone rule entry key.
 //
@@ -328,26 +286,6 @@ func DecodeLatencyValue(data []byte) (latencyMS int) {
 	}
 	latencyMS = int(binary.BigEndian.Uint16(data[0:2]))
 	return latencyMS
-}
-
-// EncodeQueryStatsValue packs aggregated stat counters.
-//
-//	Layout: [0:8]query_count int64 BE, [8:16]total_ms int64 BE
-func EncodeQueryStatsValue(queryCount, totalMS int64) []byte {
-	buf := make([]byte, 16)
-	binary.BigEndian.PutUint64(buf[0:8], uint64(queryCount)) //nolint:gosec // G115: stats counter
-	binary.BigEndian.PutUint64(buf[8:16], uint64(totalMS))   //nolint:gosec // G115: stats counter
-	return buf
-}
-
-// DecodeQueryStatsValue unpacks a stats value.
-func DecodeQueryStatsValue(data []byte) (queryCount, totalMS int64) {
-	if len(data) < 16 {
-		return 0, 0
-	}
-	queryCount = int64(binary.BigEndian.Uint64(data[0:8])) //nolint:gosec // G115: stats counter
-	totalMS = int64(binary.BigEndian.Uint64(data[8:16]))   //nolint:gosec // G115: stats counter
-	return queryCount, totalMS
 }
 
 // EncodeZoneValue packs zone rule response data.

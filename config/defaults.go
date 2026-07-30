@@ -33,14 +33,9 @@ const (
 // =============================================================================
 
 const (
-	DefaultBadgerMemTableSizeMB       = 8        // BadgerDB memtable size (write buffer)
-	DefaultBadgerBlockCacheSizeMB     = 8        // BadgerDB block cache size (read cache)
-	DefaultBadgerIndexCacheSizeMB     = 16       // BadgerDB index cache size (bloom filters + table indices)
-	DefaultBadgerNumCompactors        = 2        // BadgerDB compaction goroutines
-	DefaultBadgerNumLevelZeroTables   = 2        // BadgerDB L0 tables before compaction
-	DefaultBadgerZSTDCompressionLevel = 3        // BadgerDB zstd compression level (1=fast,3=balanced)
-	DefaultBadgerValueThreshold       = 64 << 10 // BadgerDB value inline threshold (64KB)
-	DefaultBadgerValueLogFileSizeMB   = 64       // BadgerDB vlog file size (64MB default)
+	DefaultBadgerMemTableSizeMB   = 4 // memtable write buffer (MB)
+	DefaultBadgerBlockCacheSizeMB = 4 // block cache for reads (MB)
+	DefaultBadgerIndexCacheSizeMB = 8 // bloom filters + table indices (MB)
 
 	DefaultTTL         = 10
 	DefaultStaleTTL    = 30
@@ -131,7 +126,6 @@ const (
 
 const (
 	DefaultAcceptRetryDelay      = 100 * time.Millisecond // DoT/DoQ accept retry sleep
-	DefaultAsyncFlushInterval    = 100 * time.Millisecond // async stats writer flush ticker
 	DefaultSweepInterval         = 5 * time.Minute        // periodic cleanup sweep
 	DefaultTCPWriteMuStaleCutoff = 2 * time.Minute        // stale TCP write mutex cutoff
 
@@ -156,8 +150,6 @@ const (
 
 	DefaultServerGoroutineLimit = 1024
 	DefaultMinConcurrencyLimit  = 8
-
-	DefaultAsyncStatsBufferSize = 64 // async stats writer channel capacity
 
 	DefaultTransportMax          = 64
 	DefaultQUICConfigCacheSize   = 128 // max cached QUIC configs (LRU)

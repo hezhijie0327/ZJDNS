@@ -14,7 +14,7 @@ import (
 )
 
 func testStore() *Cache {
-	db, err := database.Open("", 0, 0, 0, 0, 0, 0, 0, 0)
+	db, err := database.Open("", nil)
 	if err != nil {
 		panic(err)
 	}
@@ -204,8 +204,8 @@ func TestClose(t *testing.T) {
 	_ = mc.Close()
 }
 
-func TestAsyncWriter_RecordAndFlush(t *testing.T) {
-	db, err := database.Open("", 0, 0, 0, 0, 0, 0, 0, 0)
+func TestStats_InMemoryRecordAndRead(t *testing.T) {
+	db, err := database.Open("", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,32 +213,58 @@ func TestAsyncWriter_RecordAndFlush(t *testing.T) {
 	mc := New(db)
 	defer func() { _ = mc.Close() }()
 
-	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
-
-	mc.RecordRequest(&RequestRecord{
-		Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
-		Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess,
-	})
-	mc.Flush()
-}
-
-func TestAsyncWriter_CloseDrain(t *testing.T) {
-	db, err := database.Open("", 0, 0, 0, 0, 0, 0, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	mc := New(db)
-	for range 100 {
+	for range 50 {
 		mc.RecordRequest(&RequestRecord{
 			Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
 			Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess,
 		})
 	}
-	if err := mc.Close(); err != nil {
-		t.Errorf("Close: %v", err)
+	for range 30 {
+		mc.RecordRequest(&RequestRecord{
+			Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
+			Protocol: "tcp", Result: "miss", Rcode: dns.RcodeNameError,
+		})
 	}
+
+	stats := mc.Stats()
+	if len(stats) == 0 {
+		t.Fatal("Stats() returned empty")
+	}
+
+	// Verify total is 80.
+	found := false
+	for _, s := range stats {
+		if s[:5] == "total" {
+			found = true
+			if !contains(s, "80") {
+				t.Errorf("expected total=80, got %s", s)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("missing total line in stats")
+	}
+}
+
+func TestStats_NilSafety(t *testing.T) {
+	c := &Cache{}
+	c.RecordRequest(&RequestRecord{
+		Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
+		Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess,
+	})
+	if s := c.Stats(); s != nil {
+		t.Errorf("Stats() with nil statsMap should return nil, got %v", s)
+	}
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 func TestEntry_IsExpired(t *testing.T) {
@@ -308,7 +334,7 @@ func TestDiskPersistence(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 
-	db, err := database.Open(dbPath, 0, 0, 0, 0, 0, 0, 0, 0)
+	db, err := database.Open(dbPath, nil)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -318,7 +344,7 @@ func TestDiskPersistence(t *testing.T) {
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 	_ = mc.Close()
 
-	db2, err := database.Open(dbPath, 0, 0, 0, 0, 0, 0, 0, 0)
+	db2, err := database.Open(dbPath, nil)
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
@@ -356,7 +382,7 @@ func TestECSFallbackCandidates_Nil(t *testing.T) {
 }
 
 func BenchmarkStoreSetGet(b *testing.B) {
-	db, _ := database.Open("", 0, 0, 0, 0, 0, 0, 0, 0)
+	db, _ := database.Open("", nil)
 	mc := &Cache{db: db}
 	defer func() { _ = mc.Close() }()
 
@@ -369,7 +395,7 @@ func BenchmarkStoreSetGet(b *testing.B) {
 }
 
 func BenchmarkStoreParallel(b *testing.B) {
-	db, _ := database.Open("", 0, 0, 0, 0, 0, 0, 0, 0)
+	db, _ := database.Open("", nil)
 	mc := &Cache{db: db}
 	defer func() { _ = mc.Close() }()
 

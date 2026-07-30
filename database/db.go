@@ -26,52 +26,55 @@ type DB struct {
 	entrySeq *badger.Sequence
 }
 
+// Options configures BadgerDB memory usage. Zero fields use the small-device
+// defaults. Pass nil to Open for full defaults.
+//
+// Only memory budget knobs are exposed — everything else is hardcoded
+// in defaultDiskOptions() as correct for all DNS cache workloads.
+type Options struct {
+	MemTableSizeMB   int // memtable write buffer (MB), 0 = 4
+	BlockCacheSizeMB int // block cache for reads (MB), 0 = 4
+	IndexCacheSizeMB int // bloom filters + table indices (MB), 0 = 8
+}
+
+// Hardcoded BadgerDB tunings — correct for all DNS cache workloads.
+const (
+	valueThreshold     = 64 << 10 // 64KB: all DNS values fit inline in LSM tree
+	valueLogFileSizeMB = 64       // vlog file size (WAL-only since values are inline)
+	maxLevels          = 7        // max LSM levels (BadgerDB default); levels created lazily — small datasets stay small
+	baseLevelSizeMB    = 4        // LSM base level target (MB)
+	numMemtables       = 2        // concurrent memtables
+	numCompactors      = 2        // compaction goroutines
+	numLevelZeroTables = 2        // L0 tables before compaction triggers
+	numGoroutines      = 2        // Stream goroutines (rarely used in DNS)
+	zstdLevel          = 3        // zstd compression 1-3 (3=balanced)
+	baseTableSize      = 1 << 20  // 1MB SSTable (down from Badger default 2MB)
+	valueLogMaxEntries = 100000   // 100K per vlog (down from Badger default 1M)
+)
+
 // ErrDBClosed is returned when an operation is attempted on a closed database.
 var ErrDBClosed = errors.New("database: closed")
 
 // Open opens or creates the BadgerDB database at path. An empty path uses an
-// in-memory database. All size/count parameters use their config defaults when
-// zero/negative.
-func Open(path string, memTableSizeMB, blockCacheSizeMB, indexCacheSizeMB, valueThresholdBytes, valueLogFileSizeMB, numCompactors, numLevelZeroTables, zstdLevel int) (*DB, error) {
-	if memTableSizeMB <= 0 {
-		memTableSizeMB = config.DefaultBadgerMemTableSizeMB
+// in-memory database. A nil Options uses small-device defaults.
+func Open(path string, opt *Options) (*DB, error) {
+	if opt == nil {
+		opt = &Options{}
 	}
-	if blockCacheSizeMB <= 0 {
-		blockCacheSizeMB = config.DefaultBadgerBlockCacheSizeMB
-	}
-	if indexCacheSizeMB <= 0 {
-		indexCacheSizeMB = config.DefaultBadgerIndexCacheSizeMB
-	}
-	if numCompactors <= 0 {
-		numCompactors = config.DefaultBadgerNumCompactors
-	}
-	if numLevelZeroTables <= 0 {
-		numLevelZeroTables = config.DefaultBadgerNumLevelZeroTables
-	}
-	if valueThresholdBytes <= 0 {
-		valueThresholdBytes = config.DefaultBadgerValueThreshold
-	}
-	if valueLogFileSizeMB <= 0 {
-		valueLogFileSizeMB = config.DefaultBadgerValueLogFileSizeMB
-	}
-	if zstdLevel <= 0 || zstdLevel > 3 {
-		zstdLevel = config.DefaultBadgerZSTDCompressionLevel
-	}
+	opt.resolveDefaults()
 
-	var opts badger.Options
+	var bopts badger.Options
 	if path == "" {
-		opts = badger.DefaultOptions("").WithInMemory(true).WithLogger(nil)
+		bopts = badger.DefaultOptions("").WithInMemory(true).WithLogger(nil)
 	} else {
-		opts = defaultDiskOptions(path, memTableSizeMB, blockCacheSizeMB, indexCacheSizeMB, valueThresholdBytes, valueLogFileSizeMB, numCompactors, numLevelZeroTables, zstdLevel)
+		bopts = defaultDiskOptions(path, opt)
 	}
 
-	bdb, err := badger.Open(opts)
+	bdb, err := badger.Open(bopts)
 	if err != nil {
 		return nil, fmt.Errorf("badger open: %w", err)
 	}
 
-	// Initialize ID sequences. Bandwidth=1000 means up to 1000 IDs are
-	// leased in memory before a disk write is needed.
 	entrySeq, err := bdb.GetSequence([]byte(seqEntry), 1000)
 	if err != nil {
 		_ = bdb.Close()
@@ -92,27 +95,48 @@ func Open(path string, memTableSizeMB, blockCacheSizeMB, indexCacheSizeMB, value
 	return db, nil
 }
 
-// defaultDiskOptions returns BadgerDB options tuned for DNS cache workloads.
-// DNS values are small (~100-500B) and fit under ValueThreshold(64KB), so they
-// are stored inline in SSTables.  The vlog still receives WAL entries for every
-// write and must be periodically GC'd via RunValueLogGC.
-func defaultDiskOptions(path string, memTableSizeMB, blockCacheSizeMB, indexCacheSizeMB, valueThresholdBytes, valueLogFileSizeMB, numCompactors, numLevelZeroTables, zstdLevel int) badger.Options {
+// resolveDefaults fills zero-valued fields with config defaults.
+func (opt *Options) resolveDefaults() {
+	// Memory
+	if opt.MemTableSizeMB <= 0 {
+		opt.MemTableSizeMB = config.DefaultBadgerMemTableSizeMB
+	}
+	if opt.BlockCacheSizeMB <= 0 {
+		opt.BlockCacheSizeMB = config.DefaultBadgerBlockCacheSizeMB
+	}
+	if opt.IndexCacheSizeMB <= 0 {
+		opt.IndexCacheSizeMB = config.DefaultBadgerIndexCacheSizeMB
+	}
+}
+
+// defaultDiskOptions returns BadgerDB options tuned for DNS cache workloads on
+// small-memory / small-storage devices. Only memory budget knobs are exposed
+// via Options; everything else is hardcoded.
+func defaultDiskOptions(path string, opt *Options) badger.Options {
 	return badger.DefaultOptions(path).
-		WithNumVersionsToKeep(1).                              // No MVCC overhead
-		WithDetectConflicts(false).                            // No concurrent-key conflicts (upsert pattern)
-		WithSyncWrites(false).                                 // Cache is ephemeral; stats are best-effort
-		WithCompression(options.ZSTD).                         // Built-in zstd at SSTable level
-		WithZSTDCompressionLevel(zstdLevel).                   // Configurable 1-3 (fast→balanced)
-		WithValueThreshold(int64(valueThresholdBytes)).        // Value inline threshold; DNS values are small
-		WithValueLogFileSize(int64(valueLogFileSizeMB) << 20). // 0 = default 1GB; only matters if values exceed threshold
-		WithMemTableSize(int64(memTableSizeMB) << 20).         // Memtable write buffer
-		WithBlockCacheSize(int64(blockCacheSizeMB) << 20).     // Block cache for reads
-		WithIndexCacheSize(int64(indexCacheSizeMB) << 20).     // Bloom filters + table indices off-heap
-		WithNumCompactors(numCompactors).                      // Compaction parallelism
-		WithNumLevelZeroTables(numLevelZeroTables).            // L0 tables before compaction triggers
-		WithNumLevelZeroTablesStall(numLevelZeroTables * 2).   // Stall at 2× L0 tables
-		WithCompactL0OnClose(true).                            // Compact L0 on graceful shutdown
-		WithLogger(nil)                                        // Suppress BadgerDB's default logger
+		// Hardcoded — correct for all DNS cache workloads
+		WithNumVersionsToKeep(1).
+		WithDetectConflicts(false).
+		WithSyncWrites(false).
+		WithCompression(options.ZSTD).
+		WithZSTDCompressionLevel(zstdLevel).
+		WithCompactL0OnClose(true).
+		WithLogger(nil).
+		WithBaseTableSize(baseTableSize).
+		WithValueLogMaxEntries(valueLogMaxEntries).
+		WithValueThreshold(valueThreshold).
+		WithValueLogFileSize(valueLogFileSizeMB << 20).
+		WithNumGoroutines(numGoroutines).
+		WithNumMemtables(numMemtables).
+		WithMaxLevels(maxLevels).
+		WithBaseLevelSize(baseLevelSizeMB << 20).
+		WithNumCompactors(numCompactors).
+		WithNumLevelZeroTables(numLevelZeroTables).
+		WithNumLevelZeroTablesStall(numLevelZeroTables * 2).
+		// Memory (user-tunable)
+		WithMemTableSize(int64(opt.MemTableSizeMB) << 20).
+		WithBlockCacheSize(int64(opt.BlockCacheSizeMB) << 20).
+		WithIndexCacheSize(int64(opt.IndexCacheSizeMB) << 20)
 }
 
 // NextEntryID returns the next monotonic entry ID from the sequence.
@@ -166,8 +190,6 @@ func (db *DB) Close() error {
 		return nil
 	}
 	_ = db.entrySeq.Release()
-	// Best-effort vlog GC on shutdown — rewrites live WAL entries to SSTables
-	// and reclaims disk space for the next start.
 	_ = db.Badger.RunValueLogGC(0.5)
 	if err := db.Badger.Close(); err != nil {
 		log.Errorf("DB: BadgerDB close failed: %v", err)
