@@ -20,6 +20,24 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// captureUpstreamEDE extracts and stores the EDE option from an upstream
+// response for passthrough to downstream clients. Upstream resolvers attach
+// EDE codes (e.g. DNSSEC Bogus) to any rcode, so this is called once per
+// response before rcode-specific handling.
+func captureUpstreamEDE(lastEDE *atomic.Pointer[dns.EDE], resp *dns.Msg, serverAddr string) {
+	if resp == nil {
+		return
+	}
+	for _, rr := range resp.Pseudo {
+		if ede, ok := rr.(*dns.EDE); ok {
+			lastEDE.Store(ede)
+			log.Debugf("UPSTREAM: captured EDE %d (%s) from %s (rcode=%s)",
+				ede.InfoCode, dns.ExtendedErrorToString[ede.InfoCode], serverAddr, dns.RcodeToString[resp.Rcode])
+			break
+		}
+	}
+}
+
 func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *edns.ECSOption, servers []*config.UpstreamServer) QueryResult {
 	if len(servers) == 0 {
 		return QueryResult{Err: errors.New("no upstream servers")}
@@ -153,24 +171,6 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	}
 }
 
-// captureUpstreamEDE extracts and stores the EDE option from an upstream
-// response for passthrough to downstream clients. Upstream resolvers attach
-// EDE codes (e.g. DNSSEC Bogus) to any rcode, so this is called once per
-// response before rcode-specific handling.
-func captureUpstreamEDE(lastEDE *atomic.Pointer[dns.EDE], resp *dns.Msg, serverAddr string) {
-	if resp == nil {
-		return
-	}
-	for _, rr := range resp.Pseudo {
-		if ede, ok := rr.(*dns.EDE); ok {
-			lastEDE.Store(ede)
-			log.Debugf("UPSTREAM: captured EDE %d (%s) from %s (rcode=%s)",
-				ede.InfoCode, dns.ExtendedErrorToString[ede.InfoCode], serverAddr, dns.RcodeToString[resp.Rcode])
-			break
-		}
-	}
-}
-
 func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]dns.RR, bool) {
 	if r.crd == nil || len(matchTags) == 0 {
 		return records, false
@@ -263,7 +263,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 		ecsResponse := r.edns.ParseFromDNS(queryResult.Response)
 
 		select {
-		case resultChan <- QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Cacheable: !server.NoCache, ECS: ecsResponse, Server: serverDesc, UpstreamEDE: lastEDE.Load()}:
+		case resultChan <- QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Cacheable: !server.SkipCache, ECS: ecsResponse, Server: serverDesc, UpstreamEDE: lastEDE.Load()}:
 			remaining := activeConnections.Load() - 1
 			if remaining > 0 {
 				log.Debugf("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
@@ -281,7 +281,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 			Authority:   queryResult.Response.Ns,
 			Additional:  queryResult.Response.Extra,
 			Validated:   false,
-			Cacheable:   !server.NoCache,
+			Cacheable:   !server.SkipCache,
 			ECS:         r.edns.ParseFromDNS(queryResult.Response),
 			Server:      serverDesc,
 			UpstreamEDE: lastEDE.Load(),
@@ -300,7 +300,7 @@ func (r *Resolver) handleRecursiveQuery(groupCtx context.Context, server *config
 	defer recursiveCancel()
 
 	qr := r.cname.resolve(recursiveCtx, question, ecs)
-	qr.Cacheable = !server.NoCache
+	qr.Cacheable = !server.SkipCache
 	if qr.Err != nil {
 		return false
 	}

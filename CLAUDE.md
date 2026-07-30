@@ -10,6 +10,17 @@ When a multi-step task is interrupted, write progress to `HANDOVER.md` so the ne
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
+### 0. Audit Fixes Are All-or-Nothing
+
+**Every audit finding must be fixed. Severity is for scheduling, not skipping.**
+
+When fixing audit findings:
+- **CRITICAL, HIGH, MEDIUM, LOW — all must be fixed.** LOW is not a license to skip.
+- If a fix genuinely cannot be applied (API incompatibility, breaks tests, requires upstream changes), explain why explicitly and get confirmation before moving on.
+- Do not silently drop fixes between rounds. If a tool (linter, formatter) reverts a change, re-apply it. Keep re-applying until it sticks.
+- After each batch, verify every finding from the audit report is still present in the code. If something went missing, find it and fix it again.
+- **No TODO comments as a substitute for fixing.** If it's in the audit report, fix it now.
+
 ### 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
@@ -193,7 +204,7 @@ Key dependencies: `codeberg.org/miekg/dns` (DNS), `github.com/quic-go/quic-go` (
 - No rate limiting or per-IP connection limits. No `Get`/`Mgr`/`Manager`/`Handler` prefixes.
 - No Hungarian notation, no `snake_case`/`UPPER_SNAKE_CASE`. Use `any` not `interface{}`.
 - No `server/` sub-package importing `server/` parent (except `handler/middleware → handler`).
-- No domain↔domain imports (except `edns→config`, `cache→database`, `zone→database`, `ruleset→database`).
+- No domain↔domain imports (except `edns→config`, `cache→database`, `cache→config`, `zone→config`, `ruleset→config`).
 - No `internal/`→domain imports (except `internal/latency→config`).
 
 ## Architecture
@@ -292,7 +303,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | Type | Package | Notes |
 |------|---------|-------|
 | `ServerConfig` | `config` | Top-level config; owns `ECSConfig`, `ProtocolSettings`, `CertificateSettings` |
-| `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `NoCache`, `Match`, `Proxy`, defense flags |
+| `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `SkipCache`, `Match`, `Proxy`, defense flags |
 | `ProtocolSettings` | `config` | Per-protocol port/endpoint: `UDP`, `TCP`, `TLS`, `QUIC`, `HTTPS`, `HTTP3`, `TLCP`, `DTLS`, `DTLCP`, `DNSCrypt` |
 | `DB` | `database` | Unified BadgerDB KV store; 5 key prefixes, 1 ID sequence |
 | `Store` | `cache` | Interface: Get/Set/ReverseLookup/UpdateLatency/LatencyLastProbe/FlushDB/Clear/Close |

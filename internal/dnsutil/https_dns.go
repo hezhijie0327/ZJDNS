@@ -13,6 +13,13 @@ import (
 	"codeberg.org/miekg/dns/dnshttp"
 )
 
+// bodyCloser wraps a LimitReader while preserving the original body Close
+// so deferred cleanup drains the HTTP connection for keep-alive reuse.
+type bodyCloser struct {
+	io.Reader
+	io.Closer
+}
+
 // ExecuteDoHRequest sends a DNS query via DoH GET and returns the response.
 // It is shared by the TLS and TLCP upstream clients.  The httpMethod parameter
 // allows callers to use GET (HTTP/2) or GET0RTT (HTTP/3).
@@ -62,7 +69,9 @@ func ExecuteDoHRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient
 	}
 
 	// Use LimitReader to cap response body size, then delegate to the library.
-	httpResp.Body = io.NopCloser(io.LimitReader(httpResp.Body, dns.MaxMsgSize))
+	// Wrap the original body so Close() drains the connection — NopCloser alone
+	// would leak HTTP/1.x keep-alive connections because Close() is a no-op.
+	httpResp.Body = &bodyCloser{Reader: io.LimitReader(httpResp.Body, dns.MaxMsgSize), Closer: httpResp.Body}
 
 	response, err := dnshttp.Response(httpResp)
 	if err != nil {

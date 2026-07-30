@@ -1,6 +1,7 @@
 package dnssec
 
 import (
+	"slices"
 	"zjdns/cache"
 	"zjdns/config"
 
@@ -11,13 +12,13 @@ import (
 // Record extraction helpers.
 
 // CollectRRSIGs collects all RRSIG records from multiple RR slices.
-func CollectRRSIGs(slices ...[]dns.RR) []*dns.RRSIG {
+func CollectRRSIGs(rrSets ...[]dns.RR) []*dns.RRSIG {
 	total := 0
-	for _, rrs := range slices {
+	for _, rrs := range rrSets {
 		total += len(rrs)
 	}
 	sigs := make([]*dns.RRSIG, 0, total)
-	for _, rrs := range slices {
+	for _, rrs := range rrSets {
 		for _, rr := range rrs {
 			if rrsig, ok := rr.(*dns.RRSIG); ok {
 				sigs = append(sigs, rrsig)
@@ -181,5 +182,5 @@ func (c *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
 
 // RootKeys returns the root trust anchor DNSKEYs.
 func (c *CryptoValidator) RootKeys() []*dns.DNSKEY {
-	return c.rootKeys
+	return slices.Clone(c.rootKeys)
 }

@@ -26,6 +26,10 @@ type Client struct {
 	getProxy func(*config.UpstreamServer) *socks5.Dialer
 }
 
+// maxTCRetries bounds the DNSCrypt TC escalation loop.  minQueryLen doubles
+// each round (O(log n)), so 6 iterations covers the full 64→4096 range.
+const maxTCRetries = 6
+
 // New creates a Client for DNSCrypt DNS queries.
 func New(getProxy func(*config.UpstreamServer) *socks5.Dialer) *Client {
 	return &Client{
@@ -52,143 +56,148 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 		return nil, fmt.Errorf("dnscrypt resolver state: %w", err)
 	}
 
-	err = msg.Pack()
-	if err != nil {
-		return nil, fmt.Errorf("packing dns query: %w", err)
-	}
-
-	q := &dnscryptcrypto.EncryptedQuery{
-		ESVersion:   state.esVersion,
-		ClientMagic: state.clientMagic,
-		ClientPk:    state.publicKey,
-		IsTCP:       useTCP,
-	}
-	if state.esVersion.IsPQ() {
-		q.PQCertContext = state.pqCertContext
-	}
-	state.mu.Lock()
-	q.MinQueryLen = state.minQueryLen
-	encrypted, clientNonce, sharedKey, err := prepareQuery(state, q, msg.Data)
-	state.mu.Unlock()
-	if err != nil {
-		return nil, fmt.Errorf("encrypting dnscrypt query: %w", err)
-	}
-
-	proxyDialer := c.proxyDialer(server)
-	network := "udp"
-	if useTCP {
-		network = "tcp"
-	}
-	var conn net.Conn
-	if proxyDialer != nil {
-		if useTCP {
-			conn, err = proxyDialer.DialContext(ctx, "tcp", state.serverAddress)
-		} else {
-			conn, err = proxyDialer.DialUDP(ctx, state.serverAddress)
-		}
-	} else {
-		dialer := &net.Dialer{}
-		conn, err = dialer.DialContext(ctx, network, state.serverAddress)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("dialing dnscrypt server %s: %w", state.serverAddress, err)
-	}
-	defer func() { _ = conn.Close() }()
-
-	deadline, ok := ctx.Deadline()
-	if ok {
-		_ = conn.SetDeadline(deadline)
-	}
-
-	var respPayload []byte
-	if useTCP {
-		if writeErr := dnscryptcrypto.WritePrefixed(encrypted, conn); writeErr != nil {
-			return nil, fmt.Errorf("writing dnscrypt TCP query: %w", writeErr)
-		}
-		respPayload, err = dnscryptcrypto.ReadPrefixed(conn)
+	// Use a bounded loop instead of recursion for TC retries — the
+	// minQueryLen doubles each round, converging in O(log n).
+	for range maxTCRetries { //nolint:gocritic // defer in loop: conn re-dialed each iteration, close via defer is safe
+		err = msg.Pack()
 		if err != nil {
-			c.deleteState(stampAddr, providerName)
-			return nil, fmt.Errorf("reading dnscrypt TCP response: %w", err)
+			return nil, fmt.Errorf("packing dns query: %w", err)
 		}
-	} else {
-		_, err = conn.Write(encrypted)
-		if err != nil {
-			return nil, fmt.Errorf("writing dnscrypt query: %w", err)
+
+		q := &dnscryptcrypto.EncryptedQuery{
+			ESVersion:   state.esVersion,
+			ClientMagic: state.clientMagic,
+			ClientPk:    state.publicKey,
+			IsTCP:       useTCP,
 		}
-		respBuf := make([]byte, config.DefaultDNSCryptUDPSize)
-		n, udpErr := conn.Read(respBuf)
-		if udpErr != nil {
-			c.deleteState(stampAddr, providerName)
-			return nil, fmt.Errorf("reading dnscrypt response: %w", udpErr)
+		if state.esVersion.IsPQ() {
+			q.PQCertContext = state.pqCertContext
 		}
-		respPayload = respBuf[:n]
-	}
-
-	resp := &dnscryptcrypto.EncryptedResponse{
-		ESVersion: state.esVersion,
-	}
-	decrypted, err := resp.Decrypt(respPayload, sharedKey, clientNonce)
-	if err != nil {
-		c.deleteState(stampAddr, providerName)
-		return nil, fmt.Errorf("decrypting dnscrypt response: %w", err)
-	}
-
-	if len(resp.PQControl) > 0 {
-		ticket, lifetime, parseErr := dnscryptcrypto.PQParseControlBlock(resp.PQControl)
-		if parseErr == nil && len(ticket) > 0 &&
-			dnscryptcrypto.PQResumedOverhead(len(ticket))+dnscryptcrypto.PQMinPaddingResumed <= dnscryptcrypto.MaxDNSUDPPacketSize {
-			state.mu.Lock()
-			pqResumeSecret, err := dnscryptcrypto.PQResumeSecret(state.sharedKey, state.clientMagic, clientNonce[:dnscryptcrypto.NonceSize/2])
-			if err != nil {
-				state.mu.Unlock()
-				log.Debugf("UPSTREAM: DNSCrypt PQ resume secret derivation failed: %v", err)
-			} else {
-				state.pqResumeSecret = pqResumeSecret
-				state.pqTicket = ticket
-				state.pqTicketExpiry = time.Now().Add(time.Duration(lifetime) * time.Second)
-				state.mu.Unlock()
-				log.Debugf("UPSTREAM: DNSCrypt PQ resumption ticket stored (expires in %ds)", lifetime)
-			}
-		} else if len(ticket) > 0 {
-			log.Debugf("UPSTREAM: DNSCrypt discarded oversized PQ resumption ticket (%d bytes)", len(ticket))
-		}
-	}
-
-	log.Debugf("UPSTREAM: DNSCrypt decrypted response from %s (%d bytes)", state.serverAddress, len(decrypted))
-	response := pool.DefaultMessage.Get()
-	response.Data = decrypted
-	err = response.Unpack()
-	if err != nil {
-		pool.DefaultMessage.Put(response)
-		c.deleteState(stampAddr, providerName)
-		return nil, fmt.Errorf("unpacking dnscrypt response: %w", err)
-	}
-	response.Data = nil
-
-	if response.Truncated {
-		const maxQueryLen = 4096
 		state.mu.Lock()
-		// §5.4.2: escalate by at least 64 bytes on TC.  We double each
-		// round to converge in O(log n) — matching dnscrypt-proxy's
-		// blindAdjust().  The +64 floor is the RFC minimum.
-		next := min(max(state.minQueryLen*2, state.minQueryLen+64), maxQueryLen)
-		if next > state.minQueryLen {
-			state.minQueryLen = next
-			log.Debugf("UPSTREAM: DNSCrypt min-query-len escalated to %d after TC", state.minQueryLen)
-			state.mu.Unlock()
-			// The padding envelope was too small for the response.
-			// Retry with the larger minQueryLen so the server has
-			// enough padding headroom.  This applies to both UDP
-			// (where TC also means "retry over TCP") and TCP
-			// (where the DNSCrypt envelope itself is the bottleneck).
-			pool.DefaultMessage.Put(response)
-			_ = conn.Close()
-			return c.Execute(ctx, msg, server, useTCP)
-		}
+		q.MinQueryLen = state.minQueryLen
+		encrypted, clientNonce, sharedKey, err := prepareQuery(state, q, msg.Data)
 		state.mu.Unlock()
-	}
+		if err != nil {
+			return nil, fmt.Errorf("encrypting dnscrypt query: %w", err)
+		}
 
-	return response, nil
+		proxyDialer := c.proxyDialer(server)
+		network := "udp"
+		if useTCP {
+			network = "tcp"
+		}
+		var conn net.Conn
+		if proxyDialer != nil {
+			if useTCP {
+				conn, err = proxyDialer.DialContext(ctx, "tcp", state.serverAddress)
+			} else {
+				conn, err = proxyDialer.DialUDP(ctx, state.serverAddress)
+			}
+		} else {
+			dialer := &net.Dialer{}
+			conn, err = dialer.DialContext(ctx, network, state.serverAddress)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("dialing dnscrypt server %s: %w", state.serverAddress, err)
+		}
+		defer func() { _ = conn.Close() }() //nolint:gocritic // conn re-dialed per iteration
+
+		deadline, ok := ctx.Deadline()
+		if ok {
+			_ = conn.SetDeadline(deadline)
+		}
+
+		var respPayload []byte
+		if useTCP {
+			if writeErr := dnscryptcrypto.WritePrefixed(encrypted, conn); writeErr != nil {
+				return nil, fmt.Errorf("writing dnscrypt TCP query: %w", writeErr)
+			}
+			respPayload, err = dnscryptcrypto.ReadPrefixed(conn)
+			if err != nil {
+				c.deleteState(stampAddr, providerName)
+				return nil, fmt.Errorf("reading dnscrypt TCP response: %w", err)
+			}
+		} else {
+			_, err = conn.Write(encrypted)
+			if err != nil {
+				return nil, fmt.Errorf("writing dnscrypt query: %w", err)
+			}
+			respBuf := make([]byte, config.DefaultDNSCryptUDPSize)
+			n, udpErr := conn.Read(respBuf)
+			if udpErr != nil {
+				c.deleteState(stampAddr, providerName)
+				return nil, fmt.Errorf("reading dnscrypt response: %w", udpErr)
+			}
+			respPayload = respBuf[:n]
+		}
+
+		resp := &dnscryptcrypto.EncryptedResponse{
+			ESVersion: state.esVersion,
+		}
+		decrypted, err := resp.Decrypt(respPayload, sharedKey, clientNonce)
+		if err != nil {
+			c.deleteState(stampAddr, providerName)
+			return nil, fmt.Errorf("decrypting dnscrypt response: %w", err)
+		}
+
+		if len(resp.PQControl) > 0 {
+			ticket, lifetime, parseErr := dnscryptcrypto.PQParseControlBlock(resp.PQControl)
+			if parseErr == nil && len(ticket) > 0 &&
+				dnscryptcrypto.PQResumedOverhead(len(ticket))+dnscryptcrypto.PQMinPaddingResumed <= dnscryptcrypto.MaxDNSUDPPacketSize {
+				state.mu.Lock()
+				pqResumeSecret, err := dnscryptcrypto.PQResumeSecret(state.sharedKey, state.clientMagic, clientNonce[:dnscryptcrypto.NonceSize/2])
+				if err != nil {
+					state.mu.Unlock()
+					log.Debugf("UPSTREAM: DNSCrypt PQ resume secret derivation failed: %v", err)
+				} else {
+					state.pqResumeSecret = pqResumeSecret
+					state.pqTicket = ticket
+					state.pqTicketExpiry = time.Now().Add(time.Duration(lifetime) * time.Second)
+					state.mu.Unlock()
+					log.Debugf("UPSTREAM: DNSCrypt PQ resumption ticket stored (expires in %ds)", lifetime)
+				}
+			} else if len(ticket) > 0 {
+				log.Debugf("UPSTREAM: DNSCrypt discarded oversized PQ resumption ticket (%d bytes)", len(ticket))
+			}
+		}
+
+		log.Debugf("UPSTREAM: DNSCrypt decrypted response from %s (%d bytes)", state.serverAddress, len(decrypted))
+		response := pool.DefaultMessage.Get()
+		response.Data = decrypted
+		err = response.Unpack()
+		if err != nil {
+			pool.DefaultMessage.Put(response)
+			c.deleteState(stampAddr, providerName)
+			return nil, fmt.Errorf("unpacking dnscrypt response: %w", err)
+		}
+		response.Data = nil
+
+		if response.Truncated {
+			const maxQueryLen = 4096
+			state.mu.Lock()
+			// §5.4.2: escalate by at least 64 bytes on TC.  We double each
+			// round to converge in O(log n) — matching dnscrypt-proxy's
+			// blindAdjust().  The +64 floor is the RFC minimum.
+			next := min(max(state.minQueryLen*2, state.minQueryLen+64), maxQueryLen)
+			if next > state.minQueryLen {
+				state.minQueryLen = next
+				log.Debugf("UPSTREAM: DNSCrypt min-query-len escalated to %d after TC", state.minQueryLen)
+				state.mu.Unlock()
+				// The padding envelope was too small for the response.
+				// Retry with the larger minQueryLen so the server has
+				// enough padding headroom.  This applies to both UDP
+				// (where TC also means "retry over TCP") and TCP
+				// (where the DNSCrypt envelope itself is the bottleneck).
+				pool.DefaultMessage.Put(response)
+				_ = conn.Close()
+				continue
+			}
+			state.mu.Unlock()
+		}
+
+		return response, nil
+	}
+	return nil, errors.New("dnscrypt: query still truncated after max TC retries")
 }
 
 // WarmUp pre-fetches the DNSCrypt certificate for the given server.

@@ -309,6 +309,8 @@ func (c *Client) Close() {
 }
 
 // needsTCPFallback checks whether a UDP result should be retried over TCP.
+// needsTCPFallback is defensive: secure protocols already handle fallback
+// internally and never reach this function, but the check is harmless.
 func (c *Client) needsTCPFallback(result *Result, protocol string) bool {
 	return protocol != config.ProtoTCP && (result.Error != nil || (result.Response != nil && result.Response.Truncated))
 }

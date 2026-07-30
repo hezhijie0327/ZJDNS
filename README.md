@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.8.6-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.8.9-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -110,7 +110,7 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 | `server_name` | string | TLS SNI / DNSCrypt provider name |
 | `skip_tls_verify` | bool | 跳过 TLS 证书验证 |
 | `privacy_profile` | string | `"strict"`（默认，[RFC 8310](docs/rfc/rfc8310.txt) §6）/ `"opportunistic"`（§5） |
-| `no_cache` | bool | 禁止缓存该上游响应 |
+| `skip_cache` | bool | 禁止缓存该上游响应 |
 | `match` | []string | 规则集标签分流 |
 | `proxy` | string | SOCKS5 代理 `socks5://[user:pass@]host:port` |
 | `public_key` | string | DNSCrypt 公钥（hex） |

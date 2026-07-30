@@ -3,6 +3,7 @@ package tls
 import (
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"time"
 	"zjdns/config"
@@ -118,12 +119,9 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 
 		n, err := conn.Read(buf)
 		if err != nil {
-			// Idle timeout — close connection per RFC 8094 §3.3 (pion/dtls
-			// sends a fatal alert on close).  Do NOT treat timeouts as
-			// temporary — that would keep idle connections alive forever.
-			netErr, ok := errors.AsType[net.Error](err)
-			if ok && netErr.Timeout() {
-				return
+			if errors.Is(err, io.ErrShortBuffer) {
+				log.Debugf("TLS: DTLS record too large for buffer from %s", conn.RemoteAddr())
+				continue
 			}
 			if !zdnsutil.IsTemporaryError(err) {
 				return

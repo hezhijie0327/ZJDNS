@@ -120,7 +120,13 @@ func (h *HopGuard) Feed(serverIP string, observed uint8) {
 		st.samples++
 		if st.samples%hopGuardMinSamples == 0 {
 			rebuildTrusted(st)
-			log.Debugf("UPSTREAM: hopguard rebuild (%d trusted, threshold=%d) for %s", len(st.trusted), trustThreshold(st), serverIP)
+			if len(st.trusted) == 0 {
+				st.armed = false
+				st.samples = 0
+				log.Debugf("UPSTREAM: hopguard disarmed — all TTLs decayed, re-entering learning for %s", serverIP)
+			} else {
+				log.Debugf("UPSTREAM: hopguard rebuild (%d trusted, threshold=%d) for %s", len(st.trusted), trustThreshold(st), serverIP)
+			}
 		}
 		return
 	}

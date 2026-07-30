@@ -150,33 +150,6 @@ func appendBootstrapIPs(bin []byte, bootstrapIPs []string) []byte {
 	return bin
 }
 
-// readVLP reads a Variable Length Prefixed sequence from bin at pos.
-// The high bit (0x80) of each length byte indicates another element follows.
-// Returns the decoded byte slices, the new position, and any error.
-func readVLP(bin []byte, pos, binLen int) (elements [][]byte, newPos int, err error) {
-	for {
-		if pos >= binLen {
-			return nil, pos, ErrTruncatedLength
-		}
-		vlen := int(bin[pos])
-		length := vlen & ^0x80 // clear continuation bit
-		if 1+length > binLen-pos {
-			return nil, pos, ErrTruncatedPayload
-		}
-		pos++
-		if length > 0 {
-			elem := make([]byte, length)
-			copy(elem, bin[pos:pos+length])
-			elements = append(elements, elem)
-		}
-		pos += length
-		if vlen&0x80 != 0x80 {
-			break
-		}
-	}
-	return elements, pos, nil
-}
-
 func validatePort(port string) error {
 	p, err := strconv.ParseUint(port, 10, 16)
 	if err != nil || p == 0 {
@@ -226,5 +199,10 @@ func splitOptionalPort(s string) (host, port string) {
 	if colIndex < bracketIndex || colIndex < 0 {
 		return s, ""
 	}
-	return s[:colIndex], s[colIndex+1:]
+	host = s[:colIndex]
+	// Restore trailing bracket stripped by the colon split for IPv6 addresses.
+	if bracketIndex >= 0 && host != "" && host[0] == '[' && host[len(host)-1] != ']' {
+		host += "]"
+	}
+	return host, s[colIndex+1:]
 }

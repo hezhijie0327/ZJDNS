@@ -59,7 +59,6 @@ func (p *httpClientPool) get(port int, useTLS, useHTTP3 bool) *http.Client {
 			ForceAttemptHTTP2: false,
 			TLSClientConfig:   tlsConfig,
 			DialContext:       (&net.Dialer{}).DialContext,
-			IdleConnTimeout:   config.DefaultLatencyProbeTimeout,
 		}
 		client = &http.Client{Transport: transport}
 	}

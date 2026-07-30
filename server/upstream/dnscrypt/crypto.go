@@ -20,7 +20,7 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 			// SHA-512/256 is used here as a KDF to derive an X25519 seed from
 			// (nonce || secretKey).  This is NOT password hashing — secretKey is
 			// an X25519 private key, and the construction must match dnscrypt-proxy
-			// for interoperability.  (CodeQL false positive: go/weak-sensitive-data-hashing)
+			// for interoperability.
 			q.Nonce = newNonce()
 			seed := sha512.Sum512_256(append(q.Nonce[:dnscryptcrypto.NonceSize/2], state.secretKey[:]...))
 			epSk, epPk, epErr := dnscryptcrypto.X25519KeyPairFromSeed(seed)

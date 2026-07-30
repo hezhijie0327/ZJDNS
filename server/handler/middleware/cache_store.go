@@ -97,7 +97,6 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	}
 
 	// Cache population.
-	var _ int64
 	if cacheable {
 		// RFC 4035 §5.3.3: cap TTL of authenticated RRsets.
 		if validated {

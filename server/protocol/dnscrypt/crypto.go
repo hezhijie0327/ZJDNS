@@ -60,7 +60,7 @@ func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP boo
 	}
 
 	if q.ESVersion.IsPQ() {
-		return s.encryptPQ(packet, q, r, isUDP, maxWireLen)
+		return s.encryptPQ(packet, q, r, maxWireLen)
 	}
 
 	curr := s.current()
@@ -68,12 +68,12 @@ func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP boo
 	if err != nil {
 		return nil, fmt.Errorf("computing shared key: %w", err)
 	}
-	return r.Encrypt(packet, sharedKey, isUDP, maxWireLen)
+	return r.Encrypt(packet, sharedKey, maxWireLen)
 }
 
 // encryptPQ encrypts a DNS response for a PQ query.  For initial queries it
 // issues a resumption ticket in the response control block.
-func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *dnscryptcrypto.EncryptedResponse, isUDP bool, maxWireLen int) ([]byte, error) {
+func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *dnscryptcrypto.EncryptedResponse, maxWireLen int) ([]byte, error) {
 	var sharedKey [dnscryptcrypto.SharedKeySize]byte
 	curr := s.current()
 
@@ -121,12 +121,15 @@ func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *d
 		log.Debugf("DNSCRYPT: PQ resumed response")
 	}
 
-	return r.Encrypt(packet, sharedKey, isUDP, maxWireLen)
+	return r.Encrypt(packet, sharedKey, maxWireLen)
 }
 
 // decrypt tries to decrypt the query: PQ resumed → PQ ciphertext → classical.
 // Keys are tried newest-first to handle rotation overlap (§8).
 func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.EncryptedQuery, err error) {
+	if len(b) < dnscryptcrypto.ClientMagicSize {
+		return nil, nil, fmt.Errorf("dnscrypt: packet too short (%d bytes)", len(b))
+	}
 	// PQ resumed queries don't carry a client magic — try them first.
 	if len(b) >= dnscryptcrypto.PQResumeMagicLen && bytes.Equal(b[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:]) {
 		log.Debugf("DNSCRYPT: PQ resumed query")

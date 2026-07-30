@@ -5,6 +5,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net"
+	"slices"
 	"sync"
 
 	"codeberg.org/miekg/dns"
@@ -44,6 +45,7 @@ func ReadTCPMsg(conn net.Conn) (*dns.Msg, error) {
 	if err := msg.Unpack(); err != nil {
 		return nil, err
 	}
+	msg.Data = slices.Clone(msg.Data) // detach from pool buffer before deferred Put
 	return msg, nil
 }
 

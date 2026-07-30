@@ -69,12 +69,15 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			}
 
 			msg := pool.DefaultMessage.Get()
+			defer pool.DefaultMessage.Put(msg)
 			if len(baseMsg.Question) > 0 {
 				msg.Question = append(msg.Question, baseMsg.Question[0])
 			}
 			msg.RecursionDesired = baseMsg.RecursionDesired
 			msg.CheckingDisabled = baseMsg.CheckingDisabled
-			// Ownership transfers to ExecuteQuery; no defer Put needed.
+			msg.Security = baseMsg.Security
+			msg.UDPSize = baseMsg.UDPSize
+			// ExecuteQuery reads msg via Pack()/Data — caller retains ownership.
 
 			subCtx, subCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
 			defer subCancel()
@@ -328,9 +331,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 		})
 	}
 
-	if err := g.Wait(); err != nil {
-		log.Debugf("RECURSION: NS address resolution errgroup: %v", err)
-	}
+	_ = g.Wait()
 
 	// Fire background latency probes. Merge A+AAAA per NS name
 	// so each probe call gets both address families.

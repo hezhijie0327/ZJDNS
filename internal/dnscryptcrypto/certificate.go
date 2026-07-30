@@ -167,7 +167,7 @@ var (
 //	              <serial> <ts-start> <ts-end> <extensions>
 //
 // Classical certs are CertByteLength (124) bytes; PQ certs are PQCertByteLength
-// (1320) bytes.  err is always nil.
+// (1320) bytes.  Always returns nil error (required by encoding.BinaryMarshaler).
 func (c *Certificate) MarshalBinary() (serialized []byte, err error) {
 	if c.ESVersion.IsPQ() {
 		return c.marshalPQ()

@@ -146,6 +146,9 @@ func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 	transport := &http3Transport{
 		baseTransport: &http3.Transport{
 			Dial: func(ctx context.Context, _ string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+				// cfg is the caller-provided quic.Config; we override it with quicCfg below
+				// (except Tracer, which is forwarded).  This is intentional — the transport
+				// owns the QUIC configuration and only delegates tracing to the caller.
 				cpy := quicCfg.Clone()
 				if cfg != nil {
 					cpy.Tracer = cfg.Tracer

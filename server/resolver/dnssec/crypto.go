@@ -61,6 +61,22 @@ func (c *CryptoValidator) LoadTrustAnchors() {
 	log.Infof("SECURITY: loaded %d root trust anchor(s) from %s", len(keys), path)
 }
 
+// ContainsRootKey reports whether any KSK in dnskeys matches a loaded trust
+// anchor. Required before trusting self-verified root DNSKEYs.
+func (c *CryptoValidator) ContainsRootKey(dnskeys []*dns.DNSKEY) bool {
+	for _, rk := range c.rootKeys {
+		for _, k := range dnskeys {
+			if k.Flags&dns.FlagSEP != 0 &&
+				k.Algorithm == rk.Algorithm &&
+				k.KeyTag() == rk.KeyTag() &&
+				k.PublicKey == rk.PublicKey {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // VerifyRRset verifies an RRSIG over an RRset using the given DNSKEY.
 // Returns nil on success, or an error describing the failure.
 func (c *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey *dns.DNSKEY) error {

@@ -135,7 +135,8 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 		}
 	}()
 
-	streamGroup, _ := errgroup.WithContext(s.ctx)
+	streamGroup, streamCtx := errgroup.WithContext(s.ctx)
+	_ = streamCtx
 	streamGroup.SetLimit(config.DefaultMaxConcurrentStreams)
 
 	for {
@@ -169,6 +170,9 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 }
 
 func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
+	if stream == nil {
+		return
+	}
 	defer zdnsutil.HandlePanic("DoQ stream handler")
 	buf := pool.DefaultBuffer.Get()
 	defer pool.DefaultBuffer.Put(buf)

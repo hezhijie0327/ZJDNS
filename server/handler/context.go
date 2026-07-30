@@ -16,7 +16,8 @@ import (
 // middlewares.  The contract: once a middleware sets a field, later
 // middlewares read but do not overwrite it (unless explicitly documented).
 type QueryContext struct {
-	// ── Immutable: set by the protocol listener, never modified ──
+	// ── Set by the protocol listener; pointer is never reassigned ──
+	// (Unpack() may be called to re-parse EDNS pseudo-sections)
 
 	Req      *dns.Msg // incoming DNS request (never nil after validation)
 	ClientIP net.IP   // client address (nil for unix-domain / internal)

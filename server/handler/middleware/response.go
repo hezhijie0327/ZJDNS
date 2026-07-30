@@ -54,6 +54,7 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
 	}
 
 	clientWantsPadding := qctx.ClientWantsPadding
+	// Fallback for early short-circuit paths where EDNS middleware didn't run.
 	if !clientWantsPadding {
 		clientWantsPadding = edns.HasPaddingOption(req)
 	}

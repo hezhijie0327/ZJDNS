@@ -26,17 +26,16 @@ type Dialer struct {
 	password  string
 	timeout   time.Duration // connection + negotiation timeout
 
-	mu         sync.RWMutex
-	udpConn    *net.UDPConn  // connected UDP socket to relay
-	relayAddr  *net.UDPAddr  // proxy's UDP relay address
-	ctrlConn   net.Conn      // TCP control connection for UDP ASSOCIATE
-	ctrlClosed chan struct{} // closed when ctrlConn dies
+	mu        sync.RWMutex
+	udpConn   *net.UDPConn // connected UDP socket to relay
+	relayAddr *net.UDPAddr // proxy's UDP relay address
+	ctrlConn  net.Conn     // TCP control connection for UDP ASSOCIATE
 
-	// The above fields (udpConn, relayAddr, ctrlConn, ctrlClosed) are
-	// only used by establishUDPRelay and the monitor goroutine. They are never
-	// set on the base Dialer returned by New() -- each ListenPacket/DialUDP call
-	// creates a fresh clone that populates them. Retained on the struct for
-	// clarity; consider extracting into a separate udpRelay type.
+	// The above fields (udpConn, relayAddr, ctrlConn) are only used by
+	// establishUDPRelay and the monitor goroutine. They are never set on the
+	// base Dialer returned by New() — each ListenPacket/DialUDP call creates
+	// a fresh clone that populates them.  Retained on the struct for clarity;
+	// consider extracting into a separate udpRelay type.
 }
 
 // ---------------------------------------------------------------------------
@@ -166,9 +165,8 @@ func New(proxyURL string, timeout time.Duration) (*Dialer, error) {
 	}
 
 	d := &Dialer{
-		proxyAddr:  net.JoinHostPort(host, port),
-		timeout:    timeout,
-		ctrlClosed: make(chan struct{}),
+		proxyAddr: net.JoinHostPort(host, port),
+		timeout:   timeout,
 	}
 	if u.User != nil {
 		d.username = u.User.Username()
@@ -395,7 +393,8 @@ func buildSOCKS5Request(cmd byte, host string, port int) []byte {
 func splitHostPort(addr string) (host string, port int, err error) {
 	h, p, err := net.SplitHostPort(addr)
 	if err != nil {
-		// Try adding default DNS port
+		// net.SplitHostPort failed — assume no port specified; use DNS default.
+		// Original error is intentionally discarded (best-effort heuristic).
 		h = addr
 		p = config.DefaultUDPPort // DNS default; non-DNS proxy users should configure explicitly
 	}

@@ -257,6 +257,10 @@ func (s *Server) handleDTLCPConnections(listener net.Listener) {
 			}
 		}
 
+		// Set initial deadline so a slow client cannot block the accept loop
+		// indefinitely. The per-connection read loop extends this on each read.
+		_ = conn.SetDeadline(time.Now().Add(config.DefaultDTLSIdleTimeout))
+
 		// Handle synchronously — gotlcp shares the underlying UDP socket across
 		// all connections. Concurrent reads cause packet stealing between Conn
 		// instances and SetReadDeadline on one Conn affects the shared socket's

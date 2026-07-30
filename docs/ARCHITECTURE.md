@@ -13,8 +13,6 @@ All numeric fields use binary BigEndian encoding (not hex), consistent with valu
 |--------|---------|-------------|-------|
 | `e:` | DNS response cache | `e:{qname}\x00{ecs_addr}\x00{ecsPrefix:2B}\x00{dnssec:1B}\x00{qtype:2B}\x00{qclass:2B}` | `[0:8]id [8:16]ts [16:20]ttl [20:]raw_wire` |
 | `e:ip:` | IP reverse index + latency | `e:ip:{ip}\x00{entryID:8B}\x00{name}` / `e:ip:{ip}\x00_lat` | reverse: `[0:4]ttl` / latency: `[0:2]latency_ms` |
-| `z:` | Zone rule entries | `z:{is_wildcard:1B}\x00{qname}\x00{qtype:2B}\x00{qclass:2B}\x00{match_tags}` | `[0:2]rcode` + 3× length-prefixed blobs |
-| `r:` | Ruleset entries | `r:{type}\x00{value}\x00{tag}` | empty (key existence check) |
 
 `\x00` is the field separator for string fields. Binary fields use known offsets for parsing (NUL bytes inside binary integers would break separator-based parsing).
 
@@ -26,7 +24,8 @@ All numeric fields use binary BigEndian encoding (not hex), consistent with valu
 - **Latency**: Stored under `e:ip:{ip}\x00_lat` with no TTL — overwritten on each probe, cleaned when `DropPrefix("e:")` runs. `LatencyLastProbe` checks key existence.
 - **Stats aggregation**: `stats.Collector` — plain `map[string]*entry` + `sync.Mutex`. `Record()` upserts directly with lock. `Stats()` iterates the map. All-time counters, reset via `Reset()`. No channel, no goroutine, no persistence.
 - **Auto-increment IDs**: BadgerDB `Sequence` (bandwidth=1000) for entry IDs. Leases up to 1000 IDs in memory before a disk write.
-- **Zone queries**: `queryExact()` uses BadgerDB prefix scan on `z:0\x00{qname}\x00{qtype:2B}\x00{qclass:2B}\x00`. `queryWildcardBatch()` iterates up to 16 suffix candidates in a single View transaction.
+- **Zone queries**: `Evaluator.Evaluate()` does in-memory exact-match lookup on `exact` map (O(1)), then wildcard suffix search on `wildcards` map (max 16 iterations). No BadgerDB — pure WORM maps.
+- **Ruleset matching**: `Engine.Match()` does CIDR via binary radix trie (O(128)) and domain suffix via map lookup (O(1)). All in-memory, loaded from config at startup.
 - **Reverse lookup**: Prefix scan on `e:ip:{ip}\x00` returns all cached domains for an IP. Expired entries filtered by `IsDeletedOrExpired()`.
 - **CHAOS endpoints**: `ZJDNS.stats` (read-only), `ZJDNS.db.clear.cache` (clear `e:` + `e:ip:`), `ZJDNS.db.clear.stats` (reset `s:`). Zone/ruleset clearing is not exposed.
 
@@ -171,4 +170,5 @@ Reuses SM2 certificate pair from TLCP. Wire format = DTLS (RFC 8094): 2-byte big
 
 ## Zone Rules (`zone/`)
 
-- **Storage**: `Evaluator` holds a `*database.DB` directly (shared with cache and ruleset). Zone rules are stored under the `z:` key prefix and queried via BadgerDB prefix scans (exact match → wildcard suffix batch with max 16 iterations).
+- **Storage**: Pure in-memory WORM (write-once-read-many) maps. `Evaluator` holds `exact` (map[string][]zoneRule) and `wildcards` (map[string][]zoneRule) populated by `LoadRules` at startup. No BadgerDB dependency — evaluate is a lock-free map lookup.
+- **Lookup**: `Evaluate()` first checks `bypass` rules, then `exact` map (O(1)), then `wildcards` suffix search (max 16 iterations). All fields use `sync/atomic` for lock-free reads.

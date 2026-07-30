@@ -16,6 +16,9 @@ import (
 // naturally aged out.
 func makeAddrValidator(cache *lrumap.Map[string, time.Time]) func(net.Addr) bool {
 	return func(addr net.Addr) bool {
+		if cache == nil {
+			return true
+		}
 		udpAddr, ok := addr.(*net.UDPAddr)
 		if !ok {
 			return true

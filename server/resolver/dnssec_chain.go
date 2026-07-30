@@ -73,20 +73,22 @@ func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, c
 		// provide the root of trust; self-signed keys from any other zone are
 		// not trustworthy without a DS chain from a verified parent).
 		if currentDomain == config.DNSRootZone {
-			if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err == nil {
-				chain.zoneDNSKEYs = dnskeyRecords
-				crypto.CacheZoneKeys(currentDomain, dnskeyRecords)
-
-				// Now verify the answer with the newly verified keys
-				if len(response.Answer) > 0 {
-					validated, valErr := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
-					if valErr != nil {
-						log.Debugf("SECURITY: response validation error for %s: %v", currentDomain, valErr)
-					}
-					return validated
-				}
-				return true
+			if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err != nil {
+				log.Debugf("SECURITY: root DNSKEY self-verification failed: %v", err)
+				return false
 			}
+			chain.zoneDNSKEYs = dnskeyRecords
+			crypto.CacheZoneKeys(currentDomain, dnskeyRecords)
+
+			// Now verify the answer with the newly verified keys
+			if len(response.Answer) > 0 {
+				validated, valErr := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
+				if valErr != nil {
+					log.Debugf("SECURITY: response validation error for %s: %v", currentDomain, valErr)
+				}
+				return validated
+			}
+			return true
 		}
 	}
 
@@ -201,13 +203,13 @@ func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string,
 
 	// For root zone, verify via self-signature against embedded trust anchors.
 	if zone == config.DNSRootZone {
-		if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err == nil {
-			chain.zoneDNSKEYs = dnskeyRecords
-			crypto.CacheZoneKeys(zone, dnskeyRecords)
-			log.Debugf("SECURITY: self-verified root DNSKEY")
+		if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err != nil {
+			log.Debugf("SECURITY: root DNSKEY self-verification failed: %v", err)
 			return
 		}
-		log.Debugf("SECURITY: root DNSKEY self-verification failed: %v", err)
+		chain.zoneDNSKEYs = dnskeyRecords
+		crypto.CacheZoneKeys(zone, dnskeyRecords)
+		log.Debugf("SECURITY: self-verified root DNSKEY")
 		return
 	}
 

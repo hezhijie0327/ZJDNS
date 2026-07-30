@@ -11,6 +11,8 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
+const nsec3OptOutFlag = 0x01
+
 // verifyNSEC checks whether any NSEC record in the slice cryptographically
 // proves the non-existence of the queried name or type.
 func (c *CryptoValidator) verifyNSEC(authSigs []*dns.RRSIG, nsecs []*dns.NSEC, verifiedDNSKEYs []*dns.DNSKEY, normalizedQname string, qtype uint16, denialType string) bool {
@@ -213,7 +215,7 @@ func isAncestorDelegationNSEC3(nsec3 *dns.NSEC3) bool {
 // hasOptOutInProof returns true if any NSEC3 in the proof set has Opt-Out.
 func hasOptOutInProof(nsec3s []*dns.NSEC3) bool {
 	for _, n := range nsec3s {
-		if n.Flags&uint8(0x01) != 0 {
+		if n.Flags&nsec3OptOutFlag != 0 {
 			return true
 		}
 	}

@@ -21,6 +21,7 @@ import (
 // during the multi-read loop.  Connection-agnostic — used by both raw UDP and
 // SOCKS5 proxy paths.
 type spoofguardState struct {
+	copyBufShrinkCount   int
 	prev, last           *dns.Msg
 	prevAns, lastAns     int
 	rejected, candidates int
@@ -310,6 +311,12 @@ func (s *spoofguardState) copyData(raw []byte, n int) []byte {
 	}
 	s.copyBuf = s.copyBuf[:n]
 	copy(s.copyBuf, raw[:n])
+	s.copyBufShrinkCount++
+	if s.copyBufShrinkCount >= 256 && cap(s.copyBuf) > 4*n && cap(s.copyBuf) > 512 {
+		s.copyBuf = make([]byte, n)
+		copy(s.copyBuf, raw[:n])
+		s.copyBufShrinkCount = 0
+	}
 	return s.copyBuf
 }
 

@@ -89,12 +89,14 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				// PreferStale: return stale immediately, refresh in background.
 				if m.tryStartRefresh(qname, qtype, qclass, ecsOpt) {
 					if m.refreshGroup != nil {
-						_ = m.refreshGroup.TryGo(func() error {
+						if !m.refreshGroup.TryGo(func() error {
 							defer zdnsutil.HandlePanic("Cache refresh: stale prefetch")
 							defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
-							_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt) // error logged inside
-							return nil                                            // prevent errgroup context cancellation cascade
-						})
+							_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt)
+							return nil
+						}) {
+							m.finishRefresh(qname, qtype, qclass, ecsOpt)
+						}
 					}
 				}
 				m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
@@ -122,7 +124,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 	var refreshFinished atomic.Bool
 
 	if m.refreshGroup != nil {
-		_ = m.refreshGroup.TryGo(func() error {
+		if !m.refreshGroup.TryGo(func() error {
 			defer zdnsutil.HandlePanic("Cache refresh: foreground refresh")
 			defer close(done)
 			defer func() {
@@ -141,7 +143,10 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
 			qr = m.resolver.Query(refreshCtx, question, ecsOpt)
 			return nil
-		})
+		}) {
+			close(done)
+			m.finishRefresh(qname, qtype, qclass, ecsOpt)
+		}
 	}
 
 	timer := time.NewTimer(config.DefaultServeExpiredClientTimeout)
@@ -224,6 +229,7 @@ func (m *CacheLookup) refreshCacheEntry(qname string, qtype, qclass uint16, ecsO
 	}
 	m.store.Set(qname, qtype, qclass, ecsOpt, false, qr.Answer, qr.Authority, qr.Additional, qr.Validated)
 	log.Debugf("CACHE: refresh updated %s (type=%d, answer=%d)", qname, qtype, len(qr.Answer))
+	m.stats.Record(&stats.Request{Result: "prefetch"})
 	return nil
 }
 

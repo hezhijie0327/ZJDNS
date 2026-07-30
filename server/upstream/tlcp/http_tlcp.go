@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 
@@ -32,7 +34,16 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultHTTPTLCPPort)
 	}
 
-	key := fmt.Sprintf("%s|%s|%t|%s", server.Address, server.ServerName, server.SkipTLSVerify, server.Proxy)
+	var b strings.Builder
+	b.Grow(len(server.Address) + len(server.ServerName) + len(server.Proxy) + 20)
+	b.WriteString(server.Address)
+	b.WriteByte('|')
+	b.WriteString(server.ServerName)
+	b.WriteByte('|')
+	b.WriteString(strconv.FormatBool(server.SkipTLSVerify))
+	b.WriteByte('|')
+	b.WriteString(server.Proxy)
+	key := b.String()
 	httpClient, ok := c.httpClient.Get(key)
 	if !ok {
 		tlcpCfg := c.tlcpClientConfig(server).Clone()

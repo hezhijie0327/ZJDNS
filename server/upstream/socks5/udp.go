@@ -163,36 +163,18 @@ func (d *Dialer) establishUDPRelay(ctx context.Context) error {
 	// Clear deadline on the control connection — it must stay alive but idle.
 	_ = ctrlConn.SetDeadline(time.Time{})
 
-	ctrlClosed := make(chan struct{})
 	d.ctrlConn = ctrlConn
-	d.ctrlClosed = ctrlClosed
 	d.udpConn = udpConn
 	d.relayAddr = relay
 
-	// NOTE: The double-goroutine pattern handles the case where ctrlConn.Read
-	// blocks indefinitely. Combining into one goroutine would require
-	// additional synchronization. Simpler to keep as-is. on
-	// ctrlConn.Read and ctrlClosed would avoid the nested goroutine.
-	// Monitor the control connection. The goroutine exits when ctrlConn
-	// is closed by cleanupLocked (Close/proxy-side) or when the closed signal
-	// fires. Using a select prevents the goroutine from leaking when the Dialer
-	// is garbage-collected without an explicit Close call.
+	// Monitor the control connection.  When the proxy closes the TCP connection
+	// or cleanupLocked calls Close(), Read returns and the goroutine cleans up.
+	// A single goroutine suffices because cleanupLocked already closes ctrlConn,
+	// which unblocks this Read — no need for a separate signal channel.
 	go func() {
 		defer zdnsutil.HandlePanic("SOCKS5 UDP relay")
-		done := make(chan struct{})
-		go func() {
-			defer zdnsutil.HandlePanic("SOCKS5 UDP relay")
-			var buf [1]byte
-			_, _ = ctrlConn.Read(buf[:])
-			defer close(done)
-		}()
-		select {
-		case <-done:
-		// NOTE(M19): ctrlConn may be closed twice (monitor goroutine + cleanupLocked).
-		// Go stdlib tolerates multiple Close() calls, but alternative Conn implementations may not.
-		case <-ctrlClosed:
-			_ = ctrlConn.Close() // unblock the read goroutine
-		}
+		var buf [1]byte
+		_, _ = ctrlConn.Read(buf[:])
 		d.mu.Lock()
 		if d.ctrlConn == ctrlConn {
 			d.cleanupLocked()
@@ -207,8 +189,6 @@ func (d *Dialer) cleanupLocked() {
 	if d.ctrlConn != nil {
 		_ = d.ctrlConn.Close()
 		d.ctrlConn = nil
-		close(d.ctrlClosed)
-		d.ctrlClosed = make(chan struct{})
 	}
 	if d.udpConn != nil {
 		_ = d.udpConn.Close()
@@ -307,7 +287,12 @@ func (c *socks5PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	return nw - headerLen, nil
 }
 
-func (c *socks5PacketConn) Close() error { c.done(); return nil }
+func (c *socks5PacketConn) Close() error {
+	if c.done != nil {
+		c.done()
+	}
+	return nil
+}
 
 func (c *socks5PacketConn) LocalAddr() net.Addr {
 	return c.conn.LocalAddr()

@@ -217,8 +217,8 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 	qname = dnsutil.Canonical(qname)
 
-	// Strip EDNS OPT pseudo-record from additional before caching.
-	additional = stripOPT(cloneRRs(additional))
+	// Strip EDNS OPT pseudo-record from additional before caching (stripOPT allocates a new slice).
+	additional = stripOPT(additional)
 
 	// Clone records to prevent downstream mutations from corrupting the cache.
 	answer = cloneRRs(answer)
@@ -233,6 +233,10 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	var msgWire []byte
 	if err := msg.Pack(); err == nil {
 		msgWire = msg.Data
+	} else {
+		log.Debugf("CACHE: pack failed for %s (type=%d): %v — not stored", qname, qtype, err)
+		pool.DefaultMessage.Put(msg)
+		return 0
 	}
 	pool.DefaultMessage.Put(msg)
 

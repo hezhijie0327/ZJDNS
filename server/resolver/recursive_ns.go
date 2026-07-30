@@ -104,9 +104,20 @@ func (r *Recursive) cacheGlueRecords(glue map[string][]dns.RR) {
 		return
 	}
 	for nsName, records := range glue {
-		if len(records) > 0 {
-			qtype := dns.RRToType(records[0])
-			r.cache.Set(nsName, qtype, dns.ClassINET, nil, false, records, nil, nil, false)
+		var aGlue, aaaaGlue []dns.RR
+		for _, rec := range records {
+			switch rec.(type) {
+			case *dns.A:
+				aGlue = append(aGlue, rec)
+			case *dns.AAAA:
+				aaaaGlue = append(aaaaGlue, rec)
+			}
+		}
+		if len(aGlue) > 0 {
+			r.cache.Set(nsName, dns.TypeA, dns.ClassINET, nil, false, aGlue, nil, nil, false)
+		}
+		if len(aaaaGlue) > 0 {
+			r.cache.Set(nsName, dns.TypeAAAA, dns.ClassINET, nil, false, aaaaGlue, nil, nil, false)
 		}
 	}
 	for _, records := range glue {

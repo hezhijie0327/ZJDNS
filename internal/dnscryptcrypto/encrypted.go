@@ -106,7 +106,6 @@ type EncryptedResponse struct {
 func (r *EncryptedResponse) Encrypt(
 	packet []byte,
 	sharedKey [SharedKeySize]byte,
-	isUDP bool,
 	maxWireLen int,
 ) (response []byte, err error) {
 	// The resolver nonce (bytes 12-23) is fully random, per §7.2 of
@@ -119,7 +118,7 @@ func (r *EncryptedResponse) Encrypt(
 	response = append(response, r.Nonce[:]...)
 
 	if r.ESVersion.IsPQ() {
-		return r.encryptPQResponse(packet, sharedKey, isUDP, maxWireLen, response)
+		return r.encryptPQResponse(packet, sharedKey, maxWireLen, response)
 	}
 
 	// Classical path: deterministic padding per §5.4.5 — derived from
@@ -160,7 +159,6 @@ func (r *EncryptedResponse) Encrypt(
 func (r *EncryptedResponse) encryptPQResponse(
 	packet []byte,
 	sharedKey [SharedKeySize]byte,
-	isUDP bool,
 	maxWireLen int,
 	response []byte,
 ) ([]byte, error) {
