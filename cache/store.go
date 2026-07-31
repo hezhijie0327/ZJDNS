@@ -144,36 +144,29 @@ func (c *Cache) sortAnswerByLatency(entry *Entry) {
 	}
 
 	rrToIP := make(map[dns.RR]string, len(entry.Answer))
-	ips := make([]string, 0, len(entry.Answer))
+	addrRRs := make([]dns.RR, 0, len(entry.Answer))
 	for _, rr := range entry.Answer {
 		if ip, ok := zdnsutil.ExtractIPString(rr); ok {
 			rrToIP[rr] = ip
-			ips = append(ips, ip)
+			addrRRs = append(addrRRs, rr)
 		}
 	}
-	if len(ips) <= 1 {
+	if len(addrRRs) <= 1 {
 		return
 	}
 
+	ips := make([]string, len(addrRRs))
+	for i, rr := range addrRRs {
+		ips[i] = rrToIP[rr]
+	}
 	latencies := c.lookupIPLatencies(ips)
 	if len(latencies) == 0 {
 		return
 	}
 
-	slices.SortStableFunc(entry.Answer, func(a, b dns.RR) int {
-		aIP, aIsAddr := rrToIP[a]
-		bIP, bIsAddr := rrToIP[b]
-		if aIsAddr != bIsAddr {
-			if !aIsAddr {
-				return -1
-			}
-			return 1
-		}
-		if !aIsAddr {
-			return 0
-		}
-		aLat, aOK := latencies[aIP]
-		bLat, bOK := latencies[bIP]
+	slices.SortStableFunc(addrRRs, func(a, b dns.RR) int {
+		aLat, aOK := latencies[rrToIP[a]]
+		bLat, bOK := latencies[rrToIP[b]]
 		switch {
 		case aOK != bOK:
 			if aOK {
@@ -187,6 +180,15 @@ func (c *Cache) sortAnswerByLatency(entry *Entry) {
 		}
 		return dns.Compare(a, b)
 	})
+
+	// Merge sorted A/AAAA back into Answer — non-IP records stay in place.
+	j := 0
+	for i, rr := range entry.Answer {
+		if _, ok := rrToIP[rr]; ok {
+			entry.Answer[i] = addrRRs[j]
+			j++
+		}
+	}
 }
 
 // lookupIPLatencies fetches latencies for a batch of IPs.
