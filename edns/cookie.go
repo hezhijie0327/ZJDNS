@@ -214,7 +214,9 @@ func rfc9018MAC(key *[16]byte, clientCookie []byte, reserved [3]byte, timestamp 
 	var buf [36]byte // buf is at most 8+1+3+4+16 = 32 bytes
 	n := copy(buf[:], clientCookie[:8])
 	buf[n] = cookieVersion
-	n += 4 // version + 3 reserved bytes (already zero)
+	n++
+	copy(buf[n:], reserved[:])
+	n += 3
 	binary.BigEndian.PutUint32(buf[n:], timestamp)
 	n += 4
 
@@ -233,7 +235,7 @@ func rfc9018MAC(key *[16]byte, clientCookie []byte, reserved [3]byte, timestamp 
 
 	var mac [8]byte
 	sum := siphash.Sum64(key, buf[:n+ipLen])
-	binary.BigEndian.PutUint64(mac[:], sum)
+	binary.LittleEndian.PutUint64(mac[:], sum)
 	return mac
 }
 

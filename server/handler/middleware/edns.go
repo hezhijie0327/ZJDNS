@@ -51,9 +51,9 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 
 		cookieOpt := qctx.CookieOpt
 
-		// RFC 7873: Short server cookie (1-15 bytes) → BADCOOKIE.
-		if cookieOpt != nil && len(cookieOpt.ServerCookie) > 0 && len(cookieOpt.ServerCookie) < edns.DefaultCookieServerLen {
-			log.Debugf("EDNS: short server cookie (%d bytes) from %s, returning BADCOOKIE", len(cookieOpt.ServerCookie), qctx.ClientIP)
+		// RFC 7873: Server cookie length != 16 bytes → BADCOOKIE.
+		if cookieOpt != nil && len(cookieOpt.ServerCookie) > 0 && len(cookieOpt.ServerCookie) != edns.DefaultCookieServerLen {
+			log.Debugf("EDNS: bad server cookie length %d (expected %d) from %s, returning BADCOOKIE", len(cookieOpt.ServerCookie), edns.DefaultCookieServerLen, qctx.ClientIP)
 			qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt, qctx.ECSOpt)
 			return nil
 		}
