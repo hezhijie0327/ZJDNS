@@ -13,6 +13,8 @@ import (
 
 const nsec3OptOutFlag = 0x01
 
+// ── NSEC denial-of-existence ─────────────────────────────────────────────────
+
 // verifyNSEC checks whether any NSEC record in the slice cryptographically
 // proves the non-existence of the queried name or type.
 func (c *CryptoValidator) verifyNSEC(authSigs []*dns.RRSIG, nsecs []*dns.NSEC, verifiedDNSKEYs []*dns.DNSKEY, normalizedQname string, qtype uint16, denialType string) bool {
@@ -76,32 +78,48 @@ func matchesNSECDenial(nsec *dns.NSEC, normalizedQname string, qtype uint16, den
 	return false
 }
 
-// verifyNSEC3 checks whether any NSEC3 record in the slice cryptographically
-// proves the non-existence of the queried name or type.
+// ── NSEC3 denial-of-existence ────────────────────────────────────────────────
+
+// verifyNSEC3 verifies the NSEC3 denial-of-existence proof (RFC 5155 §7–8).
+// All NSEC3 records are first filtered to the RRSIG-verified subset (skipping
+// ancestor delegations per RFC 6840 §4.1).  The verified subset must share
+// consistent NSEC3 parameters (§7.2).  If the proof passes, the denial is
+// cryptographically valid.
 func (c *CryptoValidator) verifyNSEC3(authSigs []*dns.RRSIG, nsec3s []*dns.NSEC3, verifiedDNSKEYs []*dns.DNSKEY, normalizedQname string, qtype uint16, denialType string) bool {
+	verified := c.filterVerifiedNSEC3(authSigs, nsec3s, verifiedDNSKEYs)
+	if len(verified) == 0 {
+		return false
+	}
+	if !nsec3ParamsConsistent(verified) {
+		return false
+	}
+	params := verified[0]
+	return matchesNSEC3Denial(verified, normalizedQname, qtype, denialType, params.Hash, params.Iterations, params.Salt)
+}
+
+// filterVerifiedNSEC3 returns the subset of NSEC3 records whose RRSIGs verify
+// against the trusted DNSKEYs, skipping ancestor delegation records.
+func (c *CryptoValidator) filterVerifiedNSEC3(authSigs []*dns.RRSIG, nsec3s []*dns.NSEC3, verifiedDNSKEYs []*dns.DNSKEY) []*dns.NSEC3 {
+	var verified []*dns.NSEC3
 	for _, nsec3 := range nsec3s {
-		// RFC 6840 §4.1: ancestor delegation NSEC3 MUST NOT
-		// prove non-existence below that zone cut.
 		if isAncestorDelegationNSEC3(nsec3) {
 			continue
 		}
 		rrsigs := FindRRSIGs(authSigs, nsec3.Header().Name, dns.TypeNSEC3)
-		if !c.verifyNSEC3Record(nsec3, rrsigs, verifiedDNSKEYs, normalizedQname, qtype, denialType) {
-			continue
+		if c.verifyNSEC3RRSIG(nsec3, rrsigs, verifiedDNSKEYs) {
+			verified = append(verified, nsec3)
 		}
-		return true
 	}
-	return false
+	return verified
 }
 
-// verifyNSEC3Record verifies a single NSEC3 record's RRSIG and checks that it
-// proves the denial.
-func (c *CryptoValidator) verifyNSEC3Record(nsec3 *dns.NSEC3, rrsigs []*dns.RRSIG, verifiedDNSKEYs []*dns.DNSKEY, normalizedQname string, qtype uint16, denialType string) bool {
+// verifyNSEC3RRSIG verifies the RRSIG covering a single NSEC3 record against
+// the trusted DNSKEYs.
+func (c *CryptoValidator) verifyNSEC3RRSIG(nsec3 *dns.NSEC3, rrsigs []*dns.RRSIG, verifiedDNSKEYs []*dns.DNSKEY) bool {
 	if len(rrsigs) == 0 {
 		return false
 	}
 	rrset := []dns.RR{nsec3}
-	hashedQname := nsec3HashName(normalizedQname, nsec3.Hash, nsec3.Iterations, nsec3.Salt)
 	for _, sig := range rrsigs {
 		for _, key := range verifiedDNSKEYs {
 			if key.KeyTag() != sig.KeyTag {
@@ -110,33 +128,182 @@ func (c *CryptoValidator) verifyNSEC3Record(nsec3 *dns.NSEC3, rrsigs []*dns.RRSI
 			if err := c.VerifyRRset(rrset, sig, key); err != nil {
 				continue
 			}
-			if matchesNSEC3Denial(nsec3, hashedQname, qtype, denialType) {
-				return true
-			}
+			return true
 		}
 	}
 	return false
 }
 
-// matchesNSEC3Denial checks whether an NSEC3 record proves the requested denial.
-func matchesNSEC3Denial(nsec3 *dns.NSEC3, hashedQname string, qtype uint16, denialType string) bool {
+// matchesNSEC3Denial checks whether the verified NSEC3 set proves the
+// requested denial (RFC 5155 §8.4 NXDOMAIN, §8.5 NODATA, §8.7 wildcard NODATA).
+func matchesNSEC3Denial(verified []*dns.NSEC3, normalizedQname string, qtype uint16, denialType string, hashAlg uint8, iterations uint16, salt string) bool {
 	switch denialType {
 	case "NXDOMAIN":
-		owner := strings.ToLower(nsec3.Header().Name)
-		next := strings.ToLower(nsec3.NextDomain)
-		return isDomainInRange(hashedQname, owner, next)
+		return matchesNSEC3NXDOMAIN(verified, normalizedQname, hashAlg, iterations, salt)
 	case "NODATA":
-		owner := strings.ToLower(nsec3.Header().Name)
-		if owner != hashedQname {
-			return false
-		}
-		// RFC 6840 §4.3: same CNAME check as NSEC.
-		if slices.Contains(nsec3.TypeBitMap, dns.TypeCNAME) {
-			return false
-		}
-		return !slices.Contains(nsec3.TypeBitMap, qtype)
+		return matchesNSEC3NODATA(verified, normalizedQname, qtype, hashAlg, iterations, salt)
 	}
 	return false
+}
+
+// matchesNSEC3NXDOMAIN implements RFC 5155 §8.4.
+//  1. Closest-encloser proof (§8.3): findClosestEncloser validates both the CE
+//     match and the next-closer cover in a single traversal.
+//  2. Wildcard denial: an NSEC3 must cover H(*.closest_encloser) — a matching
+//     record would mean the wildcard exists, which contradicts NXDOMAIN.
+func matchesNSEC3NXDOMAIN(verified []*dns.NSEC3, qname string, hashAlg uint8, iterations uint16, salt string) bool {
+	ce, ok := findClosestEncloser(verified, qname, hashAlg, iterations, salt)
+	if !ok {
+		return false
+	}
+	wildcardHash := nsec3HashName("*."+ce, hashAlg, iterations, salt)
+	if wildcardHash == "" {
+		return false
+	}
+	return hasNSEC3Covering(verified, wildcardHash)
+}
+
+// matchesNSEC3NODATA implements RFC 5155 §8.5 and §8.7.
+//
+// §8.5 (ordinary NODATA): an NSEC3 matching H(qname) with neither QTYPE nor
+// CNAME in its TypeBitMap.  Empty non-terminals (ENT) have an empty bitmap and
+// pass this check naturally.
+//
+// §8.7 (wildcard NODATA): when no NSEC3 matches H(qname), the qname does not
+// exist.  A wildcard expansion exists at *.closest_encloser — proven by an
+// NSEC3 matching H(*.closest_encloser) with QTYPE and CNAME absent.
+func matchesNSEC3NODATA(verified []*dns.NSEC3, qname string, qtype uint16, hashAlg uint8, iterations uint16, salt string) bool {
+	qnameHash := nsec3HashName(qname, hashAlg, iterations, salt)
+	if qnameHash == "" {
+		return false
+	}
+
+	// §8.5: exact match on H(qname)
+	if matched := matchNSEC3(verified, qnameHash); matched != nil {
+		if slices.Contains(matched.TypeBitMap, dns.TypeCNAME) {
+			return false
+		}
+		return !slices.Contains(matched.TypeBitMap, qtype)
+	}
+
+	// §8.7: no QNAME match — try wildcard NODATA
+	ce, ok := findClosestEncloser(verified, qname, hashAlg, iterations, salt)
+	if !ok {
+		return false
+	}
+	wildcardHash := nsec3HashName("*."+ce, hashAlg, iterations, salt)
+	if wildcardHash == "" {
+		return false
+	}
+	matched := matchNSEC3(verified, wildcardHash)
+	if matched == nil {
+		return false
+	}
+	if slices.Contains(matched.TypeBitMap, dns.TypeCNAME) {
+		return false
+	}
+	return !slices.Contains(matched.TypeBitMap, qtype)
+}
+
+// ── NSEC3 proof helpers ─────────────────────────────────────────────────────
+
+// findClosestEncloser implements RFC 5155 §8.3.
+//
+// Starting from SNAME = QNAME, it walks upward label by label:
+//   - If H(SNAME) matches an NSEC3: the covered flag MUST be true (set by a
+//     covering NSEC3 at the previous, longer SNAME — the "next closer" cover);
+//     otherwise the proof is bogus (attacker stripped the next-closer proof).
+//   - If H(SNAME) has no match: set covered = hasNSEC3Covering(H(SNAME)).
+//
+// Returns (closestEncloser, true) on success.
+func findClosestEncloser(verified []*dns.NSEC3, qname string, hashAlg uint8, iterations uint16, salt string) (string, bool) {
+	sname := qname
+	covered := false
+
+	for {
+		h := nsec3HashName(sname, hashAlg, iterations, salt)
+		if h == "" {
+			return "", false
+		}
+
+		if matchNSEC3(verified, h) != nil {
+			if covered {
+				return sname, true
+			}
+			// Matched without prior cover — bogus (RFC 5155 §8.3).
+			return "", false
+		}
+
+		covered = hasNSEC3Covering(verified, h)
+
+		next := stripLeftmostLabel(sname)
+		if next == "" || next == sname {
+			return "", false
+		}
+		sname = next
+	}
+}
+
+// matchNSEC3 returns the first NSEC3 whose owner hash label equals hash,
+// or nil if none matches.
+func matchNSEC3(verified []*dns.NSEC3, hash string) *dns.NSEC3 {
+	h := strings.ToLower(hash)
+	for _, n := range verified {
+		if nsec3HashLabel(n.Header().Name) == h {
+			return n
+		}
+	}
+	return nil
+}
+
+// hasNSEC3Covering reports whether any NSEC3 in the verified set covers hash
+// (i.e., hash falls inside the (owner, next) interval of that record).
+func hasNSEC3Covering(verified []*dns.NSEC3, hash string) bool {
+	for _, n := range verified {
+		owner := nsec3HashLabel(n.Header().Name)
+		next := strings.ToLower(n.NextDomain)
+		if isDomainInRange(hash, owner, next) {
+			return true
+		}
+	}
+	return false
+}
+
+// nsec3HashLabel returns the leftmost (hash) label of an NSEC3 owner name,
+// lowercased for comparison.  Also works on bare NextDomain hashes — if there
+// is no dot, the whole string is returned lowercased.
+func nsec3HashLabel(owner string) string {
+	before, _, ok := strings.Cut(owner, ".")
+	if !ok {
+		return strings.ToLower(owner)
+	}
+	return strings.ToLower(before)
+}
+
+// nsec3ParamsConsistent checks that all NSEC3 records share the same hash
+// algorithm, iterations, and salt (RFC 5155 §7.2, §8.2).
+func nsec3ParamsConsistent(nsec3s []*dns.NSEC3) bool {
+	if len(nsec3s) < 2 {
+		return true
+	}
+	first := nsec3s[0]
+	for _, n := range nsec3s[1:] {
+		if n.Hash != first.Hash || n.Iterations != first.Iterations || n.Salt != first.Salt {
+			return false
+		}
+	}
+	return true
+}
+
+// stripLeftmostLabel strips the leftmost label from an absolute DNS name.
+// E.g., "a.b.example.com." → "b.example.com.".
+// Returns "" if there are no more labels to strip.
+func stripLeftmostLabel(name string) string {
+	idx := strings.IndexByte(name, '.')
+	if idx < 0 || idx == len(name)-1 {
+		return ""
+	}
+	return name[idx+1:]
 }
 
 // nsec3HashName hashes a domain name using the NSEC3 parameters specified in the
@@ -153,6 +320,8 @@ func nsec3HashName(name string, hashAlg uint8, iterations uint16, salt string) s
 	}
 	return dnsutil.NSEC3Name(name, salt, iterations)
 }
+
+// ── Denial-of-existence dispatch ─────────────────────────────────────────────
 
 // isDenialOfExistenceValid verifies signed NSEC/NSEC3 records against the
 // trusted DNSKEYs and checks that they cryptographically prove the non-existence
@@ -190,6 +359,8 @@ func (c *CryptoValidator) isNXDOMAINValid(response *dns.Msg, qname string, qtype
 func (c *CryptoValidator) isNODATAValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
 	return c.isDenialOfExistenceValid(response, qname, qtype, verifiedDNSKEYs, "NODATA")
 }
+
+// ── Delegation / opt-out helpers ─────────────────────────────────────────────
 
 // isAncestorDelegation checks whether an NSEC record is an ancestor
 // delegation record per RFC 6840 §4.1.  An NSEC with NS=1, SOA=0, and

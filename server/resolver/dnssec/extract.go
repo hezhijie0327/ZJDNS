@@ -2,6 +2,7 @@ package dnssec
 
 import (
 	"slices"
+	"strings"
 	"zjdns/cache"
 	"zjdns/config"
 
@@ -39,7 +40,7 @@ func FindRRSIGs(sigs []*dns.RRSIG, ownerName string, typeCovered uint16) []*dns.
 		if rrsig == nil {
 			continue
 		}
-		if rrsig.TypeCovered == typeCovered && rrsig.Header().Name == ownerName {
+		if rrsig.TypeCovered == typeCovered && strings.EqualFold(rrsig.Header().Name, ownerName) {
 			result = append(result, rrsig)
 		}
 	}
@@ -75,6 +76,18 @@ func FindCDS(rrs []dns.RR) []*dns.CDS {
 	for _, rr := range rrs {
 		if cds, ok := rr.(*dns.CDS); ok {
 			records = append(records, cds)
+		}
+	}
+	return records
+}
+
+// FindCDNSKEY extracts CDNSKEY records from an RR slice (RFC 7344).
+// CDNSKEY embeds DNSKEY — same wire format but distinct RR type.
+func FindCDNSKEY(rrs []dns.RR) []*dns.CDNSKEY {
+	var records []*dns.CDNSKEY
+	for _, rr := range rrs {
+		if cdnskey, ok := rr.(*dns.CDNSKEY); ok {
+			records = append(records, cdnskey)
 		}
 	}
 	return records
@@ -133,7 +146,7 @@ func isDomainInRange(name, lower, upper string) bool {
 		return true
 	}
 
-	if loUp >= 0 {
+	if loUp > 0 {
 		return loName < 0 || naUp < 0
 	}
 

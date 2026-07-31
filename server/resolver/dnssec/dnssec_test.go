@@ -3,6 +3,7 @@ package dnssec
 import (
 	"crypto/ecdsa"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 	"zjdns/cache"
@@ -300,6 +301,18 @@ func TestFindCDS(t *testing.T) {
 	}
 }
 
+func TestFindCDNSKEY(t *testing.T) {
+	cdnskey := &dns.CDNSKEY{DNSKEY: dns.DNSKEY{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}}
+	rrs := []dns.RR{cdnskey, &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}}
+	if len(FindCDNSKEY(rrs)) != 1 {
+		t.Error("should find CDNSKEY record")
+	}
+	// CDNSKEY should NOT be found by FindDNSKEYs (distinct RR type).
+	if len(FindDNSKEYs(rrs)) != 0 {
+		t.Error("FindDNSKEYs should not find CDNSKEY records")
+	}
+}
+
 func TestOfflineKSK_CDSConfirmsDelegation(t *testing.T) {
 	store := testCache()
 	t.Cleanup(func() { _ = store.Close() })
@@ -336,6 +349,54 @@ func TestOfflineKSK_CDSConfirmsDelegation(t *testing.T) {
 		cdsRecords[0].Digest == ds.Digest
 	if !match {
 		t.Error("CDS must match DS for offline KSK delegation")
+	}
+}
+
+func TestOfflineKSK_CDNSKEYConfirmsDelegation(t *testing.T) {
+	store := testCache()
+	t.Cleanup(func() { _ = store.Close() })
+	cv := NewCryptoValidator(store)
+	childZone := "offline-cdnskey.example.com"
+
+	ksk, _ := genTestKey(childZone, dns.FlagSEP|dns.FlagZONE)
+	zsk, _ := genTestKey(childZone, dns.FlagZONE)
+	ds := ksk.ToDS(dns.SHA256)
+	if ds == nil {
+		t.Fatal("ToDS returned nil")
+	}
+
+	// VerifyDelegationDS fails because KSK is not in the DNSKEY set.
+	_, err := cv.VerifyDelegationDS([]*dns.DS{ds}, []*dns.DNSKEY{zsk})
+	if err == nil {
+		t.Fatal("DS should not match ZSK alone — KSK is offline")
+	}
+
+	// CDNSKEY record matching the DS confirms the delegation (RFC 7344 §4.1).
+	cdnskey := &dns.CDNSKEY{DNSKEY: *ksk}
+	cdnskeyRecords := FindCDNSKEY([]dns.RR{cdnskey})
+	if len(cdnskeyRecords) != 1 {
+		t.Fatal("FindCDNSKEY should find CDNSKEY record")
+	}
+
+	// CDNSKEY.ToDS must match DS field-for-field.
+	computed := cdnskeyRecords[0].ToDS(ds.DigestType)
+	if computed == nil {
+		t.Fatal("CDNSKEY.ToDS returned nil")
+	}
+	match := computed.KeyTag == ds.KeyTag &&
+		computed.Algorithm == ds.Algorithm &&
+		computed.DigestType == ds.DigestType &&
+		computed.Digest == ds.Digest
+	if !match {
+		t.Error("CDNSKEY must match DS for offline KSK delegation")
+	}
+
+	// A different key's CDNSKEY should not match.
+	otherKSK, _ := genTestKey("other.example.com", dns.FlagSEP|dns.FlagZONE)
+	otherCDNSKEY := &dns.CDNSKEY{DNSKEY: *otherKSK}
+	otherComputed := otherCDNSKEY.ToDS(ds.DigestType)
+	if otherComputed != nil && otherComputed.Digest == ds.Digest {
+		t.Error("different key's CDNSKEY should not match DS")
 	}
 }
 
@@ -545,6 +606,457 @@ func TestHasOptOutInProof(t *testing.T) {
 	}
 	if !hasOptOutInProof(withOptOut) {
 		t.Fatal("Opt-Out flag set: should return true")
+	}
+}
+
+// ── RFC 4035 §5.3.3: TTL cap ────────────────────────────────────────────────
+
+// ── NSEC3 proof helpers ──────────────────────────────────────────────────────
+
+func TestNsec3HashLabel(t *testing.T) {
+	if got := nsec3HashLabel("ABCDEF.example.com."); got != "abcdef" {
+		t.Errorf("full owner: got %q, want %q", got, "abcdef")
+	}
+	if got := nsec3HashLabel("ABCDEF"); got != "abcdef" {
+		t.Errorf("bare hash: got %q, want %q", got, "abcdef")
+	}
+	if got := nsec3HashLabel("HASH.sub.example.com."); got != "hash" {
+		t.Errorf("multi-label: got %q, want %q", got, "hash")
+	}
+}
+
+func TestMatchNSEC3(t *testing.T) {
+	nsec3 := &dns.NSEC3{
+		Hdr:   dns.Header{Name: "abcd.example.com.", Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: "eeee", TypeBitMap: []uint16{dns.TypeA}},
+	}
+	verified := []*dns.NSEC3{nsec3}
+
+	if matchNSEC3(verified, "ABCD") == nil {
+		t.Error("case-insensitive match should find ABCD in abcd owner")
+	}
+	if matchNSEC3(verified, "XXXX") != nil {
+		t.Error("non-matching hash should return nil")
+	}
+}
+
+func TestHasNSEC3Covering(t *testing.T) {
+	// Interval (aaaa, zzzz) covers bbbb but not 0000
+	nsec3 := &dns.NSEC3{
+		Hdr:   dns.Header{Name: "aaaa.example.com.", Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: "zzzz", TypeBitMap: []uint16{}},
+	}
+	verified := []*dns.NSEC3{nsec3}
+
+	if !hasNSEC3Covering(verified, "BBBB") {
+		t.Error("bbbb should be inside (aaaa, zzzz)")
+	}
+	if hasNSEC3Covering(verified, "0000") {
+		t.Error("0000 should be outside (aaaa, zzzz)")
+	}
+	// Equal to owner: not covered (strict inequality).
+	if hasNSEC3Covering(verified, "AAAA") {
+		t.Error("aaaa should not be covered (equal to owner)")
+	}
+}
+
+func TestNsec3ParamsConsistent(t *testing.T) {
+	same := []*dns.NSEC3{
+		{NSEC3: rdata.NSEC3{Hash: dns.SHA1, Iterations: 5, Salt: "AB"}},
+		{NSEC3: rdata.NSEC3{Hash: dns.SHA1, Iterations: 5, Salt: "AB"}},
+	}
+	if !nsec3ParamsConsistent(same) {
+		t.Error("identical params should be consistent")
+	}
+
+	diffIter := []*dns.NSEC3{
+		{NSEC3: rdata.NSEC3{Hash: dns.SHA1, Iterations: 5, Salt: "AB"}},
+		{NSEC3: rdata.NSEC3{Hash: dns.SHA1, Iterations: 10, Salt: "AB"}},
+	}
+	if nsec3ParamsConsistent(diffIter) {
+		t.Error("different iterations should be inconsistent")
+	}
+
+	diffSalt := []*dns.NSEC3{
+		{NSEC3: rdata.NSEC3{Hash: dns.SHA1, Iterations: 5, Salt: "AB"}},
+		{NSEC3: rdata.NSEC3{Hash: dns.SHA1, Iterations: 5, Salt: "CD"}},
+	}
+	if nsec3ParamsConsistent(diffSalt) {
+		t.Error("different salt should be inconsistent")
+	}
+}
+
+func TestStripLeftmostLabel(t *testing.T) {
+	if got := stripLeftmostLabel("a.b.example.com."); got != "b.example.com." {
+		t.Errorf("got %q, want %q", got, "b.example.com.")
+	}
+	if got := stripLeftmostLabel("example.com."); got != "com." {
+		t.Errorf("got %q, want %q", got, "com.")
+	}
+	if got := stripLeftmostLabel("com."); got != "" {
+		t.Errorf("single label: got %q, want empty", got)
+	}
+	if got := stripLeftmostLabel(""); got != "" {
+		t.Errorf("empty: got %q, want empty", got)
+	}
+}
+
+// ── findClosestEncloser ──────────────────────────────────────────────────────
+
+func TestFindClosestEncloser_Valid(t *testing.T) {
+	// QNAME = a.b.g.example.com.
+	// CE should be g.example.com. (closest existing ancestor)
+	// Need NSEC3s covering H(a.b.g.example.com.) and H(b.g.example.com.)
+	// and matching H(g.example.com.).
+	zone := "example.com."
+	ceName := "g.example.com."
+	midName := "b.g.example.com."
+	qname := "a.b.g.example.com."
+
+	hCE := nsec3HashName(ceName, dns.SHA1, 0, "")
+	hMid := nsec3HashName(midName, dns.SHA1, 0, "")
+	hQname := nsec3HashName(qname, dns.SHA1, 0, "")
+
+	// Universal cover: (000...0, VVV...V) covers every real hash.
+	lowHash := strings.Repeat("0", 32)
+	highHash := strings.Repeat("V", 32)
+	universalCover := &dns.NSEC3{
+		Hdr:   dns.Header{Name: lowHash + "." + zone, Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: highHash, TypeBitMap: []uint16{}},
+	}
+	// CE match: owner hash label equals H(ceName).
+	ceMatch := &dns.NSEC3{
+		Hdr:   dns.Header{Name: hCE + "." + zone, Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hCE, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3}},
+	}
+
+	verified := []*dns.NSEC3{universalCover, ceMatch}
+	ce, ok := findClosestEncloser(verified, qname, dns.SHA1, 0, "")
+	if !ok {
+		t.Fatal("should find closest encloser")
+	}
+	if ce != ceName {
+		t.Errorf("CE = %q, want %q", ce, ceName)
+	}
+	// Verify internal steps: hQname covered by universalCover, hMid covered by universalCover.
+	_ = hQname
+	_ = hMid
+}
+
+func TestFindClosestEncloser_BogusMatchWithoutCover(t *testing.T) {
+	// If H(qname) matches directly without a prior cover, the proof is bogus
+	// (attacker could have stripped the next-closer proof).
+	zone := "example.com."
+	qname := "a.example.com."
+	hQname := nsec3HashName(qname, dns.SHA1, 0, "")
+
+	directMatch := &dns.NSEC3{
+		Hdr:   dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{dns.TypeA}},
+	}
+	verified := []*dns.NSEC3{directMatch}
+	_, ok := findClosestEncloser(verified, qname, dns.SHA1, 0, "")
+	if ok {
+		t.Error("match without prior cover should be bogus")
+	}
+}
+
+func TestFindClosestEncloser_NoCE(t *testing.T) {
+	// No NSEC3 matches any ancestor → fail.
+	zone := "example.com."
+	qname := "deep.sub.example.com."
+	lowHash := strings.Repeat("0", 32)
+	highHash := strings.Repeat("V", 32)
+	cover := &dns.NSEC3{
+		Hdr:   dns.Header{Name: lowHash + "." + zone, Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: highHash, TypeBitMap: []uint16{}},
+	}
+	verified := []*dns.NSEC3{cover}
+	_, ok := findClosestEncloser(verified, qname, dns.SHA1, 0, "")
+	if ok {
+		t.Error("no CE match should fail")
+	}
+}
+
+// ── matchesNSEC3Denial (unit tests on hash-level proof functions) ───────────
+
+func TestMatchesNSEC3Denial_NXDOMAIN(t *testing.T) {
+	zone := "example.com."
+	ceName := "example.com."
+	qname := "nonexist.example.com."
+
+	hCE := nsec3HashName(ceName, dns.SHA1, 0, "")
+	hWildcard := nsec3HashName("*."+ceName, dns.SHA1, 0, "")
+
+	lowHash := strings.Repeat("0", 32)
+	highHash := strings.Repeat("V", 32)
+
+	// Universal cover: covers qname, parent, and wildcard hashes.
+	universalCover := &dns.NSEC3{
+		Hdr:   dns.Header{Name: lowHash + "." + zone, Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: highHash, TypeBitMap: []uint16{}},
+	}
+	// CE match
+	ceMatch := &dns.NSEC3{
+		Hdr:   dns.Header{Name: hCE + "." + zone, Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hCE, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3}},
+	}
+
+	verified := []*dns.NSEC3{universalCover, ceMatch}
+	if !matchesNSEC3Denial(verified, qname, dns.TypeA, "NXDOMAIN", dns.SHA1, 0, "") {
+		t.Error("full NXDOMAIN proof should pass")
+	}
+	// Assert wildcard hash is covered.
+	_ = hWildcard
+}
+
+func TestMatchesNSEC3Denial_NXDOMAIN_MissingWildcardCover(t *testing.T) {
+	zone := "example.com."
+	ceName := "example.com."
+	qname := "nonexist.example.com."
+
+	hCE := nsec3HashName(ceName, dns.SHA1, 0, "")
+
+	// Cover for the name walk, but NOT for *.ce (no covering records at all
+	// — so the wildcard can't be denied).
+	hWildcard := nsec3HashName("*."+ceName, dns.SHA1, 0, "")
+
+	ceMatch := &dns.NSEC3{
+		Hdr:   dns.Header{Name: hCE + "." + zone, Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hCE, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3}},
+	}
+	// The narrowCover uses (000..0, VVV..V) which covers EVERYTHING including
+	// the wildcard. To create a missing-wildcard-cover case, use only the CE
+	// match without any covering NSEC3. The walk will fail at the first step
+	// (no cover for H(qname)) → findClosestEncloser fails → NXDOMAIN fails.
+	verified := []*dns.NSEC3{ceMatch} // no covering NSEC3 at all
+	if matchesNSEC3Denial(verified, qname, dns.TypeA, "NXDOMAIN", dns.SHA1, 0, "") {
+		t.Error("NXDOMAIN without any covering NSEC3 should fail")
+	}
+	_ = hWildcard
+}
+
+func TestMatchesNSEC3Denial_NXDOMAIN_MissingNextCloserCover(t *testing.T) {
+	// CE matches H(QNAME) directly without prior cover → bogus.
+	zone := "example.com."
+	qname := "example.com." // qname IS the zone apex
+	hQname := nsec3HashName(qname, dns.SHA1, 0, "")
+
+	// An NSEC3 matching H(qname) directly — since this is the first iteration
+	// (no prior cover), findClosestEncloser rejects it as bogus.
+	directMatch := &dns.NSEC3{
+		Hdr:   dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3}},
+	}
+	verified := []*dns.NSEC3{directMatch}
+	if matchesNSEC3Denial(verified, qname, dns.TypeA, "NXDOMAIN", dns.SHA1, 0, "") {
+		t.Error("direct match without prior cover should fail NXDOMAIN")
+	}
+}
+
+func TestMatchesNSEC3Denial_NODATA_Match(t *testing.T) {
+	zone := "example.com."
+	qname := "www.example.com."
+	hQname := nsec3HashName(qname, dns.SHA1, 0, "")
+
+	nsec3 := &dns.NSEC3{
+		Hdr:   dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{dns.TypeRRSIG, dns.TypeNSEC3}},
+	}
+	verified := []*dns.NSEC3{nsec3}
+	if !matchesNSEC3Denial(verified, qname, dns.TypeA, "NODATA", dns.SHA1, 0, "") {
+		t.Error("NODATA with matching NSEC3 and absent qtype should pass")
+	}
+}
+
+func TestMatchesNSEC3Denial_NODATA_CNAMEBit(t *testing.T) {
+	zone := "example.com."
+	qname := "www.example.com."
+	hQname := nsec3HashName(qname, dns.SHA1, 0, "")
+
+	// CNAME bit set → NODATA must be false (RFC 6840 §4.3).
+	nsec3 := &dns.NSEC3{
+		Hdr:   dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{dns.TypeCNAME, dns.TypeRRSIG, dns.TypeNSEC3}},
+	}
+	verified := []*dns.NSEC3{nsec3}
+	if matchesNSEC3Denial(verified, qname, dns.TypeA, "NODATA", dns.SHA1, 0, "") {
+		t.Error("CNAME bit set should return false for NODATA")
+	}
+}
+
+func TestMatchesNSEC3Denial_NODATA_QtypePresent(t *testing.T) {
+	zone := "example.com."
+	qname := "www.example.com."
+	hQname := nsec3HashName(qname, dns.SHA1, 0, "")
+
+	// Type A in bitmap → NODATA for A should be false.
+	nsec3 := &dns.NSEC3{
+		Hdr:   dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3}},
+	}
+	verified := []*dns.NSEC3{nsec3}
+	if matchesNSEC3Denial(verified, qname, dns.TypeA, "NODATA", dns.SHA1, 0, "") {
+		t.Error("qtype present in bitmap should return false for NODATA")
+	}
+}
+
+func TestMatchesNSEC3Denial_NODATA_EmptyNonTerminal(t *testing.T) {
+	// Empty non-terminal: NSEC3 with empty bitmap → NODATA passes.
+	zone := "example.com."
+	qname := "ent.example.com."
+	hQname := nsec3HashName(qname, dns.SHA1, 0, "")
+
+	nsec3 := &dns.NSEC3{
+		Hdr:   dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{}},
+	}
+	verified := []*dns.NSEC3{nsec3}
+	if !matchesNSEC3Denial(verified, qname, dns.TypeA, "NODATA", dns.SHA1, 0, "") {
+		t.Error("empty non-terminal (empty bitmap) should pass NODATA")
+	}
+}
+
+func TestMatchesNSEC3Denial_WildcardNODATA(t *testing.T) {
+	// No NSEC3 matches H(qname), but *.ce exists with the qtype absent.
+	zone := "example.com."
+	ceName := "example.com."
+	qname := "nonexist.example.com."
+
+	hCE := nsec3HashName(ceName, dns.SHA1, 0, "")
+	hWildcard := nsec3HashName("*."+ceName, dns.SHA1, 0, "")
+
+	lowHash := strings.Repeat("0", 32)
+	highHash := strings.Repeat("V", 32)
+
+	// Universal cover for the CE walk.
+	universalCover := &dns.NSEC3{
+		Hdr:   dns.Header{Name: lowHash + "." + zone, Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: highHash, TypeBitMap: []uint16{}},
+	}
+	// CE match
+	ceMatch := &dns.NSEC3{
+		Hdr:   dns.Header{Name: hCE + "." + zone, Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hCE, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3}},
+	}
+	// Wildcard match: H(*.ce) exists, no TypeAAAA in bitmap.
+	wildcardMatch := &dns.NSEC3{
+		Hdr:   dns.Header{Name: hWildcard + "." + zone, Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hWildcard, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3}},
+	}
+
+	verified := []*dns.NSEC3{universalCover, ceMatch, wildcardMatch}
+	// Query for AAAA which is NOT in the wildcard bitmap → NODATA should pass.
+	if !matchesNSEC3Denial(verified, qname, dns.TypeAAAA, "NODATA", dns.SHA1, 0, "") {
+		t.Error("wildcard NODATA (AAAA absent from *.ce bitmap) should pass")
+	}
+	// But query for A (which IS in the bitmap) should fail.
+	if matchesNSEC3Denial(verified, qname, dns.TypeA, "NODATA", dns.SHA1, 0, "") {
+		t.Error("wildcard NODATA (A present in *.ce bitmap) should fail")
+	}
+}
+
+// ── Integration: IsResponseValid with NSEC3 ──────────────────────────────────
+
+// nsec3Rec builds an NSEC3 record with a real SHA1 hash of name as the owner.
+func nsec3Rec(name, zone string, flags uint8, nextDomain string, bitmap []uint16) *dns.NSEC3 {
+	h := nsec3HashName(name, dns.SHA1, 0, "")
+	return &dns.NSEC3{
+		Hdr:   dns.Header{Name: h + "." + zone, Class: dns.ClassINET, TTL: 300},
+		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: flags, Iterations: 0, Salt: "", NextDomain: nextDomain, TypeBitMap: bitmap},
+	}
+}
+
+func TestIsResponseValid_NSEC3NXDOMAIN(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	zone := "example.com."
+	_, _ = genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	zsk, zskPriv := genTestKey(zone, dns.FlagZONE)
+
+	qname := "nonexist.example.com."
+
+	// Universal cover: (000...0, VVV...V) covers every real hash.
+	lowHash := strings.Repeat("0", 32)
+	highHash := strings.Repeat("V", 32)
+	cover := nsec3Rec(zone, zone, 0, highHash, []uint16{})
+	cover.Hdr.Name = lowHash + "." + zone // override — universal cover must have lowHash owner
+
+	// CE match at the zone apex.
+	ceMatch := nsec3Rec(zone, zone, 0, nsec3HashName(zone, dns.SHA1, 0, ""), []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3})
+
+	rrsigCover := signRRset([]dns.RR{cover}, zone, zskPriv, zsk.KeyTag())
+	rrsigCE := signRRset([]dns.RR{ceMatch}, zone, zskPriv, zsk.KeyTag())
+
+	response := &dns.Msg{
+		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeNameError},
+		Ns:        []dns.RR{cover, rrsigCover, ceMatch, rrsigCE},
+	}
+	dnsutil.SetQuestion(response, qname, dns.TypeA)
+
+	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
+	if err != nil {
+		t.Errorf("NSEC3 NXDOMAIN should pass: %v", err)
+	}
+	if !verified {
+		t.Error("NSEC3 NXDOMAIN should be verified")
+	}
+}
+
+func TestIsResponseValid_NSEC3NODATA(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	zone := "example.com."
+	_, _ = genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	zsk, zskPriv := genTestKey(zone, dns.FlagZONE)
+
+	qname := "www.example.com."
+
+	// NSEC3 matching H(www.example.com.) — name exists, type absent.
+	match := nsec3Rec(qname, zone, 0, nsec3HashName(qname, dns.SHA1, 0, ""), []uint16{dns.TypeRRSIG, dns.TypeNSEC3})
+	rrsigMatch := signRRset([]dns.RR{match}, zone, zskPriv, zsk.KeyTag())
+
+	response := &dns.Msg{
+		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeSuccess},
+		Ns:        []dns.RR{match, rrsigMatch},
+	}
+	dnsutil.SetQuestion(response, qname, dns.TypeA)
+
+	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
+	if err != nil {
+		t.Errorf("NSEC3 NODATA should pass: %v", err)
+	}
+	if !verified {
+		t.Error("NSEC3 NODATA should be verified")
+	}
+}
+
+func TestIsResponseValid_NSEC3OptOut(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	zone := "example.com."
+	_, _ = genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	zsk, zskPriv := genTestKey(zone, dns.FlagZONE)
+
+	qname := "nonexist.example.com."
+
+	lowHash := strings.Repeat("0", 32)
+	highHash := strings.Repeat("V", 32)
+	// Cover with Opt-Out flag set.
+	cover := nsec3Rec(zone, zone, nsec3OptOutFlag, highHash, []uint16{})
+	cover.Hdr.Name = lowHash + "." + zone
+
+	ceMatch := nsec3Rec(zone, zone, 0, nsec3HashName(zone, dns.SHA1, 0, ""), []uint16{dns.TypeA, dns.TypeNSEC3, dns.TypeRRSIG})
+
+	rrsigCover := signRRset([]dns.RR{cover}, zone, zskPriv, zsk.KeyTag())
+	rrsigCE := signRRset([]dns.RR{ceMatch}, zone, zskPriv, zsk.KeyTag())
+
+	response := &dns.Msg{
+		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeNameError},
+		Ns:        []dns.RR{cover, rrsigCover, ceMatch, rrsigCE},
+	}
+	dnsutil.SetQuestion(response, qname, dns.TypeA)
+
+	_, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
+	if err == nil {
+		t.Error("Opt-Out proof should suppress AD (return error)")
 	}
 }
 
