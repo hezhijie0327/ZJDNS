@@ -375,3 +375,65 @@ func TestOnEvict(t *testing.T) {
 		t.Errorf("onEvict after Get: want (c,3), got (%q,%d)", evictedKey, evictedVal)
 	}
 }
+
+func TestClear(t *testing.T) {
+	m := New[string, int](10)
+	m.Set("a", 1)
+	m.Set("b", 2)
+	m.Set("c", 3)
+
+	if m.Len() != 3 {
+		t.Fatalf("Len = %d, want 3 before Clear", m.Len())
+	}
+
+	m.Clear()
+
+	if m.Len() != 0 {
+		t.Errorf("Len = %d, want 0 after Clear", m.Len())
+	}
+
+	// Verify all keys are gone.
+	for _, k := range []string{"a", "b", "c"} {
+		if _, ok := m.Get(k); ok {
+			t.Errorf("key %q should not be present after Clear", k)
+		}
+	}
+
+	// Verify map is still usable after Clear.
+	m.Set("d", 4)
+	if v, ok := m.Get("d"); !ok || v != 4 {
+		t.Errorf("after Clear+Set: Get(d) = %d, %v; want 4, true", v, ok)
+	}
+}
+
+func TestClear_OnEvictCalled(t *testing.T) {
+	evicted := make(map[string]int)
+	m := New[string, int](10)
+	m.OnEvict = func(k string, v int) {
+		evicted[k] = v
+	}
+
+	m.Set("a", 1)
+	m.Set("b", 2)
+	m.Set("c", 3)
+
+	m.Clear()
+
+	if len(evicted) != 3 {
+		t.Errorf("OnEvict called %d times, want 3", len(evicted))
+	}
+	for _, k := range []string{"a", "b", "c"} {
+		if evicted[k] == 0 {
+			t.Errorf("OnEvict not called for key %q", k)
+		}
+	}
+}
+
+func TestClear_Empty(t *testing.T) {
+	m := New[string, int](10)
+	// Should not panic.
+	m.Clear()
+	if m.Len() != 0 {
+		t.Errorf("Len = %d, want 0", m.Len())
+	}
+}

@@ -134,11 +134,8 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			}()
 			// Bound the background refresh to prevent goroutine accumulation under
 			// pathological upstream latency.  refreshCtx already covers shutdown.
-			rc := m.refreshCtx
-			if rc == nil {
-				rc = context.Background()
-			}
-			refreshCtx, cancel := context.WithTimeout(rc, config.DefaultBackgroundTimeout)
+			// Note: refreshCtx is from errgroup.WithContext() and is never nil.
+			refreshCtx, cancel := context.WithTimeout(m.refreshCtx, config.DefaultBackgroundTimeout)
 			defer cancel()
 			question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
 			qr = m.resolver.Query(refreshCtx, question, ecsOpt)

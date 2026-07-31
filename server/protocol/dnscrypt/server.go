@@ -325,6 +325,8 @@ func (s *Server) rotateKeys() {
 			buildCertTXTForCert(newPair.PQ),
 		},
 	}
+	// Clear old shared key cache before replacing to release cached keys.
+	s.sharedKeyCache.Clear()
 	s.sharedKeyCache = lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize)
 	// RFC §11.7: rotate ticket keys alongside cert keys.
 	// Retain previous TK so outstanding tickets continue to verify (RFC §11.7.2:

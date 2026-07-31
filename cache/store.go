@@ -101,7 +101,8 @@ func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	msg := pool.DefaultMessage.Get()
 	msg.Data = msgWire
 	if err := msg.Unpack(); err != nil {
-		log.Warnf("CACHE: unpack wire for %s (type=%d): %v", qname, qtype, err)
+		pool.DefaultMessage.Put(msg)
+		log.Debugf("CACHE: unpack wire for %s (type=%d): %v", qname, qtype, err)
 		return nil, false, false
 	}
 	defer pool.DefaultMessage.Put(msg)

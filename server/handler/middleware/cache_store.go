@@ -89,8 +89,12 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	responseECS := qr.ECS
 	// RFC 7871 §7.3/§11.2: verify response ECS matches query.
 	if ecsOpt != nil && responseECS != nil && !edns.VerifyECSResponse(ecsOpt, responseECS) {
-		log.Debugf("EDNS: ECS mismatch — dropping spoofed response")
-		return nil
+		log.Debugf("EDNS: ECS mismatch — returning SERVFAIL for spoofed response")
+		msg := handler.BuildResponseMsg(qctx.Req)
+		msg.Rcode = dns.RcodeServerFailure
+		qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorOther, ExtraText: "ECS response mismatch"}
+		m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "error", Rcode: dns.RcodeServerFailure, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
+		return msg
 	}
 
 	if responseECS == nil && ecsOpt != nil {

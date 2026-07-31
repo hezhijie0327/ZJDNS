@@ -129,6 +129,22 @@ func (m *Map[K, V]) Delete(key K) {
 	m.mu.Unlock()
 }
 
+// Clear removes all entries from the map.
+// OnEvict is called for each evicted entry.
+func (m *Map[K, V]) Clear() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for e := m.head.next; e != m.tail; e = e.next {
+		if m.OnEvict != nil {
+			m.OnEvict(e.key, e.val)
+		}
+	}
+	m.m = make(map[K]*lruEntry[K, V], m.cap)
+	m.head.next = m.tail
+	m.tail.prev = m.head
+	m.len = 0
+}
+
 // Range calls fn for each entry in the map, from most recent to least recent.
 // Iteration stops if fn returns false.
 func (m *Map[K, V]) Range(fn func(K, V) bool) {
