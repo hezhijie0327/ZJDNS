@@ -349,6 +349,141 @@ func BenchmarkStoreParallel(b *testing.B) {
 	})
 }
 
+// ── Native BadgerDB optimisations (894449f + 408c77b) ────────────────────────
+
+func TestSet_Get_TimestampDerived(t *testing.T) {
+	// 894449f: Timestamp is NOT stored in the value — it is derived from
+	// BadgerDB's native ExpiresAt() at read time.
+	// expiresAt = timestamp + entryTTL + staleMaxAge
+	// → timestamp = expiresAt - entryTTL - staleMaxAge
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	beforeSet := time.Now().Unix()
+	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
+	afterSet := time.Now().Unix()
+
+	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if !found {
+		t.Fatal("entry not found")
+	}
+	if entry.Timestamp < beforeSet-5 || entry.Timestamp > afterSet+5 {
+		t.Errorf("Timestamp = %d, want ≈ [%d, %d] (derived from ExpiresAt)", entry.Timestamp, beforeSet, afterSet)
+	}
+	if entry.TTL != 300 {
+		t.Errorf("TTL = %d, want 300", entry.TTL)
+	}
+}
+
+func TestSet_Get_EntryTTLFromWire(t *testing.T) {
+	// This PR: entryTTL is derived from the unpacked DNS wire via minTTL(),
+	// not stored separately. The minimum positive TTL across all sections
+	// should be returned as Entry.TTL.
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	answer := []dns.RR{
+		&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 600}, A: rdata.A{Addr: netParseIP("192.0.2.1")}},
+	}
+	authority := []dns.RR{
+		&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 100}, NS: rdata.NS{Ns: "ns1.example.com."}},
+	}
+	additional := []dns.RR{
+		&dns.A{Hdr: dns.Header{Name: "ns1.example.com.", Class: dns.ClassINET, TTL: 200}, A: rdata.A{Addr: netParseIP("10.0.0.1")}},
+	}
+
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, answer, authority, additional, false)
+
+	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if !found {
+		t.Fatal("entry not found")
+	}
+	// Minimum across all sections: min(600, 100, 200) = 100.
+	if entry.TTL != 100 {
+		t.Errorf("TTL = %d, want 100 (min across all sections derived from wire)", entry.TTL)
+	}
+}
+
+func TestSet_Get_RawWireFidelity(t *testing.T) {
+	// This PR: the value is raw DNS wire — no header. RRs must survive
+	// the Set → Get round-trip with all fields intact.
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	answer := []dns.RR{
+		&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}},
+		&dns.AAAA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, AAAA: rdata.AAAA{Addr: netParseIP("2001:db8::1")}},
+	}
+	authority := []dns.RR{
+		&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: "ns1.example.com."}},
+	}
+
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, answer, authority, nil, false)
+
+	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if !found {
+		t.Fatal("entry not found")
+	}
+	if len(entry.Answer) != 2 {
+		t.Fatalf("Answer count = %d, want 2", len(entry.Answer))
+	}
+	if dns.RRToType(entry.Answer[0]) != dns.TypeA {
+		t.Errorf("Answer[0] type = %d, want A", dns.RRToType(entry.Answer[0]))
+	}
+	if dns.RRToType(entry.Answer[1]) != dns.TypeAAAA {
+		t.Errorf("Answer[1] type = %d, want AAAA", dns.RRToType(entry.Answer[1]))
+	}
+	if len(entry.Authority) != 1 {
+		t.Fatalf("Authority count = %d, want 1", len(entry.Authority))
+	}
+	if dns.RRToType(entry.Authority[0]) != dns.TypeNS {
+		t.Errorf("Authority[0] type = %d, want NS", dns.RRToType(entry.Authority[0]))
+	}
+}
+
+func TestSet_Get_CNAMERecords(t *testing.T) {
+	// CNAME records are common in DNS; verify they survive the raw-wire round-trip.
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	answer := []dns.RR{
+		&dns.CNAME{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 600}, CNAME: rdata.CNAME{Target: "example.com."}},
+		&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}},
+	}
+
+	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, answer, nil, nil, false)
+
+	entry, found, _ := mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if !found {
+		t.Fatal("entry not found")
+	}
+	if len(entry.Answer) != 2 {
+		t.Fatalf("Answer count = %d, want 2", len(entry.Answer))
+	}
+	if dns.RRToType(entry.Answer[0]) != dns.TypeCNAME {
+		t.Errorf("Answer[0] type = %d, want CNAME", dns.RRToType(entry.Answer[0]))
+	}
+	if dns.RRToType(entry.Answer[1]) != dns.TypeA {
+		t.Errorf("Answer[1] type = %d, want A", dns.RRToType(entry.Answer[1]))
+	}
+}
+
+func TestDBSize_AfterClose(t *testing.T) {
+	mc := testStore()
+	_ = mc.Close()
+
+	lsm, vlog := mc.DBSize()
+	if lsm != 0 || vlog != 0 {
+		t.Errorf("DBSize after close = (%d, %d), want (0, 0)", lsm, vlog)
+	}
+
+	lsm2, vlog2 := mc.DBEstimateSize(database.EntryKeyPrefix())
+	if lsm2 != 0 || vlog2 != 0 {
+		t.Errorf("DBEstimateSize after close = (%d, %d), want (0, 0)", lsm2, vlog2)
+	}
+}
+
 func TestProcessRecords_NoDNSSEC(t *testing.T) {
 	rrs := []dns.RR{
 		&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("1.2.3.4")}},

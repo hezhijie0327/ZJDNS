@@ -22,6 +22,9 @@ const (
 	seqEntry = "seq:entry"
 )
 
+// userMetaValidated is the UserMeta bit for the validated flag.
+const userMetaValidated = 1 << 0
+
 // ── Key Construction ─────────────────────────────────────────────────────────
 
 // EntryKey builds the primary cache key for a DNS response entry.
@@ -122,31 +125,7 @@ func EIPLatencyKey(ip string) []byte {
 
 // ── Value Encoding ────────────────────────────────────────────────────────────
 
-// EncodeEntryValue packs cache entry metadata + wire format.
-//
-//	Layout: [0:8]id uint64 BE, [8:16]ts int64 BE, [16:20]ttl int32 BE, [20:]msg_wire
-func EncodeEntryValue(id uint64, ts int64, ttl int32, msgWire []byte) []byte {
-	buf := make([]byte, 20+len(msgWire))
-	binary.BigEndian.PutUint64(buf[0:8], id)
-	binary.BigEndian.PutUint64(buf[8:16], uint64(ts))   //nolint:gosec // G115: protocol-bounded value fits target type
-	binary.BigEndian.PutUint32(buf[16:20], uint32(ttl)) //nolint:gosec // G115: protocol-bounded value fits target type
-	copy(buf[20:], msgWire)
-	return buf
-}
-
-// DecodeEntryValue unpacks a cache entry value.
-func DecodeEntryValue(data []byte) (id uint64, ts int64, ttl int32, msgWire []byte) {
-	if len(data) < 20 {
-		return 0, 0, 0, nil
-	}
-	id = binary.BigEndian.Uint64(data[0:8])
-	ts = int64(binary.BigEndian.Uint64(data[8:16]))   //nolint:gosec // G115: protocol-bounded value fits target type
-	ttl = int32(binary.BigEndian.Uint32(data[16:20])) //nolint:gosec // G115: protocol-bounded value fits target type
-	msgWire = data[20:]
-	return id, ts, ttl, msgWire
-}
-
-// EncodePtrMapValue packs a ptr_map entry value (TTL only; expiry via WithTTL).
+// EncodePtrMapValue packs a ptr_map entry value (TTL only; expiry via BadgerDB TTL).
 //
 //	Layout: [0:4]ttl int32 BE
 func EncodePtrMapValue(ttl int32) []byte {
@@ -188,10 +167,11 @@ func DecodeLatencyValue(data []byte) (latencyMS int) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
 // UserMetaValidated returns the UserMeta byte for the validated flag.
 func UserMetaValidated(validated bool) byte {
 	if validated {
-		return 1
+		return userMetaValidated
 	}
 	return 0
 }

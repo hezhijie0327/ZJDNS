@@ -3,7 +3,6 @@ package cache
 import (
 	"errors"
 	"fmt"
-	"time"
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
@@ -26,13 +25,17 @@ func (c *Cache) ReverseLookup(ip string) []LookupResult {
 		opts.PrefetchValues = true
 		it := txn.NewIterator(opts)
 		defer it.Close()
+		var buf []byte
 		for it.Rewind(); it.Valid(); it.Next() {
 			item := it.Item()
 			if item.IsDeletedOrExpired() {
 				continue
 			}
-			var ttlVal int32
-			_ = item.Value(func(v []byte) error { ttlVal = database.DecodePtrMapValue(v); return nil })
+			buf, err := item.ValueCopy(buf)
+			if err != nil {
+				continue
+			}
+			ttlVal := database.DecodePtrMapValue(buf)
 			k := string(item.Key())
 			nameOff := 0
 			for nameOff < len(k) && k[nameOff] != 0 {
@@ -85,10 +88,26 @@ func (c *Cache) UpdateLatency(ip string, latencyMS int) {
 		return
 	}
 	_ = c.db.Update(func(txn *badger.Txn) error {
-		e := badger.NewEntry(database.EIPLatencyKey(ip), database.EncodeLatencyValue(latencyMS)).
-			WithTTL(time.Duration(config.DefaultLatencyProbeMinInterval*2) * time.Second)
+		e := badger.NewEntry(database.EIPLatencyKey(ip), database.EncodeLatencyValue(latencyMS))
+		e.ExpiresAt = uint64(log.NowUnix() + config.DefaultLatencyProbeMinInterval*2) //nolint:gosec // G115: protocol-bounded value fits target type
 		return txn.SetEntry(e)
 	})
+}
+
+// DBSize returns the BadgerDB LSM and value log sizes in bytes.
+func (c *Cache) DBSize() (lsm, vlog int64) {
+	if c.db.IsClosed() {
+		return 0, 0
+	}
+	return c.db.Badger.Size()
+}
+
+// DBEstimateSize returns the estimated on-disk size for a key prefix.
+func (c *Cache) DBEstimateSize(prefix []byte) (lsm, vlog uint64) {
+	if c.db.IsClosed() {
+		return 0, 0
+	}
+	return c.db.Badger.EstimateSize(prefix)
 }
 
 // LatencyLastProbe returns the last probe time for an IP.

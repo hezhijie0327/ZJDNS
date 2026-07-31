@@ -3,7 +3,6 @@ package cache
 import (
 	"net"
 	"slices"
-	"time"
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
@@ -64,11 +63,9 @@ func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	}
 
 	qname = dnsutil.Canonical(qname)
-	var id uint64
-	var ts int64
-	var entryTTL int32
 	var validated bool
 	var msgWire []byte
+	var expiresAt uint64
 	found := false
 
 	_ = c.db.View(func(txn *badger.Txn) error {
@@ -78,9 +75,10 @@ func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 			if err != nil {
 				continue
 			}
-			validated = item.UserMeta() == 1
+			validated = item.UserMeta() == database.UserMetaValidated(true)
+			expiresAt = item.ExpiresAt()
 			if err := item.Value(func(v []byte) error {
-				id, ts, entryTTL, msgWire = database.DecodeEntryValue(v)
+				msgWire = v
 				return nil
 			}); err != nil {
 				continue
@@ -103,25 +101,38 @@ func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	msg := pool.DefaultMessage.Get()
 	msg.Data = msgWire
 	if err := msg.Unpack(); err != nil {
-		log.Warnf("CACHE: unpack wire for entry %d (name=%s type=%d): %v", id, qname, qtype, err)
+		log.Warnf("CACHE: unpack wire for %s (type=%d): %v", qname, qtype, err)
 		return nil, false, false
 	}
 	defer pool.DefaultMessage.Put(msg)
 
+	// Derive entry TTL from the unpacked wire (minimum positive TTL across all sections).
+	// Derive store timestamp from Badger's native expiry clock.
+	// Badger TTL = entryTTL + defaultStaleMaxAge seconds.
+	// expiresAt = timestamp + entryTTL + defaultStaleMaxAge
+	// → timestamp = expiresAt - entryTTL - defaultStaleMaxAge
+	entryTTL := minTTL(msg.Answer, msg.Ns, msg.Extra)
+	var ts int64
+	if expiresAt != 0 {
+		ts = int64(expiresAt) - int64(entryTTL) - defaultStaleMaxAge
+	} else {
+		// Defensive: entry stored without TTL (should not happen).
+		ts = log.NowUnix()
+	}
+
 	entry := &Entry{
-		ID:         int64(id),
 		Answer:     msg.Answer,
 		Authority:  msg.Ns,
 		Additional: msg.Extra,
 		Timestamp:  ts,
-		TTL:        int(entryTTL),
+		TTL:        entryTTL,
 		Validated:  validated,
 	}
 
 	// Sort A/AAAA answer records by latency.
 	c.sortAnswerByLatency(entry)
 
-	isExpired := ttl.IsExpired(ts, int(entryTTL))
+	isExpired := ttl.IsExpired(ts, entryTTL)
 	return entry, true, isExpired
 }
 
@@ -186,15 +197,20 @@ func (c *Cache) lookupIPLatencies(ips []string) map[string]int {
 	latencies := make(map[string]int, min(len(ips), maxLatencyLookupIPs))
 
 	_ = c.db.View(func(txn *badger.Txn) error {
+		var buf []byte
 		for _, ip := range ips {
 			item, err := txn.Get(database.EIPLatencyKey(ip))
 			if err != nil {
 				continue
 			}
-			_ = item.Value(func(v []byte) error {
-				latencies[ip] = database.DecodeLatencyValue(v)
-				return nil
-			})
+			if item.IsDeletedOrExpired() {
+				continue
+			}
+			buf, err = item.ValueCopy(buf)
+			if err != nil {
+				continue
+			}
+			latencies[ip] = database.DecodeLatencyValue(buf)
 		}
 		return nil
 	})
@@ -252,12 +268,11 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 		entryID = id
 
 		key := database.EntryKey(qname, ecsAddr, ecsPrefix, dnssecOK, qtype, qclass)
-		val := database.EncodeEntryValue(id, now, int32(entryTTL), msgWire) //nolint:gosec // G115: protocol-bounded value fits target type
-		entry := badger.NewEntry(key, val).
-			WithMeta(database.UserMetaValidated(validated)).
-			WithTTL(time.Duration(ttlDurationSec) * time.Second)
+		e := badger.NewEntry(key, msgWire)
+		e.UserMeta = database.UserMetaValidated(validated)
+		e.ExpiresAt = uint64(now + ttlDurationSec) //nolint:gosec // G115: protocol-bounded value fits target type
 
-		if err := txn.SetEntry(entry); err != nil {
+		if err := txn.SetEntry(e); err != nil {
 			return err
 		}
 

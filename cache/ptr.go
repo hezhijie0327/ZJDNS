@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"time"
 	"zjdns/database"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -45,8 +44,8 @@ func insertPtrMap(txn *badger.Txn, entryID uint64, rrs []dns.RR, now, ttlDuratio
 			seen[key] = true
 			k := database.EIPReverseKey(r.rdataIP, entryID, r.name)
 			v := database.EncodePtrMapValue(r.ttl)
-			e := badger.NewEntry(k, v).
-				WithTTL(time.Duration(ttlDuration) * time.Second)
+			e := badger.NewEntry(k, v)
+			e.ExpiresAt = uint64(now + ttlDuration) //nolint:gosec // G115: protocol-bounded value fits target type
 			if err := txn.SetEntry(e); err != nil {
 				return err
 			}

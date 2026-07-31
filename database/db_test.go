@@ -81,13 +81,15 @@ func TestKeyRoundTrip(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	// Write an entry and read it back.
+	// Write a cache entry and read it back — value is raw DNS wire.
 	key := EntryKey("example.com.", "", 0, false, 1, 1)
-	val := EncodeEntryValue(42, 1000, 300, []byte("test-wire"))
-	entry := badger.NewEntry(key, val).WithMeta(UserMetaValidated(true))
+	msgWire := []byte("test-wire")
+	e := badger.NewEntry(key, msgWire)
+	e.UserMeta = UserMetaValidated(true)
+	// ExpiresAt=0 means no expiry (BadgerDB default).
 
 	err = db.Badger.Update(func(txn *badger.Txn) error {
-		return txn.SetEntry(entry)
+		return txn.SetEntry(e)
 	})
 	if err != nil {
 		t.Fatalf("SetEntry error: %v", err)
@@ -99,25 +101,62 @@ func TestKeyRoundTrip(t *testing.T) {
 			t.Errorf("Get error: %v", e)
 			return nil
 		}
-		if item.UserMeta() != 1 {
-			t.Errorf("UserMeta = %d, want 1", item.UserMeta())
+		if item.UserMeta() != UserMetaValidated(true) {
+			t.Errorf("UserMeta = %d, want %d", item.UserMeta(), UserMetaValidated(true))
 		}
 		return item.Value(func(v []byte) error {
-			id, ts, ttl, wire := DecodeEntryValue(v)
-			if id != 42 {
-				t.Errorf("id = %d, want 42", id)
-			}
-			if ts != 1000 {
-				t.Errorf("ts = %d, want 1000", ts)
-			}
-			if ttl != 300 {
-				t.Errorf("ttl = %d, want 300", ttl)
-			}
-			if string(wire) != "test-wire" {
-				t.Errorf("wire = %q, want %q", wire, "test-wire")
+			if string(v) != "test-wire" {
+				t.Errorf("wire = %q, want %q", v, "test-wire")
 			}
 			return nil
 		})
+	})
+	if err != nil {
+		t.Fatalf("View error: %v", err)
+	}
+}
+
+func TestUserMetaRoundTrip(t *testing.T) {
+	if meta := UserMetaValidated(true); meta != 1 {
+		t.Errorf("UserMetaValidated(true) = %d, want 1", meta)
+	}
+	if meta := UserMetaValidated(false); meta != 0 {
+		t.Errorf("UserMetaValidated(false) = %d, want 0", meta)
+	}
+}
+
+func TestExpiresAtRoundTrip(t *testing.T) {
+	// 894449f: ExpiresAt is set directly (not via WithTTL) and read back via
+	// item.ExpiresAt(). The timestamp in cache.Get() is derived from:
+	//   timestamp = expiresAt - entryTTL - staleMaxAge
+	db, err := Open("", nil)
+	if err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	key := EntryKey("example.com.", "", 0, false, 1, 1)
+	futureExpiry := uint64(2_000_000_000)
+
+	e := badger.NewEntry(key, []byte("wire"))
+	e.ExpiresAt = futureExpiry
+
+	err = db.Badger.Update(func(txn *badger.Txn) error {
+		return txn.SetEntry(e)
+	})
+	if err != nil {
+		t.Fatalf("SetEntry error: %v", err)
+	}
+
+	err = db.Badger.View(func(txn *badger.Txn) error {
+		item, e := txn.Get(key)
+		if e != nil {
+			return e
+		}
+		if item.ExpiresAt() != futureExpiry {
+			t.Errorf("ExpiresAt = %d, want %d", item.ExpiresAt(), futureExpiry)
+		}
+		return nil
 	})
 	if err != nil {
 		t.Fatalf("View error: %v", err)

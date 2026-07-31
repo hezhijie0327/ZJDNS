@@ -41,7 +41,6 @@ type Store interface {
 
 // Entry holds a cached DNS response with timing metadata.
 type Entry struct {
-	ID         int64    `json:"id"`
 	Answer     []dns.RR `json:"answer"`
 	Authority  []dns.RR `json:"authority"`
 	Additional []dns.RR `json:"additional"`
@@ -52,9 +51,8 @@ type Entry struct {
 
 // LookupResult holds a PTR reverse-lookup result.
 type LookupResult struct {
-	Name    string
-	TTL     uint32
-	EntryID int64
+	Name string
+	TTL  uint32
 }
 
 // IsExpired reports whether the entry's TTL has elapsed.

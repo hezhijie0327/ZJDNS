@@ -36,7 +36,7 @@
 | **函数排序** | 文件内声明顺序是否严格遵循 `type → const → var → func`（decorder 强制）；同一接收者的方法是否聚合而非散落；构造/初始化函数是否在最靠近类型的位置（即紧跟 var 块之后的第一个 func）；新增函数是否随机插入在无关函数之间 |
 | **Go 版本特性** | 代码是否采用了当前最低 Go 版本的语言/库特性；是否存在可用 `new(expr)`、`errors.AsType[T]`、`slices.Reverse` 等新版标准库替代的手写模式；`go fix` 现代器覆盖的迁移是否已应用 |
 | **流程图覆盖** | `docs/FLOWCHARTS.md` 是否覆盖全部核心功能和协议；新增特性/协议/中间件是否同步更新了流程图；mermaid 语法是否正确可渲染 |
-| **BadgerDB 存储** | TTL 使用是否正确（`WithTTL` + `IsDeletedOrExpired`）；`WriteBatch` vs `db.Update` 选择是否合理；key 编码是否二进制 BigEndian 一致；prefix scan 效率；`DropPrefix` 清理范围；`Sequence` bandwidth 和 crash 容忍；`UserMeta` 使用；是否存在应用层 zstd 双重压缩 |
+| **BadgerDB 存储** | TTL 使用是否正确（直接 `ExpiresAt` 赋值 + `IsDeletedOrExpired`）；`WriteBatch` vs `db.Update` 选择是否合理；key 编码是否二进制 BigEndian 一致；prefix scan 效率；`DropPrefix` 清理范围；`Sequence` bandwidth 和 crash 容忍；`UserMeta` 使用；是否存在应用层 zstd 双重压缩 |
 
 ### 1.2 审计架构
 
@@ -378,7 +378,7 @@ ZJDNS 使用 BadgerDB v4 LSM-tree KV 存储（`github.com/dgraph-io/badger/v4`�
 | `db.View(fn)` | 只读事务 | 闭包内不应调用 `txn.Set`/`txn.Delete`（会 panic）。View 不阻塞 Update |
 | `db.Update(fn)` | 读写事务 | 同步提交，适合关键数据。不应在热路径用 `Update` 写大批量数据 |
 | `WriteBatch` | 异步批量写入 | 内部自动拆分大事务，异步提交。适合 stats 等 best-effort 数据。`wb.Set` 错误应检查 |
-| `Entry.WithTTL(d)` | 原生 TTL 过期 | LSM compaction 时自动清理。TTL 值 = DNS TTL + stale max age。ptr_map 条目必须同步设 TTL |
+| `Entry.ExpiresAt` + `Item.ExpiresAt()` | 原生 TTL 过期 | 直接赋值 `Entry.ExpiresAt = uint64(now + dur)` 替代 `WithTTL()`。LSM compaction 时自动清理。TTL 值 = DNS TTL + stale max age。读时通过 `Item.ExpiresAt()` 反推 timestamp |
 | `Entry.WithMeta(b)` | 1 字节元数据 | ZJDNS 用 `UserMeta` 存 `validated` 标志（0/1）。`Item.UserMeta()` 读取 |
 | `Item.IsDeletedOrExpired()` | 条目有效性检查 | 遍历时过滤已过期/已删除条目，避免对僵尸条目操作 |
 | `Item.ExpiresAt()` | 读取 TTL 时间戳 | BadgerDB 原生 API，不需要在 value 里存 `expiresAt` |
@@ -397,9 +397,9 @@ ZJDNS 使用 BadgerDB v4 LSM-tree KV 存储（`github.com/dgraph-io/badger/v4`�
 
 #### 6.3.2 BadgerDB 常见反模式
 
-1. **应用层 zstd + BadgerDB zstd 双重压缩**：`zdnsutil.Compress` 后存入 BadgerDB，BadgerDB 再做 block 级 zstd。zstd 压缩已压缩数据无效，浪费 CPU。解法：直接存 raw wire，信任 BadgerDB block 级压缩
-2. **手写 TTL 驱逐替代原生 `WithTTL`**：自己扫描、排序、删除过期条目。`WithTTL` + `IsDeletedOrExpired` 更高效，compaction 自动回收空间
-3. **value 里存 `expiresAt` 冗余字段**：BadgerDB 原生 TTL 已管理物理过期，value 只需存 DNS TTL（用于 `RemainingTTL` 计算）
+1. **应用层 zstd + BadgerDB zstd 双重压缩**：zdnsutil.Compress 后存入 BadgerDB，BadgerDB 再做 block 级 zstd。zstd 压缩已压缩数据无效，浪费 CPU。解法：直接存 raw wire，信任 BadgerDB block 级压缩
+2. **手写 TTL 驱逐替代原生 ExpiresAt**：自己扫描、排序、删除过期条目。`Entry.ExpiresAt` 直接赋值 + `IsDeletedOrExpired` 更高效，compaction 自动回收空间
+3. **value 里存冗余 metadata 字段**：BadgerDB 原生 `ExpiresAt` 管理物理过期，`UserMeta` 存储 validated 标志。value 即 raw DNS wire — timestamp 和 entryTTL 均在读时从 BadgerDB/解包后的 wire 反推，零 header 开销
 4. **`fmt.Appendf` 构造 key**：每次分配 + reflect。应用层 key/value 编码都用 `binary.BigEndian.PutUint*` + `copy`，与 value 编码风格一致
 5. **NUL 分隔符解析二进制字段**：数值字段 BE 编码可能含 `0x00` 字节（如 qtype=A=1 编码为 `[0x00, 0x01]`）。NUL 扫描会将这些字节误认为分隔符。解法：固定偏移 offset-based 解析
 6. **绕过 `database.DB` 包装层直接访问 `.Badger`**：所有调用方应通过 `db.View`/`db.Update`/`db.DropPrefix` 等方法访问，统一内置 `IsClosed` 检查
