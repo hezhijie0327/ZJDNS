@@ -70,49 +70,39 @@ func TestRemainingTTL_StaleStart(t *testing.T) {
 	}
 }
 
-func TestRemainingTTL_StaleDecrement(t *testing.T) {
+func TestRemainingTTL_StaleConstant(t *testing.T) {
 	setNow(t, 1010)
-	// Timestamp=900, TTL=100 → expired 10s ago
-	got := RemainingTTL(900, 100, 30)
-	if got != 20 {
-		t.Errorf("stale after 10s = %d, want 20", got)
-	}
-}
-
-func TestRemainingTTL_StaleFloor(t *testing.T) {
-	setNow(t, 1029)
-	// Timestamp=900, TTL=100 → expired 29s ago
-	got := RemainingTTL(900, 100, 30)
-	if got != 1 {
-		t.Errorf("stale after 29s = %d, want 1", got)
-	}
-}
-
-func TestRemainingTTL_StaleCycleReset(t *testing.T) {
-	setNow(t, 1030)
-	// Timestamp=900, TTL=100 → expired 30s ago → new cycle
+	// RFC 8767 §4: stale TTL is constant 30, not a cyclical countdown.
 	got := RemainingTTL(900, 100, 30)
 	if got != 30 {
-		t.Errorf("stale after 30s = %d, want 30 (cycle reset)", got)
+		t.Errorf("stale TTL = %d, want 30 (constant, RFC 8767 §4)", got)
 	}
 }
 
-func TestRemainingTTL_StaleSecondCycle(t *testing.T) {
+func TestRemainingTTL_StaleConstantDeep(t *testing.T) {
+	setNow(t, 1030)
+	// RFC 8767 §4: constant 30 even after 30s expiry.
+	got := RemainingTTL(900, 100, 30)
+	if got != 30 {
+		t.Errorf("stale after 30s = %d, want 30 (constant)", got)
+	}
+}
+
+func TestRemainingTTL_StaleConstantDeep2(t *testing.T) {
 	setNow(t, 1040)
-	// Timestamp=900, TTL=100 → expired 40s ago → 2nd cycle, 10s in
+	// RFC 8767 §4: constant 30 even after 40s expiry.
 	got := RemainingTTL(900, 100, 30)
-	if got != 20 {
-		t.Errorf("stale after 40s = %d, want 20", got)
+	if got != 30 {
+		t.Errorf("stale after 40s = %d, want 30 (constant)", got)
 	}
 }
 
-func TestRemainingTTL_StaleManyCycles(t *testing.T) {
+func TestRemainingTTL_StaleConstantLong(t *testing.T) {
 	setNow(t, 2000)
-	// Timestamp=900, TTL=100 → expired 1000s ago → many cycles
-	// 1000 % 30 = 10 → 30 - 10 = 20
+	// RFC 8767 §4: constant 30 regardless of how long expired.
 	got := RemainingTTL(900, 100, 30)
-	if got != 20 {
-		t.Errorf("stale after 1000s = %d, want 20", got)
+	if got != 30 {
+		t.Errorf("stale after 1000s = %d, want 30 (constant)", got)
 	}
 }
 

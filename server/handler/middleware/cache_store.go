@@ -74,8 +74,8 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	switch {
 	case validated:
 		dnssecStatus = config.DNSSECStatusSecure
-	case m.resolver != nil && m.resolver.DNSSECEDECode() != 0:
-		dnssecEDECode = m.resolver.DNSSECEDECode()
+	case qr.DNSSECEDE != 0:
+		dnssecEDECode = qr.DNSSECEDE
 		dnssecStatus = config.DNSSECStatusBogus
 	default:
 		dnssecStatus = config.DNSSECStatusInsecure
@@ -87,6 +87,12 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 
 	// ECS for the response.
 	responseECS := qr.ECS
+	// RFC 7871 §7.3/§11.2: verify response ECS matches query.
+	if ecsOpt != nil && responseECS != nil && !edns.VerifyECSResponse(ecsOpt, responseECS) {
+		log.Debugf("EDNS: ECS mismatch — dropping spoofed response")
+		return nil
+	}
+
 	if responseECS == nil && ecsOpt != nil {
 		responseECS = &edns.ECSOption{
 			Family:       ecsOpt.Family,
@@ -104,7 +110,13 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 		}
 
 		log.Debugf("CACHE: populating cache for %s", qname)
-		_ = m.store.Set(qname, qtype, qclass, ecsOpt, dnssecOK, qr.Answer, qr.Authority, qr.Additional, validated)
+		// RFC 7871 §7.3.1: when the authoritative response scope is 0,
+		// the answer is suitable for all addresses — cache globally.
+		cacheECS := ecsOpt
+		if responseECS != nil && responseECS.ScopePrefix == 0 {
+			cacheECS = nil
+		}
+		_ = m.store.Set(qname, qtype, qclass, cacheECS, dnssecOK, qr.Answer, qr.Authority, qr.Additional, validated)
 	}
 
 	// Request log.
@@ -120,14 +132,19 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	msg.Ns = cache.ProcessRecords(qr.Authority, 0, false, dnssecOK)
 	msg.Extra = cache.ProcessRecords(qr.Additional, 0, false, dnssecOK)
 
+	// RFC 8767 §4: clamp served TTLs to MaxCacheableTTL.
+	cache.ClampTTL(msg.Answer, config.DefaultMaxCacheableTTL)
+	cache.ClampTTL(msg.Ns, config.DefaultMaxCacheableTTL)
+	cache.ClampTTL(msg.Extra, config.DefaultMaxCacheableTTL)
+
 	log.Debugf("RESULT: %s %s | rcode=NOERROR, answer=%d, validated=%t", qname, dns.TypeToString[qtype], len(qr.Answer), validated)
 
 	// Set EDE from DNSSEC or upstream.
 	if dnssecEDECode != 0 {
-		qctx.EDE = &dns.EDE{InfoCode: dnssecEDECode, ExtraText: ""}
+		qctx.EDE = &dns.EDE{InfoCode: dnssecEDECode, ExtraText: "DNSSEC validation failed"}
 	}
 	if qctx.EDE == nil && qr.UpstreamEDE != nil {
-		qctx.EDE = &dns.EDE{InfoCode: qr.UpstreamEDE.InfoCode, ExtraText: qr.UpstreamEDE.ExtraText}
+		qctx.EDE = &dns.EDE{InfoCode: qr.UpstreamEDE.InfoCode, ExtraText: "(from " + qr.Server + ") " + qr.UpstreamEDE.ExtraText}
 		log.Debugf("UPSTREAM: passing through EDE %d (%s) from upstream", qr.UpstreamEDE.InfoCode, dns.ExtendedErrorToString[qr.UpstreamEDE.InfoCode])
 	}
 
@@ -160,7 +177,7 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 	edeCode := dns.ExtendedErrorNetworkError
 	dnssecStatus := ""
 	if m.resolver != nil {
-		if code := m.resolver.DNSSECEDECode(); code != 0 {
+		if code := qr.DNSSECEDE; code != 0 {
 			edeCode = code
 			dnssecStatus = config.DNSSECStatusBogus
 			log.Debugf("SECURITY: using DNSSEC EDE %d from recursive resolver", edeCode)
@@ -177,7 +194,7 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 
 	m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "error", Rcode: dns.RcodeServerFailure, ResponseTime: handler.ElapsedMS(qctx.StartTime), DNSSECStatus: dnssecStatus})
 
-	qctx.EDE = &dns.EDE{InfoCode: edeCode, ExtraText: ""}
+	qctx.EDE = &dns.EDE{InfoCode: edeCode, ExtraText: "resolution error"}
 	return msg
 }
 

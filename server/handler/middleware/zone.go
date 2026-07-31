@@ -60,7 +60,7 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				response.Ns = ttl.DeductElapsedCyclical(zoneResult.Authority, elapsed)
 				response.Extra = ttl.DeductElapsedCyclical(zoneResult.Additional, elapsed)
 			}
-			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorForgedAnswer, ExtraText: ""}
+			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorBlocked, ExtraText: ""}
 			qctx.Res = response
 			return nil
 		}

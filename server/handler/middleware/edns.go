@@ -46,6 +46,14 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		} else {
 			log.Debugf("EDNS: no ECS from client")
 		}
+		// RFC 7871 §6: reject malformed ECS options with FORMERR.
+		if qctx.ECSOpt != nil && !qctx.ECSOpt.IsValid() {
+			log.Debugf("EDNS: malformed ECS option from %s", qctx.ClientIP)
+			msg := handler.BuildResponseMsg(req)
+			msg.Rcode = dns.RcodeFormatError
+			qctx.Res = msg
+			return nil
+		}
 		qctx.CookieOpt = m.edns.ParseCookie(req)
 		qctx.ClientWantsPadding = edns.HasPaddingOption(req)
 

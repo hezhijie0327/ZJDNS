@@ -205,3 +205,42 @@ func (h *Handler) detectVia(forceIPv6, allowFallback bool) *ECSOption {
 	ecs.Normalize()
 	return ecs
 }
+
+// VerifyECSResponse checks that the response ECS matches the query ECS per
+// RFC 7871 §7.3. Returns false if FAMILY, SOURCE PREFIX-LENGTH, or ADDRESS
+// bits differ — the response MUST be dropped (§11.2).
+func VerifyECSResponse(query, response *ECSOption) bool {
+	if query == nil || response == nil {
+		return true // nothing to verify
+	}
+	if query.Family != response.Family {
+		return false
+	}
+	if query.SourcePrefix != response.SourcePrefix {
+		return false
+	}
+	if query.SourcePrefix == 0 {
+		return true // /0 prefix — no address bits to compare
+	}
+	// Compare only the significant bits of the address
+	addrLen := len(query.Address)
+	if addrLen != len(response.Address) {
+		return false
+	}
+	fullBytes := int(query.SourcePrefix) / 8
+	if fullBytes > 0 {
+		for i := range fullBytes {
+			if query.Address[i] != response.Address[i] {
+				return false
+			}
+		}
+	}
+	remainBits := int(query.SourcePrefix) % 8
+	if remainBits > 0 && fullBytes < addrLen {
+		mask := byte(0xFF << (8 - remainBits))
+		if query.Address[fullBytes]&mask != response.Address[fullBytes]&mask {
+			return false
+		}
+	}
+	return true
+}

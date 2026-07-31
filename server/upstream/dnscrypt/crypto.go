@@ -52,7 +52,9 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 		return enc, nonce, sharedKey, err
 	}
 
-	// Try cached encapsulation first to avoid expensive X-Wing KEM.
+	// RFC §11.10: cached encapsulation trades per-query forward secrecy
+	// for performance (§11.10 fresh-per-query is ideal). Encapsulation
+	// rotates on cert refresh, bounding linkability to cert lifetime.
 	if len(state.pqCiphertext) > 0 {
 		state.sharedKey = state.pqEncapsulatedKey
 		q.PQCiphertext = state.pqCiphertext

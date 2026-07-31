@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -25,14 +24,14 @@ import (
 // cache mechanism: per-type TypeA/TypeAAAA entries + ip_latency table.
 // sortAnswerByLatency reorders records by latency at Get() time.
 type Recursive struct {
-	resolver          *Resolver
-	lastDNSSECEDECode atomic.Uint64 // EDE code from the most recent DNSSEC validation failure
-	cache             cache.Store
-	ctx               context.Context // lifecycle context for background probes
-	spoofguard        bool            // from protocol=recursive upstream
-	splitguard        bool            // from protocol=recursive upstream
-	poisonguard       bool            // from protocol=recursive upstream
-	hopguard          bool            // from protocol=recursive upstream
+	resolver    *Resolver
+	lastEDECode uint16 // DNSSEC EDE from current resolution (per-query, not shared)
+	cache       cache.Store
+	ctx         context.Context // lifecycle context for background probes
+	spoofguard  bool            // from protocol=recursive upstream
+	splitguard  bool            // from protocol=recursive upstream
+	poisonguard bool            // from protocol=recursive upstream
+	hopguard    bool            // from protocol=recursive upstream
 }
 
 // CNAME handles CNAME record chasing during DNS resolution, following the
@@ -44,9 +43,9 @@ type CNAME struct {
 	resolver *Resolver
 }
 
-// DNSSECEDECode returns the last DNSSEC EDE code atomically.
+// DNSSECEDECode returns the DNSSEC EDE code for the current resolution.
 func (r *Recursive) DNSSECEDECode() uint16 {
-	return uint16(r.lastDNSSECEDECode.Load()) //nolint:gosec // G115: EDE code — protocol-bounded uint16
+	return r.lastEDECode
 }
 
 // dnssecChain tracks the cryptographic trust chain state during recursive
@@ -62,7 +61,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 	// call. Only the top-level resolve owns the shared atomic — inner calls
 	// (NS address resolution, TCP fallback) run concurrently and must not race.
 	if depth == 0 {
-		r.lastDNSSECEDECode.Store(0)
+		r.lastEDECode = 0
 	}
 
 	qname := dnsutil.Fqdn(question.Name)
@@ -112,7 +111,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		ecsResponse := r.resolver.edns.ParseFromDNS(response)
 		answer, authority, additional := response.Answer, response.Ns, response.Extra
 		pool.DefaultMessage.Put(response)
-		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Validated: cryptoValidated, ECS: ecsResponse, Server: config.ProtoRecursive, Poisoned: poisonSeen}
+		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Validated: cryptoValidated, ECS: ecsResponse, Server: config.ProtoRecursive, Poisoned: poisonSeen, DNSSECEDE: r.lastEDECode}
 	}
 
 	for {
@@ -175,10 +174,11 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			continue
 		}
 
-		// RFC 9156 §2.3: when a minimised name query returns NXDOMAIN,
-		// the intermediate label does not correspond to a delegation
-		// point.  Expose the full QNAME immediately instead of looping
-		// through non-existent subzones.
+		// RFC 9156 §2.3: when a minimised name returns NXDOMAIN,
+		// the intermediate label is not a delegation point.
+		// Jump to the full QNAME to avoid querying every
+		// non-existent label individually (performance trade-off:
+		// §2.3 permits exposing multiple labels per iteration).
 		if qnameMinimise && !strings.EqualFold(queryQuestion.Name, qname) && response.Rcode == dns.RcodeNameError {
 			pool.DefaultMessage.Put(response)
 			minimiseSteps = config.DefaultQnameMinimiseCount
@@ -228,7 +228,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		if len(nsResult.addrs) == 0 {
 			nsSlice, extraSlice := response.Ns, response.Extra
 			pool.DefaultMessage.Put(response)
-			return QueryResult{Cacheable: true, Authority: nsSlice, Additional: extraSlice, Validated: validated, ECS: ecsResponse, Server: config.ProtoRecursive}
+			return QueryResult{Cacheable: true, Authority: nsSlice, Additional: extraSlice, Validated: validated, ECS: ecsResponse, Server: config.ProtoRecursive, DNSSECEDE: r.lastEDECode}
 		}
 
 		r.cacheGlueRecords(nsResult.glue)
@@ -286,6 +286,7 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	var usedServer string
 	var poisonOccurred bool
 	allValidated := true
+	var allDNSSECEDE uint16
 
 	currentQuestion := question
 	var visitedCNAMEs [config.DefaultMaxCNAMEChain]string
@@ -321,6 +322,9 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 
 		if usedServer == "" {
 			usedServer = qr.Server
+		}
+		if qr.DNSSECEDE != 0 {
+			allDNSSECEDE = qr.DNSSECEDE
 		}
 		if qr.Poisoned {
 			poisonOccurred = true
@@ -369,5 +373,5 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	if chainExhausted {
 		log.Debugf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, dnsutil.Canonical(question.Name))
 	}
-	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Poisoned: poisonOccurred}
+	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Poisoned: poisonOccurred, DNSSECEDE: allDNSSECEDE}
 }

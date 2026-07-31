@@ -40,9 +40,16 @@ func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP boo
 		budget = dnscryptcrypto.MaxDNSUDPPacketSize
 	}
 	if budget > 0 {
+		// TCP responses use PadResponse (up to 256 bytes + 64-byte alignment) —
+		// the actual wire size can be minOverhead + maxPadding larger than the
+		// plaintext.  Reserve worst-case padding budget to stay under the 4096 cap.
+		paddingBudget := 0
+		if !isUDP {
+			paddingBudget = 256 + 64
+		}
 		for {
 			minOverhead := dnscryptcrypto.MinResponseOverhead(q.ESVersion)
-			if len(packet)+minOverhead <= budget {
+			if len(packet)+minOverhead+paddingBudget <= budget {
 				break // fits
 			}
 			if m.Truncated {
@@ -63,10 +70,17 @@ func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP boo
 		return s.encryptPQ(packet, q, r, maxWireLen)
 	}
 
-	curr := s.current()
-	sharedKey, err := dnscryptcrypto.ComputeSharedKey(dnscryptcrypto.XChacha20Poly1305, &curr.Classical.ResolverSk, &q.ClientPk)
-	if err != nil {
-		return nil, fmt.Errorf("computing shared key: %w", err)
+	// Reuse the shared key from decrypt when available — the query may
+	// have matched a previous key pair during rotation overlap. Computing
+	// with s.current() would encrypt with the wrong key (audit finding A).
+	sharedKey := q.SharedKey
+	if sharedKey == [dnscryptcrypto.SharedKeySize]byte{} {
+		curr := s.current()
+		var err error
+		sharedKey, err = dnscryptcrypto.ComputeSharedKey(dnscryptcrypto.XChacha20Poly1305, &curr.Classical.ResolverSk, &q.ClientPk)
+		if err != nil {
+			return nil, fmt.Errorf("computing shared key: %w", err)
+		}
 	}
 	return r.Encrypt(packet, sharedKey, maxWireLen)
 }
@@ -215,7 +229,7 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *dnscryptcrypto
 		return nil, nil, fmt.Errorf("parsing PQ resumed query: %w", err)
 	}
 
-	ticketPlain, err := dnscryptcrypto.PQOpenTicket(&s.ticketKey, &s.ticketKeyID, ticket)
+	ticketPlain, err := dnscryptcrypto.PQOpenTicket(&s.ticketKey, &s.ticketKeyID, &s.prevTicketKey, &s.prevTicketKeyID, ticket)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening PQ ticket: %w", err)
 	}

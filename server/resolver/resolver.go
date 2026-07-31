@@ -43,6 +43,7 @@ type QueryResult struct {
 	Server      string
 	Poisoned    bool
 	UpstreamEDE *dns.EDE // EDE code captured from upstream response (per-query, no data race)
+	DNSSECEDE   uint16   // DNSSEC EDE from recursive validation (per-query, no cross-query race)
 	Err         error
 }
 

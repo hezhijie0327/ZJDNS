@@ -29,7 +29,7 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				msg.Response = true
 			}
 			msg.Rcode = dns.RcodeFormatError
-			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorInvalidData, ExtraText: ""}
+			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorOther, ExtraText: ""}
 			qctx.Res = msg
 			return nil
 		}
@@ -78,7 +78,7 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		msg.Rcode = dns.RcodeRefused
 
 		if len(qname) > config.MaxDomainLength || !dnsutil.IsName(qname) {
-			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorInvalidData, ExtraText: ""}
+			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorOther, ExtraText: ""}
 		} else {
 			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorNotSupported, ExtraText: ""}
 		}

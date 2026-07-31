@@ -26,7 +26,10 @@ var pqProfileExt = func() []byte {
 }()
 
 // Pre-computed SHA-256 of the PQ profile extension bytes — deterministic.
-var cachedProfileExtensionHash = sha256.Sum256(PQProfileExtension())
+var (
+	cachedProfileExtensionHash = sha256.Sum256(PQProfileExtension())
+	emptyTicketKeyID           [TicketKeyIDSize]byte
+)
 
 func HKDFSHA256(salt, ikm, info []byte, outLen int) ([]byte, error) {
 	r := hkdf.New(sha256.New, ikm, salt, info)
@@ -146,16 +149,23 @@ func PQSealTicket(key [XchachaKeySize]byte, keyID [TicketKeyIDSize]byte, nonce [
 	return out, nil
 }
 
-func PQOpenTicket(key *[XchachaKeySize]byte, keyID *[TicketKeyIDSize]byte, ciphertext []byte) ([]byte, error) {
+func PQOpenTicket(key *[XchachaKeySize]byte, keyID *[TicketKeyIDSize]byte, prevKey *[XchachaKeySize]byte, prevKeyID *[TicketKeyIDSize]byte, ciphertext []byte) ([]byte, error) {
 	if len(ciphertext) < TicketKeyIDSize+XchachaNonceSize+TagSize {
 		return nil, ErrPQInvalidTicket
 	}
-	if !bytes.Equal(ciphertext[:TicketKeyIDSize], keyID[:]) {
+	// Try current TK first, then previous TK for rotation overlap.
+	var tk *[XchachaKeySize]byte
+	switch {
+	case bytes.Equal(ciphertext[:TicketKeyIDSize], keyID[:]):
+		tk = key
+	case !bytes.Equal(prevKeyID[:], emptyTicketKeyID[:]) && bytes.Equal(ciphertext[:TicketKeyIDSize], prevKeyID[:]):
+		tk = prevKey
+	default:
 		return nil, ErrPQInvalidTicket
 	}
 	var nonce [XchachaNonceSize]byte
 	copy(nonce[:], ciphertext[TicketKeyIDSize:TicketKeyIDSize+XchachaNonceSize])
-	res, err := XchachaOpen(nil, nonce[:], ciphertext[TicketKeyIDSize+XchachaNonceSize:], key[:])
+	res, err := XchachaOpen(nil, nonce[:], ciphertext[TicketKeyIDSize+XchachaNonceSize:], tk[:])
 	if err != nil {
 		return nil, err
 	}

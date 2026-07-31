@@ -26,13 +26,12 @@ func RemainingTTL(timestamp int64, ttlSeconds int, staleTTL uint32) uint32 {
 	if remaining > 0 {
 		return uint32(remaining) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
 	}
-	// Cyclical stale countdown: staleTTL - (timeSinceExpiry % staleTTL).
-	timeSinceExpiry := -remaining
+	// RFC 8767 §4 RECOMMENDED: constant 30 seconds for stale responses.
+	// A constant TTL prevents thundering-herd re-queries during outages.
 	if staleTTL == 0 {
-		return 1
+		return 30
 	}
-	cycleRemaining := max(int64(staleTTL)-(timeSinceExpiry%int64(staleTTL)), 1)
-	return uint32(cycleRemaining) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+	return staleTTL
 }
 
 // CanServeExpired reports whether the expired entry is within the maxAge

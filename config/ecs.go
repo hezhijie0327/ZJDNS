@@ -165,3 +165,28 @@ func validateECSConfigValue(value string) error {
 	}
 	return fmt.Errorf("invalid ECS subnet value: %s", value)
 }
+
+// IsValid reports whether the ECS option is well-formed per RFC 7871 §6.
+func (e *ECSOption) IsValid() bool {
+	if e == nil {
+		return true
+	}
+	if e.Family != 0 && e.Family != 1 && e.Family != 2 {
+		return false
+	}
+	if e.SourcePrefix > 32 && e.Family == 1 {
+		return false
+	}
+	if e.SourcePrefix > 128 && e.Family == 2 {
+		return false
+	}
+	if e.Family == 0 {
+		return e.SourcePrefix == 0 && len(e.Address) == 0
+	}
+	expectedLen := (int(e.SourcePrefix) + 7) / 8
+	return len(e.Address) >= expectedLen
+}
+
+// IsValid reports whether the ECS option is well-formed per RFC 7871 §6.
+// Malformed options (wrong address length, invalid family, excessive prefix)
+// should be rejected with FORMERR.

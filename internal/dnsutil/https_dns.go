@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"codeberg.org/miekg/dns"
@@ -80,6 +81,23 @@ func ExecuteDoHRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient
 	}
 
 	msg.ID = originalID
+	// RFC 8484 §5.1: subtract Age header from DNS TTLs.
+	if ageStr := httpResp.Header.Get("Age"); ageStr != "" {
+		if age, err := strconv.Atoi(ageStr); err == nil && age > 0 {
+			age32 := uint32(age) //nolint:gosec // G115: Age header — HTTP protocol value
+			for _, section := range [][]dns.RR{response.Answer, response.Ns, response.Extra} {
+				for _, rr := range section {
+					if rr != nil {
+						if rr.Header().TTL > age32 {
+							rr.Header().TTL -= age32
+						} else {
+							rr.Header().TTL = 0
+						}
+					}
+				}
+			}
+		}
+	}
 	response.ID = originalID
 
 	return response, nil

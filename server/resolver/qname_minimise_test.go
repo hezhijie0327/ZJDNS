@@ -93,12 +93,13 @@ func TestMinimiseQNAME_DeepDomain(t *testing.T) {
 // ── labelsToAdd ─────────────────────────────────────────────────────────────
 
 func TestLabelsToAdd_EarlySteps(t *testing.T) {
-	// First MINIMISE_ONE_LAB steps should each add 1 label
+	// First MINIMISE_ONE_LAB steps return cumulative exposure: 1, 2, 3, 4, ...
 	for s := range config.DefaultMinimiseOneLabel {
 		got := labelsToAdd("a.b.c.example.com.", ".", s,
 			config.DefaultQnameMinimiseCount, config.DefaultMinimiseOneLabel)
-		if got != 1 {
-			t.Errorf("labelsToAdd step %d: got %d, want 1", s, got)
+		want := s + 1 // cumulative: step 0 → 1 label, step 3 → 4 labels
+		if got != want {
+			t.Errorf("labelsToAdd step %d: got %d, want %d (cumulative)", s, got, want)
 		}
 	}
 }

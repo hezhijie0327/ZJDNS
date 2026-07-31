@@ -2,6 +2,7 @@ package dnssec
 
 import (
 	"crypto/ecdsa"
+	"errors"
 	"net/netip"
 	"strings"
 	"testing"
@@ -1081,5 +1082,42 @@ func TestCapValidatedTTL(t *testing.T) {
 	CapValidatedTTL(answer, nil, nil)
 	if a.Header().TTL != 300 {
 		t.Fatalf("min(3600,300,600,farFuture)=300, got %d", a.Header().TTL)
+	}
+}
+
+func TestVerifyRRset_SignatureExpired(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	zone := "test.example.com"
+	ksk, priv := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	rrset := []dns.RR{aRec(zone, "192.0.2.1")}
+	rrsig := signRRset(rrset, zone, priv, ksk.KeyTag())
+	// Manually expire the signature
+	rrsig.Expiration = uint32(time.Now().Add(-1 * time.Hour).Unix()) //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+	rrsig.Inception = uint32(time.Now().Add(-2 * time.Hour).Unix())  //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+
+	err := cv.VerifyRRset(rrset, rrsig, ksk)
+	if err == nil {
+		t.Fatal("expired signature should return error")
+	}
+	if !errors.Is(err, ErrSignatureExpired) {
+		t.Errorf("expired sig should wrap ErrSignatureExpired, got: %v", err)
+	}
+}
+
+func TestVerifyRRset_SignatureNotYet(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	zone := "test.example.com"
+	ksk, priv := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	rrset := []dns.RR{aRec(zone, "192.0.2.1")}
+	rrsig := signRRset(rrset, zone, priv, ksk.KeyTag())
+	rrsig.Inception = uint32(time.Now().Add(2 * time.Hour).Unix())  //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+	rrsig.Expiration = uint32(time.Now().Add(3 * time.Hour).Unix()) //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+
+	err := cv.VerifyRRset(rrset, rrsig, ksk)
+	if err == nil {
+		t.Fatal("not-yet-valid signature should return error")
+	}
+	if !errors.Is(err, ErrSignatureNotYet) {
+		t.Errorf("not-yet-valid sig should wrap ErrSignatureNotYet, got: %v", err)
 	}
 }

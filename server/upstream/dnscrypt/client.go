@@ -152,7 +152,12 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 				} else {
 					state.pqResumeSecret = pqResumeSecret
 					state.pqTicket = ticket
-					state.pqTicketExpiry = time.Now().Add(time.Duration(lifetime) * time.Second)
+					// RFC §11.7.1: cap ticket expiry by certificate expiry.
+					ticketExpiry := time.Now().Add(time.Duration(lifetime) * time.Second)
+					if state.expires.Before(ticketExpiry) {
+						ticketExpiry = state.expires
+					}
+					state.pqTicketExpiry = ticketExpiry
 					state.mu.Unlock()
 					log.Debugf("UPSTREAM: DNSCrypt PQ resumption ticket stored (expires in %ds)", lifetime)
 				}
@@ -183,16 +188,18 @@ func (c *Client) Execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 				state.minQueryLen = next
 				log.Debugf("UPSTREAM: DNSCrypt min-query-len escalated to %d after TC", state.minQueryLen)
 				state.mu.Unlock()
-				// The padding envelope was too small for the response.
-				// Retry with the larger minQueryLen so the server has
-				// enough padding headroom.  This applies to both UDP
-				// (where TC also means "retry over TCP") and TCP
-				// (where the DNSCrypt envelope itself is the bottleneck).
 				pool.DefaultMessage.Put(response)
 				_ = conn.Close()
 				continue
 			}
 			state.mu.Unlock()
+			// RFC §5.4.2 MUST: if padding escalation can't resolve
+			// the TC, retry the query over TCP instead.
+			if !useTCP {
+				pool.DefaultMessage.Put(response)
+				_ = conn.Close()
+				return c.Execute(ctx, msg, server, true)
+			}
 		}
 
 		return response, nil

@@ -169,7 +169,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			switch {
 			case qr.Validated:
 				dnssecStatus = config.DNSSECStatusSecure
-			case m.resolver != nil && m.resolver.DNSSECEDECode() != 0:
+			case qr.DNSSECEDE != 0:
 				dnssecStatus = config.DNSSECStatusBogus
 			}
 			qctx.Res = msg

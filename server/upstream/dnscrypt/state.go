@@ -114,6 +114,8 @@ func (c *Client) state(
 	txtRR := new(dns.TXT)
 	txtRR.Hdr = dns.Header{Name: providerName, Class: dns.ClassINET}
 	certQuery.Question = []dns.RR{txtRR}
+	certQuery.Security = true
+	certQuery.UDPSize = dnscryptcrypto.MaxDNSUDPPacketSize // RFC §11.3: query padding for PQ cert fit
 	err := certQuery.Pack()
 	if err != nil {
 		return nil, fmt.Errorf("packing cert query: %w", err)
@@ -136,11 +138,13 @@ func (c *Client) state(
 	// Prefer PQ by default (matching official dnscrypt-proxy).
 	// Set "pqdnscrypt": false to use classical XChacha20Poly1305 only.
 	preferPQ := true
+	explicitPQ := false
 	if server.PQDNSCrypt != nil {
 		preferPQ = *server.PQDNSCrypt
+		explicitPQ = *server.PQDNSCrypt // RFC §11.9: MUST NOT fall back when explicitly provisioned
 	}
 
-	state, err = c.buildState(addr, providerName, publicKey, cert, preferPQ)
+	state, err = c.buildState(addr, providerName, publicKey, cert, preferPQ, explicitPQ)
 	if err != nil {
 		return nil, err
 	}
@@ -161,8 +165,11 @@ func (c *Client) buildState(
 	addr, providerName string,
 	publicKey []byte,
 	cert *certPair,
-	preferPQ bool,
+	preferPQ, explicitPQ bool,
 ) (*State, error) {
+	if explicitPQ && cert.pq == nil {
+		return nil, fmt.Errorf("DNSCrypt: pqdnscrypt provisioned but resolver %q returned no PQ certificate (RFC §11.9 MUST NOT fall back)", providerName)
+	}
 	var esVersion dnscryptcrypto.CryptoConstruction
 	var selectedCert *dnscryptcrypto.Certificate
 	switch {

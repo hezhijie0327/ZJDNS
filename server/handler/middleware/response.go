@@ -61,11 +61,16 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
 
 	cookieStr := m.generateCookieStr(qctx.CookieOpt, qctx.ClientIP)
 
+	// Only add EDNS if the request had an OPT record (RFC 6891).
+	// qctx.EDE alone should NOT trigger adding OPT to non-EDNS queries.
 	shouldAddEDNS := ecsOpt != nil || qctx.ClientRequestedDNSSEC || cookieStr != "" ||
-		qctx.EDE != nil || qctx.IsSecure || qctx.TCPKeepalive > 0 || len(qctx.Req.Pseudo) > 0
+		qctx.IsSecure || qctx.TCPKeepalive > 0 || len(qctx.Req.Pseudo) > 0
 
 	// BADCOOKIE responses already have EDNS applied by the EDNS middleware.
 	if shouldAddEDNS && m.edns != nil && msg.Rcode != dns.RcodeBadCookie {
+		if ecsOpt != nil && qctx.ResolutionResult != nil && qctx.ResolutionResult.ECS != nil {
+			ecsOpt.ScopePrefix = qctx.ResolutionResult.ECS.ScopePrefix
+		}
 		m.edns.ApplyToMessage(msg, ecsOpt, qctx.IsSecure, cookieStr, qctx.EDE, false, clientWantsPadding, qctx.TCPKeepalive)
 	}
 

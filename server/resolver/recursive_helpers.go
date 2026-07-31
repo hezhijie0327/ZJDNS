@@ -87,7 +87,7 @@ func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMa
 	if len(response.Answer) == 0 && !response.Authoritative {
 		log.Debugf("RECURSION: lame delegation detected for %s — NS records point to same zone but response is not authoritative", currentDomain)
 		pool.DefaultMessage.Put(response)
-		r.lastDNSSECEDECode.Store(uint64(dns.ExtendedErrorNoReachableAuthority))
+		r.lastEDECode = dns.ExtendedErrorNoReachableAuthority
 		return &QueryResult{
 			Cacheable: true,
 			Server:    config.ProtoRecursive, ECS: ecsResponse,
@@ -183,7 +183,7 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 	}
 
 	if (len(chain.childDS) > 0 || chain.dsPresentButUnverified) && !*validated {
-		r.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
+		r.lastEDECode = chain.lastEDECode
 		// RRSIGs missing from an otherwise-valid DNSSEC chain means the
 		// zone has verified DNSKEYs but the individual records aren't
 		// signed (e.g. Cloudflare challenge subdomains).  Treat as

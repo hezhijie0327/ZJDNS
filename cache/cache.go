@@ -160,3 +160,14 @@ func cloneRRs(rrs []dns.RR) []dns.RR {
 	}
 	return out
 }
+
+// ClampTTL caps each RR's TTL to maxTTL for compliance with RFC 8767 §4's
+// recommended 7-day maximum cache TTL.  The entry retention TTL is already
+// clamped; this ensures the values served to clients are consistent.
+func ClampTTL(rrs []dns.RR, maxTTL uint32) {
+	for _, rr := range rrs {
+		if rr != nil && rr.Header().TTL > maxTTL {
+			rr.Header().TTL = maxTTL
+		}
+	}
+}

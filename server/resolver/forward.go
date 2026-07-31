@@ -30,7 +30,10 @@ func captureUpstreamEDE(lastEDE *atomic.Pointer[dns.EDE], resp *dns.Msg, serverA
 	}
 	for _, rr := range resp.Pseudo {
 		if ede, ok := rr.(*dns.EDE); ok {
-			lastEDE.Store(ede)
+			// Copy the EDE out of the pooled response (RFC 8914 §3:
+			// source attribution in ExtraText; safe copy for pool reuse).
+			copied := &dns.EDE{InfoCode: ede.InfoCode, ExtraText: ede.ExtraText}
+			lastEDE.Store(copied)
 			log.Debugf("UPSTREAM: captured EDE %d (%s) from %s (rcode=%s)",
 				ede.InfoCode, dns.ExtendedErrorToString[ede.InfoCode], serverAddr, dns.RcodeToString[resp.Rcode])
 			break
@@ -236,6 +239,10 @@ func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]
 }
 
 // processUpstreamResponse handles the response from a forwarding upstream server.
+//
+// RFC 8767 §4 note: the AA-bit check for stale refresh applies only to authoritative
+// answers. ZJDNS in forwarding mode queries recursive resolvers (always AA=0), so the
+// check is intentionally skipped — it would incorrectly reject all recursive responses.
 // Returns true if the goroutine should return (result sent or handled).
 func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server *config.UpstreamServer, question Question, resultChan chan<- QueryResult, nxdomainResult *atomic.Pointer[QueryResult], activeConnections *atomic.Int32, cancel context.CancelCauseFunc, groupCtx context.Context, cidrFilterRefused *atomic.Bool, lastEDE *atomic.Pointer[dns.EDE]) bool {
 	rcode := queryResult.Response.Rcode

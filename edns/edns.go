@@ -97,6 +97,7 @@ func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnectio
 	// Per RFC 6891 §6.2.5, the responder's UDPSize reflects its own maximum
 	// payload size; the transport layer (UDP datagram size) enforces the
 	// minimum of the two endpoints.
+	// RFC 9250 §4.6: UDPSize is ignored by DoQ — harmless to set for all transports.
 	msg.UDPSize = pool.UDPBufferSize
 	msg.Security = true
 

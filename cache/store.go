@@ -231,6 +231,9 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	// ── Prep work (parallel-safe) ─────────────────────────────────────────
 	now := log.NowUnix()
 	entryTTL := minTTL(answer, authority, additional)
+	if entryTTL <= 0 {
+		return 0 // RFC 8767 §7: TTL=0 data must not be cached
+	}
 
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 	qname = dnsutil.Canonical(qname)
@@ -312,7 +315,7 @@ func minTTL(sections ...[]dns.RR) int {
 		}
 	}
 	if minT <= 0 {
-		return config.DefaultTTL
+		return 0 // RFC 8767 §7: TTL=0 data must not be cached
 	}
 	if minT > config.DefaultMaxCacheableTTL {
 		return config.DefaultMaxCacheableTTL

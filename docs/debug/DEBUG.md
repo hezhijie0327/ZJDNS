@@ -104,14 +104,6 @@ go build -o dnsproxy .
 ZJDNS loopback and upstream tests use `self_signed: true` and
 `skip_tls_verify: true` — no external cert generation needed.
 
-### macOS Notes
-
-- **Do not use port 5353** — reserved by mDNSResponder.
-- **dig may time out on UDP** when the server binds to multiple IPs
-  (127.0.0.1, ::1, external). This is a macOS kernel UDP-loopback quirk,
-  not a ZJDNS bug. All loopback client configs now expose both UDP and TCP
-  on the same port — use `dig +tcp` as a reliable fallback. Linux is unaffected.
-
 ## Loopback Tests (ZJDNS ↔ ZJDNS)
 
 Start the server once (all protocols):
@@ -123,12 +115,14 @@ sleep 3
 
 ### Client Ports Reference
 
-| Client Config | Client Port | Protocol | Server Port |
-|---------------|:-----------:|----------|:-----------:|
+All forwarding clients accept queries on **UDP** (except `client-tcp` which has
+both UDP+TCP).  The "Protocol" column is the upstream forwarding protocol.
+
+| Client Config | Client Port | Upstream | Server Port |
 | `client-udp.json` | 10553 | UDP | 10533 |
 | `client-tcp.json` | 10653 | TCP | 10533 |
 | `client-tls.json` | 10753 | DoT | 10853 |
-| `client-https.json` | 10853 | DoH | 10443 |
+| `client-https.json` | 11853 | DoH | 10443 |
 | `client-http3.json` | 13953 | DoH3 | 10444 |
 | `client-quic.json` | 10953 | DoQ | 10784 |
 | `client-dtls.json` | 14953 | DTLS | 10434 |
@@ -141,16 +135,29 @@ sleep 3
 
 ### Quick Tests
 
-```bash
-# Direct to server (TCP recommended on macOS — see Prerequisites)
-dig @127.0.0.1 -p 10533 www.baidu.com A +short +tcp
+**Test methodology**: The server listens on both UDP and TCP for 10533 — `dig`
+works with either.  Forwarding clients (`client-*.json`) accept queries on UDP
+and forward them over the configured upstream protocol (TLS/QUIC/HTTPS/etc.).
+They do **not** have a TCP listener — use `+notcp` or omit `+tcp` (dig defaults
+to UDP).  The only exception is `client-tcp` which has both.
 
-# Via forwarding clients — start one client, query it, kill it
-# Example: DTLS
-/tmp/zjdns -config docs/debug/loopback/client-dtls.json &
+```bash
+# Direct to server — UDP or TCP both work.
+dig @127.0.0.1 -p 10533 www.baidu.com A +short
+
+# Forwarding clients — MUST use UDP (dig default, or +notcp explicitly).
+# The client listens on UDP only; +tcp will get "connection refused".
+/tmp/zjdns -config docs/debug/loopback/client-tls.json &
 sleep 2
-dig @127.0.0.1 -p 14953 www.baidu.com A +short
-pkill -f "client-dtls"
+dig @127.0.0.1 -p 10753 www.baidu.com A +short          # UDP (default)
+dig @127.0.0.1 -p 10753 www.baidu.com A +short +notcp    # UDP (explicit)
+pkill -f "client-tls"
+
+# client-tcp is the only forwarding client with a TCP listener.
+/tmp/zjdns -config docs/debug/loopback/client-tcp.json &
+sleep 2
+dig @127.0.0.1 -p 10653 www.baidu.com A +short +tcp      # TCP works
+pkill -f "client-tcp"
 ```
 
 ## DNSSEC Test
@@ -265,9 +272,9 @@ pkill -f "hopguard-spoofguard"
 /tmp/zjdns -config docs/debug/defense/splitguard.json &
 sleep 2
 
-dig @127.0.0.1 -p 10533 www.google.com A +short +tcp
+dig @127.0.0.1 -p 10533 www.google.com A +short
 
-# TCP DNS 帧被拆成小段发送，DPI 首包看不到完整域名 → 绕过 RST
+# Splitguard 在服务器转发 TCP 时内部拆帧，与客户端用 UDP/TCP 无关
 
 pkill -f "splitguard"
 ```
@@ -323,11 +330,27 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
 
 ### Test
 
-Start ZJDNS with the fixed cert (requires a custom config that uses `cert_file`
-instead of `self_signed`), or use `self_signed` and extract the cert manually.
+ZJDNS must use the same certificate as RouteDNS.  The default `server.json`
+uses `self_signed: true` (ephemeral cert) — RouteDNS can't verify that.
+Create a config with `cert_file`/`key_file` pointing to the generated cert:
 
 ```bash
-/tmp/zjdns -config docs/debug/loopback/server.json &
+# Create a DTLS-only server config with the fixed certificate
+cat > /tmp/zjdns-dtls-server.json << 'CONF'
+{
+  "server": {
+    "log_level": "debug",
+    "protocol": { "udp": "10533", "tcp": "10533", "dtls": "10434" },
+    "certificate": {
+      "domain": "zjdns-test.local",
+      "tls": { "cert_file": "/tmp/zjdns-certs/cert.pem", "key_file": "/tmp/zjdns-certs/key.pem" }
+    }
+  },
+  "upstream": [{ "protocol": "recursive" }]
+}
+CONF
+
+/tmp/zjdns -config /tmp/zjdns-dtls-server.json &
 sleep 3
 /tmp/routedns/routedns docs/debug/routedns/dtls-client.toml &
 sleep 2

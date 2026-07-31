@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
@@ -168,10 +169,32 @@ func (s *Server) respondDOH(w http.ResponseWriter, response *dns.Msg) error {
 	bytes := response.Data
 
 	w.Header().Set("Content-Type", dnshttp.MimeType)
-	w.Header().Set("Cache-Control", "max-age=0")
+	// RFC 8484 §5.1: Cache-Control max-age SHOULD equal the smallest TTL
+	// in the Answer section, or 0 for negative/zero-TTL responses.
+	w.Header().Set("Cache-Control", dohCacheControl(response))
 	n, err := w.Write(bytes) //nolint:gosec // G705: DNS wire format, not user-facing HTML
 	if n != len(bytes) {
 		return fmt.Errorf("short write: %d/%d bytes", n, len(bytes))
 	}
 	return err
+}
+
+// dohCacheControl computes the Cache-Control max-age from the smallest
+// TTL in the Answer section, per RFC 8484 §5.1 RECOMMENDED.
+func dohCacheControl(response *dns.Msg) string {
+	if response == nil {
+		return "max-age=0"
+	}
+	minTTL := -1
+	for _, rr := range response.Answer {
+		if rr != nil {
+			if t := int(rr.Header().TTL); t > 0 && (minTTL < 0 || t < minTTL) {
+				minTTL = t
+			}
+		}
+	}
+	if minTTL <= 0 {
+		return "max-age=0"
+	}
+	return "max-age=" + strconv.Itoa(minTTL)
 }

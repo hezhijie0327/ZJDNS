@@ -3,6 +3,7 @@ package dnscrypt
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -55,8 +56,10 @@ type Server struct {
 	// ticketKey / ticketKeyID seal PQ resumption tickets.  They are
 	// derived from the Ed25519 signing key and stay fixed across rotations
 	// so that tickets survive a key rotation.
-	ticketKey   [dnscryptcrypto.XchachaKeySize]byte
-	ticketKeyID [dnscryptcrypto.TicketKeyIDSize]byte
+	ticketKey       [dnscryptcrypto.XchachaKeySize]byte
+	ticketKeyID     [dnscryptcrypto.TicketKeyIDSize]byte
+	prevTicketKey   [dnscryptcrypto.XchachaKeySize]byte // previous TK for overlap validation
+	prevTicketKeyID [dnscryptcrypto.TicketKeyIDSize]byte
 
 	// Rotation goroutine control.
 	rotateCh chan struct{} // closed when rotation goroutine should stop
@@ -323,6 +326,15 @@ func (s *Server) rotateKeys() {
 		},
 	}
 	s.sharedKeyCache = lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize)
+	// RFC §11.7: rotate ticket keys alongside cert keys.
+	// Retain previous TK so outstanding tickets continue to verify (RFC §11.7.2:
+	// tickets sealed with the old TK remain valid during the overlap window,
+	// fixing audit finding DNS-H).
+	s.prevTicketKey = s.ticketKey
+	s.prevTicketKeyID = s.ticketKeyID
+	if _, err := rand.Read(s.ticketKey[:]); err == nil {
+		s.ticketKeyID[3]++
+	}
 	s.keys = append([]keyEntry{entry}, s.keys...)
 
 	// Purge expired keys.
@@ -423,8 +435,15 @@ func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
 		}
 		baseSize := len(tmp.Data)
 		pool.DefaultMessage.Put(tmp)
-		for i, k := range keys {
-			pqFits[i] = baseSize+certTXTWireSize(k.pair.PQ) <= len(b)
+		// RFC §11.3: check total size with all PQ certs, not per-window.
+		// If the sum exceeds the query size, omit all PQ certs and set TC
+		// so the client retries over TCP (rather than truncating to empty).
+		totalPQLen := 0
+		for _, k := range keys {
+			totalPQLen += certTXTWireSize(k.pair.PQ)
+		}
+		for i := range keys {
+			pqFits[i] = baseSize+totalPQLen <= len(b)
 		}
 	} else {
 		for i := range keys {

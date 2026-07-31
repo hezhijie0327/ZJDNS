@@ -29,12 +29,14 @@ type rrsetKey struct {
 
 // Common DNSSEC-related errors.
 var (
-	ErrNoRRSIG        = errors.New("no RRSIG found for rrset")
-	ErrMissingRRSIG   = errors.New("answer RRset has no RRSIG")
-	ErrNoDNSKEY       = errors.New("no DNSKEY found for zone")
-	ErrNoDS           = errors.New("no DS found for delegation")
-	ErrDSMismatch     = errors.New("DS digest does not match DNSKEY")
-	ErrBogusSignature = errors.New("bogus DNSSEC signature")
+	ErrNoRRSIG          = errors.New("no RRSIG found for rrset")
+	ErrMissingRRSIG     = errors.New("answer RRset has no RRSIG")
+	ErrNoDNSKEY         = errors.New("no DNSKEY found for zone")
+	ErrNoDS             = errors.New("no DS found for delegation")
+	ErrDSMismatch       = errors.New("DS digest does not match DNSKEY")
+	ErrBogusSignature   = errors.New("bogus DNSSEC signature")
+	ErrSignatureExpired = errors.New("RRSIG signature has expired")
+	ErrSignatureNotYet  = errors.New("RRSIG signature is not yet valid")
 )
 
 // NewCryptoValidator creates a CryptoValidator for DNSSEC validation. The
@@ -94,11 +96,13 @@ func (c *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey *
 
 	// Check the RRSIG validity period manually (RFC 4034 §3.1.5).
 	// miekg/dns RRSIG.Verify() also checks this, but the manual check
-	// provides a more descriptive error message with the inception/expiration times.
+	// provides distinct sentinel errors for EDE 7/8 mapping.
 	now := uint32(log.NowUnix()) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
-	if rrsig.Inception > now || rrsig.Expiration < now {
-		return fmt.Errorf("%w: RRSIG outside validity period (inception=%s, expiration=%s)",
-			ErrBogusSignature, time.Unix(int64(rrsig.Inception), 0).UTC(), time.Unix(int64(rrsig.Expiration), 0).UTC())
+	if rrsig.Expiration < now {
+		return fmt.Errorf("%w: RRSIG expired at %s", ErrSignatureExpired, time.Unix(int64(rrsig.Expiration), 0).UTC())
+	}
+	if rrsig.Inception > now {
+		return fmt.Errorf("%w: RRSIG not valid until %s", ErrSignatureNotYet, time.Unix(int64(rrsig.Inception), 0).UTC())
 	}
 
 	// Verify the cryptographic signature

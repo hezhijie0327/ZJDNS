@@ -377,7 +377,7 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 	dnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
 	if err != nil {
 		log.Debugf("SECURITY: DNSKEY query failed for %s: %v", currentDomain, err)
-		chain.lastEDECode = dns.ExtendedErrorDNSKEYMissing
+		chain.lastEDECode = dns.ExtendedErrorNetworkError
 		return false
 	}
 	defer pool.DefaultMessage.Put(dnskeyResp)
@@ -416,13 +416,13 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 			log.Debugf("SECURITY: self-verified root DNSKEY")
 		} else {
 			log.Debugf("SECURITY: root DNSKEY self-verification failed: %v", err)
-			chain.lastEDECode = dns.ExtendedErrorDNSKEYMissing
+			chain.lastEDECode = dns.ExtendedErrorDNSBogus
 			return false
 		}
 	}
 
 	if !keysVerified {
-		chain.lastEDECode = dns.ExtendedErrorDNSKEYMissing
+		chain.lastEDECode = dns.ExtendedErrorDNSBogus
 		return false
 	}
 
@@ -451,7 +451,14 @@ func (r *Recursive) validateOrRetry(ctx context.Context, response *dns.Msg, name
 			return false
 		}
 
-		chain.lastEDECode = dns.ExtendedErrorDNSBogus
+		switch {
+		case errors.Is(err, dnssec.ErrSignatureExpired):
+			chain.lastEDECode = dns.ExtendedErrorSignatureExpired // EDE 7
+		case errors.Is(err, dnssec.ErrSignatureNotYet):
+			chain.lastEDECode = dns.ExtendedErrorSignatureNotYetValid // EDE 8
+		default:
+			chain.lastEDECode = dns.ExtendedErrorDNSBogus // EDE 6
+		}
 		if r.isZoneCut(response, currentDomain) {
 			log.Debugf("SECURITY: zone cut detected for %s — RRSIG signer differs from %s", question.Name, currentDomain)
 			chain.zoneCutDetected = true
@@ -494,7 +501,7 @@ func (r *Recursive) recordDNSSECFailure(chain *dnssecChain, validated bool, msg 
 	if len(chain.childDS) == 0 || validated {
 		return nil
 	}
-	r.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
+	r.lastEDECode = chain.lastEDECode
 	if !r.resolver.DNSSECEnforce {
 		return nil
 	}

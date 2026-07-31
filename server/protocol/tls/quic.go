@@ -188,6 +188,9 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	_ = stream.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 	_, err := io.ReadFull(stream, buf[:zdnsutil.DNSFramePrefixLen])
 	if err != nil {
+		if err == io.ErrUnexpectedEOF {
+			log.Debugf("SERVER: DoQ protocol error: truncated STREAM FIN from %s", conn.RemoteAddr())
+		}
 		return
 	}
 
@@ -230,7 +233,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	}
 
 	// RFC 9250 §4.5: 0-RTT MUST NOT carry non-replayable transactions.
-	// Only standard QUERY opcodes are safe for 0-RTT replay.
+	// RFC 9250 §4.5: QUERY and NOTIFY are replayable in 0-RTT.
 	if conn.ConnectionState().Used0RTT && req.Opcode != dns.OpcodeQuery {
 		stream.CancelWrite(quic.StreamErrorCode(pool.QUICCodeProtocolError))
 		pool.DefaultMessage.Put(req)
@@ -238,6 +241,12 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	}
 
 	clientIP := zdnsutil.ClientIPFromAddr(conn.RemoteAddr())
+	// RFC 9250 §4.3.1: abort on client STOP_SENDING / RESET_STREAM.
+	select {
+	case <-conn.Context().Done():
+		return
+	default:
+	}
 	response := s.handler.ServeDNS(req, clientIP, true, config.ProtoQUIC)
 	// req is transferred to ServeDNS — response holds the result.
 	// Both req and response are returned to the pool below and in
@@ -273,7 +282,11 @@ func (s *Server) respondQUIC(stream *quic.Stream, response *dns.Msg) error {
 		writeBuf = make([]byte, zdnsutil.DNSFramePrefixLen+len(respBuf))
 	}
 
-	binary.BigEndian.PutUint16(writeBuf[:zdnsutil.DNSFramePrefixLen], uint16(len(respBuf))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
+	// RFC 9250 §4.3.2: oversized response → DOQ_INTERNAL_ERROR
+	if len(respBuf) > 65535 {
+		return fmt.Errorf("response too large for DoQ: %d bytes (max 65535)", len(respBuf))
+	}
+	binary.BigEndian.PutUint16(writeBuf[:zdnsutil.DNSFramePrefixLen], uint16(len(respBuf))) //nolint:gosec // G115: bounds checked above
 	copy(writeBuf[zdnsutil.DNSFramePrefixLen:], respBuf)
 
 	n, err := stream.Write(writeBuf[:zdnsutil.DNSFramePrefixLen+len(respBuf)])

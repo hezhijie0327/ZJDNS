@@ -167,12 +167,10 @@ func TestSet_DefaultTTLFallback(t *testing.T) {
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 0}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
-	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
-	if !found {
-		t.Fatal("entry not found")
-	}
-	if entry.TTL != config.DefaultTTL {
-		t.Errorf("TTL = %d, want %d (DefaultTTL)", entry.TTL, config.DefaultTTL)
+	// RFC 8767 §7: TTL=0 data must not be cached.
+	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if found {
+		t.Fatal("TTL=0 entry should not be cached (RFC 8767 §7)")
 	}
 }
 

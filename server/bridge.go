@@ -157,6 +157,8 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		// truncate and set TC so the client retries over TCP.
 		udpSize := max(req.UDPSize, dns.MinMsgSize)
 		if response.Len() > int(udpSize) {
+			// RFC 8914 §3: drop EDE options before truncating answer data.
+			response.Pseudo = dropEDE(response.Pseudo)
 			dnsutil.Truncate(response)
 			if err := packSafe(response); err != nil {
 				log.Debugf("SERVER: UDP truncate pack error for %s: %v", w.RemoteAddr().String(), err)
@@ -203,4 +205,16 @@ func packSafe(msg *dns.Msg) (err error) {
 		}
 	}()
 	return msg.Pack()
+}
+
+// dropEDE removes EDE options from Pseudo section before truncation,
+// per RFC 8914 §3 SHOULD: drop EDE before dropping answer data.
+func dropEDE(pseudo []dns.RR) []dns.RR {
+	filtered := pseudo[:0]
+	for _, rr := range pseudo {
+		if _, ok := rr.(*dns.EDE); !ok {
+			filtered = append(filtered, rr)
+		}
+	}
+	return filtered
 }
