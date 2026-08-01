@@ -10,7 +10,7 @@
     {
       "address": "8.8.8.8:53",
       "protocol": "udp",
-      "spoofguard": true
+      "spoofguard": true, "skip_cache": true
     }
   ]
 }
