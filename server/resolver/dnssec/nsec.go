@@ -19,9 +19,13 @@ const nsec3OptOutFlag = 0x01
 // proves the non-existence of the queried name or type.
 func (c *CryptoValidator) verifyNSEC(authSigs []*dns.RRSIG, nsecs []*dns.NSEC, verifiedDNSKEYs []*dns.DNSKEY, normalizedQname string, qtype uint16, denialType string) bool {
 	for _, nsec := range nsecs {
-		// RFC 6840 §4.1: ancestor delegation NSEC MUST NOT
-		// prove non-existence below that zone cut.
-		if isAncestorDelegation(nsec) {
+		// RFC 6840 §4.1: ancestor delegation NSEC MUST NOT prove non-existence
+		// below that zone cut.  However, an NSEC whose owner matches the
+		// queried name proves NODATA AT the delegation point itself (e.g. no
+		// DS for an insecure delegation — RFC 4035 §5.2), which is valid.
+		// Only filter when the NSEC is from an ancestor proving below-cut
+		// non-existence — i.e. the owner does not match the query name.
+		if isAncestorDelegation(nsec) && nsec.Header().Name != normalizedQname {
 			continue
 		}
 		rrsigs := FindRRSIGs(authSigs, nsec.Header().Name, dns.TypeNSEC)
