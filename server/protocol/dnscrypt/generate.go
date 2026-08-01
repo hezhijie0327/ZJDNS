@@ -8,7 +8,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"time"
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	zstamp "zjdns/internal/stamp"
@@ -156,12 +155,9 @@ func (rc *ResolverConfig) NewPQCert(serial, notBefore, notAfter uint32) (cert *d
 }
 
 // NewCertPair generates both classical and PQ certificates for a single key
-// window.  Both certs share the same Serial, NotBefore, and NotAfter.
-func (rc *ResolverConfig) NewCertPair() (*dnscryptcrypto.CertPair, error) {
-	serial := dnscryptcrypto.NowUnix32()
-	notBefore := serial
-	notAfter := serial + uint32(config.DefaultDNSCryptCertificateTTL/time.Second)
-
+// window using the given serial and validity timestamps.  Both certs share the
+// same Serial, NotBefore, and NotAfter.
+func (rc *ResolverConfig) NewCertPair(serial, notBefore, notAfter uint32) (*dnscryptcrypto.CertPair, error) {
 	classical, err := rc.NewCert(serial, notBefore, notAfter)
 	if err != nil {
 		return nil, fmt.Errorf("classical cert: %w", err)
@@ -242,9 +238,6 @@ func GenerateDNSCryptConfig(provider, addr string) (string, error) {
 	cfg.Server.Certificate.DNSCrypt = config.DNSCryptCertificate{
 		PublicKey:  rc.PublicKey,
 		PrivateKey: rc.PrivateKey,
-		// Persist the resolver seed so the generated example keeps stable
-		// certs/ClientMagic across restarts.
-		ResolverSk: rc.ResolverSk,
 	}
 	cfg.Upstream = []config.UpstreamServer{
 		{Address: stamp},

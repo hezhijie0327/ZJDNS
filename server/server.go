@@ -49,6 +49,7 @@ type Server struct {
 	handler     *handler.Handler
 	queryClient *upstream.Client
 
+	db              *database.DB
 	tls             *tls.Server
 	tlcpServer      *servertlcp.Server
 	dnscryptServer  *serverdnscrypt.Server
@@ -90,6 +91,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		cancel(err)
 		return nil, fmt.Errorf("database init: %w", err)
 	}
+	s.db = db
 	// Any later init failure must close the DB — BadgerDB holds an exclusive
 	// directory lock, so a leaked open handle would block every subsequent
 	// start of the server.
@@ -350,7 +352,7 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 
 	if cfg.Server.Protocol.DNSCrypt != "" {
 		providerName := cfg.Server.Certificate.DNSCrypt.ProviderName(cfg.Server.Certificate.Domain)
-		dnscryptSrv, err := serverdnscrypt.New(&cfg.Server.Certificate.DNSCrypt, cfg.Server.Protocol.DNSCrypt, providerName)
+		dnscryptSrv, err := serverdnscrypt.New(s.db, &cfg.Server.Certificate.DNSCrypt, cfg.Server.Protocol.DNSCrypt, providerName)
 		if err != nil {
 			log.Warnf("SERVER: DNSCrypt listener init failed, continuing without it: %v", err)
 		} else {

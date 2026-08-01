@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 	"zjdns/config"
+	"zjdns/database"
 	"zjdns/edns"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
@@ -68,6 +69,14 @@ type Server struct {
 	// goroutine creation under high load.
 	workerCap chan struct{}
 
+	// db is the shared BadgerDB database for persisting cert windows
+	// across restarts.  Nil when the database is not available.
+	db *database.DB
+	// seed is the X25519 secret key used to derive the next cert window's
+	// resolver key.  It forms a deterministic chain: each new window's
+	// resolver secret key becomes the seed for the one after it.
+	seed [32]byte
+
 	// sharedKeyCache avoids recomputing X25519 per query for classical
 	// DNSCrypt (RFC §8).  Cleared on key rotation.
 	sharedKeyCache *lrumap.Map[[32]byte, [32]byte]
@@ -84,21 +93,103 @@ func (k *keyEntry) remainingTTL() uint32 {
 
 // New creates a new DNSCrypt Server from the given configuration.
 // port is the listener port, providerName is auto-derived as "2.dnscrypt-cert.<ddr.domain>".
-func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) (*Server, error) {
-	rc, err := buildResolverConfig(certificateCfg, providerName)
-	if err != nil {
-		return nil, fmt.Errorf("building resolver config: %w", err)
+// db is the shared BadgerDB database for cert window persistence. Pass an in-memory
+// database (database.Open("", nil)) if persistence is not needed.
+func New(db *database.DB, certificateCfg *config.DNSCryptCertificate, port, providerName string) (*Server, error) {
+	// ── Resolve signing identity ──────────────────────────────────────────
+	// Require explicit keys in config — like TLS requires a certificate.
+	if certificateCfg.PublicKey == "" || certificateCfg.PrivateKey == "" {
+		return nil, errors.New("dnscrypt: public_key and private_key are required in config certificate.dnscrypt")
 	}
 
-	// Extract the Ed25519 signing key — it's the long-term provider identity.
-	signingSK, err := dnscryptcrypto.HexDecodeKey(rc.PrivateKey)
-	if err != nil {
-		return nil, fmt.Errorf("decoding ed25519 private key: %w", err)
+	// Try loading persisted identity from DB; auto-switch if config keys changed.
+	signingSK, err := loadIdentity(db)
+	if err == nil {
+		cfgPKBytes, derr := dnscryptcrypto.HexDecodeKey(certificateCfg.PublicKey)
+		if derr != nil || !bytes.Equal(cfgPKBytes, []byte(signingSK.Public().(ed25519.PublicKey))) {
+			log.Warnf("DNSCRYPT: config public_key changed, dropping old persisted state and switching identity")
+			_ = db.DropPrefix([]byte(database.PrefixDNSCrypt + "window:"))
+			_ = db.DropPrefix([]byte(database.PrefixDNSCrypt + "identity"))
+			signingSK = nil
+		}
+	}
+	if signingSK == nil {
+		rc, rcErr := buildResolverConfig(certificateCfg, providerName)
+		if rcErr != nil {
+			return nil, fmt.Errorf("building resolver config: %w", rcErr)
+		}
+		signingSK, err = dnscryptcrypto.HexDecodeKey(rc.PrivateKey)
+		if err != nil {
+			return nil, fmt.Errorf("decoding ed25519 private key: %w", err)
+		}
+		if saveErr := saveIdentity(db, signingSK); saveErr != nil {
+			log.Warnf("DNSCRYPT: failed to persist identity: %v", saveErr)
+		} else {
+			log.Infof("DNSCRYPT: identity persisted to database")
+		}
+	} else {
+		log.Infof("DNSCRYPT: loaded persisted identity from database")
 	}
 
-	pair, err := rc.NewCertPair()
-	if err != nil {
-		return nil, fmt.Errorf("creating certificate pair: %w", err)
+	signingPK, ok := signingSK.Public().(ed25519.PublicKey)
+	if !ok {
+		return nil, errors.New("dnscrypt: signing key is not Ed25519")
+	}
+	rc := ResolverConfig{
+		ProviderName: providerName,
+		PublicKey:    dnscryptcrypto.HexEncodeKey(signingPK),
+		PrivateKey:   dnscryptcrypto.HexEncodeKey(signingSK),
+	}
+
+	// ── Restore or create cert windows ────────────────────────────────────
+	var entries []keyEntry
+	var seed [32]byte
+
+	if windows, err := loadWindows(db); err == nil && len(windows) > 0 {
+		entries, err = windowsToKeyEntries(&rc, windows)
+		if err == nil && len(entries) > 0 {
+			copy(seed[:], windows[len(windows)-1].ResolverSk)
+			log.Infof("DNSCRYPT: restored %d cert window(s) from database", len(entries))
+		}
+	}
+
+	if len(entries) == 0 {
+		if seed == [32]byte{} {
+			var err error
+			seed, err = newRandomSeed()
+			if err != nil {
+				return nil, fmt.Errorf("generating initial seed: %w", err)
+			}
+		}
+
+		now := dnscryptcrypto.NowUnix32()
+		pair, err := rc.generateNextPair(&seed, now)
+		if err != nil {
+			return nil, fmt.Errorf("creating initial certificate pair: %w", err)
+		}
+
+		entry := keyEntry{
+			pair:      pair,
+			createdAt: time.Now(),
+			cachedTXT: [2][]string{
+				buildCertTXTForCert(pair.Classical),
+				buildCertTXTForCert(pair.PQ),
+			},
+		}
+		entries = append(entries, entry)
+
+		w := windowRecord{
+			Serial:     pair.Classical.Serial,
+			NotBefore:  pair.Classical.NotBefore,
+			NotAfter:   pair.Classical.NotAfter,
+			ResolverSk: pair.Classical.ResolverSk[:],
+			ResolverPk: pair.Classical.ResolverPk[:],
+		}
+		if err := saveWindow(db, w); err != nil {
+			log.Warnf("DNSCRYPT: failed to persist initial window: %v", err)
+		}
+
+		log.Debugf("DNSCRYPT: generated initial key pair (serial=%d)", pair.Classical.Serial)
 	}
 
 	if port == "" {
@@ -106,13 +197,10 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) 
 	}
 	ctx, cancel := context.WithCancelCause(context.Background())
 
-	entry := keyEntry{
-		pair:      pair,
-		createdAt: time.Now(),
-	}
-
 	s := &Server{
-		keys:           []keyEntry{entry},
+		db:             db,
+		seed:           seed,
+		keys:           entries,
 		port:           port,
 		providerName:   providerName,
 		certificateCfg: certificateCfg,
@@ -137,7 +225,6 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string) 
 		s.ticketKeyID = [dnscryptcrypto.TicketKeyIDSize]byte{0x00, 0x00, 0x00, 0x01}
 	}
 
-	log.Debugf("DNSCRYPT: generated initial key pair (serial=%d)", pair.Classical.Serial)
 	return s, nil
 }
 
@@ -308,14 +395,27 @@ func (s *Server) hasClientMagic(b []byte) bool {
 // This is called periodically by the rotation goroutine to comply with the
 // ≤24h short-term key rotation requirement (§7.2 / §8).
 func (s *Server) rotateKeys() {
-	newPair, err := s.generateNewCertPair()
+	s.mu.Lock()
+	seed := s.seed
+	rc := ResolverConfig{
+		ProviderName: s.providerName,
+	}
+	signingPK, ok := s.signingSK.Public().(ed25519.PublicKey)
+	if !ok {
+		s.mu.Unlock()
+		log.Warnf("DNSCRYPT: key rotation failed — signing key is not Ed25519")
+		return
+	}
+	rc.PublicKey = dnscryptcrypto.HexEncodeKey(signingPK)
+	rc.PrivateKey = dnscryptcrypto.HexEncodeKey(s.signingSK)
+
+	now := dnscryptcrypto.NowUnix32()
+	newPair, err := rc.generateNextPair(&seed, now)
 	if err != nil {
+		s.mu.Unlock()
 		log.Warnf("DNSCRYPT: key rotation failed: %v", err)
 		return
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	entry := keyEntry{
 		pair:      newPair,
@@ -329,17 +429,14 @@ func (s *Server) rotateKeys() {
 	s.sharedKeyCache.Clear()
 	s.sharedKeyCache = lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize)
 	// RFC §11.7: rotate ticket keys alongside cert keys.
-	// Retain previous TK so outstanding tickets continue to verify (RFC §11.7.2:
-	// tickets sealed with the old TK remain valid during the overlap window,
-	// fixing audit finding DNS-H).
 	s.prevTicketKey = s.ticketKey
 	s.prevTicketKeyID = s.ticketKeyID
-	if _, err := rand.Read(s.ticketKey[:]); err == nil {
+	if _, randErr := rand.Read(s.ticketKey[:]); randErr == nil {
 		s.ticketKeyID[3]++
 	}
 	s.keys = append([]keyEntry{entry}, s.keys...)
 
-	// Purge expired keys.
+	// Purge expired keys (defence in depth — BadgerDB TTL also handles this).
 	cutoff := time.Now().Add(-(config.DefaultDNSCryptCertificateTTL + config.DefaultDNSCryptKeyOverlap))
 	n := 0
 	for _, k := range s.keys {
@@ -350,30 +447,22 @@ func (s *Server) rotateKeys() {
 	}
 	s.keys = s.keys[:n]
 
+	s.seed = seed // advance the seed chain
+	s.mu.Unlock()
+
+	// Persist the new window outside the lock to avoid blocking queries.
+	w := windowRecord{
+		Serial:     newPair.Classical.Serial,
+		NotBefore:  newPair.Classical.NotBefore,
+		NotAfter:   newPair.Classical.NotAfter,
+		ResolverSk: newPair.Classical.ResolverSk[:],
+		ResolverPk: newPair.Classical.ResolverPk[:],
+	}
+	if err := saveWindow(s.db, w); err != nil {
+		log.Warnf("DNSCRYPT: failed to persist rotated window: %v", err)
+	}
+
 	log.Debugf("DNSCRYPT: rotated resolver keys (serial=%d, active=%d)", newPair.Classical.Serial, len(s.keys))
-}
-
-// generateNewCertPair creates a signed classical+PQ certificate pair with
-// fresh X25519 resolver keys (PQ derived deterministically from them).
-func (s *Server) generateNewCertPair() (*dnscryptcrypto.CertPair, error) {
-	rc := ResolverConfig{
-		ProviderName: s.providerName,
-	}
-	signingPK, ok := s.signingSK.Public().(ed25519.PublicKey)
-	if !ok {
-		return nil, errors.New("dnscrypt: signing key is not Ed25519")
-	}
-	rc.PublicKey = dnscryptcrypto.HexEncodeKey(signingPK)
-	rc.PrivateKey = dnscryptcrypto.HexEncodeKey(s.signingSK)
-
-	sk, pk, err := dnscryptcrypto.GenerateRandomKeyPair()
-	if err != nil {
-		return nil, fmt.Errorf("generating resolver keys: %w", err)
-	}
-	rc.ResolverSk = dnscryptcrypto.HexEncodeKey(sk[:])
-	rc.ResolverPk = dnscryptcrypto.HexEncodeKey(pk[:])
-
-	return rc.NewCertPair()
 }
 
 func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
@@ -540,34 +629,6 @@ func buildResolverConfig(certificateCfg *config.DNSCryptCertificate, providerNam
 		PrivateKey:   certificateCfg.PrivateKey,
 	}
 
-	if rc.PublicKey == "" || rc.PrivateKey == "" {
-		pub, priv, err := dnscryptcrypto.GenerateEd25519Keypair()
-		if err != nil {
-			return rc, fmt.Errorf("generating ed25519 keypair: %w", err)
-		}
-		rc.PublicKey = dnscryptcrypto.HexEncodeKey(pub)
-		rc.PrivateKey = dnscryptcrypto.HexEncodeKey(priv)
-		log.Warnf("DNSCRYPT: Ed25519 keypair auto-generated — save these keys for persistence")
-	}
-
-	// Resolver encryption keys: a persisted seed keeps certs and ClientMagic
-	// stable across restarts; otherwise a fresh pair is generated (short-term
-	// keys rotated every 24h §7.2; PQ keys derived deterministically).
-	if certificateCfg.ResolverSk != "" {
-		seed, err := dnscryptcrypto.HexDecodeKey(certificateCfg.ResolverSk)
-		if err != nil {
-			return rc, fmt.Errorf("decoding resolver_secret_key: %w", err)
-		}
-		var sk [dnscryptcrypto.KeySize]byte
-		copy(sk[:], seed)
-		sk2, pk2, err := dnscryptcrypto.X25519KeyPairFromSeed(sk)
-		if err != nil {
-			return rc, fmt.Errorf("deriving resolver keys from seed: %w", err)
-		}
-		rc.ResolverSk = dnscryptcrypto.HexEncodeKey(sk2[:])
-		rc.ResolverPk = dnscryptcrypto.HexEncodeKey(pk2[:])
-		return rc, nil
-	}
 	sk, pk, err := dnscryptcrypto.GenerateRandomKeyPair()
 	if err != nil {
 		return rc, fmt.Errorf("generating resolver keys: %w", err)

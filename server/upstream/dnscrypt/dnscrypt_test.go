@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 	"zjdns/config"
+	"zjdns/database"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	serverdnscrypt "zjdns/server/protocol/dnscrypt"
 
@@ -21,6 +22,16 @@ type testDNSHandler struct{}
 
 // bigResponseHandler returns many A records to force TC truncation.
 type bigResponseHandler struct{ n int }
+
+func memDB(tb testing.TB) *database.DB {
+	tb.Helper()
+	db, err := database.Open("", nil)
+	if err != nil {
+		tb.Fatalf("open in-memory db: %v", err)
+	}
+	tb.Cleanup(func() { _ = db.Close() })
+	return db
+}
 
 func (h *testDNSHandler) ServeDNS(req *dns.Msg, _ net.IP, _ bool, _ string) *dns.Msg {
 	reply := dnsutil.SetReply(new(dns.Msg), req)
@@ -47,7 +58,7 @@ func startTestDNSCryptServer(t *testing.T) (addr, stamp string) {
 	port := l.Addr().(*net.TCPAddr).Port
 	_ = l.Close()
 	cfg := &config.DNSCryptCertificate{PublicKey: rc.PublicKey, PrivateKey: rc.PrivateKey}
-	srv, err := serverdnscrypt.New(cfg, strconv.Itoa(port), rc.ProviderName)
+	srv, err := serverdnscrypt.New(memDB(t), cfg, strconv.Itoa(port), rc.ProviderName)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -413,7 +424,7 @@ func startTestDNSCryptServerWithHandler(t *testing.T, handler interface {
 	port := l.Addr().(*net.TCPAddr).Port
 	_ = l.Close()
 	cfg := &config.DNSCryptCertificate{PublicKey: rc.PublicKey, PrivateKey: rc.PrivateKey}
-	srv, err := serverdnscrypt.New(cfg, strconv.Itoa(port), rc.ProviderName)
+	srv, err := serverdnscrypt.New(memDB(t), cfg, strconv.Itoa(port), rc.ProviderName)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
