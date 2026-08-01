@@ -69,6 +69,30 @@ func FindDS(rrs []dns.RR) []*dns.DS {
 	return records
 }
 
+// FindCDS extracts CDS records from an RR slice (RFC 7344).
+// CDS has the same wire format as DS but is a distinct RR type.
+func FindCDS(rrs []dns.RR) []*dns.CDS {
+	var records []*dns.CDS
+	for _, rr := range rrs {
+		if cds, ok := rr.(*dns.CDS); ok {
+			records = append(records, cds)
+		}
+	}
+	return records
+}
+
+// FindCDNSKEY extracts CDNSKEY records from an RR slice (RFC 7344).
+// CDNSKEY embeds DNSKEY — same wire format but distinct RR type.
+func FindCDNSKEY(rrs []dns.RR) []*dns.CDNSKEY {
+	var records []*dns.CDNSKEY
+	for _, rr := range rrs {
+		if cdnskey, ok := rr.(*dns.CDNSKEY); ok {
+			records = append(records, cdnskey)
+		}
+	}
+	return records
+}
+
 // findNSEC extracts NSEC records from an RR slice.
 func findNSEC(rrs []dns.RR) []*dns.NSEC {
 	var records []*dns.NSEC
