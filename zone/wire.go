@@ -105,10 +105,17 @@ func buildRecord(domain string, record *config.ZoneRecord) dns.RR {
 		return rr
 	}
 
+	// dns.New() may succeed for empty content (e.g. TXT with no strings)
+	// but produce an RR that fails to pack.  Skip empty-content records
+	// silently — they are incomplete config, not actionable errors.
+	content := strings.TrimSpace(record.Content)
+	if content == "" {
+		return nil
+	}
+
 	// RFC 3597 fallback for unknown types: content must be the generic
 	// representation "\# <length> <hex>". Anything else is a record-level
 	// error — do not emit a malformed record.
-	content := strings.TrimSpace(record.Content)
 	if len(content) >= 2 && content[0] == '\\' && content[1] == '#' {
 		fields := strings.Fields(content[2:])
 		if len(fields) == 2 {

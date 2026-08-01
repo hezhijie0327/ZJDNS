@@ -58,9 +58,12 @@ func addChaosRecord(cfg *ServerConfig) {
 		if hasZoneRule(cfg, name) {
 			continue
 		}
+		// Placeholder Answer: this records only exists so the evaluator stores
+		// a type-filtered entry (TXT CHAOS).  At query time wireZoneDynamicContent
+		// replaces the static content with a live DynamicContent function.
 		cfg.Zone = append(cfg.Zone, ZoneRule{
 			Name:   name,
-			Answer: []ZoneRecord{{Type: dns.TypeTXT, Class: dns.ClassCHAOS, TTL: 0, Content: ""}},
+			Answer: []ZoneRecord{{Type: dns.TypeTXT, Class: dns.ClassCHAOS, TTL: 0, Content: `"dynamic"`}},
 		})
 	}
 }
