@@ -41,25 +41,32 @@ func NewGroup[K comparable]() *Group[K] {
 // proceed (leader).  Returns false if an operation for this key is already in
 // flight; the caller should skip its work.
 //
-// When the internal map reaches maxPending entries, Start returns true
-// (leader) to prevent starvation — dedup degrades gracefully under overload.
+// When the internal map reaches maxPending entries, an arbitrary key is
+// evicted to make room — the map stays bounded while dedup keeps working
+// (leaked keys from panics or missing Done calls cannot grow memory, and a
+// full map does not silently disable dedup).
+//
+// The zero-value Group is lazily initialised on first use.
 //
 // Callers MUST use `defer g.Done(key)` immediately after Start(key) to
 // prevent key leakage if the goroutine panics.
 func (g *Group[K]) Start(key K) bool {
 	g.mu.Lock()
+	if g.sets == nil {
+		g.sets = make(map[K]struct{})
+	}
 	_, loaded := g.sets[key]
 	if loaded {
 		g.mu.Unlock()
 		return false
 	}
 	if len(g.sets) >= maxPending {
-		// Map is full — cannot track this key for dedup.  Return true
-		// (leader) so the caller proceeds without dedup rather than
-		// blocking or starving.  Dedup degrades gracefully: concurrent
-		// identical queries will each proceed independently.
-		g.mu.Unlock()
-		return true
+		// Evict one entry (map iteration order is arbitrary — fine for a
+		// capacity backstop) so the new key is still deduplicated.
+		for k := range g.sets {
+			delete(g.sets, k)
+			break
+		}
 	}
 	g.sets[key] = struct{}{}
 	g.mu.Unlock()

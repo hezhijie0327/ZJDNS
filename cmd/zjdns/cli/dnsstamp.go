@@ -28,8 +28,13 @@ func RunDNSStampDecode(stampStr string) error {
 	case zstamp.ProtoDOH:
 		entry.Address = s.BuildDoHURL()
 	case zstamp.ProtoODoHTarget:
-		// ODoH target has no address — provider name + path only.
-		entry.ServerName = s.ProviderName
+		// The config validator has no "odoh" upstream protocol, so the
+		// decoded entry could never be loaded back — fail loudly instead
+		// of emitting an unusable JSON entry.
+		return fmt.Errorf("odoh-target stamps cannot be represented as a %s upstream (protocol \"odoh\" is not supported)", config.DefaultProjectName)
+	case zstamp.ProtoPlain, zstamp.ProtoDNSCrypt, zstamp.ProtoDOT, zstamp.ProtoDOQ,
+		zstamp.ProtoDNSCryptRelay, zstamp.ProtoODoHRelay:
+		entry.Address = s.Address
 	default:
 		entry.Address = s.Address
 	}
@@ -64,6 +69,11 @@ func RunDNSStampEncode(protoStr, addr, providerName, publicKeyHex, path string, 
 	if addr == "" && proto != zstamp.ProtoODoHTarget {
 		return fmt.Errorf("--stamp-addr is required for protocol %q", protoStr)
 	}
+	if addr != "" && proto == zstamp.ProtoODoHTarget {
+		// An ODoH target stamp carries no address — silently accepting one
+		// would drop it and print a stamp different from the request.
+		return errors.New("--stamp-addr is not valid for odoh-target (it has no address)")
+	}
 
 	s := &zstamp.DNSStamp{
 		Proto:        proto,
@@ -84,8 +94,8 @@ func RunDNSStampEncode(protoStr, addr, providerName, publicKeyHex, path string, 
 		s.PublicKey = pk
 	}
 
-	// Ensure path starts with / for DoH/ODoH protocols.
-	if !strings.HasPrefix(path, "/") && (proto == zstamp.ProtoDOH || proto == zstamp.ProtoODoHTarget) {
+	// Ensure path starts with / for DoH/ODoH protocols (target and relay).
+	if !strings.HasPrefix(path, "/") && (proto == zstamp.ProtoDOH || proto == zstamp.ProtoODoHTarget || proto == zstamp.ProtoODoHRelay) {
 		path = "/" + path
 		s.Path = path
 	}

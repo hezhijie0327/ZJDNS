@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -21,7 +23,7 @@ func TestPendingRequests_LeaderAndFollower(t *testing.T) {
 	qclass := uint16(dns.ClassINET)
 
 	// Leader.
-	_, follower := pr.Join(qname, qtype, qclass, nil, false)
+	_, follower := pr.Join(context.Background(), qname, qtype, qclass, nil, false)
 	if follower {
 		t.Fatal("expected leader")
 	}
@@ -36,7 +38,7 @@ func TestPendingRequests_LeaderAndFollower(t *testing.T) {
 		// for this before Done() so the follower definitely finds
 		// the pending key.
 		close(followerJoined)
-		r, f := pr.Join(qname, qtype, qclass, nil, false)
+		r, f := pr.Join(context.Background(), qname, qtype, qclass, nil, false)
 		if !f {
 			t.Error("expected follower (follower=true)")
 		}
@@ -65,7 +67,7 @@ func TestPendingRequests_MultipleFollowers(t *testing.T) {
 	qtype := dns.TypeAAAA
 	qclass := uint16(dns.ClassINET)
 
-	_, follower := pr.Join(qname, qtype, qclass, nil, false)
+	_, follower := pr.Join(context.Background(), qname, qtype, qclass, nil, false)
 	if follower {
 		t.Fatal("expected leader")
 	}
@@ -78,7 +80,7 @@ func TestPendingRequests_MultipleFollowers(t *testing.T) {
 	for range numFollowers {
 		wg.Go(func() {
 			entered <- struct{}{} // about to block in Join()
-			_, f := pr.Join(qname, qtype, qclass, nil, false)
+			_, f := pr.Join(context.Background(), qname, qtype, qclass, nil, false)
 			if !f {
 				t.Error("expected follower")
 			}
@@ -107,22 +109,22 @@ func TestPendingRequests_DifferentKeys(t *testing.T) {
 	pr := NewPendingRequests()
 	qclass := uint16(dns.ClassINET)
 
-	_, f := pr.Join("example.com.", dns.TypeA, qclass, nil, false)
+	_, f := pr.Join(context.Background(), "example.com.", dns.TypeA, qclass, nil, false)
 	if f {
 		t.Fatal("expected leader for key A")
 	}
-	_, f = pr.Join("example.com.", dns.TypeAAAA, qclass, nil, false)
+	_, f = pr.Join(context.Background(), "example.com.", dns.TypeAAAA, qclass, nil, false)
 	if f {
 		t.Fatal("expected leader for key B (different qtype)")
 	}
 
 	ecsOpt := &edns.ECSOption{Address: net.ParseIP("1.1.1.1"), SourcePrefix: 24}
-	_, f = pr.Join("example.com.", dns.TypeA, qclass, ecsOpt, false)
+	_, f = pr.Join(context.Background(), "example.com.", dns.TypeA, qclass, ecsOpt, false)
 	if f {
 		t.Fatal("expected leader for key C (different ECS)")
 	}
 
-	_, f = pr.Join("example.com.", dns.TypeA, qclass, nil, true)
+	_, f = pr.Join(context.Background(), "example.com.", dns.TypeA, qclass, nil, true)
 	if f {
 		t.Fatal("expected leader for key D (different DNSSEC)")
 	}
@@ -156,7 +158,7 @@ func TestPendingRequests_ECSVariation(t *testing.T) {
 		{"ecs2-different-ip", "example.com.", dns.TypeA, ecs2},
 		{"ecs3-different-prefix", "example.com.", dns.TypeA, ecs3},
 	} {
-		_, f := pr.Join(tc.qname, tc.qtype, qclass, tc.ecsOpt, false)
+		_, f := pr.Join(context.Background(), tc.qname, tc.qtype, qclass, tc.ecsOpt, false)
 		if f {
 			t.Errorf("%s: expected leader, got follower", tc.name)
 		}
@@ -182,7 +184,7 @@ func TestPendingRequests_ConcurrentSameKey(t *testing.T) {
 			defer wg.Done()
 			<-allSpawned
 			entered <- struct{}{} // about to call Join()
-			_, f := pr.Join(qname, dns.TypeA, qclass, nil, false)
+			_, f := pr.Join(context.Background(), qname, dns.TypeA, qclass, nil, false)
 			if f {
 				followers.Add(1)
 			} else {
@@ -221,7 +223,7 @@ func TestPendingRequests_NilECSAndZeroECSAreSameKey(t *testing.T) {
 	var nilECS *edns.ECSOption
 	zeroECS := &edns.ECSOption{}
 
-	_, f := pr.Join("example.com.", dns.TypeA, qclass, nilECS, false)
+	_, f := pr.Join(context.Background(), "example.com.", dns.TypeA, qclass, nilECS, false)
 	if f {
 		t.Fatal("expected leader for nil ECS")
 	}
@@ -231,7 +233,7 @@ func TestPendingRequests_NilECSAndZeroECSAreSameKey(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		close(started) // about to block in Join()
-		_, f := pr.Join("example.com.", dns.TypeA, qclass, zeroECS, false)
+		_, f := pr.Join(context.Background(), "example.com.", dns.TypeA, qclass, zeroECS, false)
 		if !f {
 			t.Error("expected follower for zero-value ECS (same key as nil ECS)")
 		}
@@ -442,4 +444,40 @@ func TestPendingRefreshes_LeaderDoneFollowerCanProceed(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("follower never became leader after Done")
 	}
+}
+
+// TestPendingRequests_FollowerCtxCancel verifies that a follower whose caller
+// ctx is cancelled abandons the wait immediately instead of blocking until
+// the leader completes (or the follower timeout fires).
+func TestPendingRequests_FollowerCtxCancel(t *testing.T) {
+	pr := NewPendingRequests()
+	qname, qtype, qclass := "example.com.", dns.TypeA, uint16(dns.ClassINET)
+
+	// Leader: claims the key and never finishes.
+	if _, follower := pr.Join(context.Background(), qname, qtype, qclass, nil, false); follower {
+		t.Fatal("first Join should be the leader")
+	}
+
+	// Follower with a cancellable ctx.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var qr *resolver.QueryResult
+	go func() {
+		defer close(done)
+		qr, _ = pr.Join(ctx, qname, qtype, qclass, nil, false)
+	}()
+
+	// Cancel the follower's ctx — Join must return promptly with ctx.Err().
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("follower Join did not return after ctx cancellation")
+	}
+	if qr == nil || qr.Err == nil || !errors.Is(qr.Err, context.Canceled) {
+		t.Fatalf("follower error = %v, want context.Canceled", qr.Err)
+	}
+
+	// Cleanup: release the leader's pending entry.
+	pr.Done(qname, qtype, qclass, nil, false, &resolver.QueryResult{})
 }

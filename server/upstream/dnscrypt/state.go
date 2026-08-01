@@ -36,7 +36,6 @@ type State struct {
 	expires       time.Time
 
 	minQueryLen   int
-	ewmaQuerySize float64                      // EWMA of encrypted response size
 	ephemeralKeys bool                         // per-query X25519 keys for forward secrecy (default true)
 	resolverPK    [dnscryptcrypto.KeySize]byte // resolver X25519 public key
 
@@ -87,6 +86,14 @@ func (c *Client) resolveStamp(server *config.UpstreamServer) (addr, providerName
 	return addr, providerName, publicKey, nil
 }
 
+// minTime returns the earlier of two times.
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+
 // state fetches and caches the DNSCrypt certificate and shared key for the
 // given resolver.
 func (c *Client) state(
@@ -98,7 +105,22 @@ func (c *Client) state(
 	preferTCP bool,
 ) (*State, error) {
 	providerName = dnsutil.Fqdn(providerName)
-	cacheKey := addr + "|" + providerName
+
+	// Per-server knobs are part of the cached state: derive them before any
+	// cache access so two upstreams sharing addr|providerName but differing
+	// in ephemeral_keys/pqdnscrypt never inherit each other's state, and so
+	// they are set before the State is published to the cache.
+	preferPQ := true
+	explicitPQ := false
+	if server.PQDNSCrypt != nil {
+		preferPQ = *server.PQDNSCrypt
+		explicitPQ = *server.PQDNSCrypt // RFC §11.9: MUST NOT fall back when explicitly provisioned
+	}
+	ephemeralKeys := true
+	if server.EphemeralKeys != nil {
+		ephemeralKeys = *server.EphemeralKeys
+	}
+	cacheKey := stateCacheKey(addr, providerName, ephemeralKeys, preferPQ)
 
 	c.cacheMu.Lock()
 	state, ok := c.cache.Get(cacheKey)
@@ -135,26 +157,10 @@ func (c *Client) state(
 		return nil, fmt.Errorf("parsing dnscrypt cert: %w", err)
 	}
 
-	// Prefer PQ by default (matching official dnscrypt-proxy).
-	// Set "pqdnscrypt": false to use classical XChacha20Poly1305 only.
-	preferPQ := true
-	explicitPQ := false
-	if server.PQDNSCrypt != nil {
-		preferPQ = *server.PQDNSCrypt
-		explicitPQ = *server.PQDNSCrypt // RFC §11.9: MUST NOT fall back when explicitly provisioned
-	}
-
-	state, err = c.buildState(addr, providerName, publicKey, cert, preferPQ, explicitPQ)
+	state, err = c.buildState(addr, providerName, publicKey, cert, preferPQ, explicitPQ, ephemeralKeys)
 	if err != nil {
 		return nil, err
 	}
-	// Per-query X25519 ephemeral keys for forward secrecy (default true).
-	// Set "ephemeral_keys": false to reuse the same key pair across queries.
-	ephemeralKeys := true
-	if server.EphemeralKeys != nil {
-		ephemeralKeys = *server.EphemeralKeys
-	}
-	state.ephemeralKeys = ephemeralKeys
 	return state, nil
 }
 
@@ -165,7 +171,7 @@ func (c *Client) buildState(
 	addr, providerName string,
 	publicKey []byte,
 	cert *certPair,
-	preferPQ, explicitPQ bool,
+	preferPQ, explicitPQ, ephemeralKeys bool,
 ) (*State, error) {
 	if explicitPQ && cert.pq == nil {
 		return nil, fmt.Errorf("DNSCrypt: pqdnscrypt provisioned but resolver %q returned no PQ certificate (RFC §11.9 MUST NOT fall back)", providerName)
@@ -185,14 +191,18 @@ func (c *Client) buildState(
 		return nil, fmt.Errorf("no valid dnscrypt certificate for %q", providerName)
 	}
 
+	// Derive the client X25519 pair UNCONDITIONALLY: a PQ-only server's
+	// state must still carry real key material (the PQ paths derive their
+	// per-query key from the KEM, but any fallback to the classical
+	// construction would silently encrypt with all-zero keys).
 	var sharedKey [dnscryptcrypto.SharedKeySize]byte
 	var secretKey, clientPK [dnscryptcrypto.KeySize]byte
 	var err error
+	secretKey, clientPK, err = dnscryptcrypto.GenerateRandomKeyPair()
+	if err != nil {
+		return nil, fmt.Errorf("generating key pair: %w", err)
+	}
 	if cert.classical != nil {
-		secretKey, clientPK, err = dnscryptcrypto.GenerateRandomKeyPair()
-		if err != nil {
-			return nil, fmt.Errorf("generating key pair: %w", err)
-		}
 		sharedKey, err = dnscryptcrypto.ComputeSharedKey(
 			dnscryptcrypto.XChacha20Poly1305, &secretKey, &cert.classical.ResolverPk,
 		)
@@ -209,9 +219,9 @@ func (c *Client) buildState(
 		serverPK:      publicKey,
 		clientMagic:   selectedCert.ClientMagic,
 		esVersion:     esVersion,
-		expires:       time.Now().Add(config.DefaultDNSCryptCertificateCacheTTL),
+		expires:       minTime(time.Now().Add(config.DefaultDNSCryptCertificateCacheTTL), time.Unix(int64(selectedCert.NotAfter), 0)),
 		minQueryLen:   config.DefaultDNSCryptMinQueryLen,
-		ewmaQuerySize: float64(config.DefaultDNSCryptMinQueryLen),
+		ephemeralKeys: ephemeralKeys,
 	}
 
 	if cert.classical != nil {
@@ -222,7 +232,7 @@ func (c *Client) buildState(
 		state.pqCertContext = cert.pq.PqCertContext
 	}
 
-	cacheKey := addr + "|" + providerName
+	cacheKey := stateCacheKey(addr, providerName, ephemeralKeys, preferPQ)
 	c.cacheMu.Lock()
 	if c.cache == nil {
 		c.cacheMu.Unlock()
@@ -234,18 +244,30 @@ func (c *Client) buildState(
 	return state, nil
 }
 
-// deleteState removes a cached state entry so the next query re-fetches the
+// stateCacheKey builds the cache key for a resolver state. The per-server
+// knobs are part of the key so upstreams sharing addr|providerName but
+// differing in ephemeral_keys/pqdnscrypt never share (and mutate) each
+// other's cached state.
+func stateCacheKey(addr, providerName string, ephemeralKeys, preferPQ bool) string {
+	return addr + "|" + providerName + fmt.Sprintf("|ephemeral=%t|pq=%t", ephemeralKeys, preferPQ)
+}
+
+// deleteState removes cached state entries so the next query re-fetches the
 // certificate.  Called when a query fails — the server may have rotated its
-// certificate, making the cached shared key and client magic invalid.
+// certificate, making the cached shared key and client magic invalid.  All
+// knob variants are removed because the caller has no server config here.
 func (c *Client) deleteState(addr, providerName string) {
 	providerName = dnsutil.Fqdn(providerName)
-	cacheKey := addr + "|" + providerName
 	c.cacheMu.Lock()
 	if c.cache != nil {
-		c.cache.Delete(cacheKey)
+		for _, ephemeral := range []bool{true, false} {
+			for _, pq := range []bool{true, false} {
+				c.cache.Delete(stateCacheKey(addr, providerName, ephemeral, pq))
+			}
+		}
 	}
 	c.cacheMu.Unlock()
-	log.Debugf("UPSTREAM: DNSCrypt cert cache invalidated for %s", cacheKey)
+	log.Debugf("UPSTREAM: DNSCrypt cert cache invalidated for %s", addr+"|"+providerName)
 }
 
 // parseCert parses and verifies DNSCrypt certificates from DNS TXT answer

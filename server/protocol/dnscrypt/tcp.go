@@ -23,7 +23,8 @@ type tcpResponseWriter struct {
 }
 
 const (
-	defaultReadTimeout = config.DefaultDNSCryptReadTimeout
+	defaultReadTimeout  = config.DefaultDNSCryptReadTimeout
+	defaultWriteTimeout = config.DefaultDNSCryptWriteTimeout
 )
 
 // tcpResponseWriter writes DNSCrypt-encrypted responses over TCP.
@@ -36,6 +37,10 @@ func (w *tcpResponseWriter) WriteMsg(_ context.Context, m *dns.Msg) error {
 	res, err := w.encrypt(m, w.query, false)
 	if err != nil {
 		return fmt.Errorf("encrypting response: %w", err)
+	}
+	// A client that stops reading must not block this goroutine forever.
+	if err := w.conn.SetWriteDeadline(time.Now().Add(defaultWriteTimeout)); err != nil {
+		return fmt.Errorf("setting write deadline: %w", err)
 	}
 	return dnscryptcrypto.WritePrefixed(res, w.conn)
 }
@@ -102,7 +107,13 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 // implementation (encrypted-dns-server) and draft-denis-dprive-dnscrypt-10
 // §5.4.4, which prohibits multiple transactions over the same connection.
 func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
-	_ = conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
+	// ReadPrefixed requires a read deadline: without one, a peer that sends
+	// nothing occupies the worker slot indefinitely.
+	if err := conn.SetReadDeadline(time.Now().Add(defaultReadTimeout)); err != nil {
+		log.Debugf("DNSCRYPT: setting TCP read deadline for %s: %v", conn.RemoteAddr(), err)
+		_ = conn.Close()
+		return
+	}
 
 	b, err := dnscryptcrypto.ReadPrefixed(conn)
 	if err != nil {

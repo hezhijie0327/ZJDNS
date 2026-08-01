@@ -24,15 +24,35 @@ func generateExampleConfig() (string, error) {
 	cfg.Server.Pprof = config.DefaultPprofPort
 	cfg.Server.LogLevel = log.DefaultLevel
 
+	// All secure protocols enabled as a reference example — operators should
+	// remove protocols they don't need before deploying.
+	cfg.Server.Protocol.TLS = config.DefaultTLSPort
+	cfg.Server.Protocol.QUIC = config.DefaultQUICPort
+	cfg.Server.Protocol.HTTPS = config.HTTPSEndpoint{Port: config.DefaultHTTPSPort, Endpoint: config.DefaultQueryPath}
+	cfg.Server.Protocol.HTTP3 = config.HTTPSEndpoint{Port: config.DefaultHTTP3Port, Endpoint: config.DefaultQueryPath}
+	cfg.Server.Protocol.DTLS = config.DefaultDTLSPort
 	cfg.Server.Protocol.DNSCrypt = config.DefaultDNSCryptPort
+	cfg.Server.Protocol.TLCP = config.DefaultTLCPPort
+	cfg.Server.Protocol.HTTPTLCP = config.HTTPSEndpoint{Port: config.DefaultHTTPTLCPPort, Endpoint: config.DefaultQueryPath}
+	cfg.Server.Protocol.DTLCP = config.DefaultDTLCPPort
 
 	cfg.Server.Certificate.Domain = "dns.example.com"
 	cfg.Server.Certificate.TLS = config.TLSCertificate{
 		SelfSigned: true,
 	}
+	cfg.Server.Certificate.TLCP = config.TLCPCertificate{
+		SelfSigned: true,
+	}
+	// Generate a FRESH key pair at example-generation time — a static key in
+	// the source is public knowledge, and any operator copying the example
+	// would run a DNSCrypt server whose signing identity is compromised.
+	rc, err := serverdnscrypt.GenerateResolverConfig("dns.example.com", nil)
+	if err != nil {
+		return "", fmt.Errorf("generating DNSCrypt example keys: %w", err)
+	}
 	cfg.Server.Certificate.DNSCrypt = config.DNSCryptCertificate{
-		PublicKey:  "1A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074",
-		PrivateKey: "34E2546B6F4C1FCE695E0C62DD3D74D39CEA52C70A283E7615EF4B67F82178D51A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074",
+		PublicKey:  rc.PublicKey,
+		PrivateKey: rc.PrivateKey,
 	}
 
 	cfg.Server.Features.KTLS = &config.KTLSSettings{KernelTX: true}

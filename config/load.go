@@ -13,26 +13,30 @@ import (
 // LoadConfig reads, parses, validates, and enriches the configuration from a
 // JSON file.
 func LoadConfig(configFile string) (*ServerConfig, error) {
-	if configFile == "" {
-		return NewDefaultServerConfig(), nil
-	}
+	// Start from the defaults so omitted fields keep their default behavior
+	// (DNSSEC enforcement, ECS, DDR, ports) — unmarshalling into a zero-value
+	// ServerConfig silently disabled them. The no-config path runs the same
+	// enrichment pipeline (DDR records, CHAOS rules) so both paths produce
+	// identical behavior for the same logical configuration.
+	cfg := NewDefaultServerConfig()
 
-	data, err := os.ReadFile(configFile) //nolint:gosec // G304: config file path from user
-	if err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
-	}
-	// Warn if config file has group/other read permissions — it may contain
-	// SOCKS5 proxy credentials and other sensitive values.
-	if info, err := os.Stat(configFile); err == nil {
-		if info.Mode().Perm()&GroupOtherPermMask != 0 {
-			log.Warnf("CONFIG: config file has insecure permissions (%04o). Consider 'chmod 600 %s'",
-				info.Mode().Perm(), configFile)
+	if configFile != "" {
+		data, err := os.ReadFile(configFile) //nolint:gosec // G304: config file path from user
+		if err != nil {
+			return nil, fmt.Errorf("read config: %w", err)
 		}
-	}
+		// Warn if config file has group/other read permissions — it may contain
+		// SOCKS5 proxy credentials and other sensitive values.
+		if info, err := os.Stat(configFile); err == nil {
+			if info.Mode().Perm()&GroupOtherPermMask != 0 {
+				log.Warnf("CONFIG: config file has insecure permissions (%04o). Consider 'chmod 600 %s'",
+					info.Mode().Perm(), configFile)
+			}
+		}
 
-	cfg := &ServerConfig{}
-	if err := json.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
+		if err := json.Unmarshal(data, cfg); err != nil {
+			return nil, fmt.Errorf("parse config: %w", err)
+		}
 	}
 
 	if err := validateConfig(cfg); err != nil {
@@ -63,18 +67,6 @@ func NewDefaultServerConfig() *ServerConfig {
 
 	cfg.Server.Protocol.UDP = DefaultUDPPort
 	cfg.Server.Protocol.TCP = DefaultTCPPort
-	cfg.Server.Protocol.TLS = DefaultTLSPort
-	cfg.Server.Protocol.QUIC = DefaultQUICPort
-	cfg.Server.Protocol.HTTPS = HTTPSEndpoint{Port: DefaultHTTPSPort, Endpoint: DefaultQueryPath}
-	cfg.Server.Protocol.HTTP3 = HTTPSEndpoint{Port: DefaultHTTP3Port, Endpoint: DefaultQueryPath}
-	cfg.Server.Protocol.DTLS = DefaultDTLSPort
-	cfg.Server.Protocol.DNSCrypt = DefaultDNSCryptPort
-	cfg.Server.Protocol.TLCP = DefaultTLCPPort
-	cfg.Server.Protocol.HTTPTLCP = HTTPSEndpoint{Port: DefaultHTTPTLCPPort, Endpoint: DefaultQueryPath}
-	cfg.Server.Protocol.DTLCP = DefaultDTLCPPort
-
-	cfg.Server.Certificate.Domain = "dns.example.com"
-	cfg.Server.Features.DDR = DDRSettings{IPv4: "127.0.0.1", IPv6: "::1"}
 	cfg.Server.Features.ECS = ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.DNSSECEnforce = true
 
@@ -107,6 +99,12 @@ func resolveStamp(server *UpstreamServer, index int, category string) error {
 
 	// Protocol: if not explicitly set, infer from stamp.
 	stampProto := zstamp.ProtoToConfig(s.Proto)
+	// DoH stamps map to the "https" config protocol — "doh" is not a
+	// recognized upstream protocol anywhere downstream (it would silently
+	// fall into the plain-UDP path and fail).
+	if stampProto == "doh" {
+		stampProto = ProtoHTTPS
+	}
 	if server.Protocol == "" {
 		server.Protocol = stampProto
 	} else if !protocolMatchesStamp(server.Protocol, s.Proto) {
@@ -120,6 +118,9 @@ func resolveStamp(server *UpstreamServer, index int, category string) error {
 	switch s.Proto {
 	case zstamp.ProtoDOH:
 		server.Address = s.BuildDoHURL()
+	case zstamp.ProtoPlain, zstamp.ProtoDNSCrypt, zstamp.ProtoDOT, zstamp.ProtoDOQ,
+		zstamp.ProtoODoHTarget, zstamp.ProtoDNSCryptRelay, zstamp.ProtoODoHRelay:
+		server.Address = s.Address
 	default:
 		server.Address = s.Address
 	}
@@ -148,9 +149,10 @@ func protocolMatchesStamp(userProto string, stampProto zstamp.ProtoType) bool {
 	case zstamp.ProtoDNSCrypt:
 		return userProto == ProtoDNSCrypt || userProto == ProtoDNSCryptTCP
 	case zstamp.ProtoDOH:
-		// Map to ProtoHTTP (not ProtoHTTPS): the stamp's endpoint is a URL,
-		// and BuildDoHURL() prepends "https://" at query time.
-		return userProto == ProtoHTTP
+		// The stamp's endpoint is a URL (BuildDoHURL prepends https://),
+		// so the config protocol must be ProtoHTTPS — "doh" is not a
+		// recognized upstream protocol.
+		return userProto == ProtoHTTPS
 	case zstamp.ProtoDOT:
 		return userProto == ProtoTLS
 	case zstamp.ProtoDOQ:

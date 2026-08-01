@@ -279,10 +279,24 @@ func (c *Conn) readLoop() {
 			}
 		}
 		if ok {
-			select {
-			case pq.resultCh <- resp:
-			default:
+			// Re-verify the pending is still registered and deliver UNDER
+			// the RLock: Exchange's deferred cleanup (ctx cancellation)
+			// deletes+drains under the write lock, so holding the RLock
+			// across the (non-blocking, buffered) send makes verify+deliver
+			// atomic — a late response can no longer land on a purged
+			// channel and leak a pooled *dns.Msg.
+			c.mu.RLock()
+			pq2, still := c.inflight[resp.ID]
+			if !still || pq2 != pq {
+				c.mu.RUnlock()
 				zpool.DefaultMessage.Put(resp)
+			} else {
+				select {
+				case pq.resultCh <- resp:
+				default:
+					zpool.DefaultMessage.Put(resp)
+				}
+				c.mu.RUnlock()
 			}
 		} else {
 			resp.Data = nil
@@ -404,7 +418,7 @@ func (p *ConnPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc f
 // connection is replaced; if none are dead the connection is discarded.
 func (p *ConnPool) WarmUp(ctx context.Context, key, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) error {
 	p.mu.Lock()
-	if len(p.conns[key]) >= p.maxConns && p.dialing[key] >= p.maxConns {
+	if len(p.conns[key]) >= p.maxConns {
 		p.mu.Unlock()
 		return nil // pool already full, don't bother
 	}

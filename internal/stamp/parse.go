@@ -41,6 +41,9 @@ func (s *DNSStamp) parsePlainDNS(bin []byte) error {
 	binLen := len(bin)
 	pos := 9 // skip proto(1) + props(8)
 
+	if pos >= binLen {
+		return ErrTruncatedLength
+	}
 	length := int(bin[pos])
 	if 1+length > binLen-pos {
 		return errors.New("stamp: invalid plain DNS stamp")
@@ -85,6 +88,9 @@ func (s *DNSStamp) parseDNSCrypt(bin []byte) error {
 	pos := 9 // skip proto(1) + props(8)
 
 	// Address.
+	if pos >= binLen {
+		return ErrTruncatedLength
+	}
 	length := int(bin[pos])
 	// Uses >= (vs > for plain DNS) because DNSCrypt addresses may be
 	// zero-length in relay mode, but validation still requires at least
@@ -119,6 +125,9 @@ func (s *DNSStamp) parseDNSCrypt(bin []byte) error {
 	}
 
 	// Public key — MUST be exactly 32 bytes per §4.2.3.
+	if pos >= binLen {
+		return ErrTruncatedLength
+	}
 	length = int(bin[pos])
 	if length != 32 {
 		return errors.New("stamp: DNSCrypt public key must be exactly 32 bytes")
@@ -132,6 +141,9 @@ func (s *DNSStamp) parseDNSCrypt(bin []byte) error {
 	pos += length
 
 	// Provider name.
+	if pos >= binLen {
+		return ErrTruncatedLength
+	}
 	length = int(bin[pos])
 	if length >= binLen-pos {
 		return errors.New("stamp: invalid DNSCrypt stamp")
@@ -174,6 +186,9 @@ func (s *DNSStamp) parseSecure(bin []byte, name string, hasPath, skipAddr bool) 
 		pos = newPos
 	}
 
+	if pos >= binLen {
+		return ErrTruncatedLength
+	}
 	length := int(bin[pos])
 	if 1+length > binLen-pos {
 		return fmt.Errorf("stamp: invalid %s stamp", name)
@@ -183,6 +198,9 @@ func (s *DNSStamp) parseSecure(bin []byte, name string, hasPath, skipAddr bool) 
 	pos += length
 
 	if hasPath {
+		if pos >= binLen {
+			return ErrTruncatedLength
+		}
 		length = int(bin[pos])
 		if 1+length > binLen-pos {
 			return fmt.Errorf("stamp: invalid %s stamp", name)
@@ -219,6 +237,9 @@ func (s *DNSStamp) parseDNSCryptRelay(bin []byte) error {
 	binLen := len(bin)
 	pos := 1 // relay stamps have no properties — skip only proto byte
 
+	if pos >= binLen {
+		return ErrTruncatedLength
+	}
 	length := int(bin[pos])
 	if 1+length > binLen-pos {
 		return errors.New("stamp: invalid DNSCrypt relay stamp")

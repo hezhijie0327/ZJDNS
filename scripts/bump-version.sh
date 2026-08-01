@@ -18,8 +18,15 @@ esac
 
 # ── Parse current version from version.go ────────────────────────────────
 VERSION_FILE="cmd/zjdns/version.go"
-CURRENT=$(grep 'Version\s*=' "$VERSION_FILE" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+# POSIX [[:space:]] — GNU \s fails on macOS BSD grep.
+CURRENT=$(grep 'Version[[:space:]]*=' "$VERSION_FILE" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 echo "Current version: $CURRENT"
+
+# Validate the extracted version before any arithmetic on it.
+if ! echo "$CURRENT" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    echo "error: could not parse a numeric version from $VERSION_FILE (got \"$CURRENT\")" >&2
+    exit 1
+fi
 
 MAJOR=$(echo "$CURRENT" | cut -d. -f1)
 MINOR=$(echo "$CURRENT" | cut -d. -f2)
@@ -40,13 +47,22 @@ if [ "$(uname)" = "Darwin" ]; then
 else
     sed -i "s/Version[[:space:]]*=[[:space:]]*\"$CURRENT\"/Version     = \"$NEW\"/" "$VERSION_FILE"
 fi
+if ! grep -q "Version     = \"$NEW\"" "$VERSION_FILE"; then
+    echo "error: failed to bump $VERSION_FILE to $NEW" >&2
+    exit 1
+fi
 echo "Bumped $VERSION_FILE"
 
 # ── Bump README version badge ────────────────────────────────────────────
 README="README.md"
 if [ "$(uname)" = "Darwin" ]; then
-    sed -i '' "s/Version-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-/Version-${NEW}-/" "$README"
+    sed -i '' "s/Version-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-/Version-${NEW}-/g" "$README"
 else
-    sed -i "s/Version-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-/Version-${NEW}-/" "$README"
+    sed -i "s/Version-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-/Version-${NEW}-/g" "$README"
+fi
+# The badge also appears in the release/download URL; verify the replacement.
+if ! grep -q "Version-${NEW}-" "$README"; then
+    echo "error: failed to bump README badge to $NEW" >&2
+    exit 1
 fi
 echo "Bumped $README"

@@ -30,13 +30,19 @@ func (s *Server) startTCP(g Group, ctx context.Context, handler dns.Handler) err
 		}
 
 		srv := &dns.Server{
-			Listener:    &zdnsutil.TCPKeepAliveListener{Listener: listener},
+			Listener:    &zdnsutil.TCPKeepAliveListener{Listener: listener, KeepAlivePeriod: config.DefaultTCPKeepAlivePeriod},
 			Handler:     handler,
 			ReadTimeout: config.DefaultTCPIdleTimeout, // RFC 7766 §6.2.3
 		}
+		s.mu.Lock()
 		s.tcpServers = append(s.tcpServers, srv)
+		s.mu.Unlock()
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("TCP server")
+			go func() {
+				<-ctx.Done()
+				s.Shutdown(context.Background())
+			}()
 			err := srv.ListenAndServe()
 			if err != nil {
 				select {

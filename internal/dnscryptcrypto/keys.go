@@ -17,8 +17,17 @@ func HexEncodeKey(b []byte) string {
 }
 
 // HexDecodeKey decodes a hex-encoded string (with optional colon separators)
-// into a byte slice.
+// into a byte slice.  Colons, when present, must separate complete byte pairs
+// ("aa:bb:cc") — a misplaced separator is rejected instead of being silently
+// normalized away and masking a key typo.
 func HexDecodeKey(str string) ([]byte, error) {
+	if strings.Contains(str, ":") {
+		for part := range strings.SplitSeq(str, ":") {
+			if len(part) != 2 {
+				return nil, fmt.Errorf("dnscrypt: key colons must separate byte pairs, got %q", str)
+			}
+		}
+	}
 	return hex.DecodeString(strings.ReplaceAll(str, ":", ""))
 }
 

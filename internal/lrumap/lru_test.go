@@ -347,10 +347,10 @@ func TestOnEvict(t *testing.T) {
 	var evictedKey string
 	var evictedVal int
 	m := New[string, int](3)
-	m.OnEvict = func(k string, v int) {
+	m.SetOnEvict(func(k string, v int) {
 		evictedKey = k
 		evictedVal = v
-	}
+	})
 
 	m.Set("a", 1)
 	m.Set("b", 2)
@@ -409,9 +409,9 @@ func TestClear(t *testing.T) {
 func TestClear_OnEvictCalled(t *testing.T) {
 	evicted := make(map[string]int)
 	m := New[string, int](10)
-	m.OnEvict = func(k string, v int) {
+	m.SetOnEvict(func(k string, v int) {
 		evicted[k] = v
-	}
+	})
 
 	m.Set("a", 1)
 	m.Set("b", 2)

@@ -24,9 +24,11 @@ func TestHasPaddingOption_WithPadding(t *testing.T) {
 }
 
 func TestHasPaddingOption_WithoutPadding(t *testing.T) {
-	req := &dns.Msg{
-		Pseudo: []dns.RR{&dns.EDE{InfoCode: dns.ExtendedErrorBlocked}},
-	}
+	// EDNS presence is the UDPSize header field (the fork merges OPT fields
+	// into the Msg header on Unpack); Pseudo holds only the options.
+	req := &dns.Msg{}
+	req.UDPSize = 1232 // UDPSize lives in the embedded header struct — set by assignment
+	req.Pseudo = []dns.RR{&dns.EDE{InfoCode: dns.ExtendedErrorBlocked}}
 	if HasPaddingOption(req) {
 		t.Error("client with EDNS but no PADDING opted out — should NOT pad")
 	}

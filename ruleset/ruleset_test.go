@@ -119,19 +119,23 @@ func TestDomainKey(t *testing.T) {
 	}
 }
 
-func TestTLDPlusOne(t *testing.T) {
-	tests := []struct{ in, want string }{
-		{"www.google.com.", "google.com"},
-		{"google.com.", "google.com"},
-		{"com.", "com"},
-		{"www.sub.example.com.", "example.com"},
-		// Note: multi-part TLDs (.co.uk, .com.au, etc.) are not handled —
-		// see tldPlusOne godoc for rationale.
+// TestMatch_MultiLabelRules verifies that multi-label domain rules match any
+// query that has the rule name as a suffix, and that nested rules all
+// contribute tags (OR semantics).
+func TestMatch_MultiLabelRules(t *testing.T) {
+	e := testEngine(t, []config.RuleSet{
+		{Tag: "ads", Type: "domain", Rule: []string{"ads.example.com"}},
+		{Tag: "example", Type: "domain", Rule: []string{"example.com"}},
+	})
+	got := e.Match("tracker.ads.example.com.", "1.2.3.4")
+	if !got["ads"] || !got["example"] {
+		t.Errorf("suffix rules must both match, got %v", got)
 	}
-	for _, tt := range tests {
-		if got := tldPlusOne(tt.in); got != tt.want {
-			t.Errorf("tldPlusOne(%q) = %q, want %q", tt.in, got, tt.want)
-		}
+	if got := e.Match("www.example.org.", "1.2.3.4"); len(got) != 0 {
+		t.Errorf("unrelated domain must not match, got %v", got)
+	}
+	if got := e.Match("ads.example.com.", "1.2.3.4"); !got["ads"] {
+		t.Errorf("exact-name rule must match, got %v", got)
 	}
 }
 

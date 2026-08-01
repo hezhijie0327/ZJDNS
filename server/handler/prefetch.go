@@ -28,6 +28,11 @@ func NewPrefetchCooldown() *PrefetchCooldown {
 // Uses double-checked locking: the common case (key still in cooldown) only
 // acquires a read lock.  The write path falls back to an exclusive lock.
 func (pc *PrefetchCooldown) ShouldStart(key string, now, cooldownNanos int64) bool {
+	// The zero value (constructed without NewPrefetchCooldown) has a nil
+	// map: make it usable instead of panicking on the write path.
+	if pc.data == nil {
+		pc.data = make(map[string]int64)
+	}
 	// Fast path: read-only check covers the common case where a key is
 	// still within its cooldown window.
 	pc.mu.RLock()
@@ -45,6 +50,23 @@ func (pc *PrefetchCooldown) ShouldStart(key string, now, cooldownNanos int64) bo
 	if exists && now-last < cooldownNanos {
 		pc.mu.Unlock()
 		return false
+	}
+	// Inline soft cap: even if the external Cleanup ticker is removed or
+	// delayed, the map cannot grow without bound.
+	if len(pc.data) >= config.DefaultPrefetchCooldownMaxEntries {
+		// Make room by dropping the oldest entry — a bounded map with
+		// occasional double-evictions beats unbounded growth.
+		var oldestKey string
+		var oldestTs int64
+		first := true
+		for k, v := range pc.data {
+			if first || v < oldestTs {
+				oldestKey, oldestTs, first = k, v, false
+			}
+		}
+		if oldestKey != "" {
+			delete(pc.data, oldestKey)
+		}
 	}
 	pc.data[key] = now
 	pc.mu.Unlock()
@@ -66,7 +88,10 @@ func (pc *PrefetchCooldown) Cleanup(now, cooldownNanos int64) {
 
 	maxEntries := config.DefaultPrefetchCooldownMaxEntries
 	if len(pc.data) > maxEntries {
-		// Sort by timestamp ascending; evict oldest half.
+		// Sort by timestamp ascending; evict the oldest half. Entries still
+		// inside their cooldown are evicted only as a last resort — evicting
+		// a hot key mid-cooldown lets the same name re-pass ShouldStart and
+		// duplicate the very upstream refresh the cooldown prevents.
 		type entry struct {
 			key string
 			ts  int64

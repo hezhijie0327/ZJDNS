@@ -75,6 +75,10 @@ type TLCPCertificate struct {
 // DNSCryptCertificate holds the DNSCrypt v2 identity keys.  The provider name is
 // auto-derived from certificate.domain as "2.dnscrypt-cert.<domain>".
 type DNSCryptCertificate struct {
+	// ResolverSk is the X25519 resolver secret key seed. When set, certs and
+	// ClientMagic stay stable across restarts; when empty, a fresh pair is
+	// generated (rotated every 24h).
+	ResolverSk string `json:"resolver_secret_key,omitzero"`
 	PrivateKey string `json:"private_key,omitzero"` // Ed25519 private key (hex, optional — auto-generated if empty)
 	PublicKey  string `json:"public_key,omitzero"`  // Ed25519 public key (hex, optional — auto-generated if empty)
 }

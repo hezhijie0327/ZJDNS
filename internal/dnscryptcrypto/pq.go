@@ -12,6 +12,18 @@ import (
 
 // pqProfileExt is the pre-built, immutable PQ profile extension payload.
 // Content is invariant — allocated once to avoid per-certificate heap alloc.
+// TicketPlaintext is the decoded ticket plaintext. It carries every field
+// EncodeTicketPlaintext writes — including esVersion and peHash — so the
+// ticket's profile/version binding is enforced by the API itself instead of
+// callers re-indexing the raw bytes.
+type TicketPlaintext struct {
+	ESVersion      [2]byte
+	ClientMagic    [ClientMagicSize]byte
+	ResumeSecret   [SharedKeySize]byte
+	ProfileExtHash [32]byte
+	Expiry         uint32
+}
+
 var pqProfileExt = func() []byte {
 	ext := make([]byte, PQProfileExtSize)
 	copy(ext[0:3], "PQD")
@@ -48,6 +60,11 @@ func PQProfileExtension() []byte {
 }
 
 func PQCertContext(binCert []byte) []byte {
+	// Exported function with no documented length contract: guard the fixed
+	// offsets — a short input would panic with index-out-of-range.
+	if len(binCert) < CertPQExtOff+CertPQExtLen {
+		return nil
+	}
 	ctx := make([]byte, 0, 14+
 		2+2+ // es-version + minor
 		CertPQPkLen+ClientMagicSize+
@@ -115,8 +132,14 @@ func PQEncapsulate(pk []byte) (kemSS, ct []byte, err error) {
 	return xwing.Encapsulate(pk, nil)
 }
 
-func PQDecapsulate(ct, sk []byte) (kemSS []byte) {
-	return xwing.Decapsulate(ct, sk)
+func PQDecapsulate(ct, sk []byte) (kemSS []byte, err error) {
+	// circl's Decapsulate panics on wrong-length input (PrivateKeySize /
+	// CiphertextSize): validate first so a malformed packet degrades to an
+	// error instead of crashing the process.
+	if len(ct) != PQCiphertextSize || len(sk) != xwing.PrivateKeySize {
+		return nil, ErrPQInvalidTicket
+	}
+	return xwing.Decapsulate(ct, sk), nil
 }
 
 // DerivePQKeys deterministically derives an X-Wing keypair from an X25519
@@ -236,24 +259,6 @@ func ProfileExtensionHash() [32]byte {
 	return cachedProfileExtensionHash
 }
 
-// PQClientMagic derives the 8-byte client magic for a PQ certificate from the
-// X-Wing public key, matching encrypted-dns-server dnscrypt_certs.rs:64-67:
-// SHA-256(PK)[:8], with QUIC and PQResume collision avoidance.
-func PQClientMagic(pk []byte) [ClientMagicSize]byte {
-	h := sha256.Sum256(pk)
-	var magic [ClientMagicSize]byte
-	copy(magic[:], h[:ClientMagicSize])
-	// §5.5: MUST NOT start with 7 zero bytes (QUIC collision).
-	if [7]byte(magic[:7]) == ([7]byte{}) {
-		magic[0] ^= 0xFF
-	}
-	// §11.2: MUST NOT collide with resume magic.
-	if bytes.Equal(magic[:], PQResumeMagic[:]) {
-		magic[0] ^= 0xFF
-	}
-	return magic
-}
-
 func EncodeTicketPlaintext(resumeSecret [SharedKeySize]byte, clientMagic [ClientMagicSize]byte, serial, tsEnd, expiry uint32, peHash [32]byte) []byte {
 	buf := make([]byte, TicketPlaintextSize)
 	copy(buf[TicketPlaintextSecretOff:TicketPlaintextSecretOff+TicketPlaintextSecretLen], resumeSecret[:])
@@ -266,12 +271,16 @@ func EncodeTicketPlaintext(resumeSecret [SharedKeySize]byte, clientMagic [Client
 	return buf
 }
 
-func DecodeTicketPlaintext(plaintext []byte) (clientMagic [ClientMagicSize]byte, resumeSecret [SharedKeySize]byte, ticketExpiry uint32, err error) {
+// DecodeTicketPlaintext decodes a ticket plaintext buffer.
+func DecodeTicketPlaintext(plaintext []byte) (TicketPlaintext, error) {
+	var t TicketPlaintext
 	if len(plaintext) < TicketPlaintextSize {
-		return [ClientMagicSize]byte{}, [SharedKeySize]byte{}, 0, ErrPQInvalidTicket
+		return t, ErrPQInvalidTicket
 	}
-	copy(resumeSecret[:], plaintext[TicketPlaintextSecretOff:TicketPlaintextSecretOff+TicketPlaintextSecretLen])
-	copy(clientMagic[:], plaintext[TicketPlaintextMagicOff:TicketPlaintextMagicOff+TicketPlaintextMagicLen])
-	ticketExpiry = binary.BigEndian.Uint32(plaintext[TicketPlaintextExpiryOff : TicketPlaintextExpiryOff+TicketPlaintextExpiryLen])
-	return clientMagic, resumeSecret, ticketExpiry, nil
+	copy(t.ESVersion[:], plaintext[TicketPlaintextESOff:TicketPlaintextESOff+TicketPlaintextESLen])
+	copy(t.ResumeSecret[:], plaintext[TicketPlaintextSecretOff:TicketPlaintextSecretOff+TicketPlaintextSecretLen])
+	copy(t.ClientMagic[:], plaintext[TicketPlaintextMagicOff:TicketPlaintextMagicOff+TicketPlaintextMagicLen])
+	copy(t.ProfileExtHash[:], plaintext[TicketPlaintextPEHashOff:TicketPlaintextPEHashOff+TicketPlaintextPEHashLen])
+	t.Expiry = binary.BigEndian.Uint32(plaintext[TicketPlaintextExpiryOff : TicketPlaintextExpiryOff+TicketPlaintextExpiryLen])
+	return t, nil
 }

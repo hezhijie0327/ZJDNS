@@ -299,11 +299,13 @@ func TestCertCacheKeyNormalisation(t *testing.T) {
 	}
 }
 
-// TestCertCacheInvalidationOnError verifies that a failed DNSCrypt query
-// invalidates the cached state, forcing the next query to re-fetch the
-// certificate.  Without this, a server cert rotation would cause every query
-// to fail for up to DefaultDNSCryptCertificateCacheTTL (1 hour).
-func TestCertCacheInvalidationOnError(t *testing.T) {
+// TestCertCachePreservedOnIOError verifies that transient I/O failures (UDP
+// read timeouts) do NOT invalidate the cached state.  A dropped packet or a
+// reset connection is not evidence of certificate rotation; evicting the
+// cache on every network blip would force a full certificate re-fetch (DNS
+// TXT round trip) on the very next query.  Only decryption failures — which
+// indicate the key material is genuinely stale — clear the state.
+func TestCertCachePreservedOnIOError(t *testing.T) {
 	_, stamp := startTestDNSCryptServer(t)
 	c := New(nil)
 	server := &config.UpstreamServer{Address: stamp, Protocol: config.ProtoDNSCrypt}
@@ -319,7 +321,7 @@ func TestCertCacheInvalidationOnError(t *testing.T) {
 		t.Fatalf("want 1 answer, got %d", len(resp.Answer))
 	}
 
-	// Find the cache key and grab the state pointer.
+	// Find the cache key, grab the state pointer, and save the key material.
 	var cacheKey string
 	var st *State
 	c.cache.Range(func(k string, v *State) bool {
@@ -330,10 +332,16 @@ func TestCertCacheInvalidationOnError(t *testing.T) {
 	if st == nil {
 		t.Fatal("state should be cached after successful query")
 	}
+	var savedMagic [dnscryptcrypto.ClientMagicSize]byte
+	var savedKey [dnscryptcrypto.SharedKeySize]byte
+	st.mu.Lock()
+	savedMagic = st.clientMagic
+	savedKey = st.sharedKey
+	st.mu.Unlock()
 
-	// 2. Corrupt clientMagic and sharedKey to simulate a cert rotation.
-	//    A wrong clientMagic causes the server to drop the query silently,
-	//    producing a read timeout on the client.
+	// 2. Corrupt clientMagic and sharedKey.  A wrong clientMagic causes the
+	//    server to drop the query silently, producing a read timeout — a
+	//    pure I/O error on the client side.
 	st.mu.Lock()
 	for i := range st.clientMagic {
 		st.clientMagic[i] ^= 0xFF
@@ -351,18 +359,23 @@ func TestCertCacheInvalidationOnError(t *testing.T) {
 	}
 	t.Logf("expected error: %v", err)
 
-	// Cache must be gone.
-	_, ok := c.cache.Get(cacheKey)
-	if ok {
-		t.Fatal("state should be invalidated after failed query")
+	// 3. Transient I/O failure must NOT evict the cached state.
+	if _, ok := c.cache.Get(cacheKey); !ok {
+		t.Fatal("state must be preserved after a transient I/O failure")
 	}
 
-	// 3. Third query re-fetches the certificate and succeeds.
+	// 4. Restore the key material — the query succeeds again, still served
+	//    from the cached state (no certificate re-fetch).
+	st.mu.Lock()
+	st.clientMagic = savedMagic
+	st.sharedKey = savedKey
+	st.mu.Unlock()
+
 	ctx3, cancel3 := context.WithTimeout(context.Background(), 5*time.Second)
 	resp, err = c.Execute(ctx3, newQuery("example.com."), server, false)
 	cancel3()
 	if err != nil {
-		t.Fatalf("third query (after re-fetch): %v", err)
+		t.Fatalf("third query (restored state): %v", err)
 	}
 	if len(resp.Answer) != 1 {
 		t.Fatalf("want 1 answer, got %d", len(resp.Answer))

@@ -70,42 +70,27 @@ func TestHopGuard_AdaptiveThreshold(t *testing.T) {
 func TestHopGuard_NewTrustedTTL_Promoted(t *testing.T) {
 	hg := NewHopGuard()
 
-	// Mode TTL=100 (24 times), threshold=6.
-	feedTTL(hg, testServer, 100, 24)
-	// Feed 8 other unique TTLs (1 each).
-	for ttl := uint8(50); ttl < 58; ttl++ {
-		hg.Validate(testServer, ttl)
-	} // total 32 → armed, trusted={100}
-
-	// TTL=80 is rejected but histogram updated.
-	hg.Validate(testServer, 80) // count=1, rejected, samples=33
-
-	// Feed TTL=80 until count reaches 6.
-	feedTTL(hg, testServer, 80, 5) // count=6, rejected 5×, samples=38
-
-	// Feed more to reach next rebuild at 64.
-	feedTTL(hg, testServer, 100, 26) // samples=64 → rebuild with threshold=max(4, 50/4)=12
-	// TTL=80 count=6 < 12 → still not trusted!
-
-	if hg.Validate(testServer, 80) {
-		t.Error("TTL=80 count=6 < threshold=12 → should still be rejected")
+	// 32 feeds of the mode arm the guard with trusted={100}.
+	feedTTL(hg, testServer, 100, 32)
+	if !hg.Validate(testServer, 100) {
+		t.Fatal("mode TTL=100 should pass after arming")
 	}
 
-	// Feed TTL=80 to reach count=12.
-	feedTTL(hg, testServer, 80, 10) // count=16, rejected, samples=74
+	// A secondary TTL below mode/2 is rejected.
+	feedTTL(hg, testServer, 80, 4)
+	if hg.Validate(testServer, 80) {
+		t.Error("TTL=80 count=4 < mode/2=16 → should be rejected")
+	}
 
-	// Feed to next rebuild at 96.
-	feedTTL(hg, testServer, 100, 22) // samples=96 → rebuild, threshold=max(4, 72/4)=18
-	// TTL=80 count=16 < 18 → still not trusted. Need more...
-
-	// Feed enough to get 80 to 18.
-	feedTTL(hg, testServer, 80, 10) // count=26, samples=106
-	// Need rebuild at 128...
-	feedTTL(hg, testServer, 100, 22) // samples=128 → rebuild, threshold=max(4, 94/4)=23
-	// TTL=80 count=26 >= 23 → trusted!
-
+	// Feed 80 until the sample count reaches the next rebuild boundary (64):
+	// after decay both TTLs sit at 24, the tie-break makes 80 the mode, and
+	// 100 (>= mode/2) is also retained — so 80 is now trusted.
+	feedTTL(hg, testServer, 80, 28) // samples=64 → rebuild
 	if !hg.Validate(testServer, 80) {
-		t.Error("TTL=80 count=26 >= threshold=23 → should be trusted")
+		t.Error("TTL=80 should be trusted once it becomes the mode")
+	}
+	if !hg.Validate(testServer, 100) {
+		t.Error("TTL=100 should still be trusted (>= mode/2)")
 	}
 }
 
@@ -174,25 +159,26 @@ func TestHopGuard_BoundaryClamp(t *testing.T) {
 func TestHopGuard_AdaptiveThreshold_MultipleTrusted(t *testing.T) {
 	hg := NewHopGuard()
 
-	// Mode=100 (20 times), secondary=95 (7 times) — both >= threshold max(4,20/4)=5.
+	// Mode=100 (20 times), secondary=95 (13 times) — hardened promotion
+	// requires the secondary to reach count >= mode/2 = 10.
 	feedTTL(hg, testServer, 100, 20)
-	feedTTL(hg, testServer, 95, 7)
+	feedTTL(hg, testServer, 95, 13)
 	feedTTL(hg, testServer, 50, 2)
 	feedTTL(hg, testServer, 60, 2)
-	feedTTL(hg, testServer, 70, 1) // total 32
+	feedTTL(hg, testServer, 70, 1) // total 38
 
 	trusted := hg.trustedSet(testServer)
 	if len(trusted) != 2 {
-		t.Errorf("expected 2 trusted TTLs (100 and 95 >= threshold=5), got %d: %v", len(trusted), trusted)
+		t.Errorf("expected 2 trusted TTLs (100 and 95 >= mode/2), got %d: %v", len(trusted), trusted)
 	}
 
 	// TTL=93 should pass (within 95±2)
 	if !hg.Validate(testServer, 93) {
 		t.Error("TTL=93 should pass (within 95±2)")
 	}
-	// TTL=50 should be rejected (count=2 < threshold=5)
+	// TTL=50 should be rejected (count=2 < mode/2)
 	if hg.Validate(testServer, 50) {
-		t.Error("TTL=50 should be rejected (count=2 < threshold=5)")
+		t.Error("TTL=50 should be rejected (count=2 < mode/2)")
 	}
 }
 

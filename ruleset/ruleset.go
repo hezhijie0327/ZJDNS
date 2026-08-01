@@ -77,12 +77,24 @@ func (e *Engine) insertRule(tag, typ, value string) error {
 func (e *Engine) Match(qname, ip string) map[string]bool {
 	var result map[string]bool
 
-	// Domain: O(1) suffix map lookup.
-	if tags := e.domainRules[tldPlusOne(qname)]; len(tags) > 0 {
-		result = make(map[string]bool, len(tags))
-		for _, t := range tags {
-			result[t] = true
+	// Domain: suffix map lookup walking the qname from its full form down
+	// to the shortest suffix.  Rules are keyed by their complete name
+	// (domainKey), so multi-label rules ("a.b.example.com") match any query
+	// that has them as a suffix; all matching levels contribute tags (OR).
+	for name := strings.TrimSuffix(strings.ToLower(qname), "."); ; {
+		if tags := e.domainRules[name]; len(tags) > 0 {
+			if result == nil {
+				result = make(map[string]bool, len(tags))
+			}
+			for _, t := range tags {
+				result[t] = true
+			}
 		}
+		idx := strings.IndexByte(name, '.')
+		if idx < 0 {
+			break
+		}
+		name = name[idx+1:]
 	}
 
 	// IP: binary radix trie O(128).
@@ -115,7 +127,9 @@ func (e *Engine) MatchIP(ip, tag string) (matched, exists bool) {
 		return false, false
 	}
 	if !e.HasIPTag(tag) {
-		return false, true
+		// Empty rule set: a negated tag matches everything (nothing to
+		// negate), a positive tag matches nothing.
+		return negate, true
 	}
 
 	parsedIP := net.ParseIP(ip)
@@ -155,19 +169,4 @@ func domainKey(p string) string {
 	p = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(p)), ".")
 	p = strings.TrimPrefix(p, "*.")
 	return p
-}
-
-func tldPlusOne(name string) string {
-	n := strings.TrimSuffix(strings.ToLower(name), ".")
-
-	last := strings.LastIndexByte(n, '.')
-	if last < 0 {
-		return n
-	}
-
-	secondLast := strings.LastIndexByte(n[:last], '.')
-	if secondLast < 0 {
-		return n
-	}
-	return n[secondLast+1:]
 }

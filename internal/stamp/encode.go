@@ -116,6 +116,11 @@ func encodeAddrAndHostname(addr, hostname string, defaultPort int) (encodedAddr,
 			if _, hostPort := splitOptionalPort(hostname); hostPort == "" {
 				hostname = hostname + ":" + port
 			}
+		} else {
+			// Move the port onto the hostname instead of discarding it:
+			// an empty hostname with a non-default port would otherwise
+			// encode the stamp with the protocol's default port.
+			hostname = addr + ":" + port
 		}
 	}
 	return addr, stripDefaultPort(hostname, defaultPort)
@@ -138,6 +143,12 @@ func appendHashes(bin []byte, hashes [][]byte) []byte {
 }
 
 func appendBootstrapIPs(bin []byte, bootstrapIPs []string) []byte {
+	if len(bootstrapIPs) == 0 {
+		// Per the stamp spec the VLP field is always present: an empty list
+		// is encoded as a single 0x00 terminator (mirroring appendHashes).
+		// Conforming decoders error on end-of-data without it.
+		return append(bin, 0x00)
+	}
 	last := len(bootstrapIPs) - 1
 	for i, bootstrapIP := range bootstrapIPs {
 		vlen := len(bootstrapIP)
@@ -161,7 +172,12 @@ func validatePort(port string) error {
 func validateAddrAndHostname(addr, hostname string) error {
 	if addr != "" {
 		// Strip optional port suffix before bracket/IP validation.
-		ip, _ := splitOptionalPort(addr)
+		ip, port := splitOptionalPort(addr)
+		if port != "" {
+			if err := validatePort(port); err != nil {
+				return err
+			}
+		}
 		if ip != "" {
 			if strings.HasPrefix(ip, "[") && strings.HasSuffix(ip, "]") {
 				ip = ip[1 : len(ip)-1]
@@ -197,6 +213,11 @@ func splitOptionalPort(s string) (host, port string) {
 	colIndex := strings.LastIndex(s, ":")
 	bracketIndex := strings.LastIndex(s, "]")
 	if colIndex < bracketIndex || colIndex < 0 {
+		return s, ""
+	}
+	// A bare IPv6 address has multiple colons and no brackets: do not treat
+	// the last colon as a host:port separator (::1 would parse as host ":").
+	if bracketIndex < 0 && strings.Count(s, ":") > 1 {
 		return s, ""
 	}
 	host = s[:colIndex]

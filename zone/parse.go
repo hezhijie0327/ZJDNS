@@ -47,9 +47,18 @@ func (e *Evaluator) loadFile(parent *config.ZoneRule) (int, error) {
 		curAddl     []config.ZoneRecord
 	)
 
-	flush := func() {
+	var flushErr error
+	flush := func() error {
+		if flushErr != nil {
+			return flushErr
+		}
 		if curDomain == "" {
-			return
+			return nil
+		}
+		tags, err := parseMatchTagsText(curTags)
+		if err != nil {
+			flushErr = fmt.Errorf("invalid match tags %q for %s: %w", curTags, curDomain, err)
+			return flushErr
 		}
 		groups := groupRecordsByTypeClass(curRecords)
 		if len(groups) > 0 {
@@ -57,15 +66,53 @@ func (e *Evaluator) loadFile(parent *config.ZoneRule) (int, error) {
 				aw := packRRs(curRawName, g.records)
 				auth := packRRs(curRawName, curAuth)
 				addl := packRRs(curRawName, curAddl)
-				e.store(curWildcard, exactKey(curDomain, g.qtype, g.qclass), zoneRule{matchTags: parseMatchTagsText(curTags), rcode: curRcode, answer: aw, authority: auth, additional: addl})
+				e.store(curWildcard, exactKey(curDomain, g.qtype, g.qclass), zoneRule{matchTags: tags, rcode: curRcode, answer: aw, authority: auth, additional: addl})
 				count++
 			}
 		} else if curRcode != dns.RcodeSuccess {
 			auth := packRRs(curRawName, curAuth)
 			addl := packRRs(curRawName, curAddl)
-			e.store(curWildcard, exactKey(curDomain, 0, 0), zoneRule{matchTags: parseMatchTagsText(curTags), rcode: curRcode, authority: auth, additional: addl})
+			e.store(curWildcard, exactKey(curDomain, 0, 0), zoneRule{matchTags: tags, rcode: curRcode, authority: auth, additional: addl})
 			count++
 		}
+		return nil
+	}
+
+	// File-level defaults: an attribute-only header (". rcode=3") updates
+	// these, and every subsequent domain header inherits them.
+	defaultRcode := parent.Rcode
+	defaultTags := serializeMatchTags(parent.Match)
+
+	resetState := func() {
+		curDomain = ""
+		curRawName = ""
+		curWildcard = false
+		curRcode = defaultRcode
+		curTags = defaultTags
+		curRecords = nil
+		curAuth = nil
+		curAddl = nil
+	}
+
+	applyAttrs := func(fields []string, toDefaults bool) error {
+		for _, f := range fields {
+			if strings.HasPrefix(f, "rcode=") {
+				if n, err := strconv.Atoi(f[6:]); err == nil {
+					curRcode = n
+					if toDefaults {
+						defaultRcode = n
+					}
+				} else {
+					return fmt.Errorf("invalid rcode attribute %q", f)
+				}
+			} else if strings.HasPrefix(f, "match=") {
+				curTags = f[6:] // validated at flush time
+				if toDefaults {
+					defaultTags = f[6:]
+				}
+			}
+		}
+		return nil
 	}
 
 	for sc.Scan() {
@@ -76,7 +123,9 @@ func (e *Evaluator) loadFile(parent *config.ZoneRule) (int, error) {
 
 		// Domain header: starts with . or *.
 		if line[0] == '.' || (len(line) > 1 && line[0] == '*' && line[1] == '.') {
-			flush()
+			if err := flush(); err != nil {
+				return 0, err
+			}
 
 			isWildcard := line[0] == '*'
 			if isWildcard {
@@ -87,28 +136,39 @@ func (e *Evaluator) loadFile(parent *config.ZoneRule) (int, error) {
 
 			fields := strings.Fields(curRawName)
 			if len(fields) == 0 {
-				continue // bare "." or "*." with no following domain
+				// Bare "." or "*." header — reset ALL parsing state so a
+				// stray record after it cannot leak into the previous
+				// domain.
+				resetState()
+				continue
 			}
+
+			// Attribute-only header (". rcode=3" / ". match=tag"): reset
+			// state and update the FILE-LEVEL defaults — every subsequent
+			// domain header inherits them. fields[0] is an attribute, not
+			// a domain name.
+			if strings.HasPrefix(fields[0], "rcode=") || strings.HasPrefix(fields[0], "match=") {
+				resetState()
+				if err := applyAttrs(fields, true); err != nil {
+					return 0, err
+				}
+				continue
+			}
+
 			curDomain = dnsutil.Canonical(fields[0])
 			curRawName = fields[0] // strip extra params (rcode= / match=) from domain
 			if isWildcard {
 				curRawName = "*." + curRawName
 			}
 			curWildcard = isWildcard
-			curRcode = parent.Rcode
-			curTags = serializeMatchTags(parent.Match)
+			curRcode = defaultRcode
+			curTags = defaultTags
 			curRecords = nil
 			curAuth = nil
 			curAddl = nil
 
-			for _, f := range fields[1:] {
-				if strings.HasPrefix(f, "rcode=") {
-					if n, err := strconv.Atoi(f[6:]); err == nil {
-						curRcode = n
-					}
-				} else if strings.HasPrefix(f, "match=") {
-					curTags = f[6:] // store raw, validated at query time
-				}
+			if err := applyAttrs(fields[1:], false); err != nil {
+				return 0, err
 			}
 			continue
 		}
@@ -118,6 +178,7 @@ func (e *Evaluator) loadFile(parent *config.ZoneRule) (int, error) {
 			continue
 		}
 		if curDomain == "" {
+			log.Warnf("ZONE: record line without a preceding domain header, skipping: %s", line)
 			continue
 		}
 
@@ -136,10 +197,14 @@ func (e *Evaluator) loadFile(parent *config.ZoneRule) (int, error) {
 			curRecords = append(curRecords, rec)
 		}
 	}
-	flush()
 
+	// Check the scanner error BEFORE flushing — an aborted scan must not
+	// persist the partially-parsed state as a complete rule.
 	if err := sc.Err(); err != nil {
 		return 0, fmt.Errorf("read: %w", err)
+	}
+	if err := flush(); err != nil {
+		return 0, err
 	}
 	return count, nil
 }
@@ -187,7 +252,8 @@ func parseRecordLine(line string) (config.ZoneRecord, string, error) {
 	return rec, section, nil
 }
 
-// tokenize splits a line by whitespace, preserving double-quoted strings.
+// tokenize splits a line by whitespace, preserving double-quoted strings and
+// honouring backslash escapes inside quotes (\" and \\).
 func tokenize(line string) []string {
 	var tokens []string
 	i := 0
@@ -202,12 +268,23 @@ func tokenize(line string) []string {
 		if line[i] == '"' {
 			// Quoted string.
 			i++ // skip opening quote
-			j := i
-			for j < len(line) && line[j] != '"' {
-				j++
+			var sb strings.Builder
+			for i < len(line) && line[i] != '"' {
+				if line[i] == '\\' && i+1 < len(line) {
+					// Keep the backslash: the DNS parser resolves the
+					// escape (\" and \\) from the reconstructed record.
+					sb.WriteByte('\\')
+					sb.WriteByte(line[i+1])
+					i += 2
+					continue
+				}
+				sb.WriteByte(line[i])
+				i++
 			}
-			tokens = append(tokens, line[i:j])
-			i = j + 1 // skip closing quote
+			tokens = append(tokens, sb.String())
+			if i < len(line) {
+				i++ // skip closing quote
+			}
 		} else {
 			j := i
 			for j < len(line) && line[j] != ' ' && line[j] != '\t' {

@@ -5,6 +5,7 @@ import (
 	"crypto/x509/pkix"
 	"fmt"
 	"math/big"
+	"net"
 	"time"
 	"zjdns/config"
 
@@ -16,7 +17,7 @@ import (
 
 // generateSelfSignedSMCerts creates a self-signed SM2 CA and two server
 // certificates (signing + encryption) for both TLCP (TCP) and DTLCP (UDP) use.
-func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignCert, dtlcpEncCert dtlcp.Certificate, err error) {
+func generateSelfSignedSMCerts(domain string) (signCert, encCert tlcp.Certificate, dtlcpSignCert, dtlcpEncCert dtlcp.Certificate, err error) {
 	caKey, err := sm2.GenerateKey(rand.Reader)
 	if err != nil {
 		err = fmt.Errorf("generate CA SM2 key: %w", err)
@@ -64,15 +65,24 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 		BasicConstraintsValid: true,
 		MaxPathLen:            1,
 	}
-	serverTemplate := func() *smx509.Certificate {
-		return &smx509.Certificate{
+	// Modern clients verify hostnames/IPs against the SubjectAltName
+	// (RFC 6125) and ignore CN — certs without SANs fail every verification.
+	serverTemplate := func(keyUsage smx509.KeyUsage) *smx509.Certificate {
+		tmpl := &smx509.Certificate{
 			SerialNumber: new(big.Int),
 			Subject:      pkix.Name{CommonName: config.DefaultProjectName + " TLCP"},
 			NotBefore:    time.Now(),
 			NotAfter:     time.Now().Add(config.DefaultServerCertValidity),
-			KeyUsage:     smx509.KeyUsageDigitalSignature,
+			KeyUsage:     keyUsage,
 			ExtKeyUsage:  []smx509.ExtKeyUsage{smx509.ExtKeyUsageServerAuth},
 		}
+		if domain != "" {
+			tmpl.DNSNames = []string{domain}
+			if ip := net.ParseIP(domain); ip != nil {
+				tmpl.IPAddresses = []net.IP{ip}
+			}
+		}
+		return tmpl
 	}
 
 	caDER, err := smx509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
@@ -86,7 +96,7 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
 	}
 
-	signTmpl := serverTemplate()
+	signTmpl := serverTemplate(smx509.KeyUsageDigitalSignature)
 	signTmpl.SerialNumber = signSerial
 	signDER, err := smx509.CreateCertificate(rand.Reader, signTmpl, caCert, &signKey.PublicKey, caKey)
 	if err != nil {
@@ -94,7 +104,9 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
 	}
 
-	encTmpl := serverTemplate()
+	// The encryption certificate is presented for key agreement/key
+	// transport (GM/T 0024) — strict peers validate key usage on it.
+	encTmpl := serverTemplate(smx509.KeyUsageKeyAgreement | smx509.KeyUsageKeyEncipherment | smx509.KeyUsageDataEncipherment)
 	encTmpl.SerialNumber = encSerial
 	encDER, err := smx509.CreateCertificate(rand.Reader, encTmpl, caCert, &encKey.PublicKey, caKey)
 	if err != nil {
@@ -102,16 +114,18 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
 	}
 
+	// Include the self-signed CA in the served chain so clients can validate
+	// the leaf; the CA is also returned for persistence/distribution.
 	signCert = tlcp.Certificate{
-		Certificate: [][]byte{signDER},
+		Certificate: [][]byte{signDER, caDER},
 		PrivateKey:  signKey,
 	}
 	encCert = tlcp.Certificate{
-		Certificate: [][]byte{encDER},
+		Certificate: [][]byte{encDER, caDER},
 		PrivateKey:  encKey,
 	}
 	dtlcpSignCert = dtlcp.Certificate{
-		Certificate: [][]byte{signDER},
+		Certificate: [][]byte{signDER, caDER},
 		PrivateKey:  signKey,
 	}
 	dtlcpEncCert = dtlcp.Certificate{

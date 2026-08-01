@@ -104,7 +104,16 @@ func (d *Detector) IsPoisonedByTLD(response *dns.Msg, queryName string) bool {
 		return false
 	}
 	n := dnsutil.Canonical(queryName)
+	// Root-server hostnames and TLD-apex queries legitimately get A/AAAA
+	// answers from root/TLD servers (see classifyRoot/classifyTLD) — flagging
+	// them would force an unnecessary TCP fallback for every such query.
+	if d.isRootServerDomain(n) || d.isTLD(n) {
+		return false
+	}
 	for _, rr := range response.Answer {
+		if rr == nil {
+			continue
+		}
 		if dnsutil.Canonical(rr.Header().Name) != n {
 			continue
 		}

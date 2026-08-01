@@ -1,6 +1,7 @@
 package lrumap
 
 import (
+	"slices"
 	"zjdns/internal/log"
 
 	"github.com/pion/dtls/v3"
@@ -13,13 +14,25 @@ type DTLSSessionStore struct {
 }
 
 // NewDTLSSessionStore creates a DTLSSessionStore with the given capacity.
+// On eviction the session's resumption secret is zeroed so key material does
+// not linger in heap memory until the next GC cycle.
 func NewDTLSSessionStore(capacity int) *DTLSSessionStore {
-	return &DTLSSessionStore{cache: New[string, dtls.Session](capacity)}
+	cache := New[string, dtls.Session](capacity)
+	cache.SetOnEvict(func(_ string, sess dtls.Session) {
+		clear(sess.Secret)
+		clear(sess.ID)
+	})
+	return &DTLSSessionStore{cache: cache}
 }
 
 // Set saves a DTLS session. For clients, key is the server name; for servers,
-// key is the session ID.
+// key is the session ID. The session's ID/Secret slices are deep-copied so
+// the cache owns its key material: the caller may reuse its buffers after
+// Set, and eviction zeroing must not wipe memory still referenced by an
+// in-flight handshake or a concurrent Get result.
 func (s *DTLSSessionStore) Set(key []byte, sess dtls.Session) error {
+	sess.ID = slices.Clone(sess.ID)
+	sess.Secret = slices.Clone(sess.Secret)
 	log.Debugf("UPSTREAM: DTLS session stored (id=%x)", sess.ID)
 	s.cache.Set(string(key), sess)
 	return nil

@@ -8,6 +8,7 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/ttl"
 
+	"codeberg.org/miekg/dns/dnsutil"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -19,7 +20,7 @@ func (c *Cache) ReverseLookup(ip string) []LookupResult {
 		return nil //nolint:nilerr // key not found
 	}
 	var results []LookupResult
-	_ = c.db.View(func(txn *badger.Txn) error {
+	if err := c.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		opts.Prefix = database.EIPReversePrefix(ip)
 		opts.PrefetchValues = true
@@ -33,6 +34,9 @@ func (c *Cache) ReverseLookup(ip string) []LookupResult {
 			}
 			buf, err := item.ValueCopy(buf)
 			if err != nil {
+				// A transient BadgerDB failure must not look like an empty
+				// result (the PTR middleware would then delegate upstream).
+				log.Warnf("CACHE: reverse lookup ValueCopy failed for %s: %v", ip, err)
 				continue
 			}
 			ttlVal := database.DecodePtrMapValue(buf)
@@ -43,11 +47,27 @@ func (c *Cache) ReverseLookup(ip string) []LookupResult {
 			}
 			nameOff += 1 + 8 + 1
 			if nameOff < len(k) {
-				results = append(results, LookupResult{Name: k[nameOff:], TTL: ttl.RemainingTTL(0, int(ttlVal), uint32(config.DefaultStaleTTL))})
+				name := k[nameOff:]
+				// Exclude non-ptr keys that share the e:ip:{ip}\x00 prefix
+				// (e.g. an entry key whose qname starts with "ip:{ip}"):
+				// their "name" field is not an FQDN (it would contain the
+				// ECS address / binary key columns, which never end in ".").
+				if !dnsutil.IsFqdn(name) {
+					continue
+				}
+				ts := database.DecodePtrMapTimestamp(buf)
+				if ts == 0 {
+					// Legacy 4-byte value: fall back to the entry's expiry.
+					ts = int64(item.ExpiresAt()) - int64(ttlVal) //nolint:gosec // G115: unix timestamps — protocol-bounded int64
+				}
+				results = append(results, LookupResult{Name: name, TTL: ttl.RemainingTTL(ts, int(ttlVal), uint32(config.DefaultStaleTTL))})
 			}
 		}
 		return nil //nolint:nilerr // key not found
-	})
+	}); err != nil {
+		// Surface the failure instead of silently returning an empty result.
+		log.Warnf("CACHE: reverse lookup failed for %s: %v", ip, err)
+	}
 	return results
 }
 
@@ -87,11 +107,14 @@ func (c *Cache) UpdateLatency(ip string, latencyMS int) {
 	if c.db.IsClosed() {
 		return
 	}
-	_ = c.db.Update(func(txn *badger.Txn) error {
+	if err := c.db.Update(func(txn *badger.Txn) error {
 		e := badger.NewEntry(database.EIPLatencyKey(ip), database.EncodeLatencyValue(latencyMS))
 		e.ExpiresAt = uint64(log.NowUnix() + config.DefaultLatencyProbeMinInterval*2) //nolint:gosec // G115: protocol-bounded value fits target type
 		return txn.SetEntry(e)
-	})
+	}); err != nil {
+		// A failed latency write currently looks like a successful probe.
+		log.Warnf("CACHE: latency write failed for %s: %v", ip, err)
+	}
 }
 
 // DBSize returns the BadgerDB LSM and value log sizes in bytes.
@@ -115,17 +138,21 @@ func (c *Cache) LatencyLastProbe(ip string) (int64, bool) {
 	if c.db.IsClosed() {
 		return 0, false
 	}
-	var found bool
+	var lastProbe int64
+	found := false
 	_ = c.db.View(func(txn *badger.Txn) error {
-		_, err := txn.Get(database.EIPLatencyKey(ip))
+		item, err := txn.Get(database.EIPLatencyKey(ip))
 		if err != nil {
 			return nil //nolint:nilerr // key not found
 		}
+		// UpdateLatency stores the key with ExpiresAt = probeTime + 2*interval;
+		// recover the probe time so callers can compute the elapsed interval.
+		lastProbe = int64(item.ExpiresAt()) - int64(config.DefaultLatencyProbeMinInterval)*2 //nolint:gosec // G115: unix timestamps — protocol-bounded int64
 		found = true
 		return nil //nolint:nilerr // key not found
 	})
 	if !found {
 		return 0, false
 	}
-	return log.NowUnix(), true
+	return lastProbe, true
 }

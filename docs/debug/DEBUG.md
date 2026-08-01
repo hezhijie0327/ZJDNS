@@ -23,9 +23,9 @@ docs/debug/
 │   └── client-dnscrypt-ephemeral.json     # client: DNSCrypt + ephemeral_keys + PQ → server
 ├── routedns/               # ZJDNS ↔ RouteDNS tests
 │   └── dtls-client.toml    # RouteDNS DTLS client → ZJDNS DTLS server
-│                            #   Prerequisite: generate cert with
-│                            #   openssl req -x509 -newkey ec ... -out /tmp/zjdns-certs/cert.pem
-│                            #   and configure ZJDNS to use the same cert
+│                            #   Prerequisite: generate cert with the openssl
+│                            #   command in the toml's header (SAN IP:127.0.0.1,
+│                            #   cert outside /tmp) and configure ZJDNS to use it
 ├── dnscrypt/               # ZJDNS ↔ DNSCrypt-proxy tests
 │   ├── zjdns-server.json          # ZJDNS DNSCrypt server (dual-cert: classical + PQ)
 │   ├── proxy-pq.toml                     # DNSCrypt-proxy client (pqdnscrypt=true, default)

@@ -22,6 +22,9 @@ type StoreWriter interface {
 	Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
 		answer, authority, additional []dns.RR, validated bool) int64
 	UpdateLatency(ip string, latencyMS int)
+	// LookupIPLatencies returns the cached probe latency (ms) for each IP
+	// that has one; unprobed IPs are absent from the map.
+	LookupIPLatencies(ips []string) map[string]int
 }
 
 // StoreLifecycle is the lifecycle subset of Store (housekeeping + shutdown).
@@ -47,6 +50,10 @@ type Entry struct {
 	Timestamp  int64    `json:"timestamp"`
 	TTL        int      `json:"ttl"`
 	Validated  bool     `json:"validated"`
+	// Rcode is the cached response's rcode (recovered from the packed wire
+	// header on Get). Negative responses (NXDOMAIN) must be served with
+	// their original rcode, not re-answered as NOERROR.
+	Rcode int `json:"rcode"`
 }
 
 // LookupResult holds a PTR reverse-lookup result.
@@ -104,7 +111,8 @@ func processRR(rr dns.RR, value int64, isElapsed, includeDNSSEC bool) dns.RR {
 		remaining := max(int64(newRR.Header().TTL)-value, 0)
 		newRR.Header().TTL = uint32(remaining) //nolint:gosec // G115: DNS TTL subtraction — protocol-bounded uint32
 	} else if value > 0 {
-		newRR.Header().TTL = uint32(value) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+		// Clamp: value is an exported API parameter with no protocol bound.
+		newRR.Header().TTL = uint32(min(value, int64(^uint32(0)))) //nolint:gosec // G115: clamped above
 	}
 	return newRR
 }
@@ -161,13 +169,17 @@ func cloneRRs(rrs []dns.RR) []dns.RR {
 	return out
 }
 
-// ClampTTL caps each RR's TTL to maxTTL for compliance with RFC 8767 §4's
-// recommended 7-day maximum cache TTL.  The entry retention TTL is already
-// clamped; this ensures the values served to clients are consistent.
-func ClampTTL(rrs []dns.RR, maxTTL uint32) {
-	for _, rr := range rrs {
+// ClampTTL returns a deep copy of rrs with each RR's TTL capped at maxTTL
+// (RFC 8767 §4's recommended 7-day maximum cache TTL).  The copy is
+// essential: ProcessRecords fast paths return the caller's own RR slices
+// (shared with the background latency probe), and mutating headers in place
+// would race that reader or corrupt shared state.
+func ClampTTL(rrs []dns.RR, maxTTL uint32) []dns.RR {
+	out := cloneRRs(rrs)
+	for _, rr := range out {
 		if rr != nil && rr.Header().TTL > maxTTL {
 			rr.Header().TTL = maxTTL
 		}
 	}
+	return out
 }

@@ -1,6 +1,6 @@
 package main
 
-import "fmt"
+import "strings"
 
 func banner(version string) string {
 	const b = `
@@ -10,12 +10,15 @@ func banner(version string) string {
  ███╔╝  ██   ██║██║  ██║██║╚██╗██║╚════██║
 ███████╗╚█████╔╝██████╔╝██║ ╚████║███████║
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
-  %s
+  {version}
 
   High performance recursive DNS server
   https://github.com/hezhijie0327/ZJDNS
 __________________________________\o/_______
 `
 
-	return fmt.Sprintf(b[1:], version)
+	// Plain substitution, NOT fmt.Sprintf: the artwork is inert text and any
+	// literal '%' added to it later would otherwise be re-interpreted as a
+	// format verb.
+	return strings.ReplaceAll(b[1:], "{version}", version)
 }

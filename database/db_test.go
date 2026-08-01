@@ -171,7 +171,7 @@ func TestPtrMapKeyRoundTrip(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	key := EIPReverseKey("1.2.3.4", 42, "example.com.")
-	val := EncodePtrMapValue(300)
+	val := EncodePtrMapValue(300, 1700000000)
 
 	err = db.Badger.Update(func(txn *badger.Txn) error {
 		return txn.Set(key, val)
@@ -200,7 +200,7 @@ func TestPtrMapKeyRoundTrip(t *testing.T) {
 
 	// Test prefix scan.
 	_ = db.Badger.Update(func(txn *badger.Txn) error {
-		return txn.Set(EIPReverseKey("1.2.3.4", 43, "other.com."), EncodePtrMapValue(600))
+		return txn.Set(EIPReverseKey("1.2.3.4", 43, "other.com."), EncodePtrMapValue(600, 1700000000))
 	})
 
 	err = db.Badger.View(func(txn *badger.Txn) error {

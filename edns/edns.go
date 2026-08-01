@@ -99,8 +99,22 @@ func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnectio
 	// minimum of the two endpoints.
 	// RFC 9250 §4.6: UDPSize is ignored by DoQ — harmless to set for all transports.
 	msg.UDPSize = pool.UDPBufferSize
-	msg.Security = true
+	// RFC 3225 §3 / RFC 6891 §6.1.3: the response DO bit must mirror the
+	// query's DO bit — a responder must not set DO when the query had it
+	// clear (responses are built with isRequest=false here).
+	if isRequest {
+		msg.Security = true
+	}
 
+	if ecs != nil {
+		addr := addrToNetip(ecs.Address)
+		if !addr.IsValid() {
+			// RFC 7871 §6: never serialize an option whose netmask claims
+			// address bytes that are not present.
+			log.Debugf("EDNS: skipping ECS option with invalid address")
+			ecs = nil
+		}
+	}
 	if ecs != nil {
 		msg.Pseudo = append(msg.Pseudo, &dns.SUBNET{
 			Family:  ecs.Family,

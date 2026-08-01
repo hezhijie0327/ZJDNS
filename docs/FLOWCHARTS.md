@@ -387,7 +387,7 @@ graph TD
 graph TD
     Q[Query] --> BYPASS{Bypass Rules<br/>Match?}
     BYPASS -->|Yes| NEXT[Skip Zone -> Next]
-    BYPASS -->|No| LOAD[Load Rules from BadgerDB<br/>Exact + Wildcard + File]
+    BYPASS -->|No| LOAD[Load In-Memory WORM Maps<br/>Exact + Wildcard + Dynamic + File]
     LOAD --> MATCH[Intersect with<br/>Client Match Tags<br/>CIDR + Domain]
     MATCH -->|No Match| NOMATCH[No Match -> Next]
     MATCH -->|Match| SCORE[Score by Tag Priority]
@@ -464,7 +464,7 @@ graph LR
         CFG --> IP[IP CIDR Rules<br/>Binary Radix Trie]
     end
     subgraph Match
-        Q[Query] --> DOMQ[Domain Lookup<br/>BadgerDB Prefix Scan]
+        Q[Query] --> DOMQ[Domain Lookup<br/>Suffix Map O(1)]
         Q --> IPQ[IP Lookup<br/>O-128 Trie Walk]
         DOMQ --> TAGS[Collect Tags]
         IPQ --> TAGS

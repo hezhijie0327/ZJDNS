@@ -3,6 +3,8 @@ package plain
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"zjdns/config"
 	"zjdns/internal/log"
 
@@ -16,9 +18,11 @@ type Group interface {
 
 // Server manages plain UDP and TCP DNS listeners.
 type Server struct {
-	config     *config.ServerConfig
-	udpServers []*dns.Server
-	tcpServers []*dns.Server
+	config       *config.ServerConfig
+	mu           sync.Mutex // guards the listener slices (Start appends, Shutdown iterates)
+	shutdownOnce sync.Once  // miekg's dns.Server.Shutdown panics on double-close
+	udpServers   []*dns.Server
+	tcpServers   []*dns.Server
 }
 
 // New creates a Server for plain DNS listeners.
@@ -33,7 +37,7 @@ func New(cfg *config.ServerConfig) *Server {
 // in its own goroutine via the provided errgroup.
 func (s *Server) Start(g Group, ctx context.Context, handler dns.Handler) error {
 	if g == nil || handler == nil {
-		panic("plain: nil group or handler")
+		return errors.New("plain: nil group or handler")
 	}
 	log.Debugf("PLAIN: starting listeners (UDP=%s TCP=%s)", s.config.Server.Protocol.UDP, s.config.Server.Protocol.TCP)
 	if err := s.startUDP(g, ctx, handler); err != nil {
@@ -42,11 +46,27 @@ func (s *Server) Start(g Group, ctx context.Context, handler dns.Handler) error 
 	return s.startTCP(g, ctx, handler)
 }
 
-// Shutdown gracefully stops all UDP and TCP listeners.
+// Shutdown gracefully stops all UDP and TCP listeners. miekg's dns.Server
+// Shutdown returns no error, so drain failures are surfaced via the context:
+// if the deadline expires while connections are still draining, that is
+// logged (the old code logged success unconditionally).
 func (s *Server) Shutdown(ctx context.Context) {
+	// The ctx watcher (startup-failure cleanup) and the server's shutdown
+	// path can both fire; miekg's Shutdown is not idempotent.
+	s.shutdownOnce.Do(func() {
+		s.shutdownLocked(ctx)
+	})
+}
+
+func (s *Server) shutdownLocked(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, srv := range s.udpServers {
 		if srv != nil {
 			srv.Shutdown(ctx)
+			if ctx.Err() != nil {
+				log.Warnf("PLAIN: UDP drain interrupted: %v", ctx.Err())
+			}
 		}
 	}
 	if len(s.udpServers) > 0 {
@@ -55,6 +75,9 @@ func (s *Server) Shutdown(ctx context.Context) {
 	for _, srv := range s.tcpServers {
 		if srv != nil {
 			srv.Shutdown(ctx)
+			if ctx.Err() != nil {
+				log.Warnf("PLAIN: TCP drain interrupted: %v", ctx.Err())
+			}
 		}
 	}
 	if len(s.tcpServers) > 0 {

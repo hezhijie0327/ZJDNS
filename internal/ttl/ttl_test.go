@@ -63,10 +63,11 @@ func TestRemainingTTL_FreshNearExpiry(t *testing.T) {
 
 func TestRemainingTTL_StaleStart(t *testing.T) {
 	setNow(t, 1000)
-	// Timestamp=900, TTL=100, now=1000 → exactly expired, timeSinceExpiry=0
+	// Timestamp=900, TTL=100, now=1000 → exactly at expiry: still fresh,
+	// remaining 0 (consistent with IsExpired, RFC-preferred).
 	got := RemainingTTL(900, 100, 30)
-	if got != 30 {
-		t.Errorf("stale at expiry = %d, want 30", got)
+	if got != 0 {
+		t.Errorf("remaining at exact expiry = %d, want 0", got)
 	}
 }
 
@@ -108,10 +109,11 @@ func TestRemainingTTL_StaleConstantLong(t *testing.T) {
 
 func TestRemainingTTL_ZeroTTL(t *testing.T) {
 	setNow(t, 1000)
-	// Timestamp=1000, TTL=0 → immediate stale
+	// Timestamp=1000, TTL=0 → remaining 0 (nothing to serve fresh; the
+	// stale branch only kicks in once elapsed exceeds the TTL)
 	got := RemainingTTL(1000, 0, 30)
-	if got != 30 {
-		t.Errorf("zero TTL = %d, want 30 (stale immediately)", got)
+	if got != 0 {
+		t.Errorf("zero TTL = %d, want 0", got)
 	}
 }
 
@@ -236,26 +238,26 @@ func TestDeductElapsedCyclical_Normal(t *testing.T) {
 	}
 }
 
-func TestDeductElapsedCyclical_ResetsAtBoundary(t *testing.T) {
+func TestDeductElapsedCyclical_ClampsAtBoundary(t *testing.T) {
 	rr := &dns.A{
 		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 120},
 		A:   rdata.A{Addr: netParseIP(t, "192.0.2.1")},
 	}
 	result := DeductElapsedCyclical([]dns.RR{rr}, 120)
-	if result[0].Header().TTL != 120 {
-		t.Errorf("TTL = %d, want 120 (reset at boundary)", result[0].Header().TTL)
+	if result[0].Header().TTL != 0 {
+		t.Errorf("TTL = %d, want 0 (exact expiry must not reset to a full TTL)", result[0].Header().TTL)
 	}
 }
 
-func TestDeductElapsedCyclical_MultipleCycles(t *testing.T) {
+func TestDeductElapsedCyclical_ClampsPastTTL(t *testing.T) {
 	rr := &dns.A{
 		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 120},
 		A:   rdata.A{Addr: netParseIP(t, "192.0.2.1")},
 	}
 	result := DeductElapsedCyclical([]dns.RR{rr}, 260)
-	// 260 % 120 = 20, 120 - 20 = 100
-	if result[0].Header().TTL != 100 {
-		t.Errorf("TTL = %d, want 100 (120 - 260%%120)", result[0].Header().TTL)
+	// Monotonic: 120 - 260 < 0 → clamped at 0.
+	if result[0].Header().TTL != 0 {
+		t.Errorf("TTL = %d, want 0 (clamped at 0)", result[0].Header().TTL)
 	}
 }
 
@@ -269,10 +271,9 @@ func TestDeductElapsedCyclical_DifferentRRs(t *testing.T) {
 		A:   rdata.A{Addr: netParseIP(t, "192.0.2.2")},
 	}
 	result := DeductElapsedCyclical([]dns.RR{rr1, rr2}, 80)
-	// rr1: 80 % 60 = 20, 60 - 20 = 40
-	// rr2: 80 % 120 = 80, 120 - 80 = 40
-	if result[0].Header().TTL != 40 {
-		t.Errorf("rr1 TTL = %d, want 40", result[0].Header().TTL)
+	// Monotonic: rr1 60-80 → clamped 0; rr2 120-80 = 40.
+	if result[0].Header().TTL != 0 {
+		t.Errorf("rr1 TTL = %d, want 0 (clamped)", result[0].Header().TTL)
 	}
 	if result[1].Header().TTL != 40 {
 		t.Errorf("rr2 TTL = %d, want 40", result[1].Header().TTL)

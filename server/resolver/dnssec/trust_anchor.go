@@ -1,10 +1,13 @@
 package dnssec
 
 import (
+	"bytes"
+	"encoding/hex"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 	"zjdns/internal/log"
 
@@ -65,12 +68,29 @@ func loadTrustAnchorsFromFile(path string) ([]*dns.DNSKEY, error) {
 			continue
 		}
 
-		// Skip expired keys.
+		// Skip keys that are not yet valid: RFC 7958 anchors may be published
+		// ahead of their validFrom and must not be trusted early.
+		if kd.ValidFrom != "" {
+			validFrom, err := time.Parse(time.RFC3339, kd.ValidFrom)
+			if err != nil {
+				log.Debugf("SECURITY: unparseable validFrom for trust anchor key_tag=%d: %v — skipping", kd.KeyTag, err)
+				continue
+			}
+			if now.Before(validFrom) {
+				log.Debugf("SECURITY: skipping trust anchor that is not yet valid (key_tag=%d, valid_from=%s)", kd.KeyTag, kd.ValidFrom)
+				continue
+			}
+		}
+
+		// Skip expired keys. Fail closed on malformed timestamps: a
+		// security-critical trust store must not accept unparseable data.
 		if kd.ValidUntil != "" {
 			validUntil, err := time.Parse(time.RFC3339, kd.ValidUntil)
 			if err != nil {
-				log.Debugf("SECURITY: unparseable validUntil for trust anchor key_tag=%d: %v — accepting as valid", kd.KeyTag, err)
-			} else if now.After(validUntil) {
+				log.Debugf("SECURITY: unparseable validUntil for trust anchor key_tag=%d: %v — skipping", kd.KeyTag, err)
+				continue
+			}
+			if now.After(validUntil) {
 				log.Debugf("SECURITY: skipping expired trust anchor (key_tag=%d, valid_until=%s)", kd.KeyTag, kd.ValidUntil)
 				continue
 			}
@@ -94,6 +114,27 @@ func loadTrustAnchorsFromFile(path string) ([]*dns.DNSKEY, error) {
 		if dnskey.Flags&dnsFlagRevoke != 0 {
 			log.Debugf("SECURITY: skipping revoked trust anchor key_tag=%d (RFC 5011 §2.1)", kd.KeyTag)
 			continue
+		}
+		// RFC 7958 §3.2: the XML KeyTag must match the reconstructed key, or
+		// the file is corrupt or tampered — fail closed rather than trust it.
+		if kd.KeyTag != 0 && uint32(dnskey.KeyTag()) != kd.KeyTag {
+			log.Debugf("SECURITY: trust anchor key tag mismatch (computed=%d, xml=%d) — skipping", dnskey.KeyTag(), kd.KeyTag)
+			continue
+		}
+		// The XML digest must match the reconstructed key (RFC 7958 §3.2):
+		// the digest is the integrity check the file format intends.
+		if kd.Digest != "" {
+			want, err := hex.DecodeString(strings.NewReplacer(" ", "", "\n", "", "\t", "").Replace(kd.Digest))
+			if err != nil {
+				log.Debugf("SECURITY: unparseable digest for trust anchor key_tag=%d: %v — skipping", kd.KeyTag, err)
+				continue
+			}
+			ds := dnskey.ToDS(kd.DigestType)
+			got, err := hex.DecodeString(ds.Digest)
+			if err != nil || !bytes.Equal(got, want) {
+				log.Debugf("SECURITY: trust anchor digest mismatch (key_tag=%d) — skipping", kd.KeyTag)
+				continue
+			}
 		}
 		keys = append(keys, dnskey)
 		log.Debugf("SECURITY: loaded trust anchor from file (key_tag=%d, algorithm=%s)", dnskey.KeyTag(), dns.AlgorithmToString[dnskey.Algorithm])

@@ -33,20 +33,43 @@ func New(getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Dura
 		dtlcpSession: dtlcp.NewLRUSessionCache(config.DefaultDTLCPSessionCacheSize),
 		httpClient:   lrumap.New[string, *http.Client](config.DefaultHTTPTLCPClientMax * 2),
 	}
-	c.httpClient.OnEvict = func(_ string, client *http.Client) {
+	c.httpClient.SetOnEvict(func(_ string, client *http.Client) {
 		client.CloseIdleConnections()
-	}
+	})
 	return c
 }
 
+// Close shuts down all cached DoH-over-TLCP HTTP clients. Idempotent.
+func (c *Client) Close() {
+	if c == nil {
+		return
+	}
+	if c.httpClient != nil {
+		c.httpClient.Range(func(_ string, client *http.Client) bool {
+			client.CloseIdleConnections()
+			return true
+		})
+		c.httpClient = nil
+	}
+}
+
 // tlcpClientConfig builds a gotlcp/tlcp Config for upstream TLCP connections.
+//
+// NOTE: this project has no per-upstream SM2 CA-file config, so verification
+// relies on the system trust pool. With InsecureSkipVerify=false (the strict
+// privacy-profile default), the server certificate must chain to a CA in the
+// system pool; otherwise skip_tls_verify=true is required.
 func (c *Client) tlcpClientConfig(server *config.UpstreamServer) *tlcp.Config {
 	addr := server.Address // capture for the VerifyConnection closure
+	rootCAs := smx509.NewCertPool()
+	if pool, err := smx509.SystemCertPool(); err == nil {
+		rootCAs = pool
+	}
 	return &tlcp.Config{
 		CurvePreferences:   []tlcp.CurveID{tlcp.CurveSM2},
 		InsecureSkipVerify: server.SkipTLSVerify,
 		ServerName:         server.ServerName,
-		RootCAs:            smx509.NewCertPool(), // prevent fallback to system pool (cannot parse SM2 certs)
+		RootCAs:            rootCAs,
 		SessionCache:       c.tlcpSessions,
 		VerifyConnection: func(cs tlcp.ConnectionState) error {
 			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
@@ -59,16 +82,28 @@ func (c *Client) tlcpClientConfig(server *config.UpstreamServer) *tlcp.Config {
 				Resumed:    cs.DidResume,
 				ALPN:       cs.NegotiatedProtocol,
 			})
+			// Logging-only: no additional checks are enforced here. DoT
+			// ALPN enforcement lives in exchangeOverTLCP (it must not run
+			// here — the DoH-over-TLCP path negotiates a different ALPN).
 			return nil
 		},
 	}
 }
 
 // dtlcpClientConfig builds a dtlcp.Config for upstream DTLCP connections.
+// Mirrors tlcpClientConfig: ServerName and the SM2 curve preference are
+// required for verified handshakes against the server-side listener.
 func (c *Client) dtlcpClientConfig(server *config.UpstreamServer) *dtlcp.Config {
 	addr := server.Address // capture for the VerifyConnection closure
+	rootCAs := smx509.NewCertPool()
+	if pool, err := smx509.SystemCertPool(); err == nil {
+		rootCAs = pool
+	}
 	return &dtlcp.Config{
 		InsecureSkipVerify: server.SkipTLSVerify,
+		ServerName:         server.ServerName,
+		CurvePreferences:   []dtlcp.CurveID{dtlcp.CurveSM2},
+		RootCAs:            rootCAs,
 		SessionCache:       c.dtlcpSession,
 		VerifyConnection: func(cs dtlcp.ConnectionState) error {
 			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
@@ -81,6 +116,7 @@ func (c *Client) dtlcpClientConfig(server *config.UpstreamServer) *dtlcp.Config 
 				Resumed:    cs.DidResume,
 				ALPN:       cs.NegotiatedProtocol,
 			})
+			// Logging-only: no additional checks are enforced here.
 			return nil
 		},
 	}

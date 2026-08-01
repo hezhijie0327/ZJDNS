@@ -30,10 +30,19 @@ type Map[K comparable, V any] struct {
 	len  int
 	cap  int
 
-	// OnEvict, if set, is called with the key and value of an entry
-	// that is evicted to make room.  It runs with the map mutex held,
-	// so it must not call back into the map or block.
-	OnEvict func(K, V)
+	// onEvict, if set, is called with the key and value of an entry that is
+	// evicted to make room. It runs with the map mutex held, so it must not
+	// call back into the map or block. Configure it with SetOnEvict (which
+	// assigns under the lock) — assigning the field directly races eviction.
+	onEvict func(K, V)
+}
+
+// SetOnEvict configures the eviction callback. The assignment is performed
+// under the map mutex so it cannot race a concurrent eviction read.
+func (m *Map[K, V]) SetOnEvict(fn func(K, V)) {
+	m.mu.Lock()
+	m.onEvict = fn
+	m.mu.Unlock()
 }
 
 // New creates a Map with the given capacity. When the map reaches capacity,
@@ -73,10 +82,10 @@ func (m *Map[K, V]) Get(key K) (V, bool) {
 // if the map has reached its capacity and key is new.
 func (m *Map[K, V]) Set(key K, val V) {
 	m.mu.Lock()
+	defer m.mu.Unlock() // a panic in OnEvict must not wedge the mutex
 	if e, ok := m.m[key]; ok {
 		e.val = val
 		m.moveToFront(e)
-		m.mu.Unlock()
 		return
 	}
 	if m.len >= m.cap {
@@ -86,7 +95,6 @@ func (m *Map[K, V]) Set(key K, val V) {
 	m.m[key] = e
 	m.pushFront(e)
 	m.len++
-	m.mu.Unlock()
 }
 
 // LoadOrStore returns the existing value for the key if present.
@@ -129,14 +137,29 @@ func (m *Map[K, V]) Delete(key K) {
 	m.mu.Unlock()
 }
 
+// CompareAndDelete removes the entry for key only if it currently holds val.
+// It reports whether the entry was removed. Atomic Get→compare→Delete: a
+// concurrent Set installing a different value for the same key is preserved.
+func (m *Map[K, V]) CompareAndDelete(key K, val V) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e, ok := m.m[key]; ok && any(e.val) == any(val) {
+		m.remove(e)
+		delete(m.m, key)
+		m.len--
+		return true
+	}
+	return false
+}
+
 // Clear removes all entries from the map.
 // OnEvict is called for each evicted entry.
 func (m *Map[K, V]) Clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for e := m.head.next; e != m.tail; e = e.next {
-		if m.OnEvict != nil {
-			m.OnEvict(e.key, e.val)
+		if m.onEvict != nil {
+			m.onEvict(e.key, e.val)
 		}
 	}
 	m.m = make(map[K]*lruEntry[K, V], m.cap)
@@ -147,6 +170,9 @@ func (m *Map[K, V]) Clear() {
 
 // Range calls fn for each entry in the map, from most recent to least recent.
 // Iteration stops if fn returns false.
+//
+// The callback runs with the map mutex held: it must not call back into the
+// map (Get/Set/Delete deadlock) and should not block.
 func (m *Map[K, V]) Range(fn func(K, V) bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -196,8 +222,8 @@ func (m *Map[K, V]) evictLocked() {
 		m.remove(e)
 		delete(m.m, e.key)
 		m.len--
-		if m.OnEvict != nil {
-			m.OnEvict(e.key, e.val)
+		if m.onEvict != nil {
+			m.onEvict(e.key, e.val)
 		}
 	}
 }

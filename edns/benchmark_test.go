@@ -96,6 +96,6 @@ func BenchmarkHandler_ParseCookie(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		_ = h.ParseCookie(msg)
+		_, _ = h.ParseCookie(msg)
 	}
 }

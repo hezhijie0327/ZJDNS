@@ -51,11 +51,11 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		}
 
 		qctx.CacheEntry = entry
-		qctx.CacheHit = true
 
 		// Fresh hit — serve immediately.
 		if !isExpired {
 			qctx.Res = m.buildResponse(qctx, entry, false)
+			qctx.Responded = true
 			qctx.CacheServed = true
 
 			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "hit", Rcode: dns.RcodeSuccess, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
@@ -65,12 +65,17 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				m.prefetchCooldown != nil && m.prefetchCooldown.ShouldStart(qname, log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds()) &&
 				m.tryStartRefresh(qname, qtype, qclass, ecsOpt) {
 				if m.refreshGroup != nil {
-					_ = m.refreshGroup.TryGo(func() error {
+					if !m.refreshGroup.TryGo(func() error {
 						defer zdnsutil.HandlePanic("Cache refresh: prefetch fresh-hit")
 						defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
 						_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt) // error logged inside
 						return nil                                            // prevent errgroup context cancellation cascade
-					})
+					}) {
+						// Group at capacity: release the pending key, otherwise
+						// every future refresh attempt for this name skips work
+						// because Start still sees the key in flight.
+						m.finishRefresh(qname, qtype, qclass, ecsOpt)
+					}
 				}
 			}
 			return nil
@@ -82,6 +87,7 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// Can serve stale.
 		if entry.CanServeExpired(config.DefaultStaleMaxAge) {
 			qctx.Res = m.buildResponse(qctx, entry, true)
+			qctx.Responded = true
 			qctx.CacheServed = true
 
 			// Handle stale serving strategies.
@@ -169,7 +175,17 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			case qr.DNSSECEDE != 0:
 				dnssecStatus = config.DNSSECStatusBogus
 			}
+			// Write the fresh data back: without this the entry stays
+			// expired and every subsequent request repeats the full
+			// foreground-refresh cycle.
+			if qr.Cacheable {
+				m.store.Set(qname, qtype, qclass, ecsOpt, false, qr.Answer, qr.Authority, qr.Additional, qr.Validated)
+			}
+			// The stale-serve path set an EDE 3 (Stale Answer); the
+			// refreshed response is not stale — clear it.
+			qctx.EDE = nil
 			qctx.Res = msg
+			qctx.Responded = true
 			qctx.CacheServed = false
 			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "miss", ResponseTime: handler.ElapsedMS(qctx.StartTime), Rcode: dns.RcodeSuccess, Poisoned: qr.Poisoned, DNSSECStatus: dnssecStatus})
 		} else {

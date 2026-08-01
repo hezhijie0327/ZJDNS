@@ -3,6 +3,8 @@ package tls
 import (
 	"net/netip"
 	"testing"
+	"time"
+	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/rdata"
@@ -28,5 +30,22 @@ func TestDohCacheControl(t *testing.T) {
 	}}
 	if got := dohCacheControl(msg2); got != "max-age=60" {
 		t.Errorf("min TTL: got %q, want max-age=60", got)
+	}
+}
+
+func TestLeafNotAfterClampedToCA(t *testing.T) {
+	now := time.Now()
+	caNotAfter := now.Add(10 * 24 * time.Hour) // CA expires sooner than the leaf's default
+
+	// Leaf validity longer than the CA's remaining life: clamped to the CA.
+	if got := leafNotAfter(now, caNotAfter); !got.Equal(caNotAfter) {
+		t.Errorf("leafNotAfter = %v, want clamped to CA %v", got, caNotAfter)
+	}
+
+	// Normal case: CA outlives the leaf — leaf keeps its own validity.
+	caLong := now.Add(365 * 24 * time.Hour)
+	want := now.Add(config.DefaultServerCertValidity)
+	if got := leafNotAfter(now, caLong); !got.Equal(want) {
+		t.Errorf("leafNotAfter = %v, want %v", got, want)
 	}
 }

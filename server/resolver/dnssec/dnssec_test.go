@@ -216,8 +216,10 @@ func TestSelfVerifyDNSKEY_NoSEPKey(t *testing.T) {
 	}
 	rrsig := signRRset(rrset, zone, zskPriv, zsk.KeyTag())
 
-	if err := cv.SelfVerifyDNSKEY(dnskeys, []*dns.RRSIG{rrsig}); err == nil {
-		t.Error("self-verify should fail when no KSK (SEP) is present")
+	// RFC 4034 §2.1.2: SEP is a deployment convention, not a validation
+	// requirement — a non-SEP key may sign the DNSKEY RRset (jellyfin.org).
+	if err := cv.SelfVerifyDNSKEY(dnskeys, []*dns.RRSIG{rrsig}); err != nil {
+		t.Errorf("self-verify should succeed for a non-SEP signer: %v", err)
 	}
 }
 
@@ -280,124 +282,34 @@ func TestIsResponseValid_NoDNSKEYs(t *testing.T) {
 	}
 }
 
-// ── Extract helpers (FindDS / FindCDS) ──────────────────────────────────────
+// TestVerifyDelegationDS_NonSEPKey reproduces the jellyfin.org scenario: a
+// zone whose KSK lacks the SEP bit (flags 256) is still the key referenced by
+// the parent DS. RFC 4034/4035 do not require SEP on the DS-referenced key.
+func TestVerifyDelegationDS_NonSEPKey(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	zone := "jellyfin.org"
+	ksk, _ := genTestKey(zone, dns.FlagZONE) // KSK without SEP (flags 256)
+	ds := ksk.ToDS(dns.SHA256)
+	if ds == nil {
+		t.Fatal("ToDS returned nil")
+	}
+
+	matched, err := cv.VerifyDelegationDS([]*dns.DS{ds}, []*dns.DNSKEY{ksk})
+	if err != nil {
+		t.Fatalf("VerifyDelegationDS should accept a non-SEP DS-referenced key: %v", err)
+	}
+	if matched.KeyTag() != ksk.KeyTag() {
+		t.Errorf("matched key tag %d, want %d", matched.KeyTag(), ksk.KeyTag())
+	}
+}
+
+// ── Extract helpers (FindDS) ─────────────────────────────────────────────────
 
 func TestFindDS(t *testing.T) {
 	ds := &dns.DS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}
 	rrs := []dns.RR{ds, &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}}
 	if len(FindDS(rrs)) != 1 {
 		t.Error("should find DS record")
-	}
-}
-
-func TestFindCDS(t *testing.T) {
-	cds := &dns.CDS{DS: dns.DS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}}
-	rrs := []dns.RR{cds, &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}}
-	if len(FindCDS(rrs)) != 1 {
-		t.Error("should find CDS record")
-	}
-	// CDS should NOT be found by FindDS
-	if len(FindDS(rrs)) != 0 {
-		t.Error("FindDS should not find CDS records")
-	}
-}
-
-func TestFindCDNSKEY(t *testing.T) {
-	cdnskey := &dns.CDNSKEY{DNSKEY: dns.DNSKEY{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}}
-	rrs := []dns.RR{cdnskey, &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}}
-	if len(FindCDNSKEY(rrs)) != 1 {
-		t.Error("should find CDNSKEY record")
-	}
-	// CDNSKEY should NOT be found by FindDNSKEYs (distinct RR type).
-	if len(FindDNSKEYs(rrs)) != 0 {
-		t.Error("FindDNSKEYs should not find CDNSKEY records")
-	}
-}
-
-func TestOfflineKSK_CDSConfirmsDelegation(t *testing.T) {
-	store := testCache()
-	t.Cleanup(func() { _ = store.Close() })
-	cv := NewCryptoValidator(store)
-	childZone := "offline-ksk.example.com"
-
-	// Simulate offline KSK: KSK exists (DS matches) but is not published in
-	// the DNSKEY set. Only the ZSK is published. The KSK signs the DNSKEY
-	// RRset, and CDS confirms the delegation (RFC 7344).
-	ksk, _ := genTestKey(childZone, dns.FlagSEP|dns.FlagZONE)
-	zsk, _ := genTestKey(childZone, dns.FlagZONE)
-	ds := ksk.ToDS(dns.SHA256)
-	if ds == nil {
-		t.Fatal("ToDS returned nil")
-	}
-
-	// VerifyDelegationDS fails because KSK is not in the DNSKEY set
-	_, err := cv.VerifyDelegationDS([]*dns.DS{ds}, []*dns.DNSKEY{zsk})
-	if err == nil {
-		t.Fatal("DS should not match ZSK alone — KSK is offline")
-	}
-
-	// CDS record matching the DS confirms the delegation
-	cds := &dns.CDS{DS: *ds}
-	cdsRecords := FindCDS([]dns.RR{cds})
-	if len(cdsRecords) != 1 {
-		t.Fatal("FindCDS should find CDS record")
-	}
-
-	// CDS must match DS (key_tag, algorithm, digest_type, digest)
-	match := cdsRecords[0].KeyTag == ds.KeyTag &&
-		cdsRecords[0].Algorithm == ds.Algorithm &&
-		cdsRecords[0].DigestType == ds.DigestType &&
-		cdsRecords[0].Digest == ds.Digest
-	if !match {
-		t.Error("CDS must match DS for offline KSK delegation")
-	}
-}
-
-func TestOfflineKSK_CDNSKEYConfirmsDelegation(t *testing.T) {
-	store := testCache()
-	t.Cleanup(func() { _ = store.Close() })
-	cv := NewCryptoValidator(store)
-	childZone := "offline-cdnskey.example.com"
-
-	ksk, _ := genTestKey(childZone, dns.FlagSEP|dns.FlagZONE)
-	zsk, _ := genTestKey(childZone, dns.FlagZONE)
-	ds := ksk.ToDS(dns.SHA256)
-	if ds == nil {
-		t.Fatal("ToDS returned nil")
-	}
-
-	// VerifyDelegationDS fails because KSK is not in the DNSKEY set.
-	_, err := cv.VerifyDelegationDS([]*dns.DS{ds}, []*dns.DNSKEY{zsk})
-	if err == nil {
-		t.Fatal("DS should not match ZSK alone — KSK is offline")
-	}
-
-	// CDNSKEY record matching the DS confirms the delegation (RFC 7344 §4.1).
-	cdnskey := &dns.CDNSKEY{DNSKEY: *ksk}
-	cdnskeyRecords := FindCDNSKEY([]dns.RR{cdnskey})
-	if len(cdnskeyRecords) != 1 {
-		t.Fatal("FindCDNSKEY should find CDNSKEY record")
-	}
-
-	// CDNSKEY.ToDS must match DS field-for-field.
-	computed := cdnskeyRecords[0].ToDS(ds.DigestType)
-	if computed == nil {
-		t.Fatal("CDNSKEY.ToDS returned nil")
-	}
-	match := computed.KeyTag == ds.KeyTag &&
-		computed.Algorithm == ds.Algorithm &&
-		computed.DigestType == ds.DigestType &&
-		computed.Digest == ds.Digest
-	if !match {
-		t.Error("CDNSKEY must match DS for offline KSK delegation")
-	}
-
-	// A different key's CDNSKEY should not match.
-	otherKSK, _ := genTestKey("other.example.com", dns.FlagSEP|dns.FlagZONE)
-	otherCDNSKEY := &dns.CDNSKEY{DNSKEY: *otherKSK}
-	otherComputed := otherCDNSKEY.ToDS(ds.DigestType)
-	if otherComputed != nil && otherComputed.Digest == ds.Digest {
-		t.Error("different key's CDNSKEY should not match DS")
 	}
 }
 
@@ -811,30 +723,25 @@ func TestMatchesNSEC3Denial_NXDOMAIN(t *testing.T) {
 	_ = hWildcard
 }
 
-func TestMatchesNSEC3Denial_NXDOMAIN_MissingWildcardCover(t *testing.T) {
+func TestMatchesNSEC3Denial_NXDOMAIN_SingleNSEC3Zone(t *testing.T) {
 	zone := "example.com."
 	ceName := "example.com."
 	qname := "nonexist.example.com."
 
 	hCE := nsec3HashName(ceName, dns.SHA1, 0, "")
 
-	// Cover for the name walk, but NOT for *.ce (no covering records at all
-	// — so the wildcard can't be denied).
-	hWildcard := nsec3HashName("*."+ceName, dns.SHA1, 0, "")
-
+	// A single-NSEC3 zone: Next Domain == owner. Per the hash-ring semantics
+	// (RFC 5155 §7), the interval (owner, next] wraps the whole ring, so the
+	// record covers every hash except its own — including the wildcard hash.
+	// The proof is therefore VALID: CE match + wildcard cover by one record.
 	ceMatch := &dns.NSEC3{
 		Hdr:   dns.Header{Name: hCE + "." + zone, Class: dns.ClassINET, TTL: 300},
 		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hCE, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3}},
 	}
-	// The narrowCover uses (000..0, VVV..V) which covers EVERYTHING including
-	// the wildcard. To create a missing-wildcard-cover case, use only the CE
-	// match without any covering NSEC3. The walk will fail at the first step
-	// (no cover for H(qname)) → findClosestEncloser fails → NXDOMAIN fails.
-	verified := []*dns.NSEC3{ceMatch} // no covering NSEC3 at all
-	if matchesNSEC3Denial(verified, qname, dns.TypeA, "NXDOMAIN", dns.SHA1, 0, "") {
-		t.Error("NXDOMAIN without any covering NSEC3 should fail")
+	verified := []*dns.NSEC3{ceMatch}
+	if !matchesNSEC3Denial(verified, qname, dns.TypeA, "NXDOMAIN", dns.SHA1, 0, "") {
+		t.Error("single-NSEC3 zone (next == owner) should cover the whole ring and prove NXDOMAIN")
 	}
-	_ = hWildcard
 }
 
 func TestMatchesNSEC3Denial_NXDOMAIN_MissingNextCloserCover(t *testing.T) {

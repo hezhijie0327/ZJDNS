@@ -6,6 +6,7 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -36,14 +37,15 @@ func insertPtrMap(txn *badger.Txn, entryID uint64, rrs []dns.RR, now, ttlDuratio
 		return nil
 	}
 
-	// Deduplicate by (rdata_ip, name).
+	// Deduplicate by (rdata_ip, name). DNS names are case-insensitive
+	// (RFC 4343): canonicalise so case-variant records collapse into one row.
 	seen := make(map[string]bool, len(recs))
 	for _, r := range recs {
-		key := r.rdataIP + "\x00" + r.name
+		key := r.rdataIP + "\x00" + dnsutil.Canonical(r.name)
 		if !seen[key] {
 			seen[key] = true
 			k := database.EIPReverseKey(r.rdataIP, entryID, r.name)
-			v := database.EncodePtrMapValue(r.ttl)
+			v := database.EncodePtrMapValue(r.ttl, now)
 			e := badger.NewEntry(k, v)
 			e.ExpiresAt = uint64(now + ttlDuration) //nolint:gosec // G115: protocol-bounded value fits target type
 			if err := txn.SetEntry(e); err != nil {

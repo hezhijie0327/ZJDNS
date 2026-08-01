@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 	"zjdns/config"
 	"zjdns/internal/log"
 
@@ -40,20 +41,27 @@ func FetchCert(ctx context.Context, addr string, query []byte, preferTCP bool) (
 		if err != nil {
 			return nil, fmt.Errorf("udp: %w; tcp: %w", err, tcpErr)
 		}
-		// TCP failed but the truncated UDP response is better than nothing.
+		// TCP failed and the UDP response is incomplete — reporting success
+		// would serve/cache truncated certificate data.
 		log.Debugf("UPSTREAM: DNSCrypt cert TCP retry failed: %v", tcpErr)
-		return resp, nil
+		return nil, fmt.Errorf("udp response truncated and tcp retry failed: %w", tcpErr)
 	}
 	return tcpResp, nil
 }
 
 // fetchCertOverUDP sends a single UDP DNS query and returns the unpacked response.
 func fetchCertOverUDP(ctx context.Context, addr string, query []byte) (*dns.Msg, error) {
-	conn, err := net.Dial("udp", addr)
+	d := net.Dialer{}
+	conn, err := d.DialContext(ctx, "udp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial udp: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+
+	// A cancel-only context must interrupt blocking reads even without a
+	// deadline (a stalled peer would otherwise hang the goroutine forever).
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stop()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
@@ -63,10 +71,17 @@ func fetchCertOverUDP(ctx context.Context, addr string, query []byte) (*dns.Msg,
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
-	buf := make([]byte, config.DefaultDNSCryptResponseBuffer)
+	// Size the buffer to the EDNS0 UDPSize (4096) advertised in the cert
+	// query — 512-byte reads truncated legitimate large responses.
+	buf := make([]byte, config.DefaultDNSCryptUDPSize)
 	n, err := conn.Read(buf)
 	if err != nil {
 		return nil, fmt.Errorf("read: %w", err)
+	}
+	// UDP silently drops datagram bytes beyond the buffer; a full buffer is
+	// a possible truncation — surface it and let the caller retry over TCP.
+	if n >= len(buf) {
+		return nil, fmt.Errorf("read: possible datagram truncation (%d bytes read of %d buffer)", n, len(buf))
 	}
 
 	resp := &dns.Msg{}
@@ -80,11 +95,17 @@ func fetchCertOverUDP(ctx context.Context, addr string, query []byte) (*dns.Msg,
 // fetchCertOverTCP sends a DNS query over TCP (2-byte length prefix) and
 // returns the unpacked response.
 func fetchCertOverTCP(ctx context.Context, addr string, query []byte) (*dns.Msg, error) {
-	conn, err := net.Dial("tcp", addr)
+	d := net.Dialer{}
+	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial tcp: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+
+	// A cancel-only context must interrupt blocking reads even without a
+	// deadline (a stalled peer would otherwise hang the goroutine forever).
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stop()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)

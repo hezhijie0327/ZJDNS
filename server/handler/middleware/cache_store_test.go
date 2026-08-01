@@ -59,7 +59,6 @@ func TestCacheStore_ECSMismatch_ReturnsSERVFAIL(t *testing.T) {
 		Protocol:              "udp",
 		ECSOpt:                queryECS,
 		ClientRequestedDNSSEC: false,
-		Resolved:              true,
 		ResolutionResult: &resolver.QueryResult{
 			Answer: []dns.RR{
 				&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}},

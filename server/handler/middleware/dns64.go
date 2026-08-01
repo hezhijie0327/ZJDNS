@@ -20,13 +20,23 @@ type DNS64 struct {
 	pending     *handler.PendingRequests
 }
 
+// hasAAAA reports whether the answer contains an AAAA record.
+func hasAAAA(answer []dns.RR) bool {
+	for _, rr := range answer {
+		if rr != nil && dns.RRToType(rr) == dns.TypeAAAA {
+			return true
+		}
+	}
+	return false
+}
+
 // Wrap implements Wrapper.
 func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		// Let resolution complete first.
 		err := next.ServeDNS(ctx, qctx)
 
-		if m.synthesizer == nil || !qctx.Resolved {
+		if m.synthesizer == nil || qctx.ResolutionResult == nil {
 			return err
 		}
 
@@ -35,21 +45,32 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return err
 		}
 
-		qd := qctx.Req.Question[0]
-		qtype := dns.RRToType(qd)
-		if qtype != dns.TypeAAAA || len(qr.Answer) > 0 {
+		// The pre-extracted context fields are the single source of truth
+		// for the question (qctx.Req.Question[0] is an RR in this fork).
+		qtype := qctx.Qtype
+		// Suppress synthesis only when the AAAA answer actually CONTAINS AAAA
+		// records: a CNAME-only chain (final target without AAAA but with A)
+		// is exactly the RFC 6147 §5.1.2 case DNS64 must handle.
+		if qtype != dns.TypeAAAA || hasAAAA(qr.Answer) {
 			return err
 		}
 
-		qname := qd.Header().Name
-		qclass := qd.Header().Class
+		// RFC 6147 §5.5: with the CD bit set the client validates for
+		// itself and synthesis MUST NOT happen — skip the A lookup entirely
+		// instead of performing it only to have the synthesizer refuse.
+		if qctx.Req.CheckingDisabled {
+			return err
+		}
+
+		qname := qctx.Qname
+		qclass := qctx.Req.Question[0].Header().Class
 		ecsOpt := qctx.ECSOpt
 		dnssecOK := qctx.ClientRequestedDNSSEC
 
 		// Perform A-record lookup for DNS64 synthesis.
 		var aqr *resolver.QueryResult
 		if m.pending != nil {
-			aqr = m.pending.DoJoin(qname, dns.TypeA, qclass, ecsOpt, dnssecOK, func() *resolver.QueryResult {
+			aqr = m.pending.DoJoin(ctx, qname, dns.TypeA, qclass, ecsOpt, dnssecOK, func() *resolver.QueryResult {
 				aQuestion := handler.Question{Name: qname, Qtype: dns.TypeA, Qclass: qclass}
 				return m.resolver.Query(ctx, aQuestion, ecsOpt)
 			})
@@ -59,10 +80,21 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		}
 
 		if aqr != nil && aqr.Err == nil && len(aqr.Answer) > 0 {
+			// RFC 6147 §5.5: with the CD bit set the client validates for
+			// itself — the synthesizer refuses (it would destroy the
+			// signature chain). Without CD, synthesis proceeds.
 			qr.Answer, qr.Authority, qr.Additional = m.synthesizer.Synthesize(
 				qr.Answer, qr.Authority, qr.Additional,
-				aqr.Answer, aqr.Authority, aqr.Additional, qr.Validated)
+				aqr.Answer, aqr.Authority, aqr.Additional, qctx.Req.CheckingDisabled)
+			// RFC 6147 §5.5: the synthesized AAAA's DNSSEC status is that
+			// of the A lookup it derives from — set AD only when those
+			// records validated; never assert AD for unverified data.
+			qr.Validated = aqr.Validated
 			log.Debugf("DNS64: synthesized %d AAAA records for %s", len(qr.Answer), qname)
+		} else if aqr != nil && aqr.Err != nil {
+			// An upstream failure must not be masked as NODATA (and cached
+			// as such).
+			log.Warnf("DNS64: A lookup failed for %s: %v", qname, aqr.Err)
 		}
 
 		return err

@@ -15,9 +15,14 @@ func UnpackTxtString(s string) (msg []byte) {
 			break
 		}
 		if i+2 < len(bs) && isDigitSequence(bs[i:i+3]) {
-			msg = append(msg, dddToByte(bs[i:]))
-			i += 2
-			continue
+			if b, ok := dddToByte(bs[i:]); ok {
+				msg = append(msg, b) //nolint:gosec // G115: dddToByte clamps to 0..255
+				i += 2
+				continue
+			}
+			// Out-of-range \DDD escape: reject the whole string rather than
+			// silently wrapping the value.
+			return nil
 		}
 		msg = append(msg, unescapeChar(bs[i]))
 	}
@@ -35,21 +40,19 @@ func isDigitSequence(seq []byte) (ok bool) {
 }
 
 // dddToByte converts three ASCII decimal digits into a byte value.
-func dddToByte(s []byte) (res byte) {
-	return (s[0]-'0')*100 + (s[1]-'0')*10 + (s[2] - '0')
+// Returns ok=false for out-of-range values (\999 wraps in uint8 arithmetic)
+// so malformed escapes are rejected instead of silently corrupting bytes.
+func dddToByte(s []byte) (res byte, ok bool) {
+	n := int(s[0]-'0')*100 + int(s[1]-'0')*10 + int(s[2]-'0')
+	if n > 255 {
+		return 0, false
+	}
+	return byte(n), true //nolint:gosec // G115: n clamped to 0..255 above
 }
 
 // unescapeChar returns the byte corresponding to the escaped character.
-// If b is not a recognized escape, it is returned as-is.
+// DNS TXT/master-file escaping (RFC 1035 §5.1) defines \X as the literal
+// character X — there is no \t→TAB mapping. Unknown escapes pass through.
 func unescapeChar(b byte) (escaped byte) {
-	switch b {
-	case 't':
-		return '\t'
-	case 'r':
-		return '\r'
-	case 'n':
-		return '\n'
-	default:
-		return b
-	}
+	return b
 }

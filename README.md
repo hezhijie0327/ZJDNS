@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.8.16-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.9.0-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -206,6 +206,27 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o zjdns ./cmd/zjdns
 go test -short ./...
 go test -bench=. -short -benchtime=500ms ./...
 golangci-lint run && golangci-lint fmt
+```
+
+## 代码审查
+
+通过 [Open Code Review](https://github.com/alibaba/open-code-review) 进行 AI 辅助深度审查：
+
+```bash
+# 安装
+npm install -g @alibaba-group/open-code-review
+
+# 审查工作区改动
+ocr review --audience agent
+
+# 审查单个提交
+ocr review --audience agent --commit <sha>
+
+# 审查分支差异
+ocr review --audience agent --from main --to <branch>
+
+# 预览审查范围（不调用 LLM）
+ocr review --preview
 ```
 
 ## 文档

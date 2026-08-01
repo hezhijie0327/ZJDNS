@@ -70,7 +70,7 @@ DNS pollution attacks. Each is enabled via `UpstreamServer` flags.
 | Mechanism | Layer | Algorithm |
 |-----------|-------|-----------|
 | **Hopguard** | UDP upstream | IP TTL fingerprint: auto-learn baseline, reject responses with TTL outside ±2 range |
-| **Spoofguard** | UDP upstream | Multi-read loop: reject `AR=0+NOERROR+EDNS`; accept `AN>=2`/`NS>0`/`AD=1`; collect ambiguous (≤500ms) → pick richest |
+| **Spoofguard** | UDP upstream | Multi-read loop: non-EDNS (no parsed OPT RR) + NOERROR is the GFW signature; accept `AN>=2`/`NS>0`/`AD=1`; collect ambiguous (≤500ms) → pick richest |
 | **Poisonguard** | Recursive | Zone-authority cross-validation on resolved answers |
 | **Splitguard** | TCP upstream | Random [1,N] payload segmentation with jitter |
 
@@ -98,9 +98,13 @@ Classifies responses by delegation level:
 
 Implements a multi-read UDP loop. After sending a query, it reads up to N
 responses within a configurable collect window. Candidates are classified:
-- Immediate-reject: `AR=0+NOERROR+EDNS` (GFW signature)
 - Immediate-accept: `AN≥2` or `NS>0` or `AD=1`
-- Ambiguous: collect all, pick richest (most answer records + authority)
+- EDNS-gate: parsed OPT RR determines EDNS presence (not raw ARCOUNT). Non-EDNS
+  single-answer responses are rejected as the GFW signature; non-EDNS CNAME/multi-answer
+  are collected as fallback. EDNS-bearing responses flow into the ambiguous collection
+  block.
+- Ambiguous: collect all, pick richest (most answer records + authority); TTL-confident
+  EDNS responses are fast-accepted without waiting for a second candidate.
 
 ### Splitguard
 
@@ -170,5 +174,5 @@ Reuses SM2 certificate pair from TLCP. Wire format = DTLS (RFC 8094): 2-byte big
 
 ## Zone Rules (`zone/`)
 
-- **Storage**: Pure in-memory WORM (write-once-read-many) maps. `Evaluator` holds `exact` (map[string][]zoneRule) and `wildcards` (map[string][]zoneRule) populated by `LoadRules` at startup. No BadgerDB dependency — evaluate is a lock-free map lookup.
-- **Lookup**: `Evaluate()` first checks `bypass` rules, then `exact` map (O(1)), then `wildcards` suffix search (max 16 iterations). All fields use `sync/atomic` for lock-free reads.
+- **Storage**: Pure in-memory WORM (write-once-read-many) maps. `Evaluator` holds `exact` and `wildcards` (static rules), plus `dynamics` and `wildcardDynamics` (dynamic content generators), populated by `LoadRules` at startup. No BadgerDB dependency — evaluate is a lock-free map lookup.
+- **Lookup**: `Evaluate()` first checks `bypass` rules, then exact dynamic rules + `exact` map (O(1), best-scored), then wildcard dynamic rules + `wildcards` suffix search (max 16 iterations). Exact and wildcard dynamic rules live in separate maps — the same name may carry both without overwriting. All fields use `sync/atomic` for lock-free reads.

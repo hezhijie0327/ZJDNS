@@ -25,7 +25,6 @@ import (
 // sortAnswerByLatency reorders records by latency at Get() time.
 type Recursive struct {
 	resolver    *Resolver
-	lastEDECode uint16 // DNSSEC EDE from current resolution (per-query, not shared)
 	cache       cache.Store
 	ctx         context.Context // lifecycle context for background probes
 	spoofguard  bool            // from protocol=recursive upstream
@@ -43,9 +42,18 @@ type CNAME struct {
 	resolver *Resolver
 }
 
-// DNSSECEDECode returns the DNSSEC EDE code for the current resolution.
-func (r *Recursive) DNSSECEDECode() uint16 {
-	return r.lastEDECode
+// cnameAliasFollowed reports whether a CNAME's owner is the target of any
+// other CNAME in the answer (i.e. it is an intermediate hop of a chain being
+// followed, not a separate alias).
+func cnameAliasFollowed(c *dns.CNAME, answer []dns.RR, currentQuestion string) bool {
+	for _, r := range answer {
+		if other, ok := r.(*dns.CNAME); ok && other != c {
+			if strings.EqualFold(dnsutil.Fqdn(other.Target), dnsutil.Fqdn(c.Header().Name)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // dnssecChain tracks the cryptographic trust chain state during recursive
@@ -55,13 +63,6 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 	if depth > config.DefaultMaxRecursionDepth {
 		log.Debugf("RECURSION: depth exceeded (depth=%d, max=%d) for %s", depth, config.DefaultMaxRecursionDepth, question.Name)
 		return QueryResult{Cacheable: true, Err: fmt.Errorf("recursion depth exceeded: %d", depth)}
-	}
-
-	// Clear any stale DNSSEC EDE code from a previous CNAME hop or recursive
-	// call. Only the top-level resolve owns the shared atomic — inner calls
-	// (NS address resolution, TCP fallback) run concurrently and must not race.
-	if depth == 0 {
-		r.lastEDECode = 0
 	}
 
 	qname := dnsutil.Fqdn(question.Name)
@@ -88,15 +89,24 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 	// Initialize DNSSEC trust chain with root trust anchors (when available).
 	chain := &dnssecChain{}
-	if crypto := r.resolver.validator.Crypto; crypto != nil {
-		chain.parentDNSKEYs = crypto.RootKeys()
-	}
 
 	// Root-domain query (normalizedQname is empty for the root zone ".").
 	if normalizedQname == "." {
 		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
 		if verdict == defense.VerdictPoisoned {
 			poisonSeen = true
+			// A successful-but-poisoned UDP response for the root zone must
+			// restart over TCP like any other level — the main loop handles
+			// VerdictPoisoned regardless of err, this branch only handled
+			// the err != nil case and served/cached the poisoned answer.
+			if !forceTCP {
+				if response != nil {
+					pool.DefaultMessage.Put(response)
+				}
+				qr := r.resolve(ctx, question, ecs, depth, true)
+				qr.Poisoned = true
+				return qr
+			}
 		}
 		if err != nil {
 			if verdict == defense.VerdictPoisoned && !forceTCP {
@@ -111,7 +121,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		ecsResponse := r.resolver.edns.ParseFromDNS(response)
 		answer, authority, additional := response.Answer, response.Ns, response.Extra
 		pool.DefaultMessage.Put(response)
-		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Validated: cryptoValidated, ECS: ecsResponse, Server: config.ProtoRecursive, Poisoned: poisonSeen, DNSSECEDE: r.lastEDECode}
+		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Validated: cryptoValidated, ECS: ecsResponse, Server: config.ProtoRecursive, Poisoned: poisonSeen, DNSSECEDE: chain.lastEDECode}
 	}
 
 	for {
@@ -228,7 +238,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		if len(nsResult.addrs) == 0 {
 			nsSlice, extraSlice := response.Ns, response.Extra
 			pool.DefaultMessage.Put(response)
-			return QueryResult{Cacheable: true, Authority: nsSlice, Additional: extraSlice, Validated: validated, ECS: ecsResponse, Server: config.ProtoRecursive, DNSSECEDE: r.lastEDECode}
+			return QueryResult{Cacheable: true, Authority: nsSlice, Additional: extraSlice, Validated: validated, ECS: ecsResponse, Server: config.ProtoRecursive, DNSSECEDE: chain.lastEDECode}
 		}
 
 		r.cacheGlueRecords(nsResult.glue)
@@ -338,6 +348,16 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 
 		for _, rr := range qr.Answer {
 			h := rr.Header()
+			// Keep every CNAME that participates in the chain (owner is an
+			// alias being followed), not just the current owner — a
+			// synthesized multi-hop chain (CNAME1 → CNAME2 → A) would
+			// otherwise lose the intermediate CNAMEs.
+			if cname, ok := rr.(*dns.CNAME); ok {
+				if strings.EqualFold(h.Name, currentQuestion.Name) || cnameAliasFollowed(cname, qr.Answer, currentQuestion.Name) {
+					allAnswers = append(allAnswers, rr)
+				}
+				continue
+			}
 			if strings.EqualFold(h.Name, currentQuestion.Name) || dns.RRToType(rr) == question.Qtype {
 				allAnswers = append(allAnswers, rr)
 			}

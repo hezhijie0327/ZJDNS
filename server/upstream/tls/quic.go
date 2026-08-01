@@ -11,6 +11,7 @@ import (
 	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/doq"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 
@@ -29,19 +30,20 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 	}
 	tlsConfig := c.stdTLSConfig(server)
 	key := server.Address
-	poolKey := key
-	if server.Proxy != "" {
-		poolKey = key + "|" + server.Proxy
-	}
+	// Identity-keyed pool/config keys: two upstreams sharing an address but
+	// differing in ServerName/SkipTLSVerify must not share a pooled QUIC
+	// connection or 0-RTT token store across trust boundaries.
+	poolKey := transportKey(key, server.ServerName, server.SkipTLSVerify, server.Proxy)
+	configKey := "doq:" + poolKey
 	proxyDialer := c.getProxy(server)
 
-	dialQUIC := func(dialCtx context.Context, _ string) (*quic.Conn, error) { // _ = poolKey (unused: we dial via key which is the real server addr)
+	dialQUIC := func(dialCtx context.Context, _ string) (*quic.Conn, error) { // _ = poolKey (unused: we dial the real server addr)
 		dialTLS := tlsConfig.Clone()
 		dialTLS.NextProtos = config.NextProtoDOQ
 		timeoutCtx, cancel := context.WithTimeout(dialCtx, config.DefaultDNSQueryTimeout)
 		defer cancel()
 
-		// poolKey may contain proxy info (e.g. "host:port|socks5://...");
+		// poolKey contains the full identity (e.g. "host:port|name|true|socks5://…");
 		// the proxy path must resolve and dial the actual server address (key).
 		if proxyDialer != nil {
 			pconn, err := proxyDialer.ListenPacket(timeoutCtx)
@@ -53,9 +55,15 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 				_ = pconn.Close()
 				return nil, fmt.Errorf("resolve %s: %w", key, err)
 			}
-			return quic.Dial(timeoutCtx, pconn, remoteAddr, dialTLS, c.getQUICConfig("doq:"+key, tlsConfig.InsecureSkipVerify))
+			conn, err := quic.Dial(timeoutCtx, pconn, remoteAddr, dialTLS, c.getQUICConfig(configKey, tlsConfig.InsecureSkipVerify))
+			if err != nil {
+				// quic-go does not take ownership of a caller-provided
+				// PacketConn on a failed dial — do not leak the UDP socket.
+				_ = pconn.Close()
+			}
+			return conn, err
 		}
-		conn, err := quic.DialAddrEarly(timeoutCtx, key, dialTLS, c.getQUICConfig("doq:"+key, tlsConfig.InsecureSkipVerify))
+		conn, err := quic.DialAddrEarly(timeoutCtx, key, dialTLS, c.getQUICConfig(configKey, tlsConfig.InsecureSkipVerify))
 		if err == nil {
 			log.Debugf("UPSTREAM: DoQ negotiated for %s — cipher=%s resumed=%v 0-RTT=%v",
 				key, tls.CipherSuiteName(conn.ConnectionState().TLS.CipherSuite),
@@ -71,19 +79,22 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 			if err == nil {
 				return response, nil
 			}
-			// NOTE: The 0-RTT rejection retry uses the same connection (pc.Conn),
-			// but the spec requires a fresh connection. This works because quic-go
-			// falls back to a full handshake on the existing conn when 0-RTT is
-			// rejected, but a spec-compliant implementation would dial a new one.
-			// resetQUICConfig clears the 0-RTT state to prevent further rejections.
+			// RFC 9250: 0-RTT rejection requires a FRESH connection — retrying
+			// on the rejected conn (relying on quic-go's internal fallback)
+			// can leave an invalidated connection in the pool. Remove it,
+			// reset the token store, and dial anew.
 			if errors.Is(err, quic.Err0RTTRejected) {
-				c.resetQUICConfig("doq:" + key)
-				response, err = c.doQUICQuery(ctx, pc.Conn, msg, c.timeout)
-				if err == nil {
-					return response, nil
+				c.resetQUICConfig(configKey)
+				c.quicPool.Remove(pc)
+				if fresh, aErr := c.quicPool.Acquire(ctx, poolKey, dialQUIC); aErr == nil {
+					response, err = c.doQUICQuery(ctx, fresh.Conn, msg, c.timeout)
+					if err == nil {
+						return response, nil
+					}
 				}
+			} else {
+				c.quicPool.Remove(pc)
 			}
-			c.quicPool.Remove(pc)
 			log.Debugf("UPSTREAM: pooled DoQ query to %s failed: %v, retrying with new connection", server.Address, err)
 		}
 	}
@@ -91,7 +102,7 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 	conn, err := dialQUIC(ctx, key)
 	if err != nil {
 		if errors.Is(err, quic.Err0RTTRejected) {
-			c.resetQUICConfig("doq:" + key)
+			c.resetQUICConfig(configKey)
 		}
 		return nil, fmt.Errorf("QUIC dial: %w", err)
 	}
@@ -99,25 +110,36 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 	response, err := c.doQUICQuery(ctx, conn, msg, c.timeout)
 	if err != nil {
 		if errors.Is(err, quic.Err0RTTRejected) {
-			c.resetQUICConfig("doq:" + key)
-			response, err = c.doQUICQuery(ctx, conn, msg, c.timeout)
+			// RFC 9250: 0-RTT rejection invalidates the connection — close
+			// it, reset the token store, and dial a FRESH connection (the
+			// rejected conn must never re-enter the pool).
+			c.resetQUICConfig(configKey)
+			_ = conn.CloseWithError(doq.QUICCodeNoError, "0-RTT rejected")
+			conn, err = dialQUIC(ctx, key)
 			if err == nil {
-				if c.quicPool != nil {
-					c.quicPool.Put(poolKey, conn)
-				} else {
-					_ = conn.CloseWithError(pool.QUICCodeNoError, "no pool, discarding")
+				response, err = c.doQUICQuery(ctx, conn, msg, c.timeout)
+				if err == nil {
+					if c.quicPool != nil {
+						c.quicPool.Put(poolKey, conn)
+					} else {
+						_ = conn.CloseWithError(doq.QUICCodeNoError, "no pool, discarding")
+					}
+					return response, nil
 				}
-				return response, nil
 			}
 		}
-		_ = conn.CloseWithError(pool.QUICCodeNoError, "query failed")
+		// conn may be nil when the post-rejection re-dial failed — the
+		// rejected connection was already closed above.
+		if conn != nil {
+			_ = conn.CloseWithError(doq.QUICCodeNoError, "query failed")
+		}
 		return nil, err
 	}
 
 	if c.quicPool != nil {
 		c.quicPool.Put(poolKey, conn)
 	} else {
-		_ = conn.CloseWithError(pool.QUICCodeNoError, "no pool, discarding")
+		_ = conn.CloseWithError(doq.QUICCodeNoError, "no pool, discarding")
 	}
 	return response, nil
 }
@@ -132,7 +154,7 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 	defer func() {
 		// RFC 9250 §4.3.1: cancel with DOQ_REQUEST_CANCELLED on shutdown.
 		if ctx.Err() != nil {
-			stream.CancelRead(quic.StreamErrorCode(pool.QUICCodeRequestCancelled))
+			stream.CancelRead(quic.StreamErrorCode(doq.QUICCodeRequestCancelled))
 		}
 		_ = stream.Close()
 	}()

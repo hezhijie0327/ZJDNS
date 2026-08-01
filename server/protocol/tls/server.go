@@ -56,6 +56,7 @@ type Server struct {
 	cancel         context.CancelCauseFunc
 	serverGroup    *errgroup.Group
 	serverCtx      context.Context
+	quicConnSem    chan struct{} // admission cap for concurrent QUIC connections (DoQ/DoH3)
 	dotListeners   []net.Listener
 	doqConns       []*net.UDPConn
 	doqTransports  []*quic.Transport
@@ -177,6 +178,7 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 		cancel:        cancel,
 		serverGroup:   serverGroup,
 		serverCtx:     serverCtx,
+		quicConnSem:   make(chan struct{}, config.DefaultServerGoroutineLimit),
 	}
 
 	s.displayCertificateInfo(&eCert)

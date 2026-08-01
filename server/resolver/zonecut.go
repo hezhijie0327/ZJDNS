@@ -31,12 +31,22 @@ func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
 		h := r.Header()
 		sigs := dnssec.FindRRSIGs(allSigs, h.Name, dns.RRToType(r))
 		if len(sigs) == 0 {
+			// In a signed response (some RRSIGs present), an unsigned RRset
+			// is anomalous and must not be served as authenticated data.
+			// Fully unsigned responses (unsigned zones) are left untouched.
+			if len(allSigs) > 0 {
+				log.Debugf("SECURITY: dropping unsigned record %s/%s in signed %s answer", h.Name, dns.TypeToString[dns.RRToType(r)], zone)
+				continue
+			}
 			result = append(result, r)
 			continue
 		}
 		inZone := false
 		for _, sig := range sigs {
-			if dnsutil.IsBelow(fqZone, dnsutil.Fqdn(sig.SignerName)) {
+			sigZone := dnsutil.Fqdn(sig.SignerName)
+			// A signer equal to the zone apex is in-zone; records signed by
+			// the zone itself were being stripped as cross-zone.
+			if dns.EqualName(sigZone, fqZone) || dnsutil.IsBelow(fqZone, sigZone) {
 				inZone = true
 				break
 			}
@@ -61,17 +71,23 @@ func (r *Recursive) getZoneCutSigner(response *dns.Msg, currentDomain string) st
 	}
 
 	rrsigs := dnssec.CollectRRSIGs(response.Answer, response.Extra)
+	var best string
 	for _, rrsig := range rrsigs {
 		if rrsig == nil {
 			continue
 		}
 		signerName := dnsutil.Fqdn(rrsig.SignerName)
 		if !dns.EqualName(signerName, fqCurrent) && dnsutil.IsBelow(fqCurrent, signerName) {
-			return signerName
+			// Select the closest (deepest) ancestor signer: in a
+			// mixed-signer answer (e.g. a CNAME chain across zones), the
+			// first match may not be the actual zone cut for this name.
+			if best == "" || dnsutil.Labels(signerName) > dnsutil.Labels(best) {
+				best = signerName
+			}
 		}
 	}
 
-	return ""
+	return best
 }
 
 func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, nameservers []string, question Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain) (bool, error) {
@@ -87,12 +103,13 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 	}
 	parentKeys := chain.zoneDNSKEYs
 	if len(parentKeys) == 0 {
-		parentKeys = chain.parentDNSKEYs
-	}
-	if len(parentKeys) == 0 {
 		return false, fmt.Errorf("no parent DNSKEYs available to verify DS for %s", childZone)
 	}
 
+	// The DS RRset must come from the PARENT side of the zone cut: the
+	// parent's servers are authoritative for it. Never ask the child's
+	// servers — an attacker-controlled child could answer NODATA and
+	// downgrade a signed delegation to insecure.
 	dsQuestion := Question{Name: dnsutil.Fqdn(childZone), Qtype: dns.TypeDS, Qclass: dns.ClassINET}
 	dsResp, _, dsErr := r.queryNameserversConcurrent(ctx, nameservers, dsQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
 	if dsErr != nil {
@@ -103,9 +120,14 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 	dsRecords := dnssec.FindDS(dsResp.Answer)
 	dsRecords = append(dsRecords, dnssec.FindDS(dsResp.Ns)...)
 	if len(dsRecords) == 0 {
-		chain.childDS = nil
-		chain.dsPresentButUnverified = false
-		return false, nil
+		// A signed parent must prove the absence of DS with an
+		// authenticated NSEC/NSEC3 denial; a bare NODATA is not proof.
+		if r.verifyNoDSInParent(ctx, nameservers, childZone, currentDomain, chain) {
+			chain.childDS = nil
+			chain.dsPresentButUnverified = false
+			return false, nil
+		}
+		return false, fmt.Errorf("no authenticated denial for missing DS at %s (signed parent)", childZone)
 	}
 
 	allSigs := dnssec.CollectRRSIGs(dsResp.Answer, dsResp.Ns, dsResp.Extra)
@@ -141,8 +163,17 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 
 	chain.childDS = verifiedDS
 
+	// The child DNSKEY RRset must come from the CHILD side of the zone cut.
+	// Querying it from the parent's servers returns a referral (no answer);
+	// querying the child is also required so an attacker-controlled parent
+	// cannot substitute its own keys.
+	childServers := r.resolveChildNameservers(ctx, nameservers, childZone, currentDomain, question.Name, ecs, forceTCP)
+	if len(childServers) == 0 {
+		return false, fmt.Errorf("could not resolve nameservers for child zone %s", childZone)
+	}
+
 	dnskeyQuestion := Question{Name: dnsutil.Fqdn(childZone), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
-	dnskeyResp, _, dnskeyErr := r.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+	dnskeyResp, _, dnskeyErr := r.queryNameserversConcurrent(ctx, childServers, dnskeyQuestion, ecs, forceTCP, childZone, r.resolver.validator.Poisonguard)
 	if dnskeyErr != nil {
 		return false, fmt.Errorf("DNSKEY query for %s failed: %w", childZone, dnskeyErr)
 	}
@@ -159,6 +190,19 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 		chain.lastEDECode = dns.ExtendedErrorDNSBogus
 		return false, nil
 	}
+
+	// Verify the DNSKEY RRset's own RRSIG before using or caching it: the DS
+	// match proves only ONE key; an attacker who can inject the DNSKEY
+	// response could append their own key and validate a forged answer with
+	// it (CryptoValidator.IsResponseValid accepts any key in the slice).
+	allKeySigs := dnssec.CollectRRSIGs(dnskeyResp.Answer, dnskeyResp.Ns, dnskeyResp.Extra)
+	dnskeyRRSIGs := dnssec.FindRRSIGs(allKeySigs, dnsutil.Fqdn(childZone), dns.TypeDNSKEY)
+	if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err != nil {
+		log.Debugf("SECURITY: zone cut — child DNSKEY RRset self-signature failed for %s: %v", childZone, err)
+		chain.lastEDECode = dns.ExtendedErrorDNSBogus
+		return false, nil
+	}
+
 	log.Debugf("SECURITY: zone cut — verified DNSKEY for %s (key_tag=%d)", childZone, matchedKey.KeyTag())
 
 	crypto.CacheZoneKeys(childZone, dnskeyRecords)
@@ -174,6 +218,35 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 		return false, nil
 	}
 	return true, nil
+}
+
+// resolveChildNameservers resolves the authoritative server addresses for the
+// child zone across the zone cut. The NS RRset is fetched from the parent
+// side (which is authoritative for the delegation), then the NS names are
+// resolved to addresses like any other delegation level.
+func (r *Recursive) resolveChildNameservers(ctx context.Context, nameservers []string, childZone, currentDomain, qname string, ecs *edns.ECSOption, forceTCP bool) []string {
+	nsQuestion := Question{Name: dnsutil.Fqdn(childZone), Qtype: dns.TypeNS, Qclass: dns.ClassINET}
+	resp, _, err := r.queryNameserversConcurrent(ctx, nameservers, nsQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+	if err != nil || resp == nil {
+		log.Debugf("SECURITY: NS query for child zone %s failed: %v", childZone, err)
+		return nil
+	}
+	defer pool.DefaultMessage.Put(resp)
+
+	var nsRecords []*dns.NS
+	// When the same server hosts both parent and child zones, the delegation
+	// NS records may appear in the Answer section instead of Authority.
+	for _, rrec := range append(resp.Ns, resp.Answer...) {
+		if ns, ok := rrec.(*dns.NS); ok && dns.EqualName(dnsutil.Fqdn(rrec.Header().Name), dnsutil.Fqdn(childZone)) {
+			nsRecords = append(nsRecords, ns)
+		}
+	}
+	if len(nsRecords) == 0 {
+		log.Debugf("SECURITY: no NS records for child zone %s in parent referral", childZone)
+		return nil
+	}
+
+	return r.resolveNSAddressesConcurrent(ctx, nsRecords, qname, 0, forceTCP)
 }
 
 func (r *Recursive) isZoneCut(response *dns.Msg, currentDomain string) bool {

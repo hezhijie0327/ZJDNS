@@ -6,6 +6,7 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
+	"zjdns/internal/log"
 	"zjdns/server/defense"
 	"zjdns/server/resolver"
 	"zjdns/server/resolver/dnssec"
@@ -53,7 +54,11 @@ func makeFlushFunc(op func() (int64, error), verb string) func() []string {
 	return func() []string {
 		n, err := op()
 		if err != nil {
-			return []string{fmt.Sprintf("error=%v", err)}
+			// Log the detailed error server-side; the TXT answer stays
+			// generic — FlushDB errors can expose badger/filesystem internals
+			// to any client able to query these CHAOS names.
+			log.Errorf("SERVER: %s failed: %v", verb, err)
+			return []string{"error=flush-failed"}
 		}
 		return []string{fmt.Sprintf("%s=%d", verb, n)}
 	}
@@ -69,8 +74,9 @@ func wireZoneDynamicContent(store cache.Store, statsCollector *stats.Collector, 
 		case config.DefaultProjectName + ".stats.clear":
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { statsCollector.Reset(); return int64(0), nil }, "reset")
 		case config.DefaultProjectName + ".cache.clear":
+			// cache.clear only flushes the cache; it must not wipe query
+			// statistics as a side effect (use .stats.clear for that).
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) {
-				statsCollector.Reset()
 				return store.FlushDB("cache")
 			}, "flushed")
 		}

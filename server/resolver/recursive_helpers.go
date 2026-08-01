@@ -87,14 +87,19 @@ func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMa
 	if len(response.Answer) == 0 && !response.Authoritative {
 		log.Debugf("RECURSION: lame delegation detected for %s — NS records point to same zone but response is not authoritative", currentDomain)
 		pool.DefaultMessage.Put(response)
-		r.lastEDECode = dns.ExtendedErrorNoReachableAuthority
 		return &QueryResult{
 			Cacheable: true,
 			Server:    config.ProtoRecursive, ECS: ecsResponse,
-			Err: fmt.Errorf("lame delegation: no reachable authority for %s", currentDomain),
+			Err:       fmt.Errorf("lame delegation: no reachable authority for %s", currentDomain),
+			DNSSECEDE: dns.ExtendedErrorNoReachableAuthority,
 		}
 	}
-	nsSlice, extraSlice := response.Ns, response.Extra
+	// Deep-copy before Put: the pooled message's backing arrays are reused
+	// by the next Get, so aliased slices would be corrupted asynchronously.
+	nsSlice := make([]dns.RR, len(response.Ns))
+	copy(nsSlice, response.Ns)
+	extraSlice := make([]dns.RR, len(response.Extra))
+	copy(extraSlice, response.Extra)
 	pool.DefaultMessage.Put(response)
 	return &QueryResult{
 		Cacheable: true,
@@ -164,15 +169,17 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 				"bogus zone cut delegation for "+question.Name); err != nil {
 				log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut child has DS but RRSIG verification failed", question.Name)
 				pool.DefaultMessage.Put(response)
-				return &QueryResult{Cacheable: true, Server: config.ProtoRecursive, ECS: ecsResponse, Err: err}
+				return &QueryResult{Cacheable: true, Server: config.ProtoRecursive, ECS: ecsResponse, Err: err, DNSSECEDE: chain.lastEDECode}
 			}
 		} else {
 			log.Debugf("SECURITY: zone cut resolution failed for %s: %v (treating as insecure)", question.Name, cutErr)
 			*validated = false
 		}
 		answer := stripCrossZoneRecords(response.Answer, response.Extra, currentDomain)
-		auth := response.Ns
-		extra := response.Extra
+		auth := make([]dns.RR, len(response.Ns))
+		copy(auth, response.Ns)
+		extra := make([]dns.RR, len(response.Extra))
+		copy(extra, response.Extra)
 		pool.DefaultMessage.Put(response)
 		return &QueryResult{
 			Cacheable: true,
@@ -183,7 +190,6 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 	}
 
 	if (len(chain.childDS) > 0 || chain.dsPresentButUnverified) && !*validated {
-		r.lastEDECode = chain.lastEDECode
 		// RRSIGs missing from an otherwise-valid DNSSEC chain means the
 		// zone has verified DNSKEYs but the individual records aren't
 		// signed (e.g. Cloudflare challenge subdomains).  Treat as
@@ -193,13 +199,16 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 			return &QueryResult{
 				Cacheable: true,
 				Server:    config.ProtoRecursive, ECS: ecsResponse,
-				Err: fmt.Errorf("DNSSEC validation failed: bogus delegation for %s", question.Name),
+				Err:       fmt.Errorf("DNSSEC validation failed: bogus delegation for %s", question.Name),
+				DNSSECEDE: chain.lastEDECode,
 			}
 		}
 	}
 	answer := stripCrossZoneRecords(response.Answer, response.Extra, currentDomain)
-	auth := response.Ns
-	extra := response.Extra
+	auth := make([]dns.RR, len(response.Ns))
+	copy(auth, response.Ns)
+	extra := make([]dns.RR, len(response.Extra))
+	copy(extra, response.Extra)
 	pool.DefaultMessage.Put(response)
 	return &QueryResult{
 		Cacheable: true,

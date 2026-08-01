@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnshttp"
@@ -35,20 +34,16 @@ func ExecuteDoHRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient
 	}
 	buf := append([]byte{}, msg.Data...) // copy to break aliasing with pooled msg.Data
 
-	// Build the DoH GET URL manually — dnshttp.NewRequest appends /dns-query
-	// unconditionally, but ZJDNS URLs already include the full path.  Also
-	// dnshttp.NewRequest only supports GET/POST, not GET0RTT (HTTP/3).
-	encLen := base64.RawURLEncoding.EncodedLen(len(buf))
-	var urlBuf strings.Builder
-	urlBuf.Grow(len(u.Scheme) + 3 + len(u.Host) + len(u.Path) + 5 + encLen)
-	urlBuf.WriteString(u.Scheme)
-	urlBuf.WriteString("://")
-	urlBuf.WriteString(u.Host)
-	urlBuf.WriteString(u.Path)
-	urlBuf.WriteString("?dns=")
-	urlBuf.WriteString(base64.RawURLEncoding.EncodeToString(buf))
+	// Build the DoH GET URL by cloning the upstream URL and setting the dns
+	// query parameter — dnshttp.NewRequest appends /dns-query unconditionally,
+	// but ZJDNS URLs already include the full path; it also only supports
+	// GET/POST, not GET0RTT (HTTP/3). NOTE: the caller's own RawQuery (e.g.
+	// "?param=value" on the upstream URL) is replaced, not merged — the dns
+	// parameter is the DoH query.
+	q := *u // shallow copy — caller's URL must not be mutated
+	q.RawQuery = "dns=" + base64.RawURLEncoding.EncodeToString(buf)
 
-	httpReq, err := http.NewRequestWithContext(ctx, httpMethod, urlBuf.String(), http.NoBody)
+	httpReq, err := http.NewRequestWithContext(ctx, httpMethod, q.String(), http.NoBody)
 	if err != nil {
 		msg.ID = originalID
 		return nil, fmt.Errorf("create request: %w", err)
@@ -111,7 +106,9 @@ func ServerDOHMsgAccept(m *dns.Msg) dns.MsgAcceptAction {
 	if m.Response {
 		return dns.MsgIgnore
 	}
-	if _, ok := dns.OpcodeToString[m.Opcode]; !ok {
+	// RFC 8484 §4.1.2: DoH serves only standard DNS QUERY semantics — reject
+	// IQUERY/STATUS/NOTIFY/UPDATE/DSO instead of accepting every known opcode.
+	if m.Opcode != dns.OpcodeQuery {
 		return dns.MsgRejectNotImplemented
 	}
 	if len(m.Question) != 1 {

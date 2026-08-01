@@ -19,6 +19,11 @@ func BuildResponseMsg(req *dns.Msg) *dns.Msg {
 	case req != nil && len(req.Question) > 0:
 		dnsutil.SetReply(msg, req)
 	case req != nil:
+		// Without SetReply the request's transaction ID is never copied and
+		// the pooled (zeroed) message would be emitted with Id=0 — clients
+		// correlate by ID and would discard the FORMERR.
+		msg.ID = req.ID
+		msg.Opcode = req.Opcode
 		msg.Response = true
 		msg.Rcode = dns.RcodeFormatError
 	default:
@@ -35,6 +40,9 @@ func BuildResponseMsg(req *dns.Msg) *dns.Msg {
 // When isExpired is true, the caller should set qctx.EDE after calling.
 func BuildCacheEntryResponse(req *dns.Msg, entry *cache.Entry, dnssecOK, isExpired bool) *dns.Msg {
 	msg := BuildResponseMsg(req)
+	// Restore the cached response's rcode — SetReply always leaves NOERROR,
+	// so a cached NXDOMAIN would otherwise be served as NODATA.
+	msg.Rcode = uint16(entry.Rcode) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
 
 	if isExpired {
 		responseTTL := entry.RemainingTTL()

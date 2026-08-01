@@ -30,7 +30,12 @@ func (s *Server) startDOHServer() error {
 		keepAliveListener := &tcpKeepAliveListener{Listener: rawListener}
 
 		tlcpCfg := s.tlcpConfig.Clone()
-		tlcpCfg.NextProtos = config.NextProtoDOH
+		// This http.Server is served over a gotlcp tlcp.Listener — net/http
+		// only performs ALPN dispatch for *tls.Conn, so it always parses
+		// HTTP/1.1 here. Advertising h2 would make ALPN-compliant clients
+		// negotiate HTTP/2 and send the HTTP/2 preface, which the HTTP/1.1
+		// parser rejects.
+		tlcpCfg.NextProtos = []string{"http/1.1"}
 		tlcpListener := tlcp.NewListener(keepAliveListener, tlcpCfg)
 
 		s.dohListeners = append(s.dohListeners, tlcpListener)
@@ -38,9 +43,13 @@ func (s *Server) startDOHServer() error {
 		dohSrv := &http.Server{
 			Handler:           http.HandlerFunc(s.serveDOH),
 			ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
-			WriteTimeout:      config.DefaultHTTPServerWriteTimeout,
-			IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
-			TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+			// Bound the full request read: without it a client can trickle a
+			// POST body byte-by-byte and hold the connection forever
+			// (IdleTimeout does not apply mid-request).
+			ReadTimeout:  config.DefaultHTTPServerReadTimeout,
+			WriteTimeout: config.DefaultHTTPServerWriteTimeout,
+			IdleTimeout:  config.DefaultHTTPServerIdleTimeout,
+			TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 		}
 		s.dohServers = append(s.dohServers, dohSrv)
 

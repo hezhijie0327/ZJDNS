@@ -45,18 +45,24 @@ func ResolveDataFile(name, url string) string {
 			return ""
 		}
 	}
-	// Warn if the file is group/other writable — root data files contain
-	// cryptographic trust material and must be protected from tampering.
+	// Refuse to load group/other-writable files — root data files contain
+	// cryptographic trust material; a writable file can be tampered with by
+	// any local user. Fail closed rather than loading potentially-modified
+	// trust material.
 	if info, err := os.Stat(path); err == nil {
 		if info.Mode().Perm()&otherWritePermMask != 0 {
-			log.Warnf("CONFIG: root data file has insecure permissions (%04o). Consider 'chmod 644 %s'",
-				info.Mode().Perm(), path)
+			log.Errorf("CONFIG: root data file %s has insecure permissions (%04o) — refusing to load trust material; run 'chmod 644 %s'",
+				path, info.Mode().Perm(), path)
+			return ""
 		}
 	}
 	return path
 }
 
 // DownloadFile fetches a URL and writes the content to a local file.
+// The download is written to a temporary file and atomically renamed into
+// place, so an interrupted download can never leave a partial file that a
+// later start would treat as valid trust material.
 func DownloadFile(url, path string) error {
 	resp, err := downloadClient.Get(url) //nolint:gosec // callers pass hardcoded URLs
 	if err != nil {
@@ -67,10 +73,31 @@ func DownloadFile(url, path string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(resp.Body)
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
 	if err != nil {
-		return err
+		return fmt.Errorf("create temp file: %w", err)
 	}
-	//nolint:gosec // callers pass paths from os.Executable() or config
-	return os.WriteFile(path, data, 0o644)
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }() // cleanup if any step below fails
+
+	if _, err := io.Copy(tmp, resp.Body); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("download %s: %w", url, err)
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	// Sync before the rename: after a crash the final path must never hold
+	// a truncated/zero-length file that a later start would treat as valid
+	// trust material.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	return os.Rename(tmpName, path)
 }

@@ -1,4 +1,13 @@
 # RouteDNS DTLS client → ZJDNS DTLS server
+#
+# Generate the server certificate with the DTLS client's IP as a SAN, e.g.:
+#   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+#     -keyout zjdns-certs/key.pem -out zjdns-certs/cert.pem -days 365 -nodes \
+#     -subj "/CN=zjdns-test" -addext "subjectAltName=IP:127.0.0.1"
+#
+# NOTE: keep the CA OUT of /tmp — it is world-writable, so any local user
+# could swap the certificate and MITM the DTLS connection.
+
 [listeners.local-udp]
 address = "127.0.0.1:12053"
 protocol = "udp"
@@ -7,5 +16,4 @@ resolver = "zjdns-dtls"
 [resolvers.zjdns-dtls]
 address = "127.0.0.1:10434"
 protocol = "dtls"
-ca = "/tmp/zjdns-certs/cert.pem"
-bootstrap-address = "127.0.0.1"
+ca = "zjdns-certs/cert.pem"

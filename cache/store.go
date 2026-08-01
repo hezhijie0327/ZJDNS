@@ -77,10 +77,10 @@ func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 			}
 			validated = item.UserMeta() == database.UserMetaValidated(true)
 			expiresAt = item.ExpiresAt()
-			if err := item.Value(func(v []byte) error {
-				msgWire = v
-				return nil
-			}); err != nil {
+			// ValueCopy: the []byte from item.Value is only valid inside the
+			// callback/transaction (Badger reuses an internal buffer for
+			// value-log entries) and msgWire is used after the View returns.
+			if msgWire, err = item.ValueCopy(nil); err != nil {
 				continue
 			}
 			found = true
@@ -128,6 +128,7 @@ func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 		Timestamp:  ts,
 		TTL:        entryTTL,
 		Validated:  validated,
+		Rcode:      int(msg.Rcode), //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
 	}
 
 	// Sort A/AAAA answer records by latency.
@@ -160,7 +161,7 @@ func (c *Cache) sortAnswerByLatency(entry *Entry) {
 	for i, rr := range addrRRs {
 		ips[i] = rrToIP[rr]
 	}
-	latencies := c.lookupIPLatencies(ips)
+	latencies := c.LookupIPLatencies(ips)
 	if len(latencies) == 0 {
 		return
 	}
@@ -192,8 +193,9 @@ func (c *Cache) sortAnswerByLatency(entry *Entry) {
 	}
 }
 
-// lookupIPLatencies fetches latencies for a batch of IPs.
-func (c *Cache) lookupIPLatencies(ips []string) map[string]int {
+// LookupIPLatencies fetches latencies for a batch of IPs (exported for the
+// resolver's root-server ordering).
+func (c *Cache) LookupIPLatencies(ips []string) map[string]int {
 	if len(ips) > maxLatencyLookupIPs {
 		ips = ips[:maxLatencyLookupIPs]
 	}
@@ -231,6 +233,9 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 
 	// ── Prep work (parallel-safe) ─────────────────────────────────────────
 	now := log.NowUnix()
+	// Strip the EDNS OPT pseudo-record before computing the TTL — the OPT TTL
+	// field encodes flags/extended RCODE (RFC 6891), not a cacheable RR TTL.
+	additional = stripOPT(additional)
 	entryTTL := minTTL(answer, authority, additional)
 	if entryTTL <= 0 {
 		return 0 // RFC 8767 §7: TTL=0 data must not be cached
@@ -238,9 +243,6 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 	qname = dnsutil.Canonical(qname)
-
-	// Strip EDNS OPT pseudo-record from additional before caching (stripOPT allocates a new slice).
-	additional = stripOPT(additional)
 
 	// Clone records to prevent downstream mutations from corrupting the cache.
 	answer = cloneRRs(answer)
@@ -373,14 +375,26 @@ func ecsFallbackCandidates(ecs *config.ECSOption) []ecsCandidate {
 	return candidates
 }
 
-// stripOPT removes EDNS OPT pseudo-records from an RR slice in-place.
+// stripOPT removes EDNS OPT pseudo-records from an RR slice, returning a new
+// slice. It must NOT compact the input in place: callers continue to use
+// their slice afterwards (e.g. to build the response's Additional section),
+// and in-place compaction would leave a duplicated trailing element behind.
 func stripOPT(rrs []dns.RR) []dns.RR {
-	n := 0
+	hasOPT := false
 	for _, rr := range rrs {
-		if dns.RRToType(rr) != dns.TypeOPT {
-			rrs[n] = rr
-			n++
+		if dns.RRToType(rr) == dns.TypeOPT {
+			hasOPT = true
+			break
 		}
 	}
-	return rrs[:n]
+	if !hasOPT {
+		return rrs
+	}
+	out := make([]dns.RR, 0, len(rrs)-1)
+	for _, rr := range rrs {
+		if dns.RRToType(rr) != dns.TypeOPT {
+			out = append(out, rr)
+		}
+	}
+	return out
 }

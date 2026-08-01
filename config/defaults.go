@@ -82,11 +82,13 @@ const (
 	DefaultQUICClientIdleTimeout = 60 * time.Second  // client QUIC idle (must exceed KeepAlive)
 	DefaultQUICServerIdleTimeout = 30 * time.Second  // server QUIC idle (RFC 9000 default)
 	DefaultTCPPoolIdleTimeout    = 60 * time.Second  // TCP/DoT pool connection idle
+	DefaultTLSHandshakeTimeout   = 10 * time.Second  // pre-handshake bound for DoT (an idle-connect flood must not hold shared errgroup slots)
 	DefaultTCPKeepAlivePeriod    = 30 * time.Second  // TCP keep-alive probe interval
 	DefaultTCPIdleTimeout        = 120 * time.Second // RFC 7766 §6.2.3: plain TCP server idle timeout
 
 	DefaultHTTPServerIdleTimeout  = 60 * time.Second // HTTP keep-alive idle
-	DefaultHTTPServerWriteTimeout = 10 * time.Second // HTTP response write
+	DefaultHTTPServerReadTimeout  = 15 * time.Second // full HTTP request read (Slowloris bound)
+	DefaultHTTPServerWriteTimeout = 30 * time.Second // HTTP response write — must cover DefaultRecursiveResolveTimeout (30s): the DoH handler resolves synchronously inside the handler, and a slow recursive answer must not blow past the connection write deadline
 	DefaultHTTPReadHeaderTimeout  = 5 * time.Second  // HTTP header read (Slowloris protection)
 
 	DefaultDTLSIdleTimeout = 30 * time.Second // DTLS idle timeout (RFC 8094 §3.3)
@@ -277,7 +279,8 @@ const (
 	DefaultDNSCryptUDPSize             = 4096
 	DefaultDNSCryptCertificateCacheTTL = 1 * time.Hour
 	DefaultDNSCryptReadTimeout         = 2 * time.Second
-	DefaultDNSCryptResponseBuffer      = 512 // cert queries use no EDNS0; TC retry goes over TCP
+	DefaultDNSCryptWriteTimeout        = 10 * time.Second // DNSCrypt TCP response write
+	DefaultDNSCryptResponseBuffer      = 512              // cert queries use no EDNS0; TC retry goes over TCP
 	DefaultDNSCryptPQTicketLifetime    = 600 * time.Second
 	DefaultDNSCryptKeyOverlap          = 1 * time.Hour
 	DefaultDNSCryptMinQueryLen         = 512 // min wire query size (matches dnscrypt-proxy InitialMinQuestionSize)

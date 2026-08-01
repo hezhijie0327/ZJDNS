@@ -25,8 +25,8 @@ var errNoRootHints = errors.New("no root servers found")
 // rootHints maps root server FQDNs to their addresses (ip:port).
 // Lazily populated from named.root on first access; empty until then.
 var (
-	rootHints     map[string][]string
-	rootHintsOnce sync.Once
+	rootHints   map[string][]string
+	rootHintsMu sync.RWMutex
 )
 
 // LoadRootHints eagerly loads root server hints from named.root. Only needed
@@ -36,24 +36,38 @@ func LoadRootHints() {
 }
 
 // loadHints returns the root server hints, loading from named.root on first
-// access via sync.Once. Returns an empty map on failure.
+// access. A failed load is NOT permanently cached: sync.Once would leave the
+// resolver with zero root servers for the rest of the process lifetime, so a
+// failed attempt is retried on the next call. Returns an empty map on failure.
 func loadHints() map[string][]string {
-	rootHintsOnce.Do(func() {
-		rootHints = make(map[string][]string)
+	rootHintsMu.RLock()
+	hints := rootHints
+	rootHintsMu.RUnlock()
+	if hints != nil {
+		return hints
+	}
 
-		path := zdnsutil.ResolveDataFile(rootHintsFileName, rootHintsURL)
-		if path == "" {
-			log.Errorf("RECURSION: cannot determine root hints path — no root hints loaded")
-			return
-		}
-		hints, err := loadRootHintsFromFile(path)
-		if err != nil {
-			log.Errorf("RECURSION: failed to load root hints from %s: %v", path, err)
-			return
-		}
-		rootHints = hints
-		log.Infof("RECURSION: loaded %d root server(s) from %s", len(hints), path)
-	})
+	rootHintsMu.Lock()
+	defer rootHintsMu.Unlock()
+	if rootHints != nil { // double-checked: another goroutine may have loaded already
+		return rootHints
+	}
+
+	path := zdnsutil.ResolveDataFile(rootHintsFileName, rootHintsURL)
+	if path == "" {
+		log.Errorf("RECURSION: cannot determine root hints path — no root hints loaded")
+		return nil
+	}
+	hints, err := loadRootHintsFromFile(path)
+	if err != nil {
+		log.Errorf("RECURSION: failed to load root hints from %s: %v — will retry on next query", path, err)
+		// Do NOT cache the failure: a nil map here means the next call
+		// retries. Caching an empty map would permanently disable root
+		// resolution after one transient failure (e.g. startup offline).
+		return nil
+	}
+	rootHints = hints
+	log.Infof("RECURSION: loaded %d root server(s) from %s", len(hints), path)
 	return rootHints
 }
 
@@ -76,6 +90,9 @@ func loadRootHintsFromFile(path string) (map[string][]string, error) {
 		}
 		rr, err := dns.New(line)
 		if err != nil {
+			// A single malformed line silently dropping that root server is
+			// hard to diagnose when enough lines are corrupted.
+			log.Debugf("RECURSION: skipping malformed root hints line %q: %v", line, err)
 			continue
 		}
 		hdr := rr.Header()
@@ -95,9 +112,12 @@ func loadRootHintsFromFile(path string) (map[string][]string, error) {
 
 	hints := make(map[string][]string, len(nsNames))
 	for name := range nsNames {
+		// Normalize keys to lowercase: every other name key in this file is
+		// lowercased, and a case-sensitive index into the returned map would
+		// silently miss root servers.
 		key := strings.ToLower(name)
 		if addrs := aRecords[key]; len(addrs) > 0 {
-			hints[name] = addrs
+			hints[key] = addrs
 		}
 	}
 

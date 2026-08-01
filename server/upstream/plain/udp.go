@@ -152,7 +152,7 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 	}
 
 	// ── Multi-read loop ───────────────────────────────────────────
-	maxDeadline := time.Now().Add(config.DefaultDNSQueryTimeout)
+	maxDeadline := time.Now().Add(c.timeout)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(maxDeadline) {
 		maxDeadline = dl
 	}
@@ -179,7 +179,13 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 			n, err = conn.Read(buf)
 		}
 
-		if err != nil {
+		if err != nil && !errors.Is(err, ipttl.ErrNoControlMessage) {
+			// A missing TTL control message (ipttl.ErrNoControlMessage) is
+			// NOT a network failure — the datagram was received, just without
+			// TTL metadata. It skips this error handling and falls through
+			// to packet processing as a TTL-less read (ttl=0 → not
+			// confident), instead of dropping the datagram and failing the
+			// query.
 			netErr, ok := errors.AsType[net.Error](err)
 			if ok && netErr.Timeout() {
 				now := time.Now()
@@ -331,7 +337,6 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 	ancount := uint16(raw[6])<<8 | uint16(raw[7])
 	nscount := uint16(raw[8])<<8 | uint16(raw[9])
 	ad := (raw[3] >> 5) & 1
-	hasEDNS := uint16(raw[10])<<8|uint16(raw[11]) > 0
 	rcode := int(raw[3] & 0x0F)
 
 	if ancount >= 2 || nscount > 0 || ad == 1 {
@@ -352,15 +357,15 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 			pool.DefaultMessage.Put(s.nonEDNS)
 			s.nonEDNS = nil
 		}
-		log.Debugf("UPSTREAM: UDP spoofguard fast return from %s (AN=%d, NS=%d, AD=%d, EDNS=%v, rejected=%d)", addr, ancount, nscount, ad, hasEDNS, s.rejected)
+		log.Debugf("UPSTREAM: UDP spoofguard fast return from %s (AN=%d, NS=%d, AD=%d, rejected=%d)", addr, ancount, nscount, ad, s.rejected)
 		s.last = resp
 		s.lastTTL = ttl
 		return resp
 	}
 
-	// Non-NOERROR with no EDNS — accepted as a real server signal.
-	if rcode != dns.RcodeSuccess && !hasEDNS {
-		log.Debugf("UPSTREAM: UDP spoofguard accepted %s (no-EDNS, real server) from %s", dns.RcodeToString[uint16(rcode)], addr)
+	// Non-NOERROR response — accepted as a real server signal.
+	if rcode != dns.RcodeSuccess {
+		log.Debugf("UPSTREAM: UDP spoofguard accepted %s (real server) from %s", dns.RcodeToString[uint16(rcode)], addr)
 	}
 
 	// EDNS-gate: GFW only injects bare A/AAAA records without EDNS and
@@ -368,7 +373,7 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 	// only when they contain a CNAME or multiple answers — patterns that
 	// GFW does not replicate.  Single-answer non-EDNS (GFW signature) is
 	// still rejected.
-	if rcode == dns.RcodeSuccess && !hasEDNS && queryUDPSize > 0 {
+	if rcode == dns.RcodeSuccess && queryUDPSize > 0 {
 		resp := pool.DefaultMessage.Get()
 		resp.Data = s.copyData(raw, n)
 		if err := resp.Unpack(); err != nil {
@@ -376,6 +381,23 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 			return nil
 		}
 		resp.Data = nil
+
+		// EDNS presence is determined from the parsed OPT RR, not raw
+		// ARCOUNT (which counts ALL additional records).
+		hasEDNS := false
+		for _, extra := range resp.Extra {
+			if _, ok := extra.(*dns.OPT); ok {
+				hasEDNS = true
+				break
+			}
+		}
+		if hasEDNS {
+			// An EDNS response is a legitimate candidate, NOT a spoofguard
+			// target — route it into the ambiguous EDNS-bearing handling
+			// (fast-accept on TTL confidence or collect). Dropping it here
+			// would discard the only response and time the query out.
+			return s.collectEDNSCandidate(resp, ttlConfident, ttl, addr)
+		}
 
 		// Only keep non-EDNS responses with CNAME or AN≥2 — these are
 		// authoritative patterns GFW doesn't inject (GFW injects single
@@ -415,7 +437,13 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 		return nil
 	}
 	resp.Data = nil
+	return s.collectEDNSCandidate(resp, ttlConfident, ttl, addr)
+}
 
+// collectEDNSCandidate handles an EDNS-bearing NOERROR response: fast-accept
+// when the TTL is confident, otherwise collect as an ambiguous candidate.
+// Returns the response to return immediately, or nil to continue the loop.
+func (s *spoofguardState) collectEDNSCandidate(resp *dns.Msg, ttlConfident bool, ttl uint8, addr string) *dns.Msg {
 	if ttlConfident {
 		if s.prev != nil {
 			pool.DefaultMessage.Put(s.prev)

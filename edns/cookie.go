@@ -271,9 +271,12 @@ func BuildCookieResponse(clientCookie, serverCookie []byte) string {
 }
 
 // ParseCookie extracts the DNS Cookie option from a DNS message.
-func (h *Handler) ParseCookie(msg *dns.Msg) *CookieOption {
+// Returns (nil, true) when a cookie option is present but malformed — the
+// caller must reject it with FORMERR (RFC 7873 §5.3) rather than treating it
+// as an absent cookie.
+func (h *Handler) ParseCookie(msg *dns.Msg) (*CookieOption, bool) {
 	if h == nil || msg == nil {
-		return nil
+		return nil, false
 	}
 	for _, rr := range msg.Pseudo {
 		cookie, ok := rr.(*dns.COOKIE)
@@ -281,11 +284,8 @@ func (h *Handler) ParseCookie(msg *dns.Msg) *CookieOption {
 			continue
 		}
 		cookieBytes, err := hex.DecodeString(cookie.Cookie)
-		if err != nil {
-			return nil
-		}
-		if len(cookieBytes) < DefaultCookieClientLen {
-			return nil
+		if err != nil || len(cookieBytes) < DefaultCookieClientLen {
+			return nil, true
 		}
 		clientCookie := cookieBytes[:DefaultCookieClientLen]
 		var serverCookie []byte
@@ -295,9 +295,9 @@ func (h *Handler) ParseCookie(msg *dns.Msg) *CookieOption {
 		return &CookieOption{
 			ClientCookie: clientCookie,
 			ServerCookie: serverCookie,
-		}
+		}, false
 	}
-	return nil
+	return nil, false
 }
 
 // ── SipHash-2-4 ───────────────────────────────────────────────────────────

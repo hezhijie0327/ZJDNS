@@ -1,6 +1,7 @@
 package tls
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -41,7 +42,7 @@ func (s *Server) startDOHServer(port string) error {
 			return fmt.Errorf("TCP listen on %s: %w", addr, err)
 		}
 
-		rawListener := &debugListener{Listener: &zdnsutil.TCPKeepAliveListener{Listener: listener}, name: "DoH"}
+		rawListener := &debugListener{Listener: &zdnsutil.TCPKeepAliveListener{Listener: listener, KeepAlivePeriod: config.DefaultTCPKeepAlivePeriod}, name: "DoH"}
 
 		tlsConfig := s.tlsConfig.Clone()
 		tlsConfig.NextProtos = config.NextProtoDOH
@@ -133,9 +134,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) parseDOHRequest(r *http.Request, w http.ResponseWriter) (msg *dns.Msg, statusCode int) {
 	// Validate GET request size before delegating to the library parser.
+	// The limit bounds the raw DNS wire message (RFC 8484 §4.1/§4.2.1), so
+	// the base64url parameter must be DECODED first — base64 expands ~4/3,
+	// and comparing the encoded length would reject valid messages between
+	// ~49KB and 64KB that the POST path accepts.
 	if r.Method == http.MethodGet {
 		dnsParam := r.URL.Query().Get("dns")
-		if dnsParam == "" || len(dnsParam) > config.DefaultDOHMaxRequestSize {
+		if dnsParam == "" {
+			return nil, http.StatusBadRequest
+		}
+		if decoded, err := base64.RawURLEncoding.DecodeString(dnsParam); err != nil {
+			return nil, http.StatusBadRequest
+		} else if len(decoded) > config.DefaultDOHMaxRequestSize {
 			return nil, http.StatusBadRequest
 		}
 	}
@@ -174,7 +184,7 @@ func (s *Server) respondDOH(w http.ResponseWriter, response *dns.Msg) error {
 	w.Header().Set("Cache-Control", dohCacheControl(response))
 	n, err := w.Write(bytes) //nolint:gosec // G705: DNS wire format, not user-facing HTML
 	if n != len(bytes) {
-		return fmt.Errorf("short write: %d/%d bytes", n, len(bytes))
+		return fmt.Errorf("short write: %d/%d bytes: %w", n, len(bytes), err)
 	}
 	return err
 }

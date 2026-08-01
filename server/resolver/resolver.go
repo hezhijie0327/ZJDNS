@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
-	"sync/atomic"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -58,8 +57,11 @@ type CIDRMatcher interface {
 	HasIPTag(tag string) bool
 }
 
+// upstreamSet holds the configured upstream server list. It is written
+// exactly once at startup (ConfigureServers) and read-only afterwards — the
+// old atomic.Pointer implied reload support that does not exist.
 type upstreamSet struct {
-	servers atomic.Pointer[[]*config.UpstreamServer]
+	servers []*config.UpstreamServer
 }
 
 // Resolver handles DNS query resolution by dispatching to upstream servers or
@@ -140,15 +142,11 @@ func dnssecEDEError(edeCode uint64) *DNSSECError {
 }
 
 func (u *upstreamSet) list() []*config.UpstreamServer {
-	p := u.servers.Load()
-	if p == nil {
-		return nil
-	}
-	return *p
+	return u.servers
 }
 
 func (u *upstreamSet) store(s []*config.UpstreamServer) {
-	u.servers.Store(&s)
+	u.servers = s
 }
 
 // New creates a new Resolver from the given Config.
@@ -217,15 +215,6 @@ func (r *Resolver) Recursive() *Recursive {
 	return r.recursive
 }
 
-// DNSSECEDECode returns the DNSSEC EDE code from the recursive resolver,
-// or 0 if no recursive resolution was performed or no failure occurred.
-func (r *Resolver) DNSSECEDECode() uint16 {
-	if r == nil || r.recursive == nil {
-		return 0
-	}
-	return r.recursive.DNSSECEDECode()
-}
-
 // UpstreamServers returns the current list of primary upstream servers.
 func (r *Resolver) UpstreamServers() []*config.UpstreamServer {
 	return r.upstream.list()
@@ -262,7 +251,10 @@ func ShuffleSlice[T any](slice []T) {
 }
 
 // concurrencyLimit returns an adaptive concurrency limit based on the number of
-// servers to query simultaneously.
+// servers to query simultaneously. The limit must be monotonic: adding a
+// server must never REDUCE the fan-out (the raw tier formulas drop from 8 to 7
+// at 12→13 servers and 10 to 8 at 20→21), so each tier is floored at the
+// previous tier's value.
 func concurrencyLimit(serverCount int) int {
 	if serverCount <= 0 {
 		return 1
@@ -271,13 +263,13 @@ func concurrencyLimit(serverCount int) int {
 	case serverCount <= concurrencyTier1:
 		return serverCount
 	case serverCount <= concurrencyTier2:
-		return (serverCount*concurrencyDiv2 + concurrencyDiv2) / concurrencyDiv3
+		return max((serverCount*concurrencyDiv2+concurrencyDiv2)/concurrencyDiv3, concurrencyTier1)
 	case serverCount <= concurrencyTier3:
-		return (serverCount + 1) / concurrencyDiv2
+		return max((serverCount+1)/concurrencyDiv2, (concurrencyTier2*concurrencyDiv2+concurrencyDiv2)/concurrencyDiv3)
 	default:
 		limit := serverCount / concurrencyDiv3
 		if limit < config.DefaultMinConcurrencyLimit {
-			return config.DefaultMinConcurrencyLimit
+			return max(config.DefaultMinConcurrencyLimit, (concurrencyTier3+1)/concurrencyDiv2)
 		}
 		return limit
 	}

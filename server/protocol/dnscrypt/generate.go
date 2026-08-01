@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 	"zjdns/config"
@@ -208,8 +210,21 @@ func GenerateDNSCryptConfig(provider, addr string) (string, error) {
 	if provider == "" {
 		return "", errors.New("provider name is required (-provider <name>)")
 	}
-	if !strings.Contains(addr, ":") {
-		return "", fmt.Errorf("address must be host:port format (got %q)", addr)
+	// net.SplitHostPort correctly requires brackets around IPv6 literals and
+	// extracts a real port — LastIndex-based parsing turned "::1" into a
+	// garbage "port".
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", fmt.Errorf("address must be host:port format (got %q): %w", addr, err)
+	}
+	if port == "" {
+		return "", fmt.Errorf("address must include a port (got %q)", addr)
+	}
+	if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+		return "", fmt.Errorf("invalid port %q in address %q", port, addr)
+	}
+	if host == "" {
+		return "", fmt.Errorf("address must include a host (got %q)", addr)
 	}
 
 	rc, err := GenerateResolverConfig(provider, nil)
@@ -222,13 +237,14 @@ func GenerateDNSCryptConfig(provider, addr string) (string, error) {
 		return "", fmt.Errorf("creating stamp: %w", err)
 	}
 
-	port := addr[strings.LastIndex(addr, ":")+1:]
-
 	cfg := &FullConfig{}
 	cfg.Server.Protocol.DNSCrypt = port
 	cfg.Server.Certificate.DNSCrypt = config.DNSCryptCertificate{
 		PublicKey:  rc.PublicKey,
 		PrivateKey: rc.PrivateKey,
+		// Persist the resolver seed so the generated example keeps stable
+		// certs/ClientMagic across restarts.
+		ResolverSk: rc.ResolverSk,
 	}
 	cfg.Upstream = []config.UpstreamServer{
 		{Address: stamp},

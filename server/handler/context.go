@@ -34,25 +34,27 @@ type QueryContext struct {
 
 	// ── Zone match: populated by Zone ──
 
-	ZoneMatched bool         // true when a zone rule matched
-	ZoneResult  *zone.Result // non-nil when ZoneMatched
+	ZoneResult *zone.Result // non-nil when a zone rule matched (nil = no match)
 
 	// ── Cache state: populated by CacheLookup ──
 
-	CacheHit     bool         // true when cache.Get found an entry (fresh or expired)
-	CacheEntry   *cache.Entry // the entry returned by cache.Get (nil if miss)
+	CacheEntry   *cache.Entry // the entry returned by cache.Get (nil = miss)
 	CacheIsStale bool         // true when the cached entry has expired
 	CacheServed  bool         // true when the response was built from cache (for logging)
 
 	// ── Resolution: populated by Resolution ──
 
-	ResolutionResult *resolver.QueryResult // set after resolver.Query completes
-	Resolved         bool                  // true after Resolution ran
+	ResolutionResult *resolver.QueryResult // nil until Resolution ran
 	ResolutionError  bool                  // true when resolver.Query returned an error
 
 	// ── Response: built stepwise through the chain ──
 
-	Res *dns.Msg // final response (nil until built); non-nil = short-circuit signal
+	Res *dns.Msg // final response (nil until built)
+	// Responded is true only when Res is the FINAL response and the chain
+	// must stop. A middleware that wants to set a partial response (to be
+	// completed by later middlewares) sets Res WITHOUT Responded — the chain
+	// keeps running and the Response middleware finalizes it.
+	Responded bool
 
 	// ── Coordination ──
 
@@ -66,4 +68,25 @@ type QueryContext struct {
 
 	Qname string // canonical question name (already FQDN)
 	Qtype uint16 // question type (A, AAAA, etc.)
+}
+
+// EffectiveName returns the name that should be used AFTER the zone rewrite:
+// RewrittenName when a rewrite happened, otherwise Qname. Consumers must use
+// this instead of Qname so rewritten queries use the correct cache keys,
+// logging names, and answers.
+func (c *QueryContext) EffectiveName() string {
+	if c.RewrittenName != "" {
+		return c.RewrittenName
+	}
+	return c.Qname
+}
+
+// ClientAddr returns the client IP, or a non-nil zero-length IP for
+// unix-domain/internal queries — callers can index or format it without
+// panicking on the documented-nil contract.
+func (c *QueryContext) ClientAddr() net.IP {
+	if c.ClientIP == nil {
+		return net.IP{}
+	}
+	return c.ClientIP
 }

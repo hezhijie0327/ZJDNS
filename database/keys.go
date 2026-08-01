@@ -13,8 +13,9 @@ import (
 
 // Key prefix constants.
 const (
-	prefixEntry = "e:"
-	eipPrefix   = "e:ip:"
+	prefixEntry      = "e:"
+	eipPrefix        = "e:ip:"
+	eipLatencyPrefix = "e:lat:"
 )
 
 // Sequence keys for auto-incrementing IDs via badger.Sequence.
@@ -104,43 +105,54 @@ func EIPReversePrefix(ip string) []byte {
 	return buf
 }
 
-// EIPLatencyKey builds a latency key under the e:ip: sub-space.
+// EIPLatencyKey builds a latency key. It lives in its own e:lat: namespace,
+// NOT under e:ip: — the e:ip: sub-space is scanned by EIPReversePrefix and
+// latency keys there would be misparsed as reverse-lookup entries.
 //
-//	Layout: e:ip:{ip}\x00_lat
+//	Layout: e:lat:{ip}
 func EIPLatencyKey(ip string) []byte {
-	buf := make([]byte, len(eipPrefix)+len(ip)+5) // +5 for \x00_lat
-	off := copy(buf, eipPrefix)
-	off += copy(buf[off:], ip)
-	buf[off] = 0
-	off++
-	buf[off] = '_'
-	off++
-	buf[off] = 'l'
-	off++
-	buf[off] = 'a'
-	off++
-	buf[off] = 't'
+	buf := make([]byte, len(eipLatencyPrefix)+len(ip))
+	off := copy(buf, eipLatencyPrefix)
+	copy(buf[off:], ip)
 	return buf
 }
 
 // ── Value Encoding ────────────────────────────────────────────────────────────
 
-// EncodePtrMapValue packs a ptr_map entry value (TTL only; expiry via BadgerDB TTL).
+// EncodePtrMapValue packs a ptr_map entry value: the record TTL plus the
+// write timestamp so the remaining TTL can be derived exactly on read
+// (the old value stored only the TTL, so ReverseLookup always fell into the
+// stale branch). Negative TTLs are clamped to 0 — a wire TTL >= 2^31 would
+// otherwise round-trip as a negative int32.
 //
-//	Layout: [0:4]ttl int32 BE
-func EncodePtrMapValue(ttl int32) []byte {
-	buf := make([]byte, 4)
-	binary.BigEndian.PutUint32(buf[0:4], uint32(ttl)) //nolint:gosec // G115: protocol-bounded value fits target type
+//	Layout: [0:4]ttl int32 BE, [4:12]write_unix int64 BE
+func EncodePtrMapValue(ttl int32, now int64) []byte {
+	if ttl < 0 {
+		ttl = 0
+	}
+	buf := make([]byte, 12)
+	binary.BigEndian.PutUint32(buf[0:4], uint32(ttl))  //nolint:gosec // G115: protocol-bounded value fits target type
+	binary.BigEndian.PutUint64(buf[4:12], uint64(now)) //nolint:gosec // G115: unix timestamp — protocol-bounded int64
 	return buf
 }
 
-// DecodePtrMapValue unpacks a ptr_map value.
+// DecodePtrMapValue unpacks a ptr_map value's TTL.
 func DecodePtrMapValue(data []byte) (ttl int32) {
 	if len(data) < 4 {
 		return 0
 	}
 	ttl = int32(binary.BigEndian.Uint32(data[0:4])) //nolint:gosec // G115: protocol-bounded value fits target type
 	return ttl
+}
+
+// DecodePtrMapTimestamp unpacks a ptr_map value's write timestamp. Returns 0
+// for values written by older versions (4-byte layout) — callers fall back
+// to the entry's ExpiresAt in that case.
+func DecodePtrMapTimestamp(data []byte) int64 {
+	if len(data) < 12 {
+		return 0
+	}
+	return int64(binary.BigEndian.Uint64(data[4:12])) //nolint:gosec // G115: unix timestamp — protocol-bounded int64
 }
 
 // EncodeLatencyValue packs an IP latency measurement (value only; expiry via WithTTL).

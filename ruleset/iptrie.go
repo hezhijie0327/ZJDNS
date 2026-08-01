@@ -68,7 +68,10 @@ func (t *ipTrie) insert(n *net.IPNet, tag string) {
 			node = node.child1
 		}
 	}
-	node.tags = append(node.tags, tag)
+	// Dedup: the same (CIDR, tag) pair may appear in multiple rule files.
+	if !slices.Contains(node.tags, tag) {
+		node.tags = append(node.tags, tag)
+	}
 	if t.tagSet == nil {
 		t.tagSet = make(map[string]bool)
 	}
@@ -81,11 +84,14 @@ func (t *ipTrie) match(ip net.IP) []string {
 	if ip = ip.To16(); ip == nil {
 		return nil
 	}
+	// IPv4 queries walk the shared ::ffff:0:0/96 mapping — tags attached
+	// above depth 96 are IPv6 rules (e.g. ::/0) that must NOT match IPv4.
+	isV4 := ip.To4() != nil
 	bits := [16]byte(ip)
 	node := &t.root
 	var tags []string
 	for i := range 128 {
-		if len(node.tags) > 0 {
+		if len(node.tags) > 0 && (!isV4 || i >= 96) {
 			tags = append(tags, node.tags...)
 		}
 		bit := (bits[i/8] >> (7 - i%8)) & 1
@@ -100,6 +106,7 @@ func (t *ipTrie) match(ip net.IP) []string {
 		}
 		node = next
 	}
+	// Depth 128 is always inside the IPv4 mapping zone.
 	if len(node.tags) > 0 {
 		tags = append(tags, node.tags...)
 	}
@@ -111,9 +118,11 @@ func (t *ipTrie) matchTag(ip net.IP, tag string) bool {
 	if ip = ip.To16(); ip == nil {
 		return false
 	}
+	// See match: IPv6 rules above depth 96 must not match IPv4 addresses.
+	isV4 := ip.To4() != nil
 	bits := [16]byte(ip)
 	node := &t.root
-	if slices.Contains(node.tags, tag) {
+	if !isV4 && slices.Contains(node.tags, tag) {
 		return true
 	}
 	for i := range 128 {
@@ -128,7 +137,7 @@ func (t *ipTrie) matchTag(ip net.IP, tag string) bool {
 			return false
 		}
 		node = next
-		if slices.Contains(node.tags, tag) {
+		if (!isV4 || i+1 >= 96) && slices.Contains(node.tags, tag) {
 			return true
 		}
 	}

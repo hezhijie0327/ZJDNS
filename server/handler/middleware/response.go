@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net"
+	"slices"
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
@@ -26,7 +27,9 @@ func (m *Response) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		err := next.ServeDNS(ctx, qctx)
 
-		if qctx.Res == nil {
+		// No final response was produced — a partial response (Res set
+		// without Responded) is still finalized here.
+		if qctx.Res == nil && !qctx.Responded {
 			return err
 		}
 
@@ -61,10 +64,13 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
 
 	cookieStr := m.generateCookieStr(qctx.CookieOpt, qctx.ClientIP)
 
-	// Only add EDNS if the request had an OPT record (RFC 6891).
-	// qctx.EDE alone should NOT trigger adding OPT to non-EDNS queries.
-	shouldAddEDNS := ecsOpt != nil || qctx.ClientRequestedDNSSEC || cookieStr != "" ||
-		qctx.IsSecure || qctx.TCPKeepalive > 0 || len(qctx.Req.Pseudo) > 0
+	// Only add EDNS if the request actually carried an OPT record (RFC 6891
+	// §6.1.1) — a plain non-EDNS query over a secure transport must not get
+	// an unsolicited OPT, and an invented default ECS must not be attached
+	// either. qctx.EDE alone should NOT trigger adding OPT to non-EDNS
+	// queries. Padding is gated separately by clientWantsPadding.
+	hasRequestEDNS := qctx.Req.UDPSize != 0 || len(qctx.Req.Pseudo) > 0
+	shouldAddEDNS := hasRequestEDNS || qctx.ClientRequestedDNSSEC || cookieStr != ""
 
 	// BADCOOKIE responses already have EDNS applied by the EDNS middleware.
 	if shouldAddEDNS && m.edns != nil && msg.Rcode != dns.RcodeBadCookie {
@@ -76,11 +82,7 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
 
 	// Restore original domain name if zone rule rewrote it.
 	if qctx.OriginalName != "" {
-		currentName := qctx.RewrittenName
-		if currentName == "" {
-			currentName = req.Question[0].Header().Name
-		}
-		m.restoreDomain(msg, currentName, qctx.OriginalName)
+		m.restoreDomain(msg, qctx.EffectiveName(), qctx.OriginalName)
 	}
 }
 
@@ -129,6 +131,25 @@ func (m *Response) restoreDomain(msg *dns.Msg, currentName, originalName string)
 	if msg == nil || dns.EqualName(currentName, originalName) {
 		return
 	}
+	// Renaming the owner of an RRset invalidates its RRSIG (signatures
+	// cover the owner name) and its NSEC/NSEC3 denials — a validating
+	// client would see BOGUS. Strip DNSSEC records covering the renamed
+	// name and clear the AD bit.
+	for _, rr := range msg.Answer {
+		if rr == nil {
+			continue
+		}
+		switch rr.(type) {
+		case *dns.RRSIG, *dns.NSEC, *dns.NSEC3:
+			if dns.EqualName(rr.Header().Name, currentName) {
+				rr.Header().Class = dns.ClassNONE // sentinel: filtered below
+			}
+		}
+	}
+	msg.Answer = slices.DeleteFunc(msg.Answer, func(rr dns.RR) bool {
+		return rr != nil && rr.Header().Class == dns.ClassNONE && dns.EqualName(rr.Header().Name, currentName)
+	})
+	msg.AuthenticatedData = false
 	for _, rr := range msg.Answer {
 		if rr != nil && dns.EqualName(rr.Header().Name, currentName) {
 			rr.Header().Name = originalName

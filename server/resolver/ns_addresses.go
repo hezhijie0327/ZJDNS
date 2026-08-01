@@ -3,6 +3,7 @@ package resolver
 import (
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"zjdns/cache"
 	"zjdns/config"
@@ -96,10 +97,71 @@ func (r *Recursive) getRootServers() []string {
 		}
 		all = append(all, cached...)
 	}
+	// A transient failure of one root name (unparseable hint or a failed
+	// cache read) must not permanently shrink the root set: merge the
+	// remaining hints.
+	if len(all) < len(hints) {
+		seen := make(map[string]bool, len(all))
+		for _, a := range all {
+			seen[a] = true
+		}
+		for _, addrs := range hints {
+			for _, a := range addrs {
+				if !seen[a] {
+					all = append(all, a)
+					seen[a] = true
+				}
+			}
+		}
+	}
 	if len(all) == 0 {
 		return allRootAddrs()
 	}
-	return all
+	// Global latency sort across families and names: per-entry sorting put
+	// every IPv6 record after every IPv4 record regardless of measured
+	// latency, so the fastest servers were never actually queried first.
+	return r.sortAddrsByLatency(all)
+}
+
+// sortAddrsByLatency orders addresses by their cached probe latency (fastest
+// first), with unprobed addresses last. Latency is best-effort: any lookup
+// failure leaves the order unchanged.
+func (r *Recursive) sortAddrsByLatency(addrs []string) []string {
+	if len(addrs) <= 1 || r.cache == nil {
+		return addrs
+	}
+	ips := make([]string, len(addrs))
+	for i, a := range addrs {
+		host, _, err := net.SplitHostPort(a)
+		if err != nil {
+			host = a
+		}
+		ips[i] = host
+	}
+	latencies := r.cache.LookupIPLatencies(ips)
+	if len(latencies) == 0 {
+		return addrs
+	}
+	sorted := slices.Clone(addrs)
+	slices.SortStableFunc(sorted, func(a, b string) int {
+		hostA, _, _ := net.SplitHostPort(a)
+		hostB, _, _ := net.SplitHostPort(b)
+		la, aOK := latencies[hostA]
+		lb, bOK := latencies[hostB]
+		switch {
+		case aOK != bOK:
+			if aOK {
+				return -1
+			}
+			return 1
+		case aOK:
+			if la != lb {
+				return la - lb
+			}
+		}
+		return strings.Compare(a, b)
+	})
+	return sorted
 }
 
 // allRootAddrs returns every address from rootHints as a flat slice.

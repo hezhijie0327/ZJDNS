@@ -7,11 +7,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"zjdns/config"
+	"zjdns/internal/doq"
 	"zjdns/internal/log"
 
 	"github.com/quic-go/quic-go"
-
-	zpool "zjdns/internal/pool"
 )
 
 // QUICConn wraps a QUIC connection with lifecycle tracking.
@@ -34,7 +33,7 @@ type QUIC struct {
 func (c *QUICConn) close() {
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)
-		_ = c.Conn.CloseWithError(zpool.QUICCodeNoError, "pool connection closed")
+		_ = c.Conn.CloseWithError(doq.QUICCodeNoError, "pool connection closed")
 	})
 }
 
@@ -85,6 +84,10 @@ func (p *QUIC) Acquire(ctx context.Context, key string, dialFunc func(context.Co
 	default:
 	}
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return nil, fmt.Errorf("client: pool shut down for %s", key)
+	}
 	live := p.conns[key][:0]
 	for _, pc := range p.conns[key] {
 		if !pc.isDead() {
@@ -166,25 +169,37 @@ func (p *QUIC) Shutdown() {
 // prevent duplicate entries from exceeding maxConns.
 func (p *QUIC) Put(key string, conn *quic.Conn) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	if p.closed {
-		_ = conn.CloseWithError(zpool.QUICCodeNoError, "pool closed")
+		p.mu.Unlock()
+		_ = conn.CloseWithError(doq.QUICCodeNoError, "pool closed")
 		return
 	}
 
 	// Dedup: if this connection is already in the pool, drop it.
 	for _, existing := range p.conns[key] {
 		if existing.Conn == conn {
+			p.mu.Unlock()
 			return
 		}
 	}
 
+	// Reject dead connections: a concurrently-closed conn (e.g. after a
+	// Remove by another query sharing the same *quic.Conn) would consume a
+	// pool slot until the next Acquire filters it out.
+	if conn.Context().Err() != nil {
+		p.mu.Unlock()
+		_ = conn.CloseWithError(0, "connection already closed")
+		return
+	}
+
 	if len(p.conns[key]) >= p.maxConns {
+		p.mu.Unlock()
 		_ = conn.CloseWithError(0, "pool full")
 		return
 	}
 	p.conns[key] = append(p.conns[key], &QUICConn{Conn: conn, addr: key})
+	p.mu.Unlock()
 }
 
 // Remove closes and removes a QUIC connection from the pool.

@@ -24,6 +24,8 @@ type Client struct {
 }
 
 // New creates a Client for plain UDP and TCP DNS queries.
+// All parameters must be non-nil; the returned Client dereferences them
+// unconditionally in ExecuteUDP/ExecuteTCP.
 func New(udpClient, tcpClient *dns.Client, tcpPool *pool.ConnPool, getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Duration) *Client {
 	return &Client{
 		udpClient: udpClient,

@@ -30,13 +30,20 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 	if err != nil {
 		return nil, fmt.Errorf("parse URL: %w", err)
 	}
+	// Reject scheme-less strings and plain http:// — the latter would send
+	// the DNS query over plaintext HTTP (DialTLSContext is never invoked).
+	if parsedURL.Scheme != "https" || parsedURL.Hostname() == "" {
+		return nil, fmt.Errorf("tlcp: upstream address %q must be an https URL with a host", server.Address)
+	}
 	if parsedURL.Port() == "" {
-		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultHTTPTLCPPort)
+		// Hostname() strips IPv6 brackets — JoinHostPort on the raw Host
+		// would double-bracket literals like [[2001:db8::1]]:9443.
+		parsedURL.Host = net.JoinHostPort(parsedURL.Hostname(), config.DefaultHTTPTLCPPort)
 	}
 
 	var b strings.Builder
-	b.Grow(len(server.Address) + len(server.ServerName) + len(server.Proxy) + 20)
-	b.WriteString(server.Address)
+	b.Grow(len(parsedURL.String()) + len(server.ServerName) + len(server.Proxy) + 20)
+	b.WriteString(parsedURL.String()) // normalized endpoint — default-port variants share one client
 	b.WriteByte('|')
 	b.WriteString(server.ServerName)
 	b.WriteByte('|')
@@ -66,6 +73,12 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 		httpClient = &http.Client{
 			Timeout:   c.timeout,
 			Transport: transport,
+			// Never follow redirects: a 3xx would re-send the full DNS query
+			// (dns= URL) to an arbitrary host — query leak + SSRF, and a
+			// redirect to http:// would bypass TLCP entirely.
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		}
 
 		c.httpClient.Set(key, httpClient)

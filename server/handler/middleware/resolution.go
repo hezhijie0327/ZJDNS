@@ -18,6 +18,10 @@ import (
 type Resolution struct {
 	resolver handler.Resolver
 	pending  *handler.PendingRequests
+	// ctx is the server-scope lifecycle context: the singleflight work fn
+	// runs under it so the leader's client disconnecting cannot cancel the
+	// shared query all followers are waiting on.
+	ctx context.Context
 }
 
 // Wrap implements Wrapper.  The next handler is ignored — this middleware
@@ -30,6 +34,7 @@ func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			msg := handler.BuildResponseMsg(qctx.Req)
 			msg.Rcode = dns.RcodeServerFailure
 			qctx.Res = msg
+			qctx.Responded = true
 			return nil
 		}
 
@@ -43,18 +48,24 @@ func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
 
 		// Singleflight dedup: if another goroutine is already resolving the
-		// same query, wait for its result.
+		// same query, wait for its result. The shared work runs under the
+		// SERVER-scope ctx — the leader client's disconnect must not cancel
+		// the resolution all followers are waiting on.
 		if m.pending != nil {
 			log.Debugf("RECURSION: resolving %s %s", qname, dns.TypeToString[qtype])
-			qr := m.pending.DoJoin(qname, qtype, qclass, ecsOpt, dnssecOK, func() *resolver.QueryResult {
-				return m.resolver.Query(ctx, question, ecsOpt)
+			qr := m.pending.DoJoin(ctx, qname, qtype, qclass, ecsOpt, dnssecOK, func() *resolver.QueryResult {
+				return m.resolver.Query(m.ctx, question, ecsOpt)
 			})
 			if qr == nil {
-				qctx.ResolutionError = true
+				// A nil result (e.g. an evicted singleflight follower) must
+				// not leave the client with no response at all.
+				msg := handler.BuildResponseMsg(qctx.Req)
+				msg.Rcode = dns.RcodeServerFailure
+				qctx.Res = msg
+				qctx.Responded = true
 				return nil
 			}
 			qctx.ResolutionResult = qr
-			qctx.Resolved = true
 			if qr.Err != nil {
 				qctx.ResolutionError = true
 			}
@@ -64,12 +75,14 @@ func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		log.Debugf("RECURSION: resolving %s %s", qname, dns.TypeToString[qtype])
 		qr := m.resolver.Query(ctx, question, ecsOpt)
 		if qr == nil {
-			qctx.ResolutionError = true
+			msg := handler.BuildResponseMsg(qctx.Req)
+			msg.Rcode = dns.RcodeServerFailure
+			qctx.Res = msg
+			qctx.Responded = true
 			return nil
 		}
 
 		qctx.ResolutionResult = qr
-		qctx.Resolved = true
 		if qr.Err != nil {
 			qctx.ResolutionError = true
 		}

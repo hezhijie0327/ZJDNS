@@ -108,8 +108,12 @@ func labelsToAdd(originalQname, currentZone string, stepsTaken, minimisationCoun
 	if stepsInPhase > remainingSteps-remainder {
 		cumPhase += stepsInPhase - (remainingSteps - remainder)
 	}
-	if cumPhase > labelsLeft {
-		cumPhase = labelsLeft
+	// Hold back one label so the full QNAME is only exposed once
+	// stepsTaken >= minimisationCount (the early-return branch) — the old
+	// cap exposed ALL remaining labels one step early, weakening the RFC
+	// 9156 §2.3 growth schedule.
+	if cumPhase >= labelsLeft {
+		cumPhase = labelsLeft - 1
 	}
 
 	return minimiseOneLabel + cumPhase

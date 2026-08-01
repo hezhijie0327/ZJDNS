@@ -140,7 +140,7 @@ go test -bench=. -short -benchtime=500ms ./...                 # stable numbers
 go test -bench=BenchmarkServerProcessQuery -benchtime=3s ./cmd/zjdns  # integration QPS
 ```
 
-**~84 benchmarks** across 14 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
+**~98 benchmarks** across 15 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
 
 ```bash
 # Update baseline
@@ -219,7 +219,7 @@ zjdns/
 ├── cmd/zjdns/          ← binary + CLI
 ├── config/             ← ServerConfig, ProtocolSettings, UpstreamServer, defaults
 ├── edns/               ← EDNS handler (ECS, Cookie, EDE, Padding)
-├── database/           ← Unified BadgerDB KV store (5 key prefixes, 1 ID sequence)
+├── database/           ← Unified BadgerDB KV store (3 key prefixes: `e:` cache, `e:ip:` reverse index, `e:lat:` latency)
 ├── cache/              ← DNS response cache (Store interface, BadgerDB-backed Cache)
 ├── stats/              ← In-memory query statistics (Collector: map+mutex, no persistence)
 ├── ruleset/            ← CIDR + domain tag matching (binary radix trie)
@@ -294,7 +294,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | Mechanism | Layer | Algorithm |
 |-----------|-------|-----------|
 | **Hopguard** | UDP upstream | IP TTL fingerprint: auto-learn baseline, reject responses with TTL outside ±2 range |
-| **Spoofguard** | UDP upstream | Multi-read loop: reject `AR=0+NOERROR+EDNS`; accept `AN>=2`/`NS>0`/`AD=1`; collect ambiguous (≤500ms) → pick richest |
+| **Spoofguard** | UDP upstream | Multi-read loop: non-EDNS single-answer is the GFW signature (rejected); accept `AN>=2`/`NS>0`/`AD=1`; collect ambiguous (≤500ms) → pick richest |
 | **Poisonguard** | Recursive | Zone-authority cross-validation on resolved answers |
 | **Splitguard** | TCP upstream | Random [1,N] payload segmentation with jitter |
 
@@ -305,7 +305,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | `ServerConfig` | `config` | Top-level config; owns `ECSConfig`, `ProtocolSettings`, `CertificateSettings` |
 | `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `SkipCache`, `Match`, `Proxy`, defense flags |
 | `ProtocolSettings` | `config` | Per-protocol port/endpoint: `UDP`, `TCP`, `TLS`, `QUIC`, `HTTPS`, `HTTP3`, `TLCP`, `DTLS`, `DTLCP`, `DNSCrypt` |
-| `DB` | `database` | Unified BadgerDB KV store; 5 key prefixes, 1 ID sequence |
+| `DB` | `database` | Unified BadgerDB KV store; 3 key prefixes (e:, e:ip:, e:lat:) |
 | `Store` | `cache` | Interface: Get/Set/ReverseLookup/UpdateLatency/LatencyLastProbe/FlushDB/Clear/Close |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL |
 | `Collector` | `stats` | In-memory stats: map+mutex, Record()/Stats()/Reset() |

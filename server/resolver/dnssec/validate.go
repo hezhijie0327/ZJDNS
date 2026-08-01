@@ -18,11 +18,11 @@ func IsResponseValid(response *dns.Msg, dnssecOK bool) bool {
 		log.Debugf("SECURITY: validated via AD flag + DNSSEC records")
 		return true
 	}
-	// Fallback: upstream may have validated but not set AD (e.g. CD=1 query).
-	if hasDNSSECRecords(response) {
-		log.Debugf("SECURITY: validated via DNSSEC records (no AD flag)")
-		return true
-	}
+	// Presence of DNSSEC record types is NOT proof of validation: an
+	// arbitrary forwarder (or on-path attacker) can supply RRSIG/NSEC/NSEC3
+	// looking records without them being authenticated. Only the
+	// cryptographic validator (CryptoValidator.IsResponseValid) can confirm
+	// validation, so a missing AD bit stays unvalidated.
 	log.Debugf("SECURITY: not DNSSEC-validated (AD=%t, records=%t)", response.AuthenticatedData, hasDNSSECRecords(response))
 	return false
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
@@ -100,6 +101,9 @@ func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string
 		return nil, err
 	}
 	response.Data = nil
-	response.ID = msg.ID
+	if response.ID != msg.ID {
+		pool.DefaultMessage.Put(response)
+		return nil, fmt.Errorf("response id mismatch: expected %d, got %d", msg.ID, response.ID)
+	}
 	return response, nil
 }

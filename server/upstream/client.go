@@ -113,11 +113,11 @@ func New() *Client {
 		proxyDialers: lrumap.New[string, *socks5.Dialer](config.DefaultTransportMax * 2),
 	}
 
-	c.proxyDialers.OnEvict = func(_ string, d *socks5.Dialer) {
+	c.proxyDialers.SetOnEvict(func(_ string, d *socks5.Dialer) {
 		if d != nil {
 			_ = d.Close()
 		}
-	}
+	})
 
 	c.plainClient = plain.New(udpClient, tcpClient, tcpPool, c.proxyDialer, timeout)
 	c.tlsClient = tlsclient.New(tlsDNSClient, dohClient, doh3Client, dotPool, quicPool, sessionCache, quicSessionCache, dtlsSessions, c.proxyDialer, timeout)
@@ -189,10 +189,17 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	if zdnsutil.IsSecureProtocol(protocol) {
 		result.Response, result.Error = c.executeSecureQuery(queryCtx, msg, server, protocol)
 	} else {
-		if protocol == config.ProtoTCP {
+		switch protocol {
+		case config.ProtoTCP:
 			result.Response, result.Error = c.plainClient.ExecuteTCP(queryCtx, msg, server)
-		} else {
+		case config.ProtoUDP:
 			result.Response, result.Error = c.plainClient.ExecuteUDP(queryCtx, msg, server)
+		default:
+			// Fail closed: an empty or typo'd protocol must not silently
+			// send plaintext UDP.
+			result.Error = fmt.Errorf("unsupported protocol: %q", server.Protocol)
+			result.Duration = time.Since(start)
+			return result
 		}
 
 		result.Protocol = server.Protocol
@@ -263,7 +270,10 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 		// Path MTU are silently dropped by the server.  Fall
 		// back to TLS when DTLS fails.
 		log.Debugf("UPSTREAM: DTLS query failed for %s, falling back to TLS: %v", server.Address, err)
-		return c.tlsClient.ExecuteTLS(ctx, msg, server)
+		// Fresh context: the DTLS attempt may have exhausted the deadline.
+		fallbackCtx, cancel := context.WithTimeout(ctx, c.timeout)
+		defer cancel()
+		return c.tlsClient.ExecuteTLS(fallbackCtx, msg, server)
 	case config.ProtoTLCP:
 		return c.tlcpClient.ExecuteTLCP(ctx, msg, server)
 	case config.ProtoHTTPTLCP:
@@ -275,7 +285,10 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 		}
 		// Same PMTU limitation as DTLS — fall back to TLCP.
 		log.Debugf("UPSTREAM: DTLCP query failed for %s, falling back to TLCP: %v", server.Address, err)
-		return c.tlcpClient.ExecuteTLCP(ctx, msg, server)
+		// Fresh context: the DTLCP attempt may have exhausted the deadline.
+		fallbackCtx, cancel := context.WithTimeout(ctx, c.timeout)
+		defer cancel()
+		return c.tlcpClient.ExecuteTLCP(fallbackCtx, msg, server)
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}
@@ -295,6 +308,11 @@ func (c *Client) Close() {
 		c.warmWg.Wait()
 		c.plainClient.Close()
 		c.tlsClient.Close()
+		c.tlcpClient.Close()
+		// Drain and close the dialers, but keep the map non-nil: proxyDialer()
+		// reads this field from in-flight query goroutines, so writing nil here
+		// would be an unsynchronized data race. The lrumap itself serializes
+		// concurrent Range/Get, and the bounded map is released with the Client.
 		if c.proxyDialers != nil {
 			c.proxyDialers.Range(func(key string, d *socks5.Dialer) bool {
 				if d != nil {
@@ -302,7 +320,6 @@ func (c *Client) Close() {
 				}
 				return true
 			})
-			c.proxyDialers = nil
 		}
 		c.dnscryptClient.Close()
 	})

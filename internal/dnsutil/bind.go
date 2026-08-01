@@ -12,6 +12,9 @@ import (
 // as a host:port string, skipping any that are already occupied (EADDRINUSE)
 // or otherwise unavailable.
 func ResolveBindAddrs(network, port string) ([]string, error) {
+	if port == "" || port == "0" {
+		return nil, fmt.Errorf("bind port must be a fixed port, got %q", port)
+	}
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil, fmt.Errorf("enumerate interfaces: %w", err)
@@ -19,17 +22,33 @@ func ResolveBindAddrs(network, port string) ([]string, error) {
 
 	var addrs []string
 	var skipped []string
+	seen := make(map[string]struct{})
 	for _, iface := range ifaces {
 		ips, err := iface.Addrs()
 		if err != nil {
+			log.Warnf("SERVER: cannot enumerate addresses of interface %s: %v", iface.Name, err)
 			continue
 		}
 		for _, ip := range ips {
-			ipNet, ok := ip.(*net.IPNet)
-			if !ok || ipNet.IP.IsLinkLocalUnicast() {
+			var ipAddr net.IP
+			switch a := ip.(type) {
+			case *net.IPNet:
+				ipAddr = a.IP
+			case *net.IPAddr:
+				ipAddr = a.IP
+			default:
 				continue
 			}
-			addr := net.JoinHostPort(ipNet.IP.String(), port)
+			if ipAddr == nil || ipAddr.IsLinkLocalUnicast() {
+				continue
+			}
+			// The same IP can appear on multiple interfaces (lo, veth,
+			// bridge) — binding it twice would fail on the second attempt.
+			if _, dup := seen[ipAddr.String()]; dup {
+				continue
+			}
+			seen[ipAddr.String()] = struct{}{}
+			addr := net.JoinHostPort(ipAddr.String(), port)
 			if err := TryBind(network, addr); err != nil {
 				skipped = append(skipped, addr)
 				continue

@@ -68,8 +68,7 @@ func (c *CryptoValidator) LoadTrustAnchors() {
 func (c *CryptoValidator) ContainsRootKey(dnskeys []*dns.DNSKEY) bool {
 	for _, rk := range c.rootKeys {
 		for _, k := range dnskeys {
-			if k.Flags&dns.FlagSEP != 0 &&
-				k.Algorithm == rk.Algorithm &&
+			if k.Algorithm == rk.Algorithm &&
 				k.KeyTag() == rk.KeyTag() &&
 				k.PublicKey == rk.PublicKey {
 				return true
@@ -92,6 +91,13 @@ func (c *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey *
 	// Validate the RRset structure before verification (RFC 2181).
 	if !dnsutil.IsRRset(rrset) {
 		return fmt.Errorf("%w: not a valid RRset (type/name/class mismatch)", ErrBogusSignature)
+	}
+
+	// RFC 4034 §3.1.1: the RRSIG signer name must be the DNSKEY's owner name.
+	// Explicit check so the invariant does not silently depend on the library.
+	if !dns.EqualName(dnsutil.Fqdn(rrsig.SignerName), dnsutil.Fqdn(dnskey.Header().Name)) {
+		return fmt.Errorf("%w: RRSIG signer %s does not match DNSKEY owner %s",
+			ErrBogusSignature, rrsig.SignerName, dnskey.Header().Name)
 	}
 
 	// Check the RRSIG validity period manually (RFC 4034 §3.1.5).
@@ -125,10 +131,10 @@ func (c *CryptoValidator) VerifyDelegationDS(dsRecords []*dns.DS, childDNSKEYs [
 
 	for _, ds := range dsRecords {
 		for _, dnskey := range childDNSKEYs {
-			// Only KSK (SEP bit set) should match the DS
-			if dnskey.Flags&dns.FlagSEP == 0 {
-				continue
-			}
+			// The SEP bit is a deployment convention (RFC 4034 §2.1.2), not a
+			// validation requirement: RFC 4034/4035 do not require the key
+			// referenced by a DS to have SEP set. Try every key; a digest
+			// match is exact regardless of flags.
 			computedDS := dnskey.ToDS(ds.DigestType)
 			if computedDS == nil {
 				continue
@@ -159,13 +165,11 @@ func (c *CryptoValidator) SelfVerifyDNSKEY(dnskeys []*dns.DNSKEY, dnskeyRRSIGs [
 		rrset[i] = k
 	}
 
-	// The KSK self-signs the DNSKEY RRset. Try verifying with each KSK.
+	// The zone key self-signs the DNSKEY RRset. Try verifying with each key;
+	// SEP is a convention, not a requirement (RFC 4034 §2.1.2).
 	var verified bool
 	for _, rrsig := range dnskeyRRSIGs {
 		for _, ksk := range dnskeys {
-			if ksk.Flags&dns.FlagSEP == 0 {
-				continue
-			}
 			if ksk.KeyTag() != rrsig.KeyTag {
 				continue
 			}
@@ -228,18 +232,36 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 	groups := groupRRset(answer)
 	allRRSIGs := CollectRRSIGs(answer, extra)
 
-	var anyValidated, anyRRSIGSeen bool
+	// RFC 6840 §4.1: the response is authenticated only if EVERY answer
+	// RRset validates; a single valid RRset does not authenticate the rest.
+	// First count signed RRsets: an unsigned RRset in an otherwise signed
+	// response fails the whole response. RRSIG records are the signatures
+	// themselves — they are never validated as an RRset.
+	signedCount := 0
+	for _, group := range groups {
+		if len(group) > 0 && dns.RRToType(group[0]) != dns.TypeRRSIG &&
+			len(FindRRSIGs(allRRSIGs, group[0].Header().Name, dns.RRToType(group[0]))) > 0 {
+			signedCount++
+		}
+	}
+	if signedCount == 0 {
+		return false, ErrMissingRRSIG
+	}
+
+	var anyValidated bool
 	for _, group := range groups {
 		if len(group) == 0 {
 			continue
 		}
 		header := group[0].Header()
+		if dns.RRToType(group[0]) == dns.TypeRRSIG {
+			continue // signature records are not validated as an RRset
+		}
 		sigs := FindRRSIGs(allRRSIGs, header.Name, dns.RRToType(group[0]))
 		if len(sigs) == 0 {
-			log.Debugf("SECURITY: no RRSIG for %s/%s", header.Name, dns.TypeToString[dns.RRToType(group[0])])
-			continue
+			log.Debugf("SECURITY: unsigned RRset %s/%s in signed response", header.Name, dns.TypeToString[dns.RRToType(group[0])])
+			return false, fmt.Errorf("%w: unsigned RRset %s/%s in signed response", ErrBogusSignature, header.Name, dns.TypeToString[dns.RRToType(group[0])])
 		}
-		anyRRSIGSeen = true
 
 		var groupValidated bool
 		for _, sig := range sigs {
@@ -294,13 +316,10 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 		}
 	}
 
-	if !anyValidated && len(answer) > 0 {
-		if !anyRRSIGSeen {
-			return false, ErrMissingRRSIG
-		}
+	if !anyValidated {
 		return false, fmt.Errorf("%w: no answer RRset could be cryptographically verified", ErrBogusSignature)
 	}
-	return anyValidated, nil
+	return true, nil
 }
 
 func groupRRset(rrs []dns.RR) map[rrsetKey][]dns.RR {

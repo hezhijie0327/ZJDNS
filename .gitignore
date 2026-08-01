@@ -17,11 +17,13 @@ Thumbs.db
 *.test
 *.out
 *.prof
-/coverage.txt
+coverage.*
 
 # Build artifacts
 /tmp/
-/dist/
+**/dist/
+/bin/
+/build/
 *.snapshot
 *.snapshot.tmp
 
@@ -29,10 +31,12 @@ Thumbs.db
 *.log
 
 # Environment
-.env
+.env*
+!.env.example
 
 # Database
 *.db
+*.sqlite
 
 # Root Files
 named.root

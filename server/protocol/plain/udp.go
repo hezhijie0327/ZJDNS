@@ -31,9 +31,18 @@ func (s *Server) startUDP(g Group, ctx context.Context, handler dns.Handler) err
 			// typical 1500-byte path MTU).
 			UDPSize: pool.UDPBufferSize,
 		}
+		s.mu.Lock()
 		s.udpServers = append(s.udpServers, srv)
+		s.mu.Unlock()
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("UDP server")
+			// ListenAndServe does not observe ctx cancellation: a startup
+			// failure that cancels ctx would otherwise leave this listener
+			// bound and serving. Close it when ctx fires.
+			go func() {
+				<-ctx.Done()
+				s.Shutdown(context.Background())
+			}()
 			err := srv.ListenAndServe()
 			if err != nil {
 				select {

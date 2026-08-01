@@ -9,7 +9,9 @@ package siphash
 // Sum64 computes the SipHash-2-4 64-bit MAC of msg under the given 128-bit key.
 func Sum64(key *[16]byte, msg []byte) uint64 {
 	if key == nil {
-		return 0
+		// Never fall back to a zero-key MAC — that would let any caller
+		// trivially forge values and is a silent security hole.
+		panic("siphash: nil key")
 	}
 	k0 := uint64(key[0]) | uint64(key[1])<<8 | uint64(key[2])<<16 | uint64(key[3])<<24 |
 		uint64(key[4])<<32 | uint64(key[5])<<40 | uint64(key[6])<<48 | uint64(key[7])<<56
@@ -32,38 +34,8 @@ func Hash(k0, k1 uint64, p []byte) uint64 {
 		m := uint64(p[0]) | uint64(p[1])<<8 | uint64(p[2])<<16 | uint64(p[3])<<24 |
 			uint64(p[4])<<32 | uint64(p[5])<<40 | uint64(p[6])<<48 | uint64(p[7])<<56
 		v3 ^= m
-
-		// SipRound ×2.
-		v0 += v1
-		v1 = v1<<13 | v1>>51
-		v1 ^= v0
-		v0 = v0<<32 | v0>>32
-		v2 += v3
-		v3 = v3<<16 | v3>>48
-		v3 ^= v2
-		v0 += v3
-		v3 = v3<<21 | v3>>43
-		v3 ^= v0
-		v2 += v1
-		v1 = v1<<17 | v1>>47
-		v1 ^= v2
-		v2 = v2<<32 | v2>>32
-
-		v0 += v1
-		v1 = v1<<13 | v1>>51
-		v1 ^= v0
-		v0 = v0<<32 | v0>>32
-		v2 += v3
-		v3 = v3<<16 | v3>>48
-		v3 ^= v2
-		v0 += v3
-		v3 = v3<<21 | v3>>43
-		v3 ^= v0
-		v2 += v1
-		v1 = v1<<17 | v1>>47
-		v1 ^= v2
-		v2 = v2<<32 | v2>>32
-
+		v0, v1, v2, v3 = sipRound(v0, v1, v2, v3)
+		v0, v1, v2, v3 = sipRound(v0, v1, v2, v3)
 		v0 ^= m
 		p = p[8:]
 	}
@@ -93,102 +65,36 @@ func Hash(k0, k1 uint64, p []byte) uint64 {
 	}
 
 	v3 ^= t
-
-	// SipRound ×2.
-	v0 += v1
-	v1 = v1<<13 | v1>>51
-	v1 ^= v0
-	v0 = v0<<32 | v0>>32
-	v2 += v3
-	v3 = v3<<16 | v3>>48
-	v3 ^= v2
-	v0 += v3
-	v3 = v3<<21 | v3>>43
-	v3 ^= v0
-	v2 += v1
-	v1 = v1<<17 | v1>>47
-	v1 ^= v2
-	v2 = v2<<32 | v2>>32
-
-	v0 += v1
-	v1 = v1<<13 | v1>>51
-	v1 ^= v0
-	v0 = v0<<32 | v0>>32
-	v2 += v3
-	v3 = v3<<16 | v3>>48
-	v3 ^= v2
-	v0 += v3
-	v3 = v3<<21 | v3>>43
-	v3 ^= v0
-	v2 += v1
-	v1 = v1<<17 | v1>>47
-	v1 ^= v2
-	v2 = v2<<32 | v2>>32
-
+	v0, v1, v2, v3 = sipRound(v0, v1, v2, v3)
+	v0, v1, v2, v3 = sipRound(v0, v1, v2, v3)
 	v0 ^= t
 
 	// Finalization: 4 SipRounds.
 	v2 ^= 0xff
-
-	v0 += v1
-	v1 = v1<<13 | v1>>51
-	v1 ^= v0
-	v0 = v0<<32 | v0>>32
-	v2 += v3
-	v3 = v3<<16 | v3>>48
-	v3 ^= v2
-	v0 += v3
-	v3 = v3<<21 | v3>>43
-	v3 ^= v0
-	v2 += v1
-	v1 = v1<<17 | v1>>47
-	v1 ^= v2
-	v2 = v2<<32 | v2>>32
-
-	v0 += v1
-	v1 = v1<<13 | v1>>51
-	v1 ^= v0
-	v0 = v0<<32 | v0>>32
-	v2 += v3
-	v3 = v3<<16 | v3>>48
-	v3 ^= v2
-	v0 += v3
-	v3 = v3<<21 | v3>>43
-	v3 ^= v0
-	v2 += v1
-	v1 = v1<<17 | v1>>47
-	v1 ^= v2
-	v2 = v2<<32 | v2>>32
-
-	v0 += v1
-	v1 = v1<<13 | v1>>51
-	v1 ^= v0
-	v0 = v0<<32 | v0>>32
-	v2 += v3
-	v3 = v3<<16 | v3>>48
-	v3 ^= v2
-	v0 += v3
-	v3 = v3<<21 | v3>>43
-	v3 ^= v0
-	v2 += v1
-	v1 = v1<<17 | v1>>47
-	v1 ^= v2
-	v2 = v2<<32 | v2>>32
-
-	v0 += v1
-	v1 = v1<<13 | v1>>51
-	v1 ^= v0
-	v0 = v0<<32 | v0>>32
-	v2 += v3
-	v3 = v3<<16 | v3>>48
-	v3 ^= v2
-	v0 += v3
-	v3 = v3<<21 | v3>>43
-	v3 ^= v0
-	v2 += v1
-	v1 = v1<<17 | v1>>47
-	v1 ^= v2
-	v2 = v2<<32 | v2>>32
+	v0, v1, v2, v3 = sipRound(v0, v1, v2, v3)
+	v0, v1, v2, v3 = sipRound(v0, v1, v2, v3)
+	v0, v1, v2, v3 = sipRound(v0, v1, v2, v3)
+	v0, v1, v2, v3 = sipRound(v0, v1, v2, v3)
 
 	return v0 ^ v1 ^ v2 ^ v3
+}
+
+// sipRound is one SipHash round.  Inlined by the compiler — the multi-value
+// return maps to registers, so there is no overhead versus manual unrolling.
+func sipRound(v0, v1, v2, v3 uint64) (r0, r1, r2, r3 uint64) {
+	v0 += v1
+	v1 = v1<<13 | v1>>51
+	v1 ^= v0
+	v0 = v0<<32 | v0>>32
+	v2 += v3
+	v3 = v3<<16 | v3>>48
+	v3 ^= v2
+	v0 += v3
+	v3 = v3<<21 | v3>>43
+	v3 ^= v0
+	v2 += v1
+	v1 = v1<<17 | v1>>47
+	v1 ^= v2
+	v2 = v2<<32 | v2>>32
+	return v0, v1, v2, v3
 }

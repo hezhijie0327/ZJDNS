@@ -99,7 +99,10 @@ func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *d
 		if q.SharedKey != [dnscryptcrypto.SharedKeySize]byte{} {
 			sharedKey = q.SharedKey
 		} else {
-			kemSS := dnscryptcrypto.PQDecapsulate(q.PQCiphertext, curr.PQ.PqPrivateKey)
+			kemSS, kemErr := dnscryptcrypto.PQDecapsulate(q.PQCiphertext, curr.PQ.PqPrivateKey)
+			if kemErr != nil {
+				return nil, fmt.Errorf("decapsulating PQ ciphertext: %w", kemErr)
+			}
 			sharedKey, err = dnscryptcrypto.PQDeriveSharedKey(kemSS, q.ClientMagic, curr.PQ.PqCertContext, q.PQCiphertext)
 			if err != nil {
 				return nil, fmt.Errorf("deriving PQ shared key: %w", err)
@@ -123,7 +126,14 @@ func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *d
 		if _, randErr := rand.Read(nonce[:]); randErr != nil {
 			return nil, fmt.Errorf("generating ticket nonce: %w", randErr)
 		}
-		sealed, err := dnscryptcrypto.PQSealTicket(s.ticketKey, s.ticketKeyID, nonce, plaintext)
+		// Snapshot ticket keys under read lock — rotateKeys() writes them
+		// under write lock; a torn key/ID pair would seal a ticket the
+		// server itself cannot open.
+		s.mu.RLock()
+		ticketKey := s.ticketKey
+		ticketKeyID := s.ticketKeyID
+		s.mu.RUnlock()
+		sealed, err := dnscryptcrypto.PQSealTicket(ticketKey, ticketKeyID, nonce, plaintext)
 		if err != nil {
 			return nil, fmt.Errorf("sealing PQ ticket: %w", err)
 		}
@@ -229,15 +239,29 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *dnscryptcrypto
 		return nil, nil, fmt.Errorf("parsing PQ resumed query: %w", err)
 	}
 
-	ticketPlain, err := dnscryptcrypto.PQOpenTicket(&s.ticketKey, &s.ticketKeyID, &s.prevTicketKey, &s.prevTicketKeyID, ticket)
+	// Snapshot ticket keys under read lock — rotateKeys() writes them under
+	// write lock; a torn key/ID pair would spuriously fail PQ ticket opens.
+	s.mu.RLock()
+	ticketKey := s.ticketKey
+	ticketKeyID := s.ticketKeyID
+	prevTicketKey := s.prevTicketKey
+	prevTicketKeyID := s.prevTicketKeyID
+	s.mu.RUnlock()
+
+	ticketPlain, err := dnscryptcrypto.PQOpenTicket(&ticketKey, &ticketKeyID, &prevTicketKey, &prevTicketKeyID, ticket)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening PQ ticket: %w", err)
 	}
-	clientMagic, resumeSecret, ticketExpiry, err := dnscryptcrypto.DecodeTicketPlaintext(ticketPlain)
+	ticketInfo, err := dnscryptcrypto.DecodeTicketPlaintext(ticketPlain)
 	if err != nil {
 		return nil, nil, fmt.Errorf("decoding PQ ticket: %w", err)
 	}
-	if ticketExpiry < dnscryptcrypto.NowUnix32() {
+	// Enforce the ticket's profile/version binding here instead of
+	// re-indexing the raw plaintext.
+	if !bytes.Equal(ticketInfo.ESVersion[:], dnscryptcrypto.PQESVersion[:]) {
+		return nil, nil, dnscryptcrypto.ErrPQInvalidTicket
+	}
+	if ticketInfo.Expiry < dnscryptcrypto.NowUnix32() {
 		return nil, nil, dnscryptcrypto.ErrPQTicketExpired
 	}
 
@@ -250,11 +274,10 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *dnscryptcrypto
 
 	var matchedPair *dnscryptcrypto.CertPair
 	for _, k := range keysSnapshot {
-		if clientMagic == k.pair.PQ.ClientMagic &&
-			bytes.Equal(ticketPlain[dnscryptcrypto.TicketPlaintextESOff:dnscryptcrypto.TicketPlaintextESOff+dnscryptcrypto.TicketPlaintextESLen], dnscryptcrypto.PQESVersion[:]) &&
+		if ticketInfo.ClientMagic == k.pair.PQ.ClientMagic &&
 			binary.BigEndian.Uint32(ticketPlain[dnscryptcrypto.TicketPlaintextSerialOff:dnscryptcrypto.TicketPlaintextSerialOff+dnscryptcrypto.TicketPlaintextSerialLen]) == k.pair.Classical.Serial &&
 			binary.BigEndian.Uint32(ticketPlain[dnscryptcrypto.TicketPlaintextTSEndOff:dnscryptcrypto.TicketPlaintextTSEndOff+dnscryptcrypto.TicketPlaintextTSEndLen]) == k.pair.Classical.NotAfter &&
-			bytes.Equal(ticketPlain[dnscryptcrypto.TicketPlaintextPEHashOff:dnscryptcrypto.TicketPlaintextPEHashOff+dnscryptcrypto.TicketPlaintextPEHashLen], peHash[:]) {
+			bytes.Equal(ticketInfo.ProfileExtHash[:], peHash[:]) {
 			matchedPair = k.pair
 			break
 		}
@@ -263,7 +286,7 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *dnscryptcrypto
 		return nil, nil, dnscryptcrypto.ErrPQInvalidTicket
 	}
 
-	sharedKey, err := dnscryptcrypto.PQResumedSharedKey(resumeSecret, matchedPair.PQ.ClientMagic, nonceHalf, ticket)
+	sharedKey, err := dnscryptcrypto.PQResumedSharedKey(ticketInfo.ResumeSecret, matchedPair.PQ.ClientMagic, nonceHalf, ticket)
 	if err != nil {
 		return nil, nil, fmt.Errorf("deriving PQ resumed shared key: %w", err)
 	}

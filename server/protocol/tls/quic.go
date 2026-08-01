@@ -11,6 +11,7 @@ import (
 	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/doq"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
 	"zjdns/internal/pool"
@@ -103,8 +104,17 @@ func (s *Server) handleDOQConnections(doqListener *quic.EarlyListener) {
 			conn.RemoteAddr(), tls.CipherSuiteName(conn.ConnectionState().TLS.CipherSuite),
 			conn.ConnectionState().TLS.DidResume, conn.ConnectionState().Used0RTT)
 
+		// Admission cap: quic.Config only limits streams, not connections.
+		select {
+		case s.quicConnSem <- struct{}{}:
+		default:
+			log.Debugf("TLS: DoQ connection limit reached, rejecting %s", conn.RemoteAddr())
+			_ = conn.CloseWithError(doq.QUICCodeExcessiveLoad, "connection limit reached")
+			continue
+		}
 		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("DoQ connection handler")
+			defer func() { <-s.quicConnSem }()
 			s.handleDOQConnection(conn)
 			return nil
 		})
@@ -121,7 +131,7 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultBackgroundTimeout)
 		defer cancel()
-		_ = conn.CloseWithError(pool.QUICCodeNoError, "")
+		_ = conn.CloseWithError(doq.QUICCodeNoError, "")
 
 		done := make(chan struct{})
 		stop := context.AfterFunc(conn.Context(), func() {
@@ -197,10 +207,10 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	msgLen := binary.BigEndian.Uint16(buf[:zdnsutil.DNSFramePrefixLen])
 	switch {
 	case msgLen == 0:
-		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "zero-length DNS message")
+		_ = conn.CloseWithError(doq.QUICCodeProtocolError, "zero-length DNS message")
 		return
 	case msgLen > dns.MaxMsgSize:
-		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "message too large")
+		_ = conn.CloseWithError(doq.QUICCodeProtocolError, "message too large")
 		return
 	}
 
@@ -220,14 +230,14 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	req := pool.DefaultMessage.Get()
 	req.Data = body
 	if err := req.Unpack(); err != nil {
-		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "invalid DNS message")
+		_ = conn.CloseWithError(doq.QUICCodeProtocolError, "invalid DNS message")
 		pool.DefaultMessage.Put(req)
 		return
 	}
 
 	// RFC 9250 §4.3.3: non-zero Message ID is a protocol error.
 	if req.ID != 0 {
-		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "non-zero DNS message ID")
+		_ = conn.CloseWithError(doq.QUICCodeProtocolError, "non-zero DNS message ID")
 		pool.DefaultMessage.Put(req)
 		return
 	}
@@ -235,7 +245,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	// RFC 9250 §4.5: 0-RTT MUST NOT carry non-replayable transactions.
 	// RFC 9250 §4.5: QUERY and NOTIFY are replayable in 0-RTT.
 	if conn.ConnectionState().Used0RTT && req.Opcode != dns.OpcodeQuery {
-		stream.CancelWrite(quic.StreamErrorCode(pool.QUICCodeProtocolError))
+		stream.CancelWrite(quic.StreamErrorCode(doq.QUICCodeProtocolError))
 		pool.DefaultMessage.Put(req)
 		return
 	}
@@ -248,15 +258,16 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	default:
 	}
 	response := s.handler.ServeDNS(req, clientIP, true, config.ProtoQUIC)
-	// req is transferred to ServeDNS — response holds the result.
-	// Both req and response are returned to the pool below and in
-	// the caller; req must not be double-Put.
+	// The caller owns req and returns it to the pool exactly once.
 	pool.DefaultMessage.Put(req)
 
 	if err := s.respondQUIC(stream, response); err != nil {
 		log.Debugf("TLS: DoQ response failed: %v", err)
 	}
-	if response != nil {
+	// Identity guard: a handler may return the request message itself as the
+	// response — pooling the same pointer twice would let two goroutines
+	// race on it.
+	if response != nil && response != req {
 		defer pool.DefaultMessage.Put(response)
 	}
 }
@@ -264,7 +275,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 func (s *Server) respondQUIC(stream *quic.Stream, response *dns.Msg) error {
 	if response == nil {
 		// RFC 9250 §4.3.2: signal transaction error via RESET_STREAM.
-		stream.CancelWrite(quic.StreamErrorCode(pool.QUICCodeInternalError))
+		stream.CancelWrite(quic.StreamErrorCode(doq.QUICCodeInternalError))
 		return errors.New("response is nil")
 	}
 

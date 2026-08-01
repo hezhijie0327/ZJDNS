@@ -38,13 +38,14 @@ func (s *Server) startDOTServer() error {
 		return fmt.Errorf("resolve bind addrs: %w", err)
 	}
 
-	log.Infof("TLCP: DoT server started on %v (TLCP)", addrs)
+	bound := 0
 	for _, addr := range addrs {
 		rawListener, err := net.Listen("tcp", addr)
 		if err != nil {
 			log.Warnf("TLCP: skipping tcp address %s: %v", addr, err)
 			continue
 		}
+		bound++
 
 		tlcpCfg := s.tlcpConfig.Clone()
 		tlcpCfg.NextProtos = config.NextProtoDOT
@@ -58,6 +59,10 @@ func (s *Server) startDOTServer() error {
 			return nil
 		})
 	}
+	if bound == 0 {
+		return errors.New("tlcp: no DoT addresses could be bound")
+	}
+	log.Infof("TLCP: DoT server started on %v (TLCP)", addrs)
 	return nil
 }
 

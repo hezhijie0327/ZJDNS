@@ -28,7 +28,6 @@ type Question = resolver.Question
 // Resolver is the interface for DNS query resolution.
 type Resolver interface {
 	Query(ctx context.Context, question Question, ecs *edns.ECSOption) *resolver.QueryResult
-	DNSSECEDECode() uint16
 	UpstreamServers() []*config.UpstreamServer
 }
 
@@ -155,6 +154,13 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 		msg.Rcode = dns.RcodeServerFailure
 		h.stats.Record(&stats.Request{Result: "error", Protocol: protocol, Rcode: dns.RcodeServerFailure, ResponseTime: ElapsedMS(qctx.StartTime)})
 		return msg
+	}
+	if err != nil {
+		// A chain error with a partially built response must not vanish:
+		// the partial response is served but the failure is observable.
+		log.Errorf("QUERY: chain error %v (partial response rcode=%s)", err, dns.RcodeToString[qctx.Res.Rcode])
+		h.stats.Record(&stats.Request{Result: "error", Protocol: protocol, Rcode: int(qctx.Res.Rcode), //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
+			ResponseTime: ElapsedMS(qctx.StartTime)})
 	}
 	// BADCOOKIE responses are short-circuited by the EDNS middleware before
 	// any stats-recording middleware; record them here.

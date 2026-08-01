@@ -65,7 +65,10 @@ func Open(path string, opt *Options) (*DB, error) {
 
 	var bopts badger.Options
 	if path == "" {
-		bopts = badger.DefaultOptions("").WithInMemory(true).WithLogger(nil)
+		// Apply the same resolved memory knobs as disk mode — the old branch
+		// used plain defaults, silently ignoring every configured budget
+		// (MemTableSizeMB/BlockCacheSizeMB/IndexCacheSizeMB).
+		bopts = defaultDiskOptions("", opt).WithInMemory(true)
 	} else {
 		bopts = defaultDiskOptions(path, opt)
 	}

@@ -84,6 +84,13 @@ func (s *Server) startECSRefresh() {
 	}
 	s.backgroundGroup.Go(func() error {
 		defer zdnsutil.HandlePanic("EDNS default ECS refresh")
+		// Skip the initial refresh if shutdown was already triggered — the
+		// ECS lookup is a network round trip that must not run after close.
+		select {
+		case <-s.backgroundCtx.Done():
+			return nil
+		default:
+		}
 		s.refreshECSOnce()
 		ticker := time.NewTicker(config.DefaultECSRefreshInterval)
 		defer ticker.Stop()
@@ -113,6 +120,14 @@ func (s *Server) startTCPWriteMuSweep() {
 		s.tcpWriteMu.Range(func(key, value any) bool {
 			entry, ok := value.(*tcpWriteEntry)
 			if !ok || entry.lastAccess.Load() < cutoff {
+				// Only delete entries with no in-flight references: a
+				// freshly-created entry (lastAccess 0) whose handler
+				// goroutine is still running must not be recreated with a
+				// separate writeMu — two writers would then race on the
+				// same TCP stream, interleaving length-prefixed frames.
+				if entry != nil && entry.refs.Load() != 0 {
+					return true
+				}
 				keyStr, ok := key.(string)
 				if !ok {
 					return true

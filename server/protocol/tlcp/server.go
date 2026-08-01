@@ -41,7 +41,7 @@ type Server struct {
 
 // New creates a TLCP Server, loading or generating SM2 certificate pairs.
 // dotPort, dohPort, dohEndpoint, and dtlcpPort come from the protocol config section.
-func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, dtlcpPort string) (*Server, error) {
+func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, dtlcpPort, domain string) (*Server, error) {
 	if certificateCfg == nil {
 		return nil, errors.New("tlcp: nil certificate config")
 	}
@@ -50,7 +50,7 @@ func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, 
 	var err error
 
 	if certificateCfg.SelfSigned {
-		signCert, encCert, dtlcpSignCert, dtlcpEncCert, err = generateSelfSignedSMCerts()
+		signCert, encCert, dtlcpSignCert, dtlcpEncCert, err = generateSelfSignedSMCerts(domain)
 		if err != nil {
 			return nil, fmt.Errorf("generate self-signed SM2 certificates: %w", err)
 		}
@@ -80,15 +80,17 @@ func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, 
 		CurvePreferences: []tlcp.CurveID{tlcp.CurveSM2},
 		SessionCache:     tlcp.NewLRUSessionCache(config.DefaultTLCPSessionCacheSize),
 		VerifyConnection: func(cs tlcp.ConnectionState) error {
+			// VerifyConnection's ConnectionState does not expose the peer
+			// address — omit RemoteAddr rather than log a misleading
+			// constant ("client" for every connection).
 			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
-				Role:       "TLCP",
-				Direction:  "handshake from",
-				RemoteAddr: "client",
-				Version:    cs.Version,
-				Cipher:     tlcp.CipherSuiteName(cs.CipherSuite),
-				Group:      "SM2",
-				Resumed:    cs.DidResume,
-				ALPN:       cs.NegotiatedProtocol,
+				Role:      "TLCP",
+				Direction: "handshake from",
+				Version:   cs.Version,
+				Cipher:    tlcp.CipherSuiteName(cs.CipherSuite),
+				Group:     "SM2",
+				Resumed:   cs.DidResume,
+				ALPN:      cs.NegotiatedProtocol,
 			})
 			return nil
 		},
@@ -100,14 +102,13 @@ func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, 
 		SessionCache:     dtlcp.NewLRUSessionCache(config.DefaultDTLCPSessionCacheSize),
 		VerifyConnection: func(cs dtlcp.ConnectionState) error {
 			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
-				Role:       "TLCP",
-				Direction:  "DTLCP handshake from",
-				RemoteAddr: "client",
-				Version:    cs.Version,
-				Cipher:     dtlcp.CipherSuiteName(cs.CipherSuite),
-				Group:      "SM2",
-				Resumed:    cs.DidResume,
-				ALPN:       cs.NegotiatedProtocol,
+				Role:      "TLCP",
+				Direction: "DTLCP handshake from",
+				Version:   cs.Version,
+				Cipher:    dtlcp.CipherSuiteName(cs.CipherSuite),
+				Group:     "SM2",
+				Resumed:   cs.DidResume,
+				ALPN:      cs.NegotiatedProtocol,
 			})
 			return nil
 		},

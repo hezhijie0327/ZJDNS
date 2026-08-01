@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 	"zjdns/config"
 	"zjdns/edns"
@@ -43,19 +46,30 @@ type PendingKey struct {
 // pendingCall tracks one in-flight upstream query and broadcasts its result to
 // all waiting callers.
 type pendingCall struct {
-	done   chan struct{}
-	result *resolver.QueryResult
-	once   sync.Once // guards closing of done channel
+	done    chan struct{}
+	result  *resolver.QueryResult
+	once    sync.Once // guards closing of done channel
+	evicted atomic.Bool
 }
 
 const pendingRequestCapacity = 10000 // safety bound against unbounded growth
+// evictedResult is published to followers when the leader's entry is evicted
+// before Done — without it, eviction would close the done channel with no
+// result and followers would block on a nil pointer or wait for the timeout.
+func evictedResult() *resolver.QueryResult {
+	return &resolver.QueryResult{Err: errors.New("pending query evicted before completion")}
+}
 
 // NewPendingRequests creates a PendingRequests ready for use.
 func NewPendingRequests() *PendingRequests {
 	p := &PendingRequests{
 		sets: lrumap.New[PendingKey, *pendingCall](pendingRequestCapacity),
 	}
-	p.sets.OnEvict = func(_ PendingKey, call *pendingCall) { call.once.Do(func() { close(call.done) }) }
+	p.sets.SetOnEvict(func(_ PendingKey, call *pendingCall) {
+		call.evicted.Store(true)
+		call.result = evictedResult()
+		call.once.Do(func() { close(call.done) })
+	})
 	return p
 }
 
@@ -71,7 +85,7 @@ func NewRefreshGroup() *pending.Group[PendingKey] {
 // follower=true.  If not, the caller becomes the leader: it must call Done
 // with the result after the upstream query completes, and Join returns
 // follower=false.
-func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool) (*resolver.QueryResult, bool) {
+func (p *PendingRequests) Join(ctx context.Context, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool) (*resolver.QueryResult, bool) {
 	key := BuildPendingKey(qname, qtype, qclass, ecsOpt, dnssecOK)
 
 	call := &pendingCall{done: make(chan struct{})}
@@ -81,19 +95,21 @@ func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.
 	}
 
 	// Follower: wait for leader to finish.  Safety timeout prevents
-	// indefinite blocking if the leader panics and Done is never called.
+	// indefinite blocking if the leader panics and Done is never called;
+	// the caller's ctx lets a disconnected follower abandon the wait
+	// instead of occupying a slot until the leader completes.
 	log.Debugf("CACHE: pending-request dedup — waiting for in-flight query of %s (type=%s)", qname, dns.TypeToString[qtype])
 	// NOTE(L20): follower timeout uses config.DefaultPendingFollowerTimeout.
 	// Ok for most deployments; high-latency upstreams may need a longer timeout.
 	timer := time.NewTimer(config.DefaultPendingFollowerTimeout)
+	defer timer.Stop()
 	select {
 	case <-actual.done:
-		if !timer.Stop() {
-			<-timer.C
-		}
 	case <-timer.C:
 		log.Debugf("CACHE: pending-request follower timeout for %s (type=%s)", qname, dns.TypeToString[qtype])
 		return &resolver.QueryResult{Err: fmt.Errorf("pending request timeout for %s %s", qname, dns.TypeToString[qtype])}, true
+	case <-ctx.Done():
+		return &resolver.QueryResult{Err: ctx.Err()}, true
 	}
 	return actual.result, true
 }
@@ -105,6 +121,12 @@ func (p *PendingRequests) Done(qname string, qtype, qclass uint16, ecsOpt *edns.
 
 	call, ok := p.sets.Get(key)
 	if !ok {
+		return
+	}
+	// An evicted call must not be overwritten: its followers already got the
+	// eviction error; a newer call under the same key would otherwise be
+	// completed with stale data from this leader.
+	if call.evicted.Load() {
 		return
 	}
 	p.sets.Delete(key)
@@ -120,8 +142,8 @@ func (p *PendingRequests) Done(qname string, qtype, qclass uint16, ecsOpt *edns.
 // follower, it returns the shared result from an in-flight query.  If the
 // caller is the leader, it executes fn, stores the result via Done, and
 // returns the result.
-func (p *PendingRequests) DoJoin(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool, fn func() *resolver.QueryResult) *resolver.QueryResult {
-	if qr, follower := p.Join(qname, qtype, qclass, ecsOpt, dnssecOK); follower {
+func (p *PendingRequests) DoJoin(ctx context.Context, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool, fn func() *resolver.QueryResult) *resolver.QueryResult {
+	if qr, follower := p.Join(ctx, qname, qtype, qclass, ecsOpt, dnssecOK); follower {
 		return qr
 	}
 	result := fn()

@@ -33,11 +33,13 @@ func (m *CacheStore) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		err := next.ServeDNS(ctx, qctx)
 
 		// Already handled by cache lookup or zone match — nothing to do.
-		if qctx.CacheServed || qctx.ZoneMatched || qctx.Res != nil {
+		// Only a FINAL (Responded) response skips the cache write; a partial
+		// response still needs building and caching.
+		if qctx.CacheServed || qctx.ZoneResult != nil || qctx.Responded {
 			return err
 		}
 
-		if !qctx.Resolved {
+		if qctx.ResolutionResult == nil {
 			return err
 		}
 
@@ -45,13 +47,16 @@ func (m *CacheStore) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		if qr.Err != nil {
 			if errors.Is(qr.Err, resolver.ErrCIDRFilterRefused) {
 				qctx.Res = m.buildCIDRRefused(qctx)
+				qctx.Responded = true
 			} else {
 				qctx.Res = m.buildError(qctx)
+				qctx.Responded = true
 			}
 			return err
 		}
 
 		qctx.Res = m.buildSuccess(qctx)
+		qctx.Responded = true
 		return err
 	})
 }
@@ -136,10 +141,11 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	msg.Ns = cache.ProcessRecords(qr.Authority, 0, false, dnssecOK)
 	msg.Extra = cache.ProcessRecords(qr.Additional, 0, false, dnssecOK)
 
-	// RFC 8767 §4: clamp served TTLs to MaxCacheableTTL.
-	cache.ClampTTL(msg.Answer, config.DefaultMaxCacheableTTL)
-	cache.ClampTTL(msg.Ns, config.DefaultMaxCacheableTTL)
-	cache.ClampTTL(msg.Extra, config.DefaultMaxCacheableTTL)
+	// RFC 8767 §4: clamp served TTLs to MaxCacheableTTL. ClampTTL clones, so
+	// the records shared with the latency prober are never mutated.
+	msg.Answer = cache.ClampTTL(msg.Answer, config.DefaultMaxCacheableTTL)
+	msg.Ns = cache.ClampTTL(msg.Ns, config.DefaultMaxCacheableTTL)
+	msg.Extra = cache.ClampTTL(msg.Extra, config.DefaultMaxCacheableTTL)
 
 	log.Debugf("RESULT: %s %s | rcode=NOERROR, answer=%d, validated=%t", qname, dns.TypeToString[qtype], len(qr.Answer), validated)
 
@@ -168,7 +174,10 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 	if entry, found, isExpired := m.store.Get(qname, qtype, qclass, ecsOpt, dnssecOK); found {
 		if !isExpired || entry.CanServeExpired(config.DefaultStaleMaxAge) {
 			log.Debugf("CACHE: serving cached result for %s, ttl_remaining=%d", qname, entry.RemainingTTL())
-			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "error", Rcode: dns.RcodeServerFailure, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
+			// The client gets a valid cached answer (NOERROR), not a
+			// SERVFAIL — recording RcodeServerFailure here corrupted the
+			// availability/error metrics.
+			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "error", Rcode: dns.RcodeSuccess, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
 			return m.buildFromCacheEntry(qctx, entry, isExpired)
 		}
 	}

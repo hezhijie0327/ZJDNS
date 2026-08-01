@@ -3,6 +3,7 @@ package zone
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"zjdns/config"
 	"zjdns/internal/ttl"
@@ -1207,5 +1208,251 @@ func TestEvaluator_MatchTagScoring(t *testing.T) {
 	a = result.Answer[0].(*dns.A)
 	if a.A.String() != "10.0.0.2" {
 		t.Errorf("untagged fallback, got %s", a.A.String())
+	}
+}
+
+func TestEvaluator_FileImport_BareDotResetsState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "zone.txt")
+	// A bare "." header must reset all parsing state — a record line after
+	// it must NOT be attributed to the previous domain.
+	content := ".example.com\n" +
+		"  1  10.0.0.1  300\n" +
+		".\n" +
+		"  1  10.0.0.2  300\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	z := New()
+	if err := z.LoadRules([]config.ZoneRule{{File: path}}); err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil)
+	if !result.Matched {
+		t.Fatal("example.com A: expected match")
+	}
+	// The stray record after the bare "." header must not have been merged
+	// into example.com's answer.
+	if len(result.Answer) != 1 {
+		t.Fatalf("example.com A: Answer len = %d, want 1 (stray record leaked)", len(result.Answer))
+	}
+}
+
+func TestEvaluator_FileImport_DotRcodeAttr(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "zone.txt")
+	content := ". example.com\n" + // domain header
+		"  1  10.0.0.1  300\n" +
+		". rcode=3\n" // attribute-only header — parsed as attributes, not a domain
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	z := New()
+	if err := z.LoadRules([]config.ZoneRule{{File: path}}); err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// The ". rcode=3" line must not create a bogus "RCODE=3" domain; the
+	// example.com rule must be intact.
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil)
+	if !result.Matched || len(result.Answer) != 1 {
+		t.Fatalf("example.com A: matched=%v answer=%d, want matched with 1 record", result.Matched, len(result.Answer))
+	}
+}
+
+func TestEvaluator_FileImport_EscapedQuotes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "zone.txt")
+	// TXT content with an escaped quote must survive tokenization.
+	content := ".txt.example.com\n" +
+		"  16  \"hello\\\"world\"  300\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	z := New()
+	if err := z.LoadRules([]config.ZoneRule{{File: path}}); err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	result := z.Evaluate("txt.example.com.", dns.TypeTXT, dns.ClassINET, nil)
+	if !result.Matched || len(result.Answer) != 1 {
+		t.Fatalf("TXT: matched=%v answer=%d, want matched with 1 record", result.Matched, len(result.Answer))
+	}
+	txt, ok := result.Answer[0].(*dns.TXT)
+	if !ok {
+		t.Fatalf("expected TXT record, got %T", result.Answer[0])
+	}
+	joined := strings.Join(txt.Txt, "")
+	// miekg/dns keeps the backslash in TXT values (\" is not unescaped by
+	// the library); the point of this test is that the quoted token is not
+	// truncated at the escaped quote.
+	if joined != `hello\"world` {
+		t.Errorf("TXT content = %q, want %q", joined, `hello\"world`)
+	}
+}
+
+func TestEvaluator_WildcardDynamicRule(t *testing.T) {
+	z := New()
+	err := z.LoadRules([]config.ZoneRule{
+		{
+			Name:           "*.stats.example.com",
+			DynamicContent: func() []string { return []string{"value=42"} },
+			Match:          []string{"internal"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// With the tag: the wildcard dynamic rule answers.
+	result := z.Evaluate("node1.stats.example.com.", dns.TypeTXT, dns.ClassCHAOS, map[string]bool{"internal": true})
+	if !result.Matched || len(result.Answer) != 1 {
+		t.Fatalf("tagged query: matched=%v answer=%d, want matched with 1 record", result.Matched, len(result.Answer))
+	}
+
+	// Without the tag: the rule is filtered out and nothing matches.
+	result = z.Evaluate("node1.stats.example.com.", dns.TypeTXT, dns.ClassCHAOS, nil)
+	if result.Matched {
+		t.Fatal("dynamic rule must not answer when match tags are unsatisfied")
+	}
+}
+
+// TestEvaluator_DynamicKeySpaces verifies exact and wildcard dynamic rules
+// stay in their own key spaces: an exact rule answers only its own name, a
+// wildcard rule answers only subdomains (never the bare name).
+func TestEvaluator_DynamicKeySpaces(t *testing.T) {
+	z := New()
+	err := z.LoadRules([]config.ZoneRule{
+		{Name: "exact.example.com", DynamicContent: func() []string { return []string{"exact"} }},
+		{Name: "*.wild.example.com", DynamicContent: func() []string { return []string{"wild"} }},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// Exact rule answers its own name.
+	if r := z.Evaluate("exact.example.com.", dns.TypeTXT, dns.ClassCHAOS, nil); !r.Matched {
+		t.Fatal("exact dynamic rule must answer its own name")
+	}
+	// Exact rule must NOT answer a subdomain.
+	if r := z.Evaluate("sub.exact.example.com.", dns.TypeTXT, dns.ClassCHAOS, nil); r.Matched {
+		t.Fatal("exact dynamic rule must not answer subdomains")
+	}
+	// Wildcard rule answers subdomains.
+	if r := z.Evaluate("a.wild.example.com.", dns.TypeTXT, dns.ClassCHAOS, nil); !r.Matched {
+		t.Fatal("wildcard dynamic rule must answer subdomains")
+	}
+	// Wildcard rule must NOT answer the bare name (RFC 1034 §4.3.2).
+	if r := z.Evaluate("wild.example.com.", dns.TypeTXT, dns.ClassCHAOS, nil); r.Matched {
+		t.Fatal("wildcard dynamic rule must not answer the bare domain")
+	}
+}
+
+// TestEvaluator_DynamicScoreVsStatic verifies a static wildcard rule with
+// stronger match tags wins over a generic wildcard dynamic rule.
+func TestEvaluator_DynamicScoreVsStatic(t *testing.T) {
+	z := New()
+	err := z.LoadRules([]config.ZoneRule{
+		{Name: "*.cdn.example.com", DynamicContent: func() []string { return []string{"generic"} }},
+		{Name: "*.cdn.example.com", Match: []string{"premium"}, Answer: []config.ZoneRecord{{Type: dns.TypeTXT, Content: "premium"}}},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+	r := z.Evaluate("x.cdn.example.com.", dns.TypeTXT, dns.ClassINET, map[string]bool{"premium": true})
+	if !r.Matched || len(r.Answer) == 0 {
+		t.Fatalf("premium query: matched=%v answer=%d", r.Matched, len(r.Answer))
+	}
+	if txt, ok := r.Answer[0].(*dns.TXT); !ok || strings.Join(txt.Txt, "") != "premium" {
+		t.Fatalf("static premium rule must win over generic dynamic, got %v", r.Answer[0])
+	}
+}
+
+// TestEvaluator_FileImport_AttrDefaults verifies an attribute-only header
+// (". rcode=3") sets the file-level default inherited by subsequent domain
+// headers.
+func TestEvaluator_FileImport_AttrDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "zone.txt")
+	content := ". rcode=3\n" +
+		".blocked.example.com\n" +
+		".ok.example.com\n" +
+		"  1  10.0.0.1  300\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	z := New()
+	if err := z.LoadRules([]config.ZoneRule{{File: path}}); err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+	// blocked.example.com inherits the file default NXDOMAIN.
+	r := z.Evaluate("blocked.example.com.", dns.TypeA, dns.ClassINET, nil)
+	if !r.Matched || r.Rcode != dns.RcodeNameError {
+		t.Fatalf("blocked: matched=%v rcode=%d, want NXDOMAIN", r.Matched, r.Rcode)
+	}
+	// ok.example.com overrides with an actual record.
+	r = z.Evaluate("ok.example.com.", dns.TypeA, dns.ClassINET, nil)
+	if !r.Matched || len(r.Answer) != 1 {
+		t.Fatalf("ok: matched=%v answer=%d, want 1 record", r.Matched, len(r.Answer))
+	}
+}
+
+// TestEvaluator_ExactDynamicVsStaticScore verifies the exact dynamic path
+// also participates in best-scoring: a static rule with stronger match tags
+// wins over a generic exact dynamic answer.
+func TestEvaluator_ExactDynamicVsStaticScore(t *testing.T) {
+	z := New()
+	err := z.LoadRules([]config.ZoneRule{
+		{Name: "example.com", Match: []string{"cn"}, DynamicContent: func() []string { return []string{"dynamic"} }},
+		{Name: "example.com", Match: []string{"cn", "us"}, Answer: []config.ZoneRecord{{Type: dns.TypeTXT, Content: "static"}}},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+	r := z.Evaluate("example.com.", dns.TypeTXT, dns.ClassINET, map[string]bool{"cn": true, "us": true})
+	if !r.Matched || len(r.Answer) == 0 {
+		t.Fatalf("query: matched=%v answer=%d", r.Matched, len(r.Answer))
+	}
+	if txt, ok := r.Answer[0].(*dns.TXT); !ok || strings.Join(txt.Txt, "") != "static" {
+		t.Fatalf("static rule with stronger tags must win over dynamic, got %v", r.Answer[0])
+	}
+	// Without the extra tag, the dynamic rule answers.
+	r = z.Evaluate("example.com.", dns.TypeTXT, dns.ClassINET, map[string]bool{"cn": true})
+	if txt, ok := r.Answer[0].(*dns.TXT); !ok || strings.Join(txt.Txt, "") != "dynamic" {
+		t.Fatalf("dynamic rule should answer when static tags are absent, got %v", r.Answer[0])
+	}
+}
+
+// TestEvaluator_ExactAndWildcardDynamicCoexist verifies the same name can
+// carry both an exact and a wildcard dynamic rule without one overwriting
+// the other.
+func TestEvaluator_ExactAndWildcardDynamicCoexist(t *testing.T) {
+	z := New()
+	err := z.LoadRules([]config.ZoneRule{
+		{Name: "example.com", DynamicContent: func() []string { return []string{"exact"} }},
+		{Name: "*.example.com", DynamicContent: func() []string { return []string{"wild"} }},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+	// Bare name → exact rule.
+	r := z.Evaluate("example.com.", dns.TypeTXT, dns.ClassCHAOS, nil)
+	if !r.Matched || len(r.Answer) != 1 {
+		t.Fatalf("bare name: matched=%v answer=%d", r.Matched, len(r.Answer))
+	}
+	if txt, ok := r.Answer[0].(*dns.TXT); !ok || strings.Join(txt.Txt, "") != "exact" {
+		t.Fatalf("bare name should get the exact rule, got %v", r.Answer[0])
+	}
+	// Subdomain → wildcard rule.
+	r = z.Evaluate("sub.example.com.", dns.TypeTXT, dns.ClassCHAOS, nil)
+	if !r.Matched || len(r.Answer) != 1 {
+		t.Fatalf("subdomain: matched=%v answer=%d", r.Matched, len(r.Answer))
+	}
+	if txt, ok := r.Answer[0].(*dns.TXT); !ok || strings.Join(txt.Txt, "") != "wild" {
+		t.Fatalf("subdomain should get the wildcard rule, got %v", r.Answer[0])
 	}
 }

@@ -40,6 +40,9 @@ func (r *Recursive) resolveNextNameservers(
 	if r.cache != nil {
 		for _, ns := range bestNSRecords {
 			nsName := dnsutil.Fqdn(ns.Ns)
+			if cachedNSNames[nsName] {
+				continue // duplicate NS target — addresses already appended
+			}
 			cached := r.lookupNSAddrsFromCache(nsName, nil)
 			if len(cached) > 0 {
 				result.addrs = append(result.addrs, cached...)
@@ -83,14 +86,28 @@ func (r *Recursive) resolveNextNameservers(
 		}
 	}
 
-	// Use glue records directly when available; only fall back to independent
-	// NS resolution when the delegation has no glue.
-	if len(result.addrs) == 0 {
-		result.addrs = r.resolveNSAddressesConcurrent(ctx, bestNSRecords, qname, depth, forceTCP)
-		if len(result.addrs) > 0 {
-			result.source = "resolution"
+	// Resolve independently any NS names not covered by cache or glue: the
+	// old short-circuit dropped the remaining delegation targets whenever
+	// cache/glue covered even a subset, so resolution could fail even though
+	// the uncovered servers were reachable.
+	uncovered := make([]*dns.NS, 0, len(bestNSRecords))
+	for _, ns := range bestNSRecords {
+		nsName := dnsutil.Fqdn(ns.Ns)
+		if cachedNSNames[nsName] || len(result.glue[nsName]) > 0 {
+			continue
 		}
-	} else if result.source == "" {
+		uncovered = append(uncovered, ns)
+	}
+	if len(uncovered) > 0 {
+		resolved := r.resolveNSAddressesConcurrent(ctx, uncovered, qname, depth, forceTCP)
+		if len(resolved) > 0 {
+			result.addrs = append(result.addrs, resolved...)
+			if result.source == "" {
+				result.source = "resolution"
+			}
+		}
+	}
+	if result.source == "" && len(result.addrs) > 0 {
 		result.source = "glue"
 	}
 

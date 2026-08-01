@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"codeberg.org/miekg/dns"
-	"github.com/quic-go/quic-go"
 )
 
 // Message is a pooled allocator for dns.Msg values.
@@ -29,32 +28,6 @@ const (
 	RecursiveUDPBufferSize = 4096
 	SecureBufferSize       = 8192
 	defaultBufferSize      = 256
-)
-
-// QUIC application error codes (RFC 9000 §20) shared across client and
-// server packages.  Defined here because they are consumed by both
-// server/protocol/tls and server/upstream/tls.
-const (
-	// QUICCodeNoError is for normal connection closure (RFC 9250 §4.3).
-	QUICCodeNoError quic.ApplicationErrorCode = 0x0
-
-	// QUICCodeInternalError is for internal errors (RFC 9250 §4.3).
-	QUICCodeInternalError quic.ApplicationErrorCode = 0x1
-
-	// QUICCodeProtocolError is for protocol violations (RFC 9250 §4.3).
-	QUICCodeProtocolError quic.ApplicationErrorCode = 0x2
-
-	// QUICCodeRequestCancelled is for cancelled requests (RFC 9250 §4.3).
-	QUICCodeRequestCancelled quic.ApplicationErrorCode = 0x3
-
-	// QUICCodeExcessiveLoad is for load shedding (RFC 9250 §4.3).
-	QUICCodeExcessiveLoad quic.ApplicationErrorCode = 0x4
-
-	// QUICCodeUnspecifiedError is for unspecified errors (RFC 9250 §4.3).
-	QUICCodeUnspecifiedError quic.ApplicationErrorCode = 0x5
-
-	// QUICCodeErrorReserved is the reserved error code (RFC 9250 §4.3).
-	QUICCodeErrorReserved quic.ApplicationErrorCode = 0xd098ea5e
 )
 
 // DefaultMessage is the package-level default message pool, shared across the
@@ -110,6 +83,9 @@ func (m *Message) Put(msg *dns.Msg) {
 // of buffers. Buffers are stored as *[]byte pointers to avoid interface-boxing
 // allocations on every Put (see staticcheck SA6002).
 func NewBuffer(size, poolSize int) *Buffer {
+	if size < 0 {
+		size = 0
+	}
 	if poolSize < 0 {
 		poolSize = 0
 	}

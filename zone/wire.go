@@ -1,9 +1,11 @@
 package zone
 
 import (
+	"encoding/hex"
 	"strconv"
 	"strings"
 	"zjdns/config"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -22,6 +24,7 @@ func packRRs(domain string, records []config.ZoneRecord) []byte {
 	}
 	msg := &dns.Msg{Answer: rrs}
 	if err := msg.Pack(); err != nil {
+		log.Warnf("ZONE: packing records for %s failed: %v", domain, err)
 		return nil
 	}
 	return msg.Data
@@ -35,6 +38,7 @@ func unpackRRs(blob []byte) []dns.RR {
 	msg := &dns.Msg{}
 	msg.Data = blob
 	if err := msg.Unpack(); err != nil {
+		log.Warnf("ZONE: unpacking stored records failed: %v", err)
 		return nil
 	}
 	return msg.Answer
@@ -68,7 +72,15 @@ func buildRecord(domain string, record *config.ZoneRecord) dns.RR {
 	}
 	name := dnsutil.Fqdn(domain)
 	if record.Name != "" {
-		name = dnsutil.Fqdn(record.Name)
+		// A relative record name is joined to the enclosing zone domain
+		// (e.g. "www" under "example.com" → "www.example.com."); an
+		// absolute name (trailing dot) is used as-is.
+		if strings.HasSuffix(record.Name, ".") {
+			name = dnsutil.Fqdn(record.Name)
+		} else {
+			base := strings.TrimPrefix(domain, "*.")
+			name = dnsutil.Fqdn(record.Name + "." + base)
+		}
 	}
 	typeStr := dns.TypeToString[record.Type]
 	if typeStr == "" {
@@ -92,8 +104,24 @@ func buildRecord(domain string, record *config.ZoneRecord) dns.RR {
 	if rr, err := dns.New(sb.String()); err == nil {
 		return rr
 	}
-	return &dns.RFC3597{
-		Hdr:     dns.Header{Name: name, Class: class, TTL: ttl},
-		RFC3597: rdata.RFC3597{RRType: record.Type, Data: record.Content},
+
+	// RFC 3597 fallback for unknown types: content must be the generic
+	// representation "\# <length> <hex>". Anything else is a record-level
+	// error — do not emit a malformed record.
+	content := strings.TrimSpace(record.Content)
+	if len(content) >= 2 && content[0] == '\\' && content[1] == '#' {
+		fields := strings.Fields(content[2:])
+		if len(fields) == 2 {
+			if _, err := strconv.ParseUint(fields[0], 10, 16); err == nil {
+				if _, err := hex.DecodeString(fields[1]); err == nil {
+					return &dns.RFC3597{
+						Hdr:     dns.Header{Name: name, Class: class, TTL: ttl},
+						RFC3597: rdata.RFC3597{RRType: record.Type, Data: fields[1]},
+					}
+				}
+			}
+		}
 	}
+	log.Warnf("ZONE: invalid RFC3597 content for type %d at %s: %q", record.Type, name, record.Content)
+	return nil
 }

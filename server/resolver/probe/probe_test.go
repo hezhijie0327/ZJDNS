@@ -17,7 +17,7 @@ func TestPendingProbes_LeaderAndFollower(t *testing.T) {
 	qname := "example.com."
 	qtype := dns.TypeA
 
-	key := probeKey{qname, qtype}
+	key := probeKey{qname: qname, qtype: qtype}
 
 	if !pp.Start(key) {
 		t.Fatal("expected leader for first call")
@@ -37,9 +37,9 @@ func TestPendingProbes_LeaderAndFollower(t *testing.T) {
 func TestPendingProbes_DifferentKeys(t *testing.T) {
 	pp := pending.NewGroup[probeKey]()
 
-	keyA := probeKey{"example.com.", dns.TypeA}
-	keyAAAA := probeKey{"example.com.", dns.TypeAAAA}
-	keyOther := probeKey{"other.com.", dns.TypeA}
+	keyA := probeKey{qname: "example.com.", qtype: dns.TypeA}
+	keyAAAA := probeKey{qname: "example.com.", qtype: dns.TypeAAAA}
+	keyOther := probeKey{qname: "other.com.", qtype: dns.TypeA}
 
 	if !pp.Start(keyA) {
 		t.Fatal("expected leader for type A")
@@ -58,7 +58,7 @@ func TestPendingProbes_DifferentKeys(t *testing.T) {
 
 func TestPendingProbes_ConcurrentSameKey(t *testing.T) {
 	pp := pending.NewGroup[probeKey]()
-	key := probeKey{"concurrent.example.com.", dns.TypeA}
+	key := probeKey{qname: "concurrent.example.com.", qtype: dns.TypeA}
 
 	const goroutines = 50
 	var leaders atomic.Int32
@@ -102,7 +102,7 @@ func TestPendingProbes_ConcurrentSameKey(t *testing.T) {
 
 func TestPendingProbes_MultipleFollowers(t *testing.T) {
 	pp := pending.NewGroup[probeKey]()
-	key := probeKey{"example.com.", dns.TypeAAAA}
+	key := probeKey{qname: "example.com.", qtype: dns.TypeAAAA}
 
 	if !pp.Start(key) {
 		t.Fatal("expected leader")
@@ -136,12 +136,12 @@ func TestPendingProbes_MultipleFollowers(t *testing.T) {
 
 func TestPendingProbes_DoneWithoutStart(t *testing.T) {
 	pp := pending.NewGroup[probeKey]()
-	pp.Done(probeKey{"no-such-key.", dns.TypeA})
+	pp.Done(probeKey{qname: "no-such-key.", qtype: dns.TypeA})
 }
 
 func TestPendingProbes_LeaderDoneFollowerCanProceed(t *testing.T) {
 	pp := pending.NewGroup[probeKey]()
-	key := probeKey{"test.example.com.", dns.TypeA}
+	key := probeKey{qname: "test.example.com.", qtype: dns.TypeA}
 
 	if !pp.Start(key) {
 		t.Fatal("expected leader")

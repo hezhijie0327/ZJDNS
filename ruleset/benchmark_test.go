@@ -42,11 +42,15 @@ func BenchmarkEngine_HasIPTag(b *testing.B) {
 	}
 }
 
-func BenchmarkTLDPlusOne(b *testing.B) {
-	name := "www.sub.example.com"
+func BenchmarkMatchSuffix(b *testing.B) {
+	engine := New()
+	_ = engine.LoadRules([]config.RuleSet{
+		{Tag: "ads", Type: "domain", Rule: []string{"ads.example.com", "example.com"}},
+	})
+	qname := "tracker.sub.example.com."
 	b.ResetTimer()
 	for b.Loop() {
-		_ = tldPlusOne(name)
+		_ = engine.Match(qname, "192.168.1.1")
 	}
 }
 

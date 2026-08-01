@@ -205,17 +205,17 @@ func (m *Logger) Log(lvl Level, format string, args ...any) {
 
 	// Check component filter: if set, only emit messages whose prefix
 	// matches. Messages without a recognizable "PREFIX: " always pass.
+	// The filter applies to the RENDERED message — a dynamic prefix passed
+	// as an argument (e.g. "%s: ...") would otherwise bypass the filter.
 	m.mu.RLock()
 	filter := m.componentFilter
 	m.mu.RUnlock()
+	message := sanitizeLogMessage(fmt.Sprintf(format, args...))
 	if filter != nil {
-		prefix := extractPrefix(format)
-		if prefix != "" && !filter[prefix] {
+		if prefix := extractPrefix(message); prefix != "" && !filter[prefix] {
 			return
 		}
 	}
-
-	message := sanitizeLogMessage(fmt.Sprintf(format, args...))
 
 	levelStr := levelNames[lvl]
 
@@ -299,6 +299,9 @@ func ParseLevelFilter(s string, defaultLevel Level) (lvl Level, components []str
 			if c != "" {
 				components = append(components, c)
 			}
+		}
+		if len(components) == 0 {
+			return lvl, nil // empty component list — no filtering (nil = all pass)
 		}
 		return lvl, components
 	}

@@ -65,15 +65,24 @@ func matchesNSECDenial(nsec *dns.NSEC, normalizedQname string, qtype uint16, den
 		return isDomainInRange(normalizedQname, nsec.Header().Name, nsec.NextDomain)
 	case "NODATA":
 		owner := nsec.Header().Name
-		if owner != normalizedQname {
-			return false
+		if owner == normalizedQname {
+			// RFC 6840 §4.3: CNAME bit set means a CNAME exists
+			// at this name — NODATA is false.
+			if slices.Contains(nsec.TypeBitMap, dns.TypeCNAME) {
+				return false
+			}
+			return !slices.Contains(nsec.TypeBitMap, qtype)
 		}
-		// RFC 6840 §4.3: CNAME bit set means a CNAME exists
-		// at this name — NODATA is false.
-		if slices.Contains(nsec.TypeBitMap, dns.TypeCNAME) {
-			return false
+		// RFC 4035 §5.4 / §3.1.3.4: wildcard-expanded NODATA (QNAME does not
+		// exist, *.zone exists without QTYPE) is proven by the NSEC at the
+		// wildcard owner *.ancestor whose bitmap lacks QTYPE and CNAME.
+		if strings.HasPrefix(owner, "*.") && dnsutil.IsBelow(owner[2:], normalizedQname) {
+			if slices.Contains(nsec.TypeBitMap, dns.TypeCNAME) {
+				return false
+			}
+			return !slices.Contains(nsec.TypeBitMap, qtype)
 		}
-		return !slices.Contains(nsec.TypeBitMap, qtype)
+		return false
 	}
 	return false
 }
@@ -84,25 +93,33 @@ func matchesNSECDenial(nsec *dns.NSEC, normalizedQname string, qtype uint16, den
 // All NSEC3 records are first filtered to the RRSIG-verified subset (skipping
 // ancestor delegations per RFC 6840 §4.1).  The verified subset must share
 // consistent NSEC3 parameters (§7.2).  If the proof passes, the denial is
-// cryptographically valid.
-func (c *CryptoValidator) verifyNSEC3(authSigs []*dns.RRSIG, nsec3s []*dns.NSEC3, verifiedDNSKEYs []*dns.DNSKEY, normalizedQname string, qtype uint16, denialType string) bool {
-	verified := c.filterVerifiedNSEC3(authSigs, nsec3s, verifiedDNSKEYs)
+// cryptographically valid.  The verified subset is returned so callers can
+// base the RFC 5155 §9.2 Opt-Out AD-suppression decision on exactly the
+// records relied upon, not on unrelated NSEC3s in the response.
+func (c *CryptoValidator) verifyNSEC3(authSigs []*dns.RRSIG, nsec3s []*dns.NSEC3, verifiedDNSKEYs []*dns.DNSKEY, normalizedQname string, qtype uint16, denialType string) (bool, []*dns.NSEC3) {
+	verified := c.filterVerifiedNSEC3(authSigs, nsec3s, verifiedDNSKEYs, qtype)
 	if len(verified) == 0 {
-		return false
+		return false, verified
 	}
 	if !nsec3ParamsConsistent(verified) {
-		return false
+		return false, verified
 	}
 	params := verified[0]
-	return matchesNSEC3Denial(verified, normalizedQname, qtype, denialType, params.Hash, params.Iterations, params.Salt)
+	return matchesNSEC3Denial(verified, normalizedQname, qtype, denialType, params.Hash, params.Iterations, params.Salt), verified
 }
 
 // filterVerifiedNSEC3 returns the subset of NSEC3 records whose RRSIGs verify
 // against the trusted DNSKEYs, skipping ancestor delegation records.
-func (c *CryptoValidator) filterVerifiedNSEC3(authSigs []*dns.RRSIG, nsec3s []*dns.NSEC3, verifiedDNSKEYs []*dns.DNSKEY) []*dns.NSEC3 {
+//
+// The ancestor-delegation exclusion (RFC 6840 §4.1: NS=1, SOA=0 must not
+// prove non-existence BELOW the zone cut) does NOT apply to DS queries: the
+// delegation's own NSEC3 is exactly the record that proves whether the DS
+// RRset exists AT the zone cut. Skipping it broke no-DS NODATA proofs for
+// Opt-Out zones like .com/.net.
+func (c *CryptoValidator) filterVerifiedNSEC3(authSigs []*dns.RRSIG, nsec3s []*dns.NSEC3, verifiedDNSKEYs []*dns.DNSKEY, qtype uint16) []*dns.NSEC3 {
 	var verified []*dns.NSEC3
 	for _, nsec3 := range nsec3s {
-		if isAncestorDelegationNSEC3(nsec3) {
+		if qtype != dns.TypeDS && isAncestorDelegationNSEC3(nsec3) {
 			continue
 		}
 		rrsigs := FindRRSIGs(authSigs, nsec3.Header().Name, dns.TypeNSEC3)
@@ -172,6 +189,12 @@ func matchesNSEC3NXDOMAIN(verified []*dns.NSEC3, qname string, hashAlg uint8, it
 // §8.7 (wildcard NODATA): when no NSEC3 matches H(qname), the qname does not
 // exist.  A wildcard expansion exists at *.closest_encloser — proven by an
 // NSEC3 matching H(*.closest_encloser) with QTYPE and CNAME absent.
+//
+// Covered-name NODATA: when neither H(qname) nor H(*.CE) has an NSEC3, the
+// qname is not an NSEC3 owner — either it does not exist or it is an insecure
+// delegation in Opt-Out space (RFC 5155 §9.2).  The closest-encloser walk
+// already proved the next-closer cover, which is the authenticated denial;
+// this is the standard case for no-DS proofs from Opt-Out zones like .com/.net.
 func matchesNSEC3NODATA(verified []*dns.NSEC3, qname string, qtype uint16, hashAlg uint8, iterations uint16, salt string) bool {
 	qnameHash := nsec3HashName(qname, hashAlg, iterations, salt)
 	if qnameHash == "" {
@@ -197,7 +220,9 @@ func matchesNSEC3NODATA(verified []*dns.NSEC3, qname string, qtype uint16, hashA
 	}
 	matched := matchNSEC3(verified, wildcardHash)
 	if matched == nil {
-		return false
+		// Covered-name NODATA: no NSEC3 exists for H(qname) or H(*.CE).
+		// The CE walk's next-closer cover is the authenticated denial.
+		return true
 	}
 	if slices.Contains(matched.TypeBitMap, dns.TypeCNAME) {
 		return false
@@ -316,7 +341,10 @@ func nsec3HashName(name string, hashAlg uint8, iterations uint16, salt string) s
 		return ""
 	}
 	if iterations > config.DefaultMaxNSEC3Iterations {
-		iterations = config.DefaultMaxNSEC3Iterations
+		// Do not silently change the hash input: hashing with a different
+		// iteration count can never match the zone's NSEC3 owner names.
+		// Fail closed on unsupported parameters instead.
+		return ""
 	}
 	return dnsutil.NSEC3Name(name, salt, iterations)
 }
@@ -337,12 +365,14 @@ func (c *CryptoValidator) isDenialOfExistenceValid(response *dns.Msg, qname stri
 	}
 
 	nsec3s := findNSEC3(response.Ns)
-	if valid := c.verifyNSEC3(authSigs, nsec3s, verifiedDNSKEYs, normalizedQname, qtype, denialType); valid {
-		// RFC 5155 §9.2: Opt-Out NSEC3 proofs suppress AD bit.
-		if hasOptOutInProof(nsec3s) {
-			return false, fmt.Errorf("%w: NSEC3 Opt-Out proof for %s of %s — AD bit suppressed (RFC 5155 §9.2)", ErrBogusSignature, denialType, qname)
+	if valid, verified := c.verifyNSEC3(authSigs, nsec3s, verifiedDNSKEYs, normalizedQname, qtype, denialType); valid {
+		// RFC 5155 §9.2: an Opt-Out proof is cryptographically valid — it
+		// only suppresses the AD bit. The decision is based on exactly the
+		// records the proof relied upon (the RRSIG-verified subset), not on
+		// unrelated Opt-Out NSEC3s in the response.
+		if hasOptOutInProof(verified) {
+			log.Debugf("SECURITY: NSEC3 Opt-Out proof for %s of %s — AD bit suppressed (RFC 5155 §9.2)", denialType, qname)
 		}
-
 		return true, nil
 	}
 	if len(nsec3s) > 0 {

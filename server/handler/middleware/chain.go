@@ -78,6 +78,7 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	var h handler.QueryHandler = handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
 		log.Debugf("QUERY: terminal stub reached — not reached in normal operation (Resolution is always configured)")
 		qctx.Res = handler.BuildResponseMsg(qctx.Req)
+		qctx.Responded = true
 		qctx.Res.Rcode = dns.RcodeServerFailure
 		return nil
 	})
@@ -86,6 +87,7 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	h = (&Resolution{
 		resolver: deps.Resolver,
 		pending:  deps.PendingReqs,
+		ctx:      deps.Ctx, // server-scope ctx for shared singleflight work
 	}).Wrap(h)
 
 	// Post-resolution transforms: wrap resolution from inside out so they
@@ -121,11 +123,10 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	}).Wrap(h)
 
 	// Zone rule evaluation (short-circuit on match).
-	if deps.ZoneEvaluator.HasRules() {
+	if deps.ZoneEvaluator != nil && deps.ZoneEvaluator.HasRules() {
 		h = (&Zone{
 			evaluator:  deps.ZoneEvaluator,
 			tagMatcher: deps.TagMatcher,
-			cache:      deps.Cache,
 			stats:      deps.Stats,
 		}).Wrap(h)
 	}

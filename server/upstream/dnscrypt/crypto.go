@@ -21,7 +21,11 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 			// (nonce || secretKey).  This is NOT password hashing — secretKey is
 			// an X25519 private key, and the construction must match dnscrypt-proxy
 			// for interoperability.
-			q.Nonce = newNonce()
+			var nonceErr error
+			q.Nonce, nonceErr = newNonce()
+			if nonceErr != nil {
+				return nil, dnscryptcrypto.Nonce{}, [dnscryptcrypto.SharedKeySize]byte{}, nonceErr
+			}
 			seed := sha512.Sum512_256(append(q.Nonce[:dnscryptcrypto.NonceSize/2], state.secretKey[:]...))
 			epSk, epPk, epErr := dnscryptcrypto.X25519KeyPairFromSeed(seed)
 			if epErr != nil {
@@ -40,7 +44,11 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 
 	// PQ: try resumed query first, fall back to fresh encapsulation.
 	if len(state.pqTicket) > 0 && time.Now().Before(state.pqTicketExpiry) {
-		q.Nonce = newNonce()
+		var nonceErr error
+		q.Nonce, nonceErr = newNonce()
+		if nonceErr != nil {
+			return nil, dnscryptcrypto.Nonce{}, [dnscryptcrypto.SharedKeySize]byte{}, nonceErr
+		}
 		sharedKey, err := dnscryptcrypto.PQResumedSharedKey(state.pqResumeSecret, state.clientMagic, q.Nonce[:dnscryptcrypto.NonceSize/2], state.pqTicket)
 		if err != nil {
 			return nil, dnscryptcrypto.Nonce{}, [dnscryptcrypto.SharedKeySize]byte{}, fmt.Errorf("deriving PQ resumed shared key: %w", err)
@@ -82,8 +90,13 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 }
 
 // newNonce generates a fresh 24-byte client nonce.
-func newNonce() dnscryptcrypto.Nonce {
+func newNonce() (dnscryptcrypto.Nonce, error) {
 	var n dnscryptcrypto.Nonce
-	_, _ = rand.Read(n[:dnscryptcrypto.NonceSize/2]) // _ = error: crypto/rand.Read never fails on modern kernels
-	return n
+	// crypto/rand.Read is documented to never fail, but a silent failure
+	// would reproduce the same key+nonce pair for every query — a
+	// catastrophic XChaCha20-Poly1305 state. Fail loudly instead.
+	if _, err := rand.Read(n[:dnscryptcrypto.NonceSize/2]); err != nil {
+		return n, fmt.Errorf("generating nonce: %w", err)
+	}
+	return n, nil
 }

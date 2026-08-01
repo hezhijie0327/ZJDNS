@@ -60,11 +60,13 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 	defer s.wg.Done()
 
 	buf := pool.DefaultBuffer.Get()
+	// Single deferred Put covers every exit path, including panics recovered
+	// by HandlePanic — per-path Puts leak the pooled buffer on panic.
+	defer func() { pool.DefaultBuffer.Put(buf) }()
 
 	for s.isStarted() {
 		select {
 		case <-ctx.Done():
-			pool.DefaultBuffer.Put(buf)
 			return
 		default:
 		}
@@ -133,9 +135,18 @@ func (s *Server) handleUDPPacket(ctx context.Context, b []byte, addr *net.UDPAdd
 			truncated.Data = reply
 			if unpackErr := truncated.Unpack(); unpackErr == nil {
 				dnsutil.Truncate(truncated)
-				if packErr := truncated.Pack(); packErr == nil {
+				if packErr := truncated.Pack(); packErr == nil && len(truncated.Data) <= len(b) {
 					reply = truncated.Data
+				} else {
+					// Truncation cannot shrink the response to fit the
+					// request — send nothing rather than violate the §10.3
+					// anti-amplification guarantee.
+					log.Debugf("DNSCRYPT: dropping UDP cert response (%d bytes) for %d-byte request", origLen, len(b))
+					return
 				}
+			} else {
+				log.Debugf("DNSCRYPT: dropping unparseable UDP cert response: %v", unpackErr)
+				return
 			}
 			log.Debugf("DNSCRYPT: UDP cert response (%d bytes) exceeds request (%d bytes) — returning TC", origLen, len(b))
 		}

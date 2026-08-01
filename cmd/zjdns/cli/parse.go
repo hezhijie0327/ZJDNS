@@ -4,12 +4,16 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"zjdns/config"
 )
 
 // ParseFlags parses command-line arguments and handles special commands.
-// Returns the config file path (empty for default config) and whether the
-// caller should exit (true after running a special command).
-func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfter bool) {
+// Returns the config file path (empty for default config), whether the caller
+// should exit (true after running a special command), and the exit code to
+// use: 0 for success (-h/--version and successful special commands), 1 for
+// command failures (parse errors, probe/generate/dnsstamp failures), and 2
+// for flag-parse errors. When exitAfter is false the exit code is ignored.
+func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfter bool, exitCode int) {
 	// ── Flags ────────────────────────────────────────────────────────────
 	var (
 		// Server
@@ -75,7 +79,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 
 	// ── Usage ────────────────────────────────────────────────────────────
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "ZJDNS Server - High Performance DNS Server\n\n")
+		fmt.Fprintf(os.Stderr, "%s Server - High Performance DNS Server\n\n", config.DefaultProjectName)
 		fmt.Fprintf(os.Stderr, "Version: %s\n\n", versionStr)
 		fmt.Fprintf(os.Stderr, "Usage:\n")
 		fmt.Fprintf(os.Stderr, "  %s --config <file>              # Start with config file\n", fs.Name())
@@ -95,21 +99,55 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	for _, arg := range osArgs[1:] {
 		if arg == "-h" || arg == "--help" {
 			fs.Usage()
-			return "", true
+			return "", true, 0
 		}
 	}
 
 	// ── Parse ────────────────────────────────────────────────────────────
 	if err := fs.Parse(osArgs[1:]); err != nil {
-		return "", true
+		return "", true, 2
+	}
+
+	// ── Special-mode exclusivity ─────────────────────────────────────────
+	// The dispatch below is a priority chain; conflicting modes must be
+	// diagnosed instead of silently running only the first one. The probe
+	// sub-modes are checked against the special modes too: --version
+	// --pipeline would otherwise silently swallow the probe request.
+	modes := 0
+	for _, on := range []bool{showVersion, generateConfig, runDNSStamp, runProbeFlag} {
+		if on {
+			modes++
+		}
+	}
+	if modes > 1 {
+		fmt.Fprintln(os.Stderr, "error: --version, --generate-config, --dnsstamp and --probe are mutually exclusive")
+		return "", true, 1
+	}
+	probeModes := 0
+	for _, on := range []bool{probePipeline, probeConnReuse, probeIdleTO} {
+		if on {
+			probeModes++
+		}
+	}
+	if probeModes > 1 {
+		fmt.Fprintln(os.Stderr, "error: --pipeline, --conn-reuse and --idle-timeout are mutually exclusive")
+		return "", true, 1
+	}
+	if probeModes > 0 && !runProbeFlag {
+		fmt.Fprintln(os.Stderr, "error: --pipeline, --conn-reuse and --idle-timeout require --probe")
+		return "", true, 1
+	}
+	if runProbeFlag && probeModes == 0 {
+		fmt.Fprintln(os.Stderr, "error: --probe requires one of --pipeline, --conn-reuse or --idle-timeout")
+		return "", true, 1
 	}
 
 	// ── Dispatch ─────────────────────────────────────────────────────────
 	// --version
 	if showVersion {
-		fmt.Printf("ZJDNS Server\n")
+		fmt.Printf("%s Server\n", config.DefaultProjectName)
 		fmt.Printf("Version: %s\n", versionStr)
-		return "", true
+		return "", true, 0
 	}
 
 	// --generate-config
@@ -118,18 +156,18 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 			output, err := generateDNSCryptConfig(dnscryptProvider, dnscryptAddr)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "generate-config: %v\n", err)
-			} else {
-				fmt.Println(output)
+				return "", true, 1
 			}
+			fmt.Println(output)
 		} else {
 			output, err := generateExampleConfig()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "generate-config: %v\n", err)
-			} else {
-				fmt.Println(output)
+				return "", true, 1
 			}
+			fmt.Println(output)
 		}
-		return "", true
+		return "", true, 0
 	}
 
 	// --probe
@@ -137,7 +175,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		args := fs.Args()
 		if len(args) < 1 {
 			fmt.Fprintf(os.Stderr, "Usage: %s --probe --pipeline|--conn-reuse|--idle-timeout <tcp://host:port|tls://host:port>\n", fs.Name())
-			return "", true
+			return "", true, 1
 		}
 		var probeType string
 		switch {
@@ -149,12 +187,13 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 			probeType = "idle-timeout"
 		default:
 			fmt.Fprintf(os.Stderr, "Usage: %s --probe --pipeline|--conn-reuse|--idle-timeout <tcp://host:port|tls://host:port>\n", fs.Name())
-			return "", true
+			return "", true, 1
 		}
 		if err := runProbe(probeType, args[0]); err != nil {
 			fmt.Fprintf(os.Stderr, "probe: %v\n", err)
+			return "", true, 1
 		}
-		return "", true
+		return "", true, 0
 	}
 
 	// --dnsstamp
@@ -164,21 +203,24 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 			args := fs.Args()
 			if len(args) < 1 {
 				fmt.Fprintf(os.Stderr, "Usage: %s --dnsstamp --decode <sdns://...>\n", fs.Name())
-				return "", true
+				return "", true, 1
 			}
 			if err := RunDNSStampDecode(args[0]); err != nil {
 				fmt.Fprintf(os.Stderr, "dnsstamp decode: %v\n", err)
+				return "", true, 1
 			}
 		case dnsStampEncode:
 			if err := RunDNSStampEncode(stampProto, stampAddr, stampProvider, stampPublicKey, stampPath, stampProps); err != nil {
 				fmt.Fprintf(os.Stderr, "dnsstamp encode: %v\n", err)
+				return "", true, 1
 			}
 		default:
 			fmt.Fprintf(os.Stderr, "Usage: %s --dnsstamp --decode <stamp> | --dnsstamp --encode [options]\n", fs.Name())
+			return "", true, 1
 		}
-		return "", true
+		return "", true, 0
 	}
 
 	// Default: start server
-	return configFileFlag, false
+	return configFileFlag, false, 0
 }

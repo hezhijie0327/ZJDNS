@@ -1,7 +1,23 @@
+# dnscrypt-proxy config: classic construction with per-query ephemeral keys.
+#
+# Pair with the ZJDNS DNSCrypt server config; the stamp below encodes
+# 127.0.0.1:12443 + the resolver's Ed25519 public key + provider name.
+# Regenerate it against YOUR keys with:
+#   ./zjdns --dnsstamp --encode --proto dnscrypt \
+#     --stamp-addr 127.0.0.1:12443 --provider-name 2.dnscrypt-cert.zjdns-test.local \
+#     --public-key <hex> --props 0
+#
+# listen_addresses is bound to 127.0.0.1 for testing — do NOT widen it to
+# 0.0.0.0: this proxy is unauthenticated plaintext-to-DNSCrypt relay test
+# tooling, not a production endpoint.
+#
+# dnscrypt_ephemeral_keys = true forces a fresh X25519 keypair per query
+# (forward secrecy), at the cost of an extra DH per query — keep it off in
+# production unless you specifically need per-query key rotation.
 server_names = ['zjdns-test']
 listen_addresses = ['127.0.0.1:13253']
 cache = false
-log_level = 2
+log_level = 1
 pqdnscrypt = false
 dnscrypt_ephemeral_keys = true
 

@@ -26,9 +26,12 @@ type Client struct {
 	getProxy func(*config.UpstreamServer) *socks5.Dialer
 }
 
-// maxTCRetries bounds the DNSCrypt TC escalation loop.  minQueryLen doubles
-// each round (O(log n)), so 6 iterations covers the full 64→4096 range.
-const maxTCRetries = 6
+// maxTCRetries bounds the DNSCrypt TC escalation loop. Each escalation
+// consumes one iteration and sets the value for the NEXT query, so reaching
+// AND sending 4096 needs one more iteration than the escalation count — 7
+// iterations from the 64-byte minimum guarantee the max-padding attempt and
+// the RFC §5.4.2 TCP fallback are always reachable.
+const maxTCRetries = 7
 
 // New creates a Client for DNSCrypt DNS queries.
 func New(getProxy func(*config.UpstreamServer) *socks5.Dialer) *Client {
@@ -136,7 +139,6 @@ func (c *Client) executeOnce(
 		}
 		respPayload, err = dnscryptcrypto.ReadPrefixed(conn)
 		if err != nil {
-			c.deleteState(stampAddr, providerName)
 			return nil, false, fmt.Errorf("reading dnscrypt TCP response: %w", err)
 		}
 	} else {
@@ -147,7 +149,6 @@ func (c *Client) executeOnce(
 		respBuf := make([]byte, config.DefaultDNSCryptUDPSize)
 		n, udpErr := conn.Read(respBuf)
 		if udpErr != nil {
-			c.deleteState(stampAddr, providerName)
 			return nil, false, fmt.Errorf("reading dnscrypt response: %w", udpErr)
 		}
 		respPayload = respBuf[:n]
@@ -167,7 +168,11 @@ func (c *Client) executeOnce(
 		if parseErr == nil && len(ticket) > 0 &&
 			dnscryptcrypto.PQResumedOverhead(len(ticket))+dnscryptcrypto.PQMinPaddingResumed <= dnscryptcrypto.MaxDNSUDPPacketSize {
 			state.mu.Lock()
-			pqResumeSecret, err := dnscryptcrypto.PQResumeSecret(state.sharedKey, state.clientMagic, clientNonce[:dnscryptcrypto.NonceSize/2])
+			// Derive the resume secret from THIS query's key: state.sharedKey
+			// is a shared mutable field a concurrent in-flight PQ query can
+			// overwrite between encryption and this read, producing a
+			// resume secret the server cannot open.
+			pqResumeSecret, err := dnscryptcrypto.PQResumeSecret(sharedKey, state.clientMagic, clientNonce[:dnscryptcrypto.NonceSize/2])
 			if err != nil {
 				state.mu.Unlock()
 				log.Debugf("UPSTREAM: DNSCrypt PQ resume secret derivation failed: %v", err)

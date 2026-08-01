@@ -550,8 +550,24 @@ func buildResolverConfig(certificateCfg *config.DNSCryptCertificate, providerNam
 		log.Warnf("DNSCRYPT: Ed25519 keypair auto-generated — save these keys for persistence")
 	}
 
-	// Resolver encryption keys are always auto-generated.  They are short-term
-	// keys rotated every 24h (§7.2); PQ keys are derived deterministically.
+	// Resolver encryption keys: a persisted seed keeps certs and ClientMagic
+	// stable across restarts; otherwise a fresh pair is generated (short-term
+	// keys rotated every 24h §7.2; PQ keys derived deterministically).
+	if certificateCfg.ResolverSk != "" {
+		seed, err := dnscryptcrypto.HexDecodeKey(certificateCfg.ResolverSk)
+		if err != nil {
+			return rc, fmt.Errorf("decoding resolver_secret_key: %w", err)
+		}
+		var sk [dnscryptcrypto.KeySize]byte
+		copy(sk[:], seed)
+		sk2, pk2, err := dnscryptcrypto.X25519KeyPairFromSeed(sk)
+		if err != nil {
+			return rc, fmt.Errorf("deriving resolver keys from seed: %w", err)
+		}
+		rc.ResolverSk = dnscryptcrypto.HexEncodeKey(sk2[:])
+		rc.ResolverPk = dnscryptcrypto.HexEncodeKey(pk2[:])
+		return rc, nil
+	}
 	sk, pk, err := dnscryptcrypto.GenerateRandomKeyPair()
 	if err != nil {
 		return rc, fmt.Errorf("generating resolver keys: %w", err)

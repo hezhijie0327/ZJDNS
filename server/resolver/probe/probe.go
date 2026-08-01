@@ -39,9 +39,10 @@ type Prober struct {
 type probeKey struct {
 	qname string
 	qtype uint16
+	ips   string // sorted IP set being probed (dedup key)
 }
 
-// nsPending deduplicates concurrent ProbeNSAddrs calls by sorted IP set.
+// ipSet returns a stable sorted representation of the IPs in the RRs.
 // It is deliberately global — NS latency probing is naturally cross-query
 // (the same authoritative nameservers serve many domains), so sharing a
 // single singleflight group across all Prober instances is correct behaviour.
@@ -49,6 +50,18 @@ type probeKey struct {
 //nolint:gochecknoglobals // cross-query singleflight: intentional global
 var nsPending = pending.NewGroup[string]()
 
+func ipSet(rrs []dns.RR) string {
+	ips := make([]string, 0, len(rrs))
+	for _, rr := range rrs {
+		if ip, ok := zdnsutil.ExtractIPString(rr); ok {
+			ips = append(ips, ip)
+		}
+	}
+	slices.Sort(ips)
+	return strings.Join(ips, ",")
+}
+
+// nsPending deduplicates concurrent ProbeNSAddrs calls by sorted IP set.
 // New creates a new Prober with the given cache setter, background group
 // executor, context, and probe configuration steps.
 func New(cache CacheSetter, bgGroup func(func() error), bgCtx context.Context, steps []config.LatencyProbeStep) *Prober {
@@ -100,10 +113,12 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 		return
 	}
 
-	// Skip if all IPs in the answer were recently probed. Each IP is checked
-	// individually — CDN IPs shared across domains are deduped globally.
+	// Probe only the IPs that are stale or unprobed: the old all-or-nothing
+	// check re-probed the ENTIRE answer (including freshly measured IPs)
+	// whenever a single IP was stale. Each IP is checked individually — CDN
+	// IPs shared across domains are deduped globally.
 	now := log.NowUnix()
-	allRecent := true
+	var needProbe []dns.RR
 	for _, rr := range answer {
 		ip, ok := zdnsutil.ExtractIPString(rr)
 		if !ok {
@@ -111,16 +126,18 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 		}
 		lastProbe, ok := p.cache.LatencyLastProbe(ip)
 		if !ok || now-lastProbe >= int64(config.DefaultLatencyProbeMinInterval) {
-			allRecent = false
-			break
+			needProbe = append(needProbe, rr)
 		}
 	}
-	if allRecent {
+	if len(needProbe) == 0 {
 		log.Debugf("LATENCY: probe skipped for %s (all IPs recently probed)", qname)
 		return
 	}
 
-	key := probeKey{qname: qname, qtype: qtype}
+	// Key the singleflight on the actual IP set: qname+qtype alone collapsed
+	// concurrent responses whose IP sets differ, leaving newly-appeared IPs
+	// unprobed until the next cache miss.
+	key := probeKey{qname: qname, qtype: qtype, ips: ipSet(needProbe)}
 	if !p.pending.Start(key) {
 		log.Debugf("LATENCY: probe skipped for %s — already in flight", qname)
 		return
@@ -131,7 +148,7 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 	p.bgGroup(func() error {
 		defer p.pending.Done(key)
 		defer zdnsutil.HandlePanic("latency probe")
-		if err := p.probeAndReorder(p.bgCtx, qname, answer, ecsResponse); err != nil {
+		if err := p.probeAndUpdateLatency(p.bgCtx, qname, answer, ecsResponse); err != nil {
 			log.Debugf("LATENCY: background probe failed for %s: %v", qname, err)
 		}
 		return nil
@@ -140,7 +157,7 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 
 // --- Prober unexported methods ---
 
-func (p *Prober) probeAndReorder(ctx context.Context, qname string, answer []dns.RR, ecsResponse *edns.ECSOption) error {
+func (p *Prober) probeAndUpdateLatency(ctx context.Context, qname string, answer []dns.RR, ecsResponse *edns.ECSOption) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}

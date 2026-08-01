@@ -57,9 +57,14 @@ func TestLoadConfig_MissingServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	// Empty config should load successfully with no listeners enabled.
-	if cfg.Server.Protocol.UDP != "" {
-		t.Error("expected empty protocol config")
+	// An empty config file starts from the defaults: omitted fields keep
+	// their default behavior (ports, DNSSEC enforcement, ECS). Explicitly
+	// empty protocol values in JSON still disable that listener.
+	if cfg.Server.Protocol.UDP != DefaultUDPPort {
+		t.Errorf("empty config should keep default UDP port, got %q", cfg.Server.Protocol.UDP)
+	}
+	if !cfg.Server.Features.DNSSECEnforce {
+		t.Error("empty config should keep default dnssec_enforce=true")
 	}
 }
 
@@ -265,11 +270,11 @@ func TestDDRRecords_AllProtocolsEnabled(t *testing.T) {
 	// Port 8853: DTLS(dot) → alpn=dot
 	// Port 9853: TLCP(dot) + DTLCP(dot) → alpn=dot
 	want := []string{
-		`1 . alpn=h2,h3 port=443 dohpath="/dns-query{?dns}" ipv4hint=127.0.0.1 ipv6hint=::1`,
-		`2 . alpn=h2 port=9443 dohpath="/dns-query{?dns}" ipv4hint=127.0.0.1 ipv6hint=::1`,
-		`3 . alpn=doq,dot port=853 ipv4hint=127.0.0.1 ipv6hint=::1`,
-		`4 . alpn=dot port=8853 ipv4hint=127.0.0.1 ipv6hint=::1`,
-		`5 . alpn=dot port=9853 ipv4hint=127.0.0.1 ipv6hint=::1`,
+		`1 dns.example.com alpn=h2,h3 port=443 dohpath="/dns-query{?dns}" ipv4hint=127.0.0.1 ipv6hint=::1`,
+		`2 dns.example.com alpn=h2 port=9443 dohpath="/dns-query{?dns}" ipv4hint=127.0.0.1 ipv6hint=::1`,
+		`3 dns.example.com alpn=doq,dot port=853 ipv4hint=127.0.0.1 ipv6hint=::1`,
+		`4 dns.example.com alpn=dot port=8853 ipv4hint=127.0.0.1 ipv6hint=::1`,
+		`5 dns.example.com alpn=dot port=9853 ipv4hint=127.0.0.1 ipv6hint=::1`,
 	}
 	if len(svcbRecords) != len(want) {
 		t.Fatalf("got %d SVCB records, want %d:\n%v", len(svcbRecords), len(want), svcbRecords)
@@ -303,10 +308,12 @@ func TestDDRRecords_HTTPSOnly(t *testing.T) {
 	cfg := `{
 		"server": {
 			"protocol": {
+				"udp": "", "tcp": "", "tls": "", "quic": "", "http3": {"port": ""},
+				"dtls": "", "dnscrypt": "", "tlcp": "", "http_tlcp": {"port": ""}, "dtlcp": "",
 				"https": {"port": "443", "endpoint": "/dns-query"}
 			},
 			"certificate": {"domain": "dns.example.com"},
-			"features": {"ddr": {"ipv4": "1.2.3.4"}}
+			"features": {"ddr": {"ipv4": "1.2.3.4", "ipv6": ""}}
 		}
 	}`
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
@@ -328,7 +335,7 @@ func TestDDRRecords_HTTPSOnly(t *testing.T) {
 	if len(svcbRecords) != 1 {
 		t.Fatalf("got %d SVCB records, want 1", len(svcbRecords))
 	}
-	want := `1 . alpn=h2 port=443 dohpath="/dns-query{?dns}" ipv4hint=1.2.3.4`
+	want := `1 dns.example.com alpn=h2 port=443 dohpath="/dns-query{?dns}" ipv4hint=1.2.3.4`
 	if svcbRecords[0].Content != want {
 		t.Errorf("got  %s\nwant %s", svcbRecords[0].Content, want)
 	}
@@ -342,12 +349,14 @@ func TestDDRRecords_DifferentPorts(t *testing.T) {
 	cfg := `{
 		"server": {
 			"protocol": {
+				"udp": "", "tcp": "", "https": {"port": ""}, "http3": {"port": ""},
+				"dnscrypt": "", "tlcp": "", "http_tlcp": {"port": ""}, "dtlcp": "",
 				"tls": "853",
 				"quic": "784",
 				"dtls": "8853"
 			},
 			"certificate": {"domain": "dns.example.com"},
-			"features": {"ddr": {"ipv4": "10.0.0.1"}}
+			"features": {"ddr": {"ipv4": "10.0.0.1", "ipv6": ""}}
 		}
 	}`
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
@@ -371,17 +380,17 @@ func TestDDRRecords_DifferentPorts(t *testing.T) {
 	}
 	// Sorted: stream group by port → 784 < 853 < 8853
 	// Port 784: QUIC(doq) only
-	want0 := `1 . alpn=doq port=784 ipv4hint=10.0.0.1`
+	want0 := `1 dns.example.com alpn=doq port=784 ipv4hint=10.0.0.1`
 	if svcbRecords[0].Content != want0 {
 		t.Errorf("record 0:\n  got  %s\n  want %s", svcbRecords[0].Content, want0)
 	}
 	// Port 853: TLS(dot) only
-	want1 := `2 . alpn=dot port=853 ipv4hint=10.0.0.1`
+	want1 := `2 dns.example.com alpn=dot port=853 ipv4hint=10.0.0.1`
 	if svcbRecords[1].Content != want1 {
 		t.Errorf("record 1:\n  got  %s\n  want %s", svcbRecords[1].Content, want1)
 	}
 	// Port 8853: DTLS(dot) only
-	want2 := `3 . alpn=dot port=8853 ipv4hint=10.0.0.1`
+	want2 := `3 dns.example.com alpn=dot port=8853 ipv4hint=10.0.0.1`
 	if svcbRecords[2].Content != want2 {
 		t.Errorf("record 2:\n  got  %s\n  want %s", svcbRecords[2].Content, want2)
 	}
@@ -396,11 +405,13 @@ func TestDDRRecords_TLSAndDTLS_SamePort(t *testing.T) {
 	cfg := `{
 		"server": {
 			"protocol": {
+				"udp": "", "tcp": "", "https": {"port": ""}, "http3": {"port": ""},
+				"quic": "", "dnscrypt": "", "tlcp": "", "http_tlcp": {"port": ""}, "dtlcp": "",
 				"tls": "853",
 				"dtls": "853"
 			},
 			"certificate": {"domain": "dns.example.com"},
-			"features": {"ddr": {"ipv4": "10.0.0.1"}}
+			"features": {"ddr": {"ipv4": "10.0.0.1", "ipv6": ""}}
 		}
 	}`
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
@@ -422,7 +433,7 @@ func TestDDRRecords_TLSAndDTLS_SamePort(t *testing.T) {
 	if len(svcbRecords) != 1 {
 		t.Fatalf("got %d SVCB records, want 1 (merged)", len(svcbRecords))
 	}
-	want := `1 . alpn=dot port=853 ipv4hint=10.0.0.1`
+	want := `1 dns.example.com alpn=dot port=853 ipv4hint=10.0.0.1`
 	if svcbRecords[0].Content != want {
 		t.Errorf("got  %s\nwant %s", svcbRecords[0].Content, want)
 	}
@@ -435,7 +446,11 @@ func TestDDRRecords_NoSecureProtocols(t *testing.T) {
 	// DDR configured but no secure protocols enabled → should be skipped.
 	cfg := `{
 		"server": {
-			"protocol": {"udp": "53"},
+			"protocol": {
+				"udp": "53", "tcp": "", "tls": "", "quic": "",
+				"https": {"port": ""}, "http3": {"port": ""}, "dtls": "",
+				"dnscrypt": "", "tlcp": "", "http_tlcp": {"port": ""}, "dtlcp": ""
+			},
 			"certificate": {"domain": "dns.example.com"},
 			"features": {"ddr": {"ipv4": "127.0.0.1"}}
 		}
@@ -463,6 +478,12 @@ func TestDDRRecords_Disabled(t *testing.T) {
 	// DDR enabled but no certificate domain → should be skipped.
 	cfg := `{
 		"server": {
+			"protocol": {
+				"udp": "", "tcp": "", "tls": "", "quic": "",
+				"https": {"port": ""}, "http3": {"port": ""}, "dtls": "",
+				"dnscrypt": "", "tlcp": "", "http_tlcp": {"port": ""}, "dtlcp": ""
+			},
+			"certificate": {"domain": ""},
 			"features": {"ddr": {"ipv4": "127.0.0.1"}}
 		}
 	}`
@@ -485,7 +506,7 @@ func TestDDRRecords_Disabled(t *testing.T) {
 func TestValidateConfig_MissingCertDomain(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")
-	cfg := `{"server":{"protocol":{"tls":"853"}},"upstream":[{"address":"8.8.8.8:53"}]}`
+	cfg := `{"server":{"protocol":{"tls":"853"},"certificate":{"domain":""}},"upstream":[{"address":"8.8.8.8:53"}]}`
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}

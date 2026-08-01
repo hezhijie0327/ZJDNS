@@ -31,8 +31,8 @@ func TestLoadRootHintsFromFile(t *testing.T) {
 		t.Fatalf("expected 2 root servers, got %d", len(hints))
 	}
 
-	aAddrs := hints["A.ROOT-SERVERS.NET."]
-	bAddrs := hints["B.ROOT-SERVERS.NET."]
+	aAddrs := hints["a.root-servers.net."]
+	bAddrs := hints["b.root-servers.net."]
 	if len(aAddrs) != 2 {
 		t.Errorf("A.ROOT-SERVERS.NET: expected 2 addrs, got %d", len(aAddrs))
 	}

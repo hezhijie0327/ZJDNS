@@ -78,16 +78,16 @@ func New(
 		getProxy:         getProxy,
 		timeout:          timeout,
 	}
-	c.dohTransports.OnEvict = func(_ string, client *http.Client) {
+	c.dohTransports.SetOnEvict(func(_ string, client *http.Client) {
 		if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
 			ct.CloseIdleConnections()
 		}
-	}
-	c.doh3Transports.OnEvict = func(_ string, client *http.Client) {
+	})
+	c.doh3Transports.SetOnEvict(func(_ string, client *http.Client) {
 		if t, ok := client.Transport.(*http3Transport); ok {
 			_ = t.Close()
 		}
-	}
+	})
 	return c
 }
 
@@ -229,15 +229,16 @@ func (c *Client) WarmUpTLS(ctx context.Context, server *config.UpstreamServer) {
 
 // WarmUpQUIC pre-establishes a QUIC connection for DoQ.
 func (c *Client) WarmUpQUIC(ctx context.Context, server *config.UpstreamServer) {
-	poolKey := server.Address
-	if server.Proxy != "" {
-		poolKey = server.Address + "|" + server.Proxy
-	}
+	// Identity-keyed pool/config keys (address|serverName|skipVerify|proxy):
+	// two upstreams sharing an address must not share a pooled connection or
+	// 0-RTT token store across trust boundaries.
+	poolKey := transportKey(server.Address, server.ServerName, server.SkipTLSVerify, server.Proxy)
+	configKey := "doq:" + poolKey
 	proxyDialer := c.getProxy(server)
 	dialTLS := c.stdTLSConfig(server).Clone()
 	dialTLS.NextProtos = config.NextProtoDOQ
 	if c.quicPool != nil {
-		if err := c.quicPool.WarmUp(ctx, poolKey, func(dialCtx context.Context, addr string) (*quic.Conn, error) {
+		if err := c.quicPool.WarmUp(ctx, poolKey, func(dialCtx context.Context, _ string) (*quic.Conn, error) {
 			timeoutCtx, cancel := context.WithTimeout(dialCtx, config.DefaultDNSQueryTimeout)
 			defer cancel()
 			if proxyDialer != nil {
@@ -245,14 +246,20 @@ func (c *Client) WarmUpQUIC(ctx context.Context, server *config.UpstreamServer) 
 				if err != nil {
 					return nil, fmt.Errorf("proxy ListenPacket: %w", err)
 				}
-				remoteAddr, err := net.ResolveUDPAddr("udp", addr)
+				remoteAddr, err := net.ResolveUDPAddr("udp", server.Address)
 				if err != nil {
 					_ = pconn.Close()
-					return nil, fmt.Errorf("resolve %s: %w", addr, err)
+					return nil, fmt.Errorf("resolve %s: %w", server.Address, err)
 				}
-				return quic.Dial(timeoutCtx, pconn, remoteAddr, dialTLS, c.getQUICConfig("doq:"+addr, dialTLS.InsecureSkipVerify))
+				conn, err := quic.Dial(timeoutCtx, pconn, remoteAddr, dialTLS, c.getQUICConfig(configKey, dialTLS.InsecureSkipVerify))
+				if err != nil {
+					// quic-go does not take ownership of a caller-provided
+					// PacketConn on a failed dial — do not leak the UDP socket.
+					_ = pconn.Close()
+				}
+				return conn, err
 			}
-			return quic.DialAddrEarly(timeoutCtx, addr, dialTLS, c.getQUICConfig("doq:"+addr, dialTLS.InsecureSkipVerify))
+			return quic.DialAddrEarly(timeoutCtx, server.Address, dialTLS, c.getQUICConfig(configKey, dialTLS.InsecureSkipVerify))
 		}); err != nil {
 			log.Debugf("UPSTREAM: pre-warm DoQ to %s: %v", server.Address, err)
 			return
@@ -262,14 +269,16 @@ func (c *Client) WarmUpQUIC(ctx context.Context, server *config.UpstreamServer) 
 }
 
 // WarmUpHTTPS pre-creates a DoH transport.
-func (c *Client) WarmUpHTTPS(server *config.UpstreamServer) {
+func (c *Client) WarmUpHTTPS(_ context.Context, server *config.UpstreamServer) {
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		log.Debugf("UPSTREAM: pre-warm DoH parse %s: %v", server.Address, err)
 		return
 	}
 	if parsedURL.Port() == "" {
-		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultHTTPSPort)
+		// Hostname() strips IPv6 brackets — JoinHostPort on the raw Host
+		// would double-bracket literals like [[2001:db8::1]]:443.
+		parsedURL.Host = net.JoinHostPort(parsedURL.Hostname(), config.DefaultHTTPSPort)
 	}
 	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
 	tlsConfig := c.eTLSClientConfig(server)
@@ -278,14 +287,16 @@ func (c *Client) WarmUpHTTPS(server *config.UpstreamServer) {
 }
 
 // WarmUpHTTP3 pre-creates a DoH3 transport.
-func (c *Client) WarmUpHTTP3(server *config.UpstreamServer) {
+func (c *Client) WarmUpHTTP3(_ context.Context, server *config.UpstreamServer) {
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		log.Debugf("UPSTREAM: pre-warm DoH3 parse %s: %v", server.Address, err)
 		return
 	}
 	if parsedURL.Port() == "" {
-		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultHTTPSPort)
+		// Hostname() strips IPv6 brackets — JoinHostPort on the raw Host
+		// would double-bracket literals like [[2001:db8::1]]:443.
+		parsedURL.Host = net.JoinHostPort(parsedURL.Hostname(), config.DefaultHTTPSPort)
 	}
 	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
 	tlsConfig := c.stdTLSConfig(server)

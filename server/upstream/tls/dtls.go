@@ -87,8 +87,11 @@ func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.U
 	}
 
 	queryLen := len(msg.Data)
+	if queryLen > 65535 {
+		return nil, fmt.Errorf("dtls: query too large (%d bytes)", queryLen)
+	}
 	req := make([]byte, 2+queryLen)
-	binary.BigEndian.PutUint16(req[:2], uint16(queryLen)) //nolint:gosec // G115: DNS query length < 65535 (UDP datagram limit)
+	binary.BigEndian.PutUint16(req[:2], uint16(queryLen))
 	copy(req[2:], msg.Data)
 	if _, err := conn.Write(req); err != nil {
 		return nil, fmt.Errorf("dtls: write query: %w", err)

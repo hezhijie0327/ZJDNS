@@ -53,7 +53,10 @@ const (
 	// TagSize is the Poly1305 authentication tag size in bytes.
 	TagSize = 16
 
-	// EDNSSize is the overhead for DNSCrypt headers when calculating truncation.
+	// EDNSSize is the overhead reserved for DNSCrypt headers when calculating
+	// truncation. It is deliberately >= MinResponseOverhead(XWingPQ): the
+	// wire-budget paths must never under-count the PQ frame overhead.
+	// (Cross-referenced with ResponseOverhead / MinResponseOverhead below.)
 	EDNSSize = 64
 
 	// QueryOverhead is the wire-format overhead for a classical DNSCrypt query:
@@ -61,7 +64,9 @@ const (
 	QueryOverhead = ClientMagicSize + KeySize + NonceSize/2 + TagSize
 
 	// ResponseOverhead is the wire-format overhead for a DNSCrypt response:
-	// resolver-magic (8) + nonce (24) + tag (16).
+	// resolver-magic (8) + nonce (24) + tag (16). Note it OMITS the 1-byte
+	// pad delimiter that MinResponseOverhead includes — keep the two in
+	// sync when either changes (they feed the anti-amplification budgets).
 	ResponseOverhead = ResolverMagicSize + NonceSize + TagSize
 
 	// PQC public key, ciphertext, and certificate sizes for X-Wing PQ/T hybrid KEM.
@@ -87,8 +92,9 @@ const (
 var CertMagic = [4]byte{0x44, 0x4e, 0x53, 0x43}
 
 // ResolverMagic is the byte sequence that must appear at the beginning of every
-// DNSCrypt response.
-var ResolverMagic = []byte{0x72, 0x36, 0x66, 0x6e, 0x76, 0x57, 0x6a, 0x38}
+// DNSCrypt response. A fixed array so external callers cannot mutate the
+// process-wide response prefix in place (a slice would be writable).
+var ResolverMagic = [ResolverMagicSize]byte{0x72, 0x36, 0x66, 0x6e, 0x76, 0x57, 0x6a, 0x38}
 
 // PQResumeMagic is the byte sequence identifying a resumed PQ query (carries
 // a resumption ticket instead of a full X-Wing ciphertext).
@@ -98,8 +104,10 @@ var PQResumeMagic = [8]byte{'P', 'Q', 'R', 'e', 's', 'u', 'm', 'e'}
 // carrying a resumption ticket.
 var PQControlMagic = [4]byte{'P', 'Q', 'D', 'R'}
 
-// PQESVersion is the wire-format es-version for X-Wing PQ.
-var PQESVersion = [2]byte{0x00, 0x03}
+// PQESVersion is the wire-format es-version for X-Wing PQ. Derived from
+// XWingPQ so the in-memory construction routing and the bytes emitted on the
+// wire can never desynchronize.
+var PQESVersion = [2]byte{byte(XWingPQ >> 8), byte(XWingPQ)}
 
 // compile-time interface check.
 var _ fmt.Stringer = CryptoConstruction(0)
@@ -142,7 +150,10 @@ func (c CryptoConstruction) IsPQ() bool {
 //	PQ (XWingPQ): 8 magic + 24 nonce + 16 tag + 2 control-len + 1 pad delimiter = 51
 func MinResponseOverhead(esVersion CryptoConstruction) int {
 	const base = ResolverMagicSize + NonceSize + TagSize + 1
-	if esVersion.IsPQ() {
+	if esVersion.IsPQ() || esVersion > XWingPQ {
+		// Unknown constructions default to the LARGER PQ overhead: an
+		// over-estimate is always safe for anti-amplification budgeting,
+		// while an under-estimate could admit an over-budget response.
 		return base + 2
 	}
 	return base

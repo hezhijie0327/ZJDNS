@@ -61,6 +61,17 @@ func addDDRRecords(cfg *ServerConfig) {
 	ddr := cfg.Server.Features.DDR
 	domain := strings.TrimSuffix(cfg.Server.Certificate.Domain, ".")
 
+	// Defensive guard: advertising empty SVCB records is meaningless. The
+	// caller's shouldEnableDDR check normally prevents this, but keeping the
+	// precondition local makes the invariant robust to future callers.
+	if cfg.Server.Protocol.HTTPS.Port == "" && cfg.Server.Protocol.HTTP3.Port == "" &&
+		cfg.Server.Protocol.HTTPTLCP.Port == "" && cfg.Server.Protocol.TLS == "" &&
+		cfg.Server.Protocol.QUIC == "" && cfg.Server.Protocol.DTLS == "" &&
+		cfg.Server.Protocol.TLCP == "" && cfg.Server.Protocol.DTLCP == "" {
+		log.Warnf("CONFIG: DDR enabled but no encrypted protocol ports are configured — no DDR records added")
+		return
+	}
+
 	if strings.ContainsAny(domain, " \"") || strings.ContainsAny(ddr.IPv4, " \"") || strings.ContainsAny(ddr.IPv6, " \"") {
 		log.Warnf("CONFIG: DDR domain/IP contains unsafe characters, DDR records will not be added")
 		return
@@ -76,6 +87,13 @@ func addDDRRecords(cfg *ServerConfig) {
 		}
 		if !strings.HasPrefix(ep, "/") {
 			ep = "/" + ep
+		}
+		// The endpoint is embedded verbatim in SVCB rdata (dohpath="...").
+		// Reject characters that would produce malformed rdata, and reject
+		// absolute URLs (the endpoint is a path on this server's host).
+		if strings.ContainsAny(ep, "\"\\ \t\n") || strings.Contains(ep, "://") {
+			log.Warnf("CONFIG: DDR endpoint %q contains unsafe characters, DDR records will not be added", ep)
+			return ""
 		}
 		return ep
 	}
@@ -125,6 +143,10 @@ func addDDRRecords(cfg *ServerConfig) {
 		r.alpns[d.alpn] = true
 		if d.endpoint != "" && r.dohpath == "" {
 			r.dohpath = normalizeEndpoint(d.endpoint)
+			if r.dohpath == "" && d.endpoint != "" {
+				// Unsafe endpoint — drop this protocol definition entirely.
+				continue
+			}
 		}
 	}
 
@@ -165,11 +187,11 @@ func addDDRRecords(cfg *ServerConfig) {
 	for priority, r := range records {
 		var content string
 		if r.dohpath != "" {
-			content = fmt.Sprintf("%d . alpn=%s port=%s dohpath=\"%s{?dns}\"",
-				priority+1, r.alpns, r.port, r.dohpath)
+			content = fmt.Sprintf("%d %s alpn=%s port=%s dohpath=\"%s{?dns}\"",
+				priority+1, domain, r.alpns, r.port, r.dohpath)
 		} else {
-			content = fmt.Sprintf("%d . alpn=%s port=%s",
-				priority+1, r.alpns, r.port)
+			content = fmt.Sprintf("%d %s alpn=%s port=%s",
+				priority+1, domain, r.alpns, r.port)
 		}
 		zoneServiceRecords = append(zoneServiceRecords, ZoneRecord{Type: dns.TypeSVCB, Content: content})
 	}
@@ -189,7 +211,9 @@ func addDDRRecords(cfg *ServerConfig) {
 	}
 
 	for _, name := range ddrNames {
-		cfg.Zone = append(cfg.Zone, ZoneRule{Name: name, Answer: zoneServiceRecords, Additional: zoneAdditional})
+		// Clone per rule: ZoneRule is stored by value and all rules would
+		// otherwise alias the same backing arrays.
+		cfg.Zone = append(cfg.Zone, ZoneRule{Name: name, Answer: slices.Clone(zoneServiceRecords), Additional: slices.Clone(zoneAdditional)})
 	}
 
 	var ipInfo string

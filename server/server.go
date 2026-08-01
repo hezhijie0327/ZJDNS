@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	_ "net/http/pprof" //nolint:gosec // G108: pprof binds 127.0.0.1 only and is off unless configured
 	"os"
 	"runtime"
 	"strings"
@@ -89,6 +90,15 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		cancel(err)
 		return nil, fmt.Errorf("database init: %w", err)
 	}
+	// Any later init failure must close the DB — BadgerDB holds an exclusive
+	// directory lock, so a leaked open handle would block every subsequent
+	// start of the server.
+	initOK := false
+	defer func() {
+		if !initOK {
+			_ = db.Close()
+		}
+	}()
 
 	cacheStore := cache.New(db)
 	statsCollector := stats.New()
@@ -120,15 +130,13 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	s.handler = h
 
-	if err := s.initProtocolListeners(cfg, h); err != nil {
-		cancel(err)
-		return nil, err
-	}
+	s.initProtocolListeners(cfg, h)
 
 	s.initPprof(cfg)
 
 	s.startBackgroundTasks()
 
+	initOK = true
 	return s, nil
 }
 
@@ -314,7 +322,7 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, s
 // initProtocolListeners creates and wires all protocol servers (TLS, TLCP,
 // DNSCrypt, Plain) into the Server struct.  Errors are non-fatal — the
 // server starts with the protocols that initialised successfully.
-func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Handler) error {
+func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Handler) {
 	if cfg.Server.Certificate.TLS.IsEnabled() {
 		tlsCfg := tls.Config{
 			TLSPort:       cfg.Server.Protocol.TLS,
@@ -334,30 +342,32 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 		}
 		tlsSrv, err := tls.New(h, &tlsCfg)
 		if err != nil {
-			return fmt.Errorf("TLS server init: %w", err)
+			log.Warnf("SERVER: TLS listener init failed, continuing without it: %v", err)
+		} else {
+			s.tls = tlsSrv
 		}
-		s.tls = tlsSrv
 	}
 
 	if cfg.Server.Protocol.DNSCrypt != "" {
 		providerName := cfg.Server.Certificate.DNSCrypt.ProviderName(cfg.Server.Certificate.Domain)
 		dnscryptSrv, err := serverdnscrypt.New(&cfg.Server.Certificate.DNSCrypt, cfg.Server.Protocol.DNSCrypt, providerName)
 		if err != nil {
-			return fmt.Errorf("DNSCrypt server init: %w", err)
+			log.Warnf("SERVER: DNSCrypt listener init failed, continuing without it: %v", err)
+		} else {
+			s.dnscryptServer = dnscryptSrv
 		}
-		s.dnscryptServer = dnscryptSrv
 	}
 
 	if cfg.Server.Certificate.TLCP.IsEnabled() && (cfg.Server.Protocol.TLCP != "" || cfg.Server.Protocol.HTTPTLCP.Port != "" || cfg.Server.Protocol.DTLCP != "") {
-		tlcpSrv, err := servertlcp.New(&cfg.Server.Certificate.TLCP, cfg.Server.Protocol.TLCP, cfg.Server.Protocol.HTTPTLCP.Port, cfg.Server.Protocol.HTTPTLCP.Endpoint, cfg.Server.Protocol.DTLCP)
+		tlcpSrv, err := servertlcp.New(&cfg.Server.Certificate.TLCP, cfg.Server.Protocol.TLCP, cfg.Server.Protocol.HTTPTLCP.Port, cfg.Server.Protocol.HTTPTLCP.Endpoint, cfg.Server.Protocol.DTLCP, cfg.Server.Certificate.Domain)
 		if err != nil {
-			return fmt.Errorf("TLCP server init: %w", err)
+			log.Warnf("SERVER: TLCP listener init failed, continuing without it: %v", err)
+		} else {
+			s.tlcpServer = tlcpSrv
 		}
-		s.tlcpServer = tlcpSrv
 	}
 
 	s.plain = serverplain.New(cfg)
-	return nil
 }
 
 // initPprof starts the optional pprof HTTP listener on 127.0.0.1.
@@ -374,6 +384,9 @@ func (s *Server) initPprof(cfg *config.ServerConfig) {
 		ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
 		ReadTimeout:       0,
 		IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
+		// net/http/pprof's init registers /debug/pprof/ here; without a
+		// handler every pprof path would 404.
+		Handler: http.DefaultServeMux,
 	}
 }
 

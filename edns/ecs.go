@@ -140,7 +140,13 @@ func isECSOptionEqual(a, b *ECSOption) bool {
 func (h *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, error) {
 	subnet = strings.ToLower(strings.TrimSpace(subnet))
 	if subnet == config.ECSModeAuto {
-		return h.detectVia(forceIPv6, false), nil
+		ecs := h.detectVia(forceIPv6, false)
+		if ecs == nil {
+			// A broken/unreachable AutoDetectURL would otherwise leave the
+			// default ECS unset forever with no diagnostic.
+			return nil, errors.New("ECS auto-detection returned no address")
+		}
+		return ecs, nil
 	}
 	if _, ipNet, err := net.ParseCIDR(subnet); err == nil {
 		// Mask.Size() always succeeds for a successfully parsed CIDR.
@@ -225,6 +231,11 @@ func VerifyECSResponse(query, response *ECSOption) bool {
 	// Compare only the significant bits of the address
 	addrLen := len(query.Address)
 	if addrLen != len(response.Address) {
+		return false
+	}
+	// A wire-supplied SourcePrefix larger than the address width would index
+	// past the slice end below; degrade to 'mismatch' instead of panicking.
+	if int(query.SourcePrefix) > len(query.Address)*8 || int(response.SourcePrefix) > len(response.Address)*8 {
 		return false
 	}
 	fullBytes := int(query.SourcePrefix) / 8

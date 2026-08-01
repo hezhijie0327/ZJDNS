@@ -21,6 +21,9 @@ type tcpWriteEntry struct {
 	lastAccess   atomic.Int64
 	capacity     chan struct{}
 	capacityOnce sync.Once
+	// refs counts in-flight request goroutines (plus the synchronous SERVFAIL
+	// path). The writeMu sweep only deletes entries with refs == 0.
+	refs atomic.Int64
 }
 
 // handleDNSRequest is the protocol bridge: it extracts client IP, determines
@@ -54,9 +57,16 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 			entry.writeMu = make(chan struct{}, 1)
 		})
 
+		// In-flight refcount: incremented synchronously so the sweep can never
+		// delete an entry a handler goroutine still holds (the goroutine
+		// releases it on exit; the synchronous SERVFAIL path releases it via
+		// defer before returning).
+		entry.refs.Add(1)
+
 		select {
 		case entry.capacity <- struct{}{}:
 		default:
+			defer entry.refs.Add(-1)
 			msg := pool.DefaultMessage.Get()
 			dnsutil.SetReply(msg, req)
 			msg.Rcode = dns.RcodeServerFailure
@@ -96,14 +106,32 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		// causes the listener Accept loop to return, so in-flight goroutines exit quickly.
 		// No WaitGroup is needed because shutdown blocks on listener close before returning.
 		go func() {
+			defer entry.refs.Add(-1)
 			defer func() { <-entry.capacity }()
 			defer zdnsutil.HandlePanic("TCP query handler")
 
 			// Global TCP goroutine bound — matches TLS errgroup.SetLimit.
+			// Bounded wait: a saturated semaphore must not occupy the
+			// per-client slot forever. On timeout the request is dropped
+			// silently (this fire-and-forget goroutine has no response
+			// path to the client); the client's own query timeout will
+			// surface the failure.
+			semTimer := time.NewTimer(config.DefaultDNSQueryTimeout)
 			select {
 			case s.tcpSem <- struct{}{}:
+				if !semTimer.Stop() {
+					// Go 1.23+ timers use unbuffered channels: drain so the
+					// timer value is not left undelivered.
+					select {
+					case <-semTimer.C:
+					default:
+					}
+				}
 				defer func() { <-s.tcpSem }()
 			case <-s.ctx.Done():
+				semTimer.Stop()
+				return
+			case <-semTimer.C:
 				return
 			}
 

@@ -77,6 +77,10 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			msg.CheckingDisabled = baseMsg.CheckingDisabled
 			msg.Security = baseMsg.Security
 			msg.UDPSize = baseMsg.UDPSize
+			// EDNS(0) options (ECS SUBNET, cookie, padding) live in Pseudo in
+			// this fork — without this copy the caller's explicit ECS never
+			// reached the authoritative servers (geo-aware resolution broke).
+			msg.Pseudo = append(msg.Pseudo, baseMsg.Pseudo...)
 			// ExecuteQuery reads msg via Pack()/Data — caller retains ownership.
 
 			subCtx, subCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
@@ -198,6 +202,22 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		return resp, verdict, nil
 	case <-errgroupDone:
 	case <-ctx.Done():
+	}
+
+	// Drain a NOERROR result that arrived concurrently with errgroupDone or
+	// ctx cancellation: both select cases can be ready at once (Go picks
+	// uniformly), and dropping the buffered response here would fall through
+	// to the NXDOMAIN fallback with a wrong answer.
+	select {
+	case resp := <-resultChan:
+		if nx := nxdomainMsg.Load(); nx != nil {
+			pool.DefaultMessage.Put(nx)
+		}
+		if poisonRejected.Load() {
+			verdict = defense.VerdictPoisoned
+		}
+		return resp, verdict, nil
+	default:
 	}
 
 	// No NOERROR response — fall back to NXDOMAIN if one was collected.

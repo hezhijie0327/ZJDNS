@@ -20,13 +20,17 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// captureUpstreamEDE extracts and stores the EDE option from an upstream
-// response for passthrough to downstream clients. Upstream resolvers attach
-// EDE codes (e.g. DNSSEC Bogus) to any rcode, so this is called once per
-// response before rcode-specific handling.
-func captureUpstreamEDE(lastEDE *atomic.Pointer[dns.EDE], resp *dns.Msg, serverAddr string) {
+// captureUpstreamEDE extracts the EDE option from an upstream response for
+// passthrough to downstream clients. Upstream resolvers attach EDE codes
+// (e.g. DNSSEC Bogus) to any rcode. The copied EDE is RETURNED so the caller
+// carries it per-goroutine into its own result — reloading the shared atomic
+// at send time can attribute a DIFFERENT upstream's EDE to the winning
+// response (a slower SERVFAIL/DNSSEC-bogus responder could Store after this
+// one captured). The atomic is still updated for the all-servers-failed
+// fallback path.
+func captureUpstreamEDE(lastEDE *atomic.Pointer[dns.EDE], resp *dns.Msg, serverAddr string) *dns.EDE {
 	if resp == nil {
-		return
+		return nil
 	}
 	for _, rr := range resp.Pseudo {
 		if ede, ok := rr.(*dns.EDE); ok {
@@ -36,9 +40,10 @@ func captureUpstreamEDE(lastEDE *atomic.Pointer[dns.EDE], resp *dns.Msg, serverA
 			lastEDE.Store(copied)
 			log.Debugf("UPSTREAM: captured EDE %d (%s) from %s (rcode=%s)",
 				ede.InfoCode, dns.ExtendedErrorToString[ede.InfoCode], serverAddr, dns.RcodeToString[resp.Rcode])
-			break
+			return copied
 		}
 	}
+	return nil
 }
 
 func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *edns.ECSOption, servers []*config.UpstreamServer) QueryResult {
@@ -211,22 +216,20 @@ func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]
 			continue
 		}
 
-		accepted := false
-		hasIPTag := false
+		// AND semantics: every pre-filtered tag must be satisfied. The old
+		// accept-on-first-match let a record inside tagB but outside tagA
+		// bypass a negated '!tagA' rule (the negate field was never used).
+		accepted := len(ipTags) == 0
 		ipStr := ip.String()
 		for _, t := range ipTags {
-			hasIPTag = true
 			matched, exists := r.crd.MatchIP(ipStr, t.raw)
 			if !exists {
 				return nil, true
 			}
-			if matched {
-				accepted = true
+			if !matched {
+				accepted = false
 				break
 			}
-		}
-		if !hasIPTag {
-			accepted = true
 		}
 		if accepted {
 			filtered = append(filtered, rr)
@@ -251,7 +254,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 		serverDesc = server.Address + " (" + strings.ToUpper(server.Protocol) + ")"
 	}
 
-	captureUpstreamEDE(lastEDE, queryResult.Response, server.Address)
+	upstreamEDE := captureUpstreamEDE(lastEDE, queryResult.Response, server.Address)
 
 	switch rcode {
 	case dns.RcodeSuccess:
@@ -270,7 +273,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 		ecsResponse := r.edns.ParseFromDNS(queryResult.Response)
 
 		select {
-		case resultChan <- QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Cacheable: !server.SkipCache, ECS: ecsResponse, Server: serverDesc, UpstreamEDE: lastEDE.Load()}:
+		case resultChan <- QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Cacheable: !server.SkipCache, ECS: ecsResponse, Server: serverDesc, UpstreamEDE: upstreamEDE}:
 			remaining := activeConnections.Load() - 1
 			if remaining > 0 {
 				log.Debugf("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
@@ -291,7 +294,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 			Cacheable:   !server.SkipCache,
 			ECS:         r.edns.ParseFromDNS(queryResult.Response),
 			Server:      serverDesc,
-			UpstreamEDE: lastEDE.Load(),
+			UpstreamEDE: upstreamEDE,
 		})
 		pool.DefaultMessage.Put(queryResult.Response)
 	default:

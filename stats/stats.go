@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"zjdns/internal/log"
+
+	"codeberg.org/miekg/dns"
 )
 
 // Request holds per-query metadata for stats aggregation.
@@ -41,7 +43,9 @@ type Collector struct {
 
 	prefetch atomic.Int64
 
-	rCode [6]atomic.Int64
+	// rCode covers all rcodes this server can produce, including BADCOOKIE
+	// (23) — narrower arrays silently dropped them from the rcode line.
+	rCode [24]atomic.Int64
 
 	latCounts [latBuckets]atomic.Int64
 	latTotal  atomic.Int64
@@ -177,8 +181,13 @@ func formatLine(metrics ...metric) string {
 }
 
 // Stats returns all statistics in a compact multi-line format.
+//
+// Best-effort snapshot: each counter is loaded individually, so concurrent
+// Record()/Reset() calls can make category percentages disagree slightly with
+// the total. This is a monitoring view, not a transactional report.
 func (c *Collector) Stats() []string {
 	total := c.total.Load()
+	totalMS := c.totalMS.Load()
 
 	// Result counters.
 	h, m, s, pf, z := c.hit.Load(), c.miss.Load(), c.stale.Load(), c.prefetch.Load(), c.zone.Load()
@@ -187,6 +196,7 @@ func (c *Collector) Stats() []string {
 	// Rcodes.
 	noerr, formerr, servfail, nx, nimp, ref := c.rCode[0].Load(), c.rCode[1].Load(), c.rCode[2].Load(),
 		c.rCode[3].Load(), c.rCode[4].Load(), c.rCode[5].Load()
+	badcookieRC := c.rCode[dns.RcodeBadCookie].Load()
 
 	// Transport protocols.
 	udp, tcpN, tls, quic, https, http3, dtls := c.udp.Load(), c.tcp.Load(), c.tls.Load(), c.quic.Load(), c.https.Load(), c.http3.Load(), c.dtls.Load()
@@ -220,9 +230,13 @@ func (c *Collector) Stats() []string {
 	}
 	out := make([]string, 0, 8)
 
-	// QPS + Latency percentiles (always shown).
-	out = append(out, fmt.Sprintf("qps=%.1f/s p50=%.0fms p95=%.0fms p99=%.0fms",
-		qps, c.percentile(50), c.percentile(95), c.percentile(99)))
+	// QPS + Latency percentiles + mean (always shown).
+	avg := float64(0)
+	if total > 0 {
+		avg = float64(totalMS) / float64(total)
+	}
+	out = append(out, fmt.Sprintf("qps=%.1f/s avg=%.0fms p50=%.0fms p95=%.0fms p99=%.0fms",
+		qps, avg, c.percentile(50), c.percentile(95), c.percentile(99)))
 
 	// Results — omit zero-count entries.
 	if s := formatLine(
@@ -233,11 +247,12 @@ func (c *Collector) Stats() []string {
 		out = append(out, s)
 	}
 
-	// Rcodes.
+	// Rcodes (BADCOOKIE 23 is counted separately when present).
 	if s := formatLine(
 		metric{"noerr", noerr, noerrR}, metric{"formerr", formerr, formerrR},
 		metric{"servfail", servfail, servfailR}, metric{"nx", nx, nxR},
 		metric{"nimp", nimp, nimpR}, metric{"ref", ref, refR},
+		metric{"badcookie", badcookieRC, float64(badcookieRC) / float64(total) * 100},
 	); s != "" {
 		out = append(out, s)
 	}
@@ -284,8 +299,44 @@ func (c *Collector) percentile(p float64) float64 {
 	return float64(latBounds[latBuckets-1])
 }
 
-// Reset clears all counters.
+// Reset clears all counters. Each counter is zeroed individually with atomic
+// stores — a whole-struct copy would race the lock-free Record()/Stats()
+// readers (torn reads, lost increments). The reset is still not a
+// transactional snapshot: counters may be incremented while Reset runs.
 func (c *Collector) Reset() {
-	*c = Collector{}
-	c.startTime.Store(log.NowUnix())
+	now := log.NowUnix()
+	c.startTime.Store(now)
+	c.total.Store(0)
+	c.totalMS.Store(0)
+	c.hit.Store(0)
+	c.miss.Store(0)
+	c.stale.Store(0)
+	c.zone.Store(0)
+	c.blocked.Store(0)
+	c.badcookie.Store(0)
+	c.errorCount.Store(0)
+	c.udp.Store(0)
+	c.tcp.Store(0)
+	c.tls.Store(0)
+	c.quic.Store(0)
+	c.https.Store(0)
+	c.http3.Store(0)
+	c.dtls.Store(0)
+	c.dnscrypt.Store(0)
+	c.dnscryptTCP.Store(0)
+	c.tlcp.Store(0)
+	c.httpTLCP.Store(0)
+	c.dtlcp.Store(0)
+	c.secure.Store(0)
+	c.insecure.Store(0)
+	c.bogus.Store(0)
+	c.poisoned.Store(0)
+	c.prefetch.Store(0)
+	for i := range c.rCode {
+		c.rCode[i].Store(0)
+	}
+	for i := range c.latCounts {
+		c.latCounts[i].Store(0)
+	}
+	c.latTotal.Store(0)
 }

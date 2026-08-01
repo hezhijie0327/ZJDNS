@@ -2,6 +2,8 @@ package tlcp
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -177,6 +179,17 @@ func acceptDTLCP(udpConn *net.UDPConn, firstPacket []byte, remoteAddr *net.UDPAd
 		remoteAddr: remoteAddr,
 	}
 
+	// Bound the handshake: a client that sends one datagram then goes silent
+	// would otherwise block Handshake forever. The accept loop serves
+	// connections synchronously, so one stalled handshake would take down the
+	// entire DTLCP server. The deadline must be cleared on every exit path
+	// because bpc shares the listener's UDP socket.
+	if err := bpc.SetDeadline(time.Now().Add(config.DefaultDTLSIdleTimeout)); err != nil {
+		_ = bpc.Close()
+		return nil, fmt.Errorf("setting DTLCP handshake deadline: %w", err)
+	}
+	defer bpc.SetDeadline(time.Time{}) //nolint:errcheck // best-effort cleanup of the shared socket
+
 	conn := dtlcp.Server(bpc, remoteAddr, cfg)
 	if err := conn.Handshake(); err != nil {
 		_ = conn.Close()
@@ -248,11 +261,23 @@ func (s *Server) handleDTLCPConnections(listener net.Listener) {
 			case <-s.ctx.Done():
 				return
 			default:
+				// Back off on temporary errors: an immediately-repeating
+				// temporary failure (e.g. EMFILE) would otherwise spin the
+				// accept loop at 100% CPU. A 50ms pause also gives the
+				// condition time to clear.
+				backoff := 50 * time.Millisecond
 				if zdnsutil.IsTemporaryError(err) {
 					log.Debugf("TLCP: DTLCP accept temporary error: %v", err)
-					continue
+				} else {
+					log.Warnf("TLCP: DTLCP accept error: %v", err)
 				}
-				log.Warnf("TLCP: DTLCP accept error: %v", err)
+				timer := time.NewTimer(backoff)
+				select {
+				case <-timer.C:
+				case <-s.ctx.Done():
+					timer.Stop()
+					return
+				}
 				continue
 			}
 		}
@@ -293,6 +318,13 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 
 		n, err := conn.Read(buf)
 		if err != nil {
+			// A read-deadline expiry means the peer went idle — close the
+			// connection instead of retrying forever (a timeout was being
+			// classified as temporary and the loop spun).
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				return
+			}
 			if !zdnsutil.IsTemporaryError(err) {
 				return
 			}
@@ -329,6 +361,14 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 // Returns true to continue the connection loop, false to close the connection.
 // The response is always returned to the pool (defer-protected).
 func (s *Server) sendDTLCPResponse(conn net.Conn, response *dns.Msg) bool {
+	// The per-connection loop only refreshes the READ deadline; the write
+	// deadline was set once at accept time and would expire mid-conversation
+	// for any connection alive longer than the idle timeout. Refresh it per
+	// response.
+	if err := conn.SetWriteDeadline(time.Now().Add(config.DefaultDTLSIdleTimeout)); err != nil {
+		log.Debugf("TLCP: DTLCP SetWriteDeadline error: %v", err)
+		return false
+	}
 	if response == nil {
 		return true
 	}

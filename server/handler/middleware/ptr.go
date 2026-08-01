@@ -22,7 +22,7 @@ type PTR struct {
 func (m *PTR) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		// Only run on cache miss.
-		if qctx.CacheHit {
+		if qctx.CacheEntry != nil {
 			return next.ServeDNS(ctx, qctx)
 		}
 
@@ -54,6 +54,7 @@ func (m *PTR) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		response.Answer = records
 		response.Rcode = dns.RcodeSuccess
 		qctx.Res = response
+		qctx.Responded = true
 		qctx.CacheServed = true
 
 		log.Debugf("PTR: reverse lookup %s -> %d records (from cache)", qname, len(records))

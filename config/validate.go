@@ -62,6 +62,14 @@ func validateConfig(cfg *ServerConfig) error {
 		return err
 	}
 
+	// DNSCrypt identity keys must be provided together: with only one key
+	// set, startup would regenerate BOTH, silently discarding the
+	// user-provided key material and changing the long-term provider identity.
+	dc := &cfg.Server.Certificate.DNSCrypt
+	if (dc.PublicKey == "") != (dc.PrivateKey == "") {
+		return errors.New("config: certificate.dnscrypt public_key and private_key must be configured together")
+	}
+
 	if err := validateLatencyProbeDefaults(cfg.Server.Features.LatencyProbe); err != nil {
 		return err
 	}
@@ -170,15 +178,18 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 			// Stamp addresses are parsed during normalization — the raw
 			// sdns:// string is not a valid host:port or URL.
 			if !strings.HasPrefix(server.Address, "sdns://") {
-				if _, _, err := net.SplitHostPort(server.Address); err != nil {
-					if protocol == ProtoHTTPS || protocol == ProtoHTTP3 ||
-						protocol == ProtoHTTPTLCP {
-						if _, err := url.Parse(server.Address); err != nil {
-							return fmt.Errorf("upstream server %d address invalid: %w", i, err)
+				if protocol == ProtoHTTPS || protocol == ProtoHTTP3 ||
+					protocol == ProtoHTTPTLCP {
+					// URL form: require an absolute URL with a scheme and
+					// host — url.Parse alone accepts relative strings and
+					// empty hosts, deferring failure to runtime.
+					if u, err := url.Parse(server.Address); err != nil || u.Scheme == "" || u.Host == "" {
+						if _, _, hpErr := net.SplitHostPort(server.Address); hpErr != nil {
+							return fmt.Errorf("upstream server %d address invalid (must be an absolute https URL or host:port): %w", i, err)
 						}
-					} else {
-						return fmt.Errorf("upstream server %d address invalid: %w", i, err)
 					}
+				} else if _, _, err := net.SplitHostPort(server.Address); err != nil {
+					return fmt.Errorf("upstream server %d address invalid: %w", i, err)
 				}
 			}
 		}
@@ -330,17 +341,17 @@ func validatePorts(cfg *ServerConfig) error {
 }
 
 func validateTLSCertificateConfig(cfg *ServerConfig) error {
-	tlsCert := &cfg.Server.Certificate.TLS
-	if !tlsCert.IsEnabled() {
-		return nil
-	}
-
-	// Only require cert validation if at least one TLS-based protocol is enabled.
+	// Only require cert validation if at least one TLS-based protocol is
+	// enabled. This must be checked FIRST — the old early return on
+	// !IsEnabled() made partial/missing cert configs pass validation while
+	// TLS/DoT/DoH/DoQ were silently disabled at startup.
 	proto := &cfg.Server.Protocol
 	tlsEnabled := proto.TLS != "" || proto.QUIC != "" || proto.HTTPS.Port != "" || proto.HTTP3.Port != "" || proto.DTLS != ""
 	if !tlsEnabled {
 		return nil
 	}
+
+	tlsCert := &cfg.Server.Certificate.TLS
 
 	if tlsCert.SelfSigned {
 		if tlsCert.CertFile != "" || tlsCert.KeyFile != "" {
@@ -349,7 +360,15 @@ func validateTLSCertificateConfig(cfg *ServerConfig) error {
 		return nil
 	}
 
-	if tlsCert.CertFile == "" || tlsCert.KeyFile == "" {
+	switch {
+	case tlsCert.CertFile == "" && tlsCert.KeyFile == "":
+		// Nothing configured: the server auto-generates self-signed certs
+		// at startup (the default behavior).
+		return nil
+	case tlsCert.CertFile == "" || tlsCert.KeyFile == "":
+		// Partial configs are the bug this check exists for: the server
+		// would otherwise silently disable the TLS-family listeners or
+		// fail later with a less actionable error.
 		return errors.New("config: certificate.tls.cert_file and certificate.tls.key_file must be configured together, or enable self_signed")
 	}
 	if !zdnsutil.IsValidFilePath(tlsCert.CertFile) {
@@ -416,20 +435,29 @@ func validateLatencyProbeStep(index int, step *LatencyProbeStep) error {
 }
 
 func validateTLCPCertificateConfig(cfg *ServerConfig) error {
-	tlcpCert := &cfg.Server.Certificate.TLCP
-	if !tlcpCert.IsEnabled() {
-		return nil
-	}
-
 	// Only require cert validation if at least one TLCP protocol is enabled.
+	// Checked first — the old early return on !IsEnabled() skipped the check
+	// whenever a TLCP protocol was enabled but the cert section was partial.
 	proto := &cfg.Server.Protocol
-	tlcpEnabled := proto.TLCP != "" || proto.HTTPTLCP.Port != ""
+	tlcpEnabled := proto.TLCP != "" || proto.HTTPTLCP.Port != "" || proto.DTLCP != ""
 	if !tlcpEnabled {
 		return nil
 	}
 
+	tlcpCert := &cfg.Server.Certificate.TLCP
+
 	if tlcpCert.SelfSigned {
 		return nil
+	}
+	if tlcpCert.SignCertFile == "" && tlcpCert.SignKeyFile == "" &&
+		tlcpCert.EncCertFile == "" && tlcpCert.EncKeyFile == "" {
+		// Nothing configured: the server auto-generates TLCP certs at
+		// startup (the default behavior).
+		return nil
+	}
+	if tlcpCert.SignCertFile == "" || tlcpCert.SignKeyFile == "" ||
+		tlcpCert.EncCertFile == "" || tlcpCert.EncKeyFile == "" {
+		return errors.New("config: certificate.tlcp sign/enc cert and key files must be configured together, or enable self_signed")
 	}
 	if !zdnsutil.IsValidFilePath(tlcpCert.SignCertFile) {
 		return fmt.Errorf("config: TLCP sign cert file not found: %s", tlcpCert.SignCertFile)

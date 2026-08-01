@@ -39,9 +39,17 @@ type Result struct {
 	cachable bool
 }
 
+// dynamicEntry holds the content generator for a dynamic zone rule together
+// with its match tags, rcode, and authority/additional records — these were
+// previously dropped, so a dynamic rule's match= / rcode= / authority=
+// attributes never took effect.
 type dynamicEntry struct {
-	fn      func() []string
-	configs []config.ZoneRecord
+	fn         func() []string
+	configs    []config.ZoneRecord
+	matchTags  []matchTag
+	rcode      int
+	authority  []dns.RR
+	additional []dns.RR
 }
 
 // zoneRule is a single zone rule held in memory. matchTags is parsed at load
@@ -60,10 +68,11 @@ type Evaluator struct {
 	loadedAt  atomic.Int64
 	ruleCount atomic.Int64
 
-	dynamics  map[string]*dynamicEntry // normalized qname → dynamic content
-	bypass    [][]matchTag             // global bypass rules
-	exact     map[string][]zoneRule    // "qname|qtype|qclass" → rules
-	wildcards map[string][]zoneRule    // "suffix|qtype|qclass" → wildcard rules
+	dynamics         map[string]*dynamicEntry // exact dynamic rules (normalized qname)
+	wildcardDynamics map[string]*dynamicEntry // wildcard dynamic rules (stripped name)
+	bypass           [][]matchTag             // global bypass rules
+	exact            map[string][]zoneRule    // "qname|qtype|qclass" → rules
+	wildcards        map[string][]zoneRule    // "suffix|qtype|qclass" → wildcard rules
 }
 
 // ---------------------------------------------------------------------------
@@ -78,9 +87,10 @@ const (
 // New creates an Evaluator.
 func New() *Evaluator {
 	return &Evaluator{
-		dynamics:  make(map[string]*dynamicEntry),
-		exact:     make(map[string][]zoneRule),
-		wildcards: make(map[string][]zoneRule),
+		dynamics:         make(map[string]*dynamicEntry),
+		wildcardDynamics: make(map[string]*dynamicEntry),
+		exact:            make(map[string][]zoneRule),
+		wildcards:        make(map[string][]zoneRule),
 	}
 }
 
@@ -95,6 +105,7 @@ func (e *Evaluator) HasRules() bool { return e.ruleCount.Load() > 0 }
 func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 	// Reset all maps.
 	e.dynamics = make(map[string]*dynamicEntry)
+	e.wildcardDynamics = make(map[string]*dynamicEntry)
 	e.exact = make(map[string][]zoneRule)
 	e.wildcards = make(map[string][]zoneRule)
 
@@ -158,14 +169,36 @@ func (e *Evaluator) loadInline(rule *config.ZoneRule) (int, error) {
 	}
 
 	normalizedName := dnsutil.Canonical(rule.Name)
-
-	if rule.DynamicContent != nil {
-		e.dynamics[normalizedName] = &dynamicEntry{fn: rule.DynamicContent, configs: rule.Answer}
-	}
-	tags := parseMatchTagsText(serializeMatchTags(rule.Match))
 	isWildcard := strings.HasPrefix(rule.Name, wildcardPrefix)
 	if isWildcard {
 		normalizedName = normalizedName[len(wildcardPrefix):]
+	}
+
+	tags, err := parseMatchTagsText(serializeMatchTags(rule.Match))
+	if err != nil {
+		return 0, fmt.Errorf("zone rule %q: invalid match tags: %w", rule.Name, err)
+	}
+
+	if rule.DynamicContent != nil {
+		// Dynamic rules are keyed by the WILDCARD-STRIPPED name — otherwise
+		// "*.example.com" would be stored as-is and never matched by any
+		// real query name. Exact and wildcard rules live in SEPARATE maps:
+		// the same name may legally carry both (e.g. "example.com" plus
+		// "*.example.com"), and a wildcard never matches the bare domain
+		// itself (RFC 1034 §4.3.2).
+		entry := &dynamicEntry{
+			fn:         rule.DynamicContent,
+			configs:    rule.Answer,
+			matchTags:  tags,
+			rcode:      rule.Rcode,
+			authority:  buildRRs(rule.Name, rule.Authority),
+			additional: buildRRs(rule.Name, rule.Additional),
+		}
+		if isWildcard {
+			e.wildcardDynamics[normalizedName] = entry
+		} else {
+			e.dynamics[normalizedName] = entry
+		}
 	}
 
 	groups := groupRecordsByTypeClass(rule.Answer)
@@ -247,33 +280,33 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 	}
 
 	qname = dnsutil.Canonical(qname)
-
-	if de, ok := e.dynamics[qname]; ok {
-		return e.evalDynamic(qname, qtype, qclass, de)
-	}
-
 	loadedAt := e.loadedAt.Load()
 
-	// Exact match — concrete qtype/qclass.
-	if r := e.bestMatch(e.exact[exactKey(qname, qtype, qclass)], qname, matchedTags, loadedAt); r.Matched {
-		return r
+	var bestScore int
+	var best Result
+
+	// Exact dynamic rule participates in best-scoring alongside the static
+	// exact rules: a static rule with stronger match tags must win over a
+	// generic dynamic answer (mirrors the wildcard path).
+	if de, ok := e.dynamics[qname]; ok {
+		if r, matched := e.evalDynamic(qname, qtype, qclass, de, matchedTags); matched {
+			bestScore = matchScore(de.matchTags, matchedTags)
+			best = r
+		}
 	}
 
+	// Exact match — concrete qtype/qclass.
+	e.pickBest(e.exact[exactKey(qname, qtype, qclass)], qname, matchedTags, loadedAt, &bestScore, &best)
+
 	// Exact match — sentinel (qtype=0, qclass=0).
-	if r := e.bestMatch(e.exact[exactKey(qname, 0, 0)], qname, matchedTags, loadedAt); r.Matched {
-		return r
+	e.pickBest(e.exact[exactKey(qname, 0, 0)], qname, matchedTags, loadedAt, &bestScore, &best)
+
+	if best.Matched {
+		return best
 	}
 
 	// Wildcard suffix matching.
 	return e.wildcardMatch(qname, qtype, qclass, matchedTags, loadedAt)
-}
-
-// bestMatch scores all rules for a single key and returns the best result.
-func (e *Evaluator) bestMatch(rules []zoneRule, domain string, matchedTags map[string]bool, loadedAt int64) Result {
-	var bestScore int
-	var best Result
-	e.pickBest(rules, domain, matchedTags, loadedAt, &bestScore, &best)
-	return best
 }
 
 // wildcardMatch iterates suffix candidates, picking the best-scored match.
@@ -282,6 +315,21 @@ func (e *Evaluator) wildcardMatch(qname string, qtype, qclass uint16, matchedTag
 	var bestScore int
 	var best Result
 	for _, suffix := range suffixes {
+		// Wildcard dynamic rules are keyed by the stripped name — a query
+		// under that suffix hits them here (deepest suffix first). Exact
+		// dynamic rules live in a separate map and are NOT consulted here:
+		// an exact rule only answers its own name, never subdomains. A
+		// dynamic match participates in best-scoring like static rules — a
+		// static rule with stronger match tags must still win over a
+		// generic dynamic answer.
+		if de, ok := e.wildcardDynamics[suffix]; ok {
+			if r, matched := e.evalDynamic(qname, qtype, qclass, de, matchedTags); matched {
+				if score := matchScore(de.matchTags, matchedTags); score > bestScore || !best.Matched {
+					bestScore = score
+					best = r
+				}
+			}
+		}
 		e.pickBest(e.wildcards[exactKey(suffix, qtype, qclass)], suffix, matchedTags, loadedAt, &bestScore, &best)
 		e.pickBest(e.wildcards[exactKey(suffix, 0, 0)], suffix, matchedTags, loadedAt, &bestScore, &best)
 	}
@@ -333,7 +381,17 @@ func buildSuffixes(qname string) []string {
 // Dynamic content
 // ---------------------------------------------------------------------------
 
-func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicEntry) Result {
+// evalDynamic evaluates a dynamic rule. It reports (result, false) when the
+// rule is filtered out (match tags not satisfied) or produces no content —
+// the caller then falls through to ordinary exact/wildcard rules.
+func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicEntry, matchedTags map[string]bool) (Result, bool) {
+	// Match-tag filter: a rule with tags the client does not carry must
+	// not answer — fall through instead of serving content to the wrong
+	// client.
+	if score := matchScore(de.matchTags, matchedTags); score < 0 {
+		return Result{}, false
+	}
+
 	var contents []string
 	if len(de.configs) == 0 {
 		contents = de.fn()
@@ -351,12 +409,17 @@ func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicE
 			}
 		}
 	}
+	if len(contents) == 0 {
+		return Result{}, false
+	}
 
 	result := Result{
-		Domain:    qname,
-		Matched:   len(contents) > 0,
-		Rcode:     dns.RcodeSuccess,
-		CreatedAt: e.loadedAt.Load(),
+		Domain:     qname,
+		Matched:    true,
+		Rcode:      de.rcode,
+		Authority:  de.authority,
+		Additional: de.additional,
+		CreatedAt:  e.loadedAt.Load(),
 	}
 	for _, content := range contents {
 		rr := buildRecord(qname, &config.ZoneRecord{
@@ -368,7 +431,7 @@ func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicE
 			result.Answer = append(result.Answer, rr)
 		}
 	}
-	return result
+	return result, true
 }
 
 // ---------------------------------------------------------------------------
@@ -408,16 +471,12 @@ func serializeMatchTags(raw []string) string {
 	return strings.Join(raw, ",")
 }
 
-func parseMatchTagsText(text string) []matchTag {
+func parseMatchTagsText(text string) ([]matchTag, error) {
 	if text == "" {
-		return nil
+		return nil, nil
 	}
-	parts := strings.Split(text, ",")
-	tags, err := parseMatchTags(parts)
-	if err != nil {
-		log.Warnf("ZONE: invalid match tags %q: %v", text, err)
-	}
-	return tags
+	// A malformed tag must not silently degrade into match-all.
+	return parseMatchTags(strings.Split(text, ","))
 }
 
 func parseMatchTags(raw []string) ([]matchTag, error) {

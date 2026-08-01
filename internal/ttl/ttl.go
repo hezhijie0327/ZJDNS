@@ -1,6 +1,6 @@
 // Package ttl provides stateless TTL calculation functions for DNS cache
-// entries and zone responses. All functions are zero-allocation and
-// operate on scalar values.
+// entries and zone responses. Scalar helpers are zero-allocation;
+// DeductElapsedCyclical allocates (it deep-copies each RR).
 package ttl
 
 import (
@@ -18,16 +18,15 @@ func IsExpired(timestamp int64, ttlSeconds int) bool {
 	return NowUnix()-timestamp > int64(ttlSeconds)
 }
 
-// RemainingTTL returns the remaining TTL if fresh, or a cyclical stale TTL
-// when expired. Each staleTTL-second window, the TTL decrements from
-// staleTTL→1, then resets for the next window.
+// RemainingTTL returns the remaining TTL if fresh, or a constant stale TTL
+// when expired (RFC 8767 §4 RECOMMENDED: 30s prevents thundering-herd
+// re-queries during outages). At the exact expiry instant (remaining == 0)
+// the entry is still fresh and 0 is returned, consistent with IsExpired.
 func RemainingTTL(timestamp int64, ttlSeconds int, staleTTL uint32) uint32 {
 	remaining := int64(ttlSeconds) - (NowUnix() - timestamp)
-	if remaining > 0 {
+	if remaining >= 0 {
 		return uint32(remaining) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
 	}
-	// RFC 8767 §4 RECOMMENDED: constant 30 seconds for stale responses.
-	// A constant TTL prevents thundering-herd re-queries during outages.
 	if staleTTL == 0 {
 		return 30
 	}
@@ -69,9 +68,10 @@ func Elapsed(timestamp int64) int64 {
 }
 
 // DeductElapsedCyclical returns a new slice with each RR's TTL reduced by
-// elapsed modulo its original TTL, producing a cyclical countdown that wraps
-// back to origTTL when elapsed reaches a multiple of origTTL. Each RR is
-// deep-copied and cycles independently.
+// elapsed, decreasing monotonically and clamping at 0 — an expired record
+// must never be re-served with a full TTL (the old modular wrap reset it to
+// origTTL at exact multiples, keeping expired zone data valid indefinitely).
+// Each RR is deep-copied and adjusted independently.
 func DeductElapsedCyclical(rrs []dns.RR, elapsed int64) []dns.RR {
 	if len(rrs) == 0 {
 		return nil
@@ -87,7 +87,8 @@ func DeductElapsedCyclical(rrs []dns.RR, elapsed int64) []dns.RR {
 			result = append(result, copied)
 			continue
 		}
-		copied.Header().TTL = uint32(origTTL - (elapsed % origTTL)) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+		remaining := max(origTTL-elapsed, 0)
+		copied.Header().TTL = uint32(remaining) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
 		result = append(result, copied)
 	}
 	return result
