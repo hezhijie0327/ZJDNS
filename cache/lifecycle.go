@@ -82,6 +82,9 @@ func (c *Cache) FlushDB(target string) (int64, error) {
 			return 0, fmt.Errorf("flushDB cache: %w", err)
 		}
 		c.latencyCache.Clear()
+		if c.frontCache != nil {
+			c.frontCache.Clear()
+		}
 	case "zone":
 		if err := c.db.DropPrefix([]byte("z:")); err != nil {
 			return 0, fmt.Errorf("flushDB zone: %w", err)

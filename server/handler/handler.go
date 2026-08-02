@@ -130,22 +130,20 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	}
 
 	qd := req.Question[0]
-	qctx := &QueryContext{
-		Req:       req,
-		ClientIP:  clientIP,
-		IsSecure:  isSecure,
-		Protocol:  protocol,
-		StartTime: log.NowUnixNano(),
-		Qname:     dnsutil.Fqdn(qd.Header().Name),
-		Qtype:     dns.RRToType(qd),
-	}
+	qctx := NewQueryContext()
+	qctx.Req = req
+	qctx.ClientIP = clientIP
+	qctx.IsSecure = isSecure
+	qctx.Protocol = protocol
+	qctx.StartTime = log.NowUnixNano()
+	qctx.Qname = dnsutil.Fqdn(qd.Header().Name)
+	qctx.Qtype = dns.RRToType(qd)
+	qctx.Qclass = qd.Header().Class
 
 	err := h.chain.ServeDNS(h.ctx, qctx)
 
 	if errors.Is(err, ErrDrop) || qctx.Dropped {
-		// NOTE: Do NOT Put(req) here — the protocol caller owns the
-		// request message lifecycle and will Put it after ServeDNS returns.
-		// Putting here would cause a double-put race with the caller.
+		ReleaseQueryContext(qctx)
 		return nil
 	}
 
@@ -153,17 +151,14 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 		msg := BuildResponseMsg(req)
 		msg.Rcode = dns.RcodeServerFailure
 		h.stats.Record(&stats.Request{Result: "error", Protocol: protocol, Rcode: dns.RcodeServerFailure, ResponseTime: ElapsedMS(qctx.StartTime)})
+		ReleaseQueryContext(qctx)
 		return msg
 	}
 	if err != nil {
-		// A chain error with a partially built response must not vanish:
-		// the partial response is served but the failure is observable.
 		log.Errorf("QUERY: chain error %v (partial response rcode=%s)", err, dns.RcodeToString[qctx.Res.Rcode])
 		h.stats.Record(&stats.Request{Result: "error", Protocol: protocol, Rcode: int(qctx.Res.Rcode), //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
 			ResponseTime: ElapsedMS(qctx.StartTime)})
 	}
-	// BADCOOKIE responses are short-circuited by the EDNS middleware before
-	// any stats-recording middleware; record them here.
 	if qctx.Res != nil && qctx.Res.Rcode == dns.RcodeBadCookie {
 		h.stats.Record(&stats.Request{Result: "badcookie", Protocol: protocol, Rcode: dns.RcodeBadCookie, ResponseTime: ElapsedMS(qctx.StartTime)})
 	}
@@ -178,7 +173,9 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 			qctx.Res.String())
 	}
 
-	return qctx.Res
+	res := qctx.Res
+	ReleaseQueryContext(qctx)
+	return res
 }
 
 // ElapsedMS returns the elapsed time in milliseconds since startNs

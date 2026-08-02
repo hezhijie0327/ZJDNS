@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 	"zjdns/config"
@@ -12,6 +13,7 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/rdata"
 )
 
 func disableLogging() { log.Default.SetLevel(log.Error) }
@@ -78,7 +80,7 @@ func BenchmarkResolveRootServers(b *testing.B) {
 	}
 }
 
-// ── Server QPS benchmarks ────────────────────────────────────────────────────
+// ── Server builder helpers ───────────────────────────────────────────────────
 
 func buildBenchServer(b *testing.B) *server.Server {
 	disableLogging()
@@ -110,7 +112,41 @@ func buildBenchServer(b *testing.B) *server.Server {
 	return srv
 }
 
-func BenchmarkServerProcessQuery(b *testing.B) {
+// buildCacheBenchServer creates a server WITHOUT zone rules so queries traverse
+// the full middleware chain (EDNS → CacheLookup). The cache is pre-populated
+// with test data so CacheLookup always hits.
+func buildCacheBenchServer(b *testing.B) *server.Server {
+	disableLogging()
+	b.Helper()
+
+	cfg := &config.ServerConfig{
+		Server: config.ServerSettings{
+			LogLevel: "error",
+			Protocol: config.ProtocolSettings{UDP: "15353", TCP: "15353", TLS: "853"},
+			Features: config.FeatureFlags{
+				DNSSECEnforce: false,
+				Cache:         config.CacheSettings{},
+			},
+		},
+		// No zone rules — all queries fall through to EDNS → CacheLookup.
+	}
+
+	srv, err := server.New(cfg)
+	if err != nil {
+		b.Fatalf("server.New: %v", err)
+	}
+
+	// Pre-populate cache with A records so CacheLookup hits immediately.
+	cacheStore := srv.Handler().CacheStore()
+	rr := &dns.A{Hdr: dns.Header{Name: "cache-hit.local.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("10.0.0.1")}}
+	cacheStore.Set("cache-hit.local.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, dns.RcodeSuccess)
+
+	return srv
+}
+
+// ── Zone-match QPS benchmarks (current baseline) ─────────────────────────────
+
+func BenchmarkServerProcessQuery_ZoneMatch(b *testing.B) {
 	srv := buildBenchServer(b)
 
 	req := new(dns.Msg)
@@ -139,7 +175,7 @@ func BenchmarkServerProcessQuery(b *testing.B) {
 	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "qps")
 }
 
-func BenchmarkServerProcessQuery_Cold(b *testing.B) {
+func BenchmarkServerProcessQuery_ZoneMatch_Cold(b *testing.B) {
 	srv := buildBenchServer(b)
 
 	req := new(dns.Msg)
@@ -158,6 +194,92 @@ func BenchmarkServerProcessQuery_Cold(b *testing.B) {
 		}
 	})
 	b.StopTimer()
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "qps")
+}
+
+// ── Cache-hit QPS benchmarks (EDNS + CacheLookup path) ───────────────────────
+
+func BenchmarkServerProcessQuery_CacheHit(b *testing.B) {
+	srv := buildCacheBenchServer(b)
+
+	req := new(dns.Msg)
+	dnsutil.SetQuestion(req, "cache-hit.local.", dns.TypeA)
+	req.RecursionDesired = true
+
+	// Warm up: ensure cache entries are loaded and pools are warm.
+	for range 100 {
+		if resp := srv.ServeDNS(req, net.IPv4(127, 0, 0, 1), false, "UDP"); resp != nil {
+			pool.DefaultMessage.Put(resp)
+		}
+	}
+
+	b.ResetTimer()
+	b.SetParallelism(8)
+	b.RunParallel(func(pb *testing.PB) {
+		clientIP := net.IPv4(127, 0, 0, 1)
+		for pb.Next() {
+			resp := srv.ServeDNS(req.Copy(), clientIP, false, "UDP")
+			if resp != nil {
+				pool.DefaultMessage.Put(resp)
+			}
+		}
+	})
+	b.StopTimer()
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "qps")
+}
+
+func BenchmarkServerProcessQuery_CacheHit_Serial(b *testing.B) {
+	srv := buildCacheBenchServer(b)
+
+	req := new(dns.Msg)
+	dnsutil.SetQuestion(req, "cache-hit.local.", dns.TypeA)
+	req.RecursionDesired = true
+
+	// Warm up.
+	for range 100 {
+		if resp := srv.ServeDNS(req, net.IPv4(127, 0, 0, 1), false, "UDP"); resp != nil {
+			pool.DefaultMessage.Put(resp)
+		}
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		resp := srv.ServeDNS(req.Copy(), net.IPv4(127, 0, 0, 1), false, "UDP")
+		if resp != nil {
+			pool.DefaultMessage.Put(resp)
+		}
+	}
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "qps")
+}
+
+// ── Raw cache Get benchmark (bypass middleware, measure BadgerDB directly) ────
+
+func BenchmarkCacheStore_Get(b *testing.B) {
+	disableLogging()
+	cfg := &config.ServerConfig{
+		Server: config.ServerSettings{
+			LogLevel: "error",
+			Protocol: config.ProtocolSettings{UDP: "15353", TCP: "15353", TLS: "853"},
+			Features: config.FeatureFlags{
+				DNSSECEnforce: false,
+				Cache:         config.CacheSettings{},
+			},
+		},
+	}
+
+	srv, err := server.New(cfg)
+	if err != nil {
+		b.Fatalf("server.New: %v", err)
+	}
+
+	cacheStore := srv.Handler().CacheStore()
+	rr := &dns.A{Hdr: dns.Header{Name: "bench.local.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("10.0.0.1")}}
+	cacheStore.Set("bench.local.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, dns.RcodeSuccess)
+
+	b.ResetTimer()
+	for b.Loop() {
+		cacheStore.Get("bench.local.", dns.TypeA, dns.ClassINET, nil, false)
+	}
 	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "qps")
 }
 

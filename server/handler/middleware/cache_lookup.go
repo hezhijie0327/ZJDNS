@@ -38,10 +38,16 @@ type CacheLookup struct {
 // Wrap implements Wrapper.
 func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
-		qd := qctx.Req.Question[0]
-		qname := qd.Header().Name
-		qtype := dns.RRToType(qd)
-		qclass := qd.Header().Class
+		qname := qctx.Qname
+		qtype := qctx.Qtype
+		qclass := qctx.Qclass
+		// Fallback for callers that don't go through handler.ServeDNS (e.g. tests).
+		if qname == "" {
+			qd := qctx.Req.Question[0]
+			qname = qd.Header().Name
+			qtype = dns.RRToType(qd)
+			qclass = qd.Header().Class
+		}
 		ecsOpt := qctx.ECSOpt
 		dnssecOK := qctx.ClientRequestedDNSSEC
 

@@ -33,10 +33,16 @@ func isDestructiveChaosName(qname string) bool {
 // Wrap implements Wrapper.
 func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
-		qd := qctx.Req.Question[0]
-		qname := qd.Header().Name
-		qtype := dns.RRToType(qd)
-		qclass := qd.Header().Class
+		qname := qctx.Qname
+		qtype := qctx.Qtype
+		qclass := qctx.Qclass
+		// Fallback for callers that don't go through handler.ServeDNS (e.g. tests).
+		if qname == "" {
+			qd := qctx.Req.Question[0]
+			qname = qd.Header().Name
+			qtype = dns.RRToType(qd)
+			qclass = qd.Header().Class
+		}
 
 		var matchedTags map[string]bool
 		if m.tagMatcher != nil {
@@ -79,8 +85,10 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			response.Rcode = uint16(zoneResult.Rcode) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
 			if len(zoneResult.Authority) > 0 || len(zoneResult.Additional) > 0 {
 				elapsed := ttl.Elapsed(zoneResult.CreatedAt)
-				response.Ns = ttl.DeductElapsedCyclical(zoneResult.Authority, elapsed)
-				response.Extra = ttl.DeductElapsedCyclical(zoneResult.Additional, elapsed)
+				ttl.DeductElapsedInPlace(zoneResult.Authority, elapsed)
+				ttl.DeductElapsedInPlace(zoneResult.Additional, elapsed)
+				response.Ns = zoneResult.Authority
+				response.Extra = zoneResult.Additional
 			}
 			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorBlocked, ExtraText: ""}
 			qctx.Res = response
@@ -92,10 +100,13 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		hasRecords := len(zoneResult.Answer) > 0 || len(zoneResult.Authority) > 0 || len(zoneResult.Additional) > 0
 		if hasRecords {
 			elapsed := ttl.Elapsed(zoneResult.CreatedAt)
+			ttl.DeductElapsedInPlace(zoneResult.Answer, elapsed)
+			ttl.DeductElapsedInPlace(zoneResult.Authority, elapsed)
+			ttl.DeductElapsedInPlace(zoneResult.Additional, elapsed)
 			response := handler.BuildResponseMsg(qctx.Req)
-			response.Answer = ttl.DeductElapsedCyclical(zoneResult.Answer, elapsed)
-			response.Ns = ttl.DeductElapsedCyclical(zoneResult.Authority, elapsed)
-			response.Extra = ttl.DeductElapsedCyclical(zoneResult.Additional, elapsed)
+			response.Answer = zoneResult.Answer
+			response.Ns = zoneResult.Authority
+			response.Extra = zoneResult.Additional
 			response.Rcode = dns.RcodeSuccess
 			// Operator-configured zone rules are legitimate policy, not
 			// security forgeries — omit EDE so clients don't misclassify.

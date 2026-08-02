@@ -92,14 +92,23 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return nil
 		}
 
-		qd := qctx.Req.Question[0]
-		qname := qd.Header().Name
-		qtype := dns.RRToType(qd)
+		qname := qctx.Qname
+		qtype := qctx.Qtype
+		qclass := qctx.Qclass
+		// Fallback for callers that don't go through handler.ServeDNS (e.g. tests).
+		// Also trigger when Qclass is zero: a caller that sets Qname/Qtype but
+		// not Qclass would otherwise be rejected (0 is neither IN nor CHAOS).
+		if qname == "" || qclass == 0 {
+			qd := qctx.Req.Question[0]
+			qname = qd.Header().Name
+			qtype = dns.RRToType(qd)
+			qclass = qd.Header().Class
+		}
 
 		// Allow CHAOS class for ZJDNS introspection queries (stats, etc.).
 		// Other non-IN classes are rejected per RFC 6895 §3.1.
-		if qd.Header().Class != dns.ClassINET && qd.Header().Class != dns.ClassCHAOS {
-			log.Debugf("QUERY: rejecting non-IN/CHAOS class %d for %s with REFUSED", qd.Header().Class, qname)
+		if qclass != dns.ClassINET && qclass != dns.ClassCHAOS {
+			log.Debugf("QUERY: rejecting non-IN/CHAOS class %d for %s with REFUSED", qclass, qname)
 			msg := pool.DefaultMessage.Get()
 			dnsutil.SetReply(msg, qctx.Req)
 			msg.Rcode = dns.RcodeRefused
@@ -114,11 +123,12 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// undercounts nothing — an invalid name with many labels passes a
 		// presentation check while exceeding 255 wire octets.
 		wireLen := wireNameLength(qname)
+		// wireNameLength >= 0 already validates name structure (labels, length,
+		// trailing dot) — dnsutil.IsName is redundant here.
 		if wireLen >= 0 && wireLen <= 255 &&
 			qtype != dns.TypeANY &&
 			qtype != dns.TypeAXFR &&
-			qtype != dns.TypeIXFR &&
-			dnsutil.IsName(qname) {
+			qtype != dns.TypeIXFR {
 			return next.ServeDNS(ctx, qctx)
 		}
 

@@ -93,3 +93,20 @@ func DeductElapsedCyclical(rrs []dns.RR, elapsed int64) []dns.RR {
 	}
 	return result
 }
+
+// DeductElapsedInPlace reduces each RR's TTL by elapsed in place without
+// cloning. Only call when the caller owns the RRs exclusively — no other
+// goroutine or data structure holds a reference to any element.
+func DeductElapsedInPlace(rrs []dns.RR, elapsed int64) {
+	for _, rr := range rrs {
+		if rr == nil {
+			continue
+		}
+		origTTL := int64(rr.Header().TTL)
+		if origTTL <= 0 {
+			continue
+		}
+		remaining := max(origTTL-elapsed, 0)
+		rr.Header().TTL = uint32(remaining) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+	}
+}

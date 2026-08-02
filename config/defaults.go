@@ -52,6 +52,11 @@ const (
 	// 512 entries × ~16 bytes ≈ 8KB memory.  A miss falls back to BadgerDB.
 	DefaultLatencyCacheCapacity = 512
 
+	// DefaultFrontCacheCapacity caps the in-memory DNS entry LRU front-cache.
+	// Hot entries avoid the BadgerDB View transaction and wire Unpack entirely.
+	// 10000 entries × ~500 bytes ≈ 5MB memory.
+	DefaultFrontCacheCapacity = 10000
+
 	// DefaultPrefetchCooldownMaxEntries caps the PrefetchCooldown map size.
 	// When exceeded, the oldest half of entries are evicted to prevent
 	// unbounded growth under sustained diverse-query load.

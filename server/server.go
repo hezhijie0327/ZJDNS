@@ -398,6 +398,10 @@ func (s *Server) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol
 	return s.handler.ServeDNS(req, clientIP, isSecure, protocol)
 }
 
+// Handler returns the query handler, exposed for benchmarks to pre-populate
+// the cache and inspect internal state.
+func (s *Server) Handler() *handler.Handler { return s.handler }
+
 // Start runs the DNS server and blocks until shutdown is triggered.
 func (s *Server) Start() error {
 	log.Infof("SERVER: Starting DNS server")

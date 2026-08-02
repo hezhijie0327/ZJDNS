@@ -25,10 +25,20 @@ type latencyEntry struct {
 	expiresAt int64 // unix timestamp after which the entry is considered stale
 }
 
+// frontCacheEntry is a lightweight in-memory cache entry that stores the
+// unpacked DNS response alongside its expiry metadata, avoiding both the
+// BadgerDB View transaction (~400ns) and the wire Unpack (~200ns) on every
+// hot cache hit.
+type frontCacheEntry struct {
+	entry     *Entry
+	expiresAt int64 // unix timestamp from BadgerDB ExpiresAt
+}
+
 // Cache is a DNS response cache backed by a BadgerDB key-value store.
 type Cache struct {
 	db           *database.DB
-	latencyCache *lrumap.Map[string, latencyEntry] // in-memory LRU for IP latencies — avoids a second BadgerDB View on every Get()
+	latencyCache *lrumap.Map[string, latencyEntry]    // in-memory LRU for IP latencies — avoids a second BadgerDB View on every Get()
+	frontCache   *lrumap.Map[string, frontCacheEntry] // in-memory LRU front-cache for hot DNS entries — avoids BadgerDB View + wire Unpack
 }
 
 // ecsCandidate is a single ECS cache-key candidate used during fallback lookup.
@@ -58,6 +68,7 @@ func New(db *database.DB) *Cache {
 	return &Cache{
 		db:           db,
 		latencyCache: lrumap.New[string, latencyEntry](config.DefaultLatencyCacheCapacity),
+		frontCache:   lrumap.New[string, frontCacheEntry](config.DefaultFrontCacheCapacity),
 	}
 }
 
@@ -76,9 +87,34 @@ func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	}
 
 	qname = dnsutil.Canonical(qname)
+
+	// Check the in-memory LRU front-cache first. For hot entries this avoids
+	// the BadgerDB View transaction (~400ns) and wire Unpack (~200ns).
+	if c.frontCache != nil {
+		// NOTE: front-cache hits return pre-sorted answers (sorted once at
+		// insertion time via sortAnswerByLatency) — the ordering is frozen
+		// for the TTL lifetime. This trades latency-ordering freshness for
+		// ~660ns/op (BadgerDB View + wire Unpack). The ordering is still
+		// directionally correct and refreshes when the entry naturally expires.
+		now := log.NowUnix()
+		for _, cand := range ecsFallbackCandidates(ecs) {
+			frontKey := frontCacheKey(qname, cand.addr, cand.prefix, dnssecOK, qtype, qclass)
+			if fc, ok := c.frontCache.Get(frontKey); ok {
+				if now < fc.expiresAt {
+					isExpired := ttl.IsExpired(fc.entry.Timestamp, fc.entry.TTL)
+					return fc.entry, true, isExpired
+				}
+				// Expired entry in front-cache — evict and fall through.
+				c.frontCache.Delete(frontKey)
+			}
+		}
+	}
+
+	// Cold path — BadgerDB lookup.
 	var validated bool
 	var msgWire []byte
 	var expiresAt uint64
+	var foundKey []byte
 	found := false
 
 	_ = c.db.View(func(txn *badger.Txn) error {
@@ -90,12 +126,10 @@ func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 			}
 			validated = item.UserMeta() == database.UserMetaValidated(true)
 			expiresAt = item.ExpiresAt()
-			// ValueCopy: the []byte from item.Value is only valid inside the
-			// callback/transaction (Badger reuses an internal buffer for
-			// value-log entries) and msgWire is used after the View returns.
 			if msgWire, err = item.ValueCopy(nil); err != nil {
 				continue
 			}
+			foundKey = key
 			found = true
 			return nil
 		}
@@ -120,17 +154,11 @@ func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	}
 	defer pool.DefaultMessage.Put(msg)
 
-	// Derive entry TTL from the unpacked wire (minimum positive TTL across all sections).
-	// Derive store timestamp from Badger's native expiry clock.
-	// Badger TTL = entryTTL + defaultStaleMaxAge seconds.
-	// expiresAt = timestamp + entryTTL + defaultStaleMaxAge
-	// → timestamp = expiresAt - entryTTL - defaultStaleMaxAge
 	entryTTL := minTTL(msg.Answer, msg.Ns, msg.Extra)
 	var ts int64
 	if expiresAt != 0 {
 		ts = int64(expiresAt) - int64(entryTTL) - defaultStaleMaxAge
 	} else {
-		// Defensive: entry stored without TTL (should not happen).
 		ts = log.NowUnix()
 	}
 
@@ -144,8 +172,16 @@ func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 		Rcode:      int(msg.Rcode), //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
 	}
 
-	// Sort A/AAAA answer records by latency.
 	c.sortAnswerByLatency(entry)
+
+	// Populate the front-cache so subsequent reads skip BadgerDB.
+	if c.frontCache != nil {
+		frontKey := string(foundKey)
+		c.frontCache.Set(frontKey, frontCacheEntry{
+			entry:     entry,
+			expiresAt: ts + int64(entryTTL) + defaultStaleMaxAge,
+		})
+	}
 
 	isExpired := ttl.IsExpired(ts, entryTTL)
 	return entry, true, isExpired
@@ -340,6 +376,14 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 		return 0
 	}
 
+	// Invalidate the front-cache entry so subsequent Get calls see the fresh
+	// value — without this, a prefetch or stale-refresh writes new data to
+	// BadgerDB but the front-cache keeps serving the old *Entry until its
+	// natural expiry (potentially minutes out of date).
+	if c.frontCache != nil {
+		c.frontCache.Delete(frontCacheKey(qname, ecsAddr, ecsPrefix, dnssecOK, qtype, qclass))
+	}
+
 	return int64(entryID)
 }
 
@@ -421,6 +465,12 @@ func ecsFallbackCandidates(ecs *config.ECSOption) []ecsCandidate {
 	// reachable from ECS queries.
 	candidates = append(candidates, ecsCandidate{"", 0})
 	return candidates
+}
+
+// frontCacheKey builds the string key used for the in-memory LRU front-cache.
+// The key mirrors the database.EntryKey binary format but returns a string.
+func frontCacheKey(qname, ecsAddr string, ecsPrefix int, dnssecOK bool, qtype, qclass uint16) string {
+	return string(database.EntryKey(qname, ecsAddr, ecsPrefix, dnssecOK, qtype, qclass))
 }
 
 // stripOPT removes EDNS OPT pseudo-records from an RR slice, returning a new

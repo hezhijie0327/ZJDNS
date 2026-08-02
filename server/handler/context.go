@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net"
+	"sync"
 	"zjdns/cache"
 	"zjdns/edns"
 	"zjdns/server/resolver"
@@ -66,8 +67,31 @@ type QueryContext struct {
 
 	// ── Pre-extracted question fields (set once in ServeDNS) ──
 
-	Qname string // canonical question name (already FQDN)
-	Qtype uint16 // question type (A, AAAA, etc.)
+	Qname  string // canonical question name (already FQDN)
+	Qtype  uint16 // question type (A, AAAA, etc.)
+	Qclass uint16 // question class (IN, CHAOS)
+}
+
+// queryContextPool is a sync.Pool for QueryContext values to reduce per-query
+// heap allocations. QueryContext is the single most-allocated type on the hot
+// path (~1.8 GB in a 3s zone-match benchmark).
+var queryContextPool = sync.Pool{
+	New: func() any { return &QueryContext{} },
+}
+
+// NewQueryContext returns a zeroed QueryContext from the pool.
+func NewQueryContext() *QueryContext {
+	return queryContextPool.Get().(*QueryContext)
+}
+
+// ReleaseQueryContext returns a QueryContext to the pool. The caller must
+// ensure no references to qctx or its fields are retained.
+func ReleaseQueryContext(qctx *QueryContext) {
+	if qctx == nil {
+		return
+	}
+	*qctx = QueryContext{}
+	queryContextPool.Put(qctx)
 }
 
 // EffectiveName returns the name that should be used AFTER the zone rewrite:

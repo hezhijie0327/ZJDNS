@@ -65,7 +65,7 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	qr := qctx.ResolutionResult
 	qname := qctx.Qname
 	qtype := qctx.Qtype
-	qclass := qctx.Req.Question[0].Header().Class
+	qclass := qctx.Qclass
 	ecsOpt := qctx.ECSOpt
 	dnssecOK := qctx.ClientRequestedDNSSEC
 	validated := qr.Validated
@@ -172,7 +172,7 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 	qr := qctx.ResolutionResult
 	qname := qctx.Qname
 	qtype := qctx.Qtype
-	qclass := qctx.Req.Question[0].Header().Class
+	qclass := qctx.Qclass
 	ecsOpt := qctx.ECSOpt
 	dnssecOK := qctx.ClientRequestedDNSSEC
 	queryErr := qr.Err
