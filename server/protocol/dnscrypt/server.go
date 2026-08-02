@@ -10,8 +10,8 @@ import (
 	"net"
 	"sync"
 	"time"
+	"zjdns/cache"
 	"zjdns/config"
-	"zjdns/database"
 	"zjdns/edns"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
@@ -69,9 +69,9 @@ type Server struct {
 	// goroutine creation under high load.
 	workerCap chan struct{}
 
-	// db is the shared BadgerDB database for persisting cert windows
-	// across restarts.  Nil when the database is not available.
-	db *database.DB
+	// stateSaver persists identity + cert windows across restarts (the cache
+	// implements it). Nil when persistence is not available.
+	stateSaver StateSaver
 	// seed is the X25519 secret key used to derive the next cert window's
 	// resolver key.  It forms a deterministic chain: each new window's
 	// resolver secret key becomes the seed for the one after it.
@@ -93,23 +93,23 @@ func (k *keyEntry) remainingTTL() uint32 {
 
 // New creates a new DNSCrypt Server from the given configuration.
 // port is the listener port, providerName is auto-derived as "2.dnscrypt-cert.<ddr.domain>".
-// db is the shared BadgerDB database for cert window persistence. Pass an in-memory
-// database (database.Open("", nil)) if persistence is not needed.
-func New(db *database.DB, certificateCfg *config.DNSCryptCertificate, port, providerName string) (*Server, error) {
+// state is the persisted identity + windows loaded by the cache (nil on first
+// run); stateSaver persists them back (the cache). Nil stateSaver disables
+// persistence.
+func New(state *cache.DNSCrypt, stateSaver StateSaver, certificateCfg *config.DNSCryptCertificate, port, providerName string) (*Server, error) {
 	// ── Resolve signing identity ──────────────────────────────────────────
 	// Require explicit keys in config — like TLS requires a certificate.
 	if certificateCfg.PublicKey == "" || certificateCfg.PrivateKey == "" {
 		return nil, errors.New("dnscrypt: public_key and private_key are required in config certificate.dnscrypt")
 	}
 
-	// Try loading persisted identity from DB; auto-switch if config keys changed.
-	signingSK, err := loadIdentity(db)
+	// Try loading the persisted identity; auto-switch if config keys changed.
+	signingSK, err := decodeIdentity(state)
 	if err == nil {
 		cfgPKBytes, derr := dnscryptcrypto.HexDecodeKey(certificateCfg.PublicKey)
 		if derr != nil || !bytes.Equal(cfgPKBytes, []byte(signingSK.Public().(ed25519.PublicKey))) {
 			log.Warnf("DNSCRYPT: config public_key changed, dropping old persisted state and switching identity")
-			_ = db.DropPrefix([]byte(database.PrefixDNSCrypt + "window:"))
-			_ = db.DropPrefix([]byte(database.PrefixDNSCrypt + "identity"))
+			state = nil
 			signingSK = nil
 		}
 	}
@@ -122,13 +122,9 @@ func New(db *database.DB, certificateCfg *config.DNSCryptCertificate, port, prov
 		if err != nil {
 			return nil, fmt.Errorf("decoding ed25519 private key: %w", err)
 		}
-		if saveErr := saveIdentity(db, signingSK); saveErr != nil {
-			log.Warnf("DNSCRYPT: failed to persist identity: %v", saveErr)
-		} else {
-			log.Infof("DNSCRYPT: identity persisted to database")
-		}
+		log.Infof("DNSCRYPT: identity generated from config")
 	} else {
-		log.Infof("DNSCRYPT: loaded persisted identity from database")
+		log.Infof("DNSCRYPT: loaded persisted identity")
 	}
 
 	signingPK, ok := signingSK.Public().(ed25519.PublicKey)
@@ -145,11 +141,12 @@ func New(db *database.DB, certificateCfg *config.DNSCryptCertificate, port, prov
 	var entries []keyEntry
 	var seed [32]byte
 
-	if windows, err := loadWindows(db); err == nil && len(windows) > 0 {
-		entries, err = windowsToKeyEntries(&rc, windows)
-		if err == nil && len(entries) > 0 {
+	if windows := windowsFromState(state); len(windows) > 0 {
+		var wErr error
+		entries, wErr = windowsToKeyEntries(&rc, windows)
+		if wErr == nil && len(entries) > 0 {
 			copy(seed[:], windows[len(windows)-1].ResolverSk)
-			log.Infof("DNSCRYPT: restored %d cert window(s) from database", len(entries))
+			log.Infof("DNSCRYPT: restored %d cert window(s)", len(entries))
 		}
 	}
 
@@ -178,17 +175,6 @@ func New(db *database.DB, certificateCfg *config.DNSCryptCertificate, port, prov
 		}
 		entries = append(entries, entry)
 
-		w := windowRecord{
-			Serial:     pair.Classical.Serial,
-			NotBefore:  pair.Classical.NotBefore,
-			NotAfter:   pair.Classical.NotAfter,
-			ResolverSk: pair.Classical.ResolverSk[:],
-			ResolverPk: pair.Classical.ResolverPk[:],
-		}
-		if err := saveWindow(db, w); err != nil {
-			log.Warnf("DNSCRYPT: failed to persist initial window: %v", err)
-		}
-
 		log.Debugf("DNSCRYPT: generated initial key pair (serial=%d)", pair.Classical.Serial)
 	}
 
@@ -198,7 +184,7 @@ func New(db *database.DB, certificateCfg *config.DNSCryptCertificate, port, prov
 	ctx, cancel := context.WithCancelCause(context.Background())
 
 	s := &Server{
-		db:             db,
+		stateSaver:     stateSaver,
 		seed:           seed,
 		keys:           entries,
 		port:           port,
@@ -213,6 +199,10 @@ func New(db *database.DB, certificateCfg *config.DNSCryptCertificate, port, prov
 		workerCap:      make(chan struct{}, config.DefaultMaxConcurrentStreams),
 		sharedKeyCache: lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize),
 	}
+
+	// Persist the (possibly fresh) identity + windows so a restart resumes
+	// from this state.
+	s.persistState()
 
 	// Derive ticket key from the Ed25519 signing key for PQ resumption.
 	// Same derivation as the reference implementation (encrypted-dns-server).
@@ -436,7 +426,8 @@ func (s *Server) rotateKeys() {
 	}
 	s.keys = append([]keyEntry{entry}, s.keys...)
 
-	// Purge expired keys (defence in depth — BadgerDB TTL also handles this).
+	// Purge expired keys (defence in depth — the persist dump also skips
+	// windows past NotAfter + overlap).
 	cutoff := time.Now().Add(-(config.DefaultDNSCryptCertificateTTL + config.DefaultDNSCryptKeyOverlap))
 	n := 0
 	for _, k := range s.keys {
@@ -450,19 +441,27 @@ func (s *Server) rotateKeys() {
 	s.seed = seed // advance the seed chain
 	s.mu.Unlock()
 
-	// Persist the new window outside the lock to avoid blocking queries.
-	w := windowRecord{
-		Serial:     newPair.Classical.Serial,
-		NotBefore:  newPair.Classical.NotBefore,
-		NotAfter:   newPair.Classical.NotAfter,
-		ResolverSk: newPair.Classical.ResolverSk[:],
-		ResolverPk: newPair.Classical.ResolverPk[:],
-	}
-	if err := saveWindow(s.db, w); err != nil {
-		log.Warnf("DNSCRYPT: failed to persist rotated window: %v", err)
-	}
+	// Persist the new window set outside the lock to avoid blocking queries.
+	s.persistState()
 
 	log.Debugf("DNSCRYPT: rotated resolver keys (serial=%d, active=%d)", newPair.Classical.Serial, len(s.keys))
+}
+
+// persistState hands the current identity + windows to the state saver
+// (the cache), which writes the persist file. Called on startup and rotation.
+func (s *Server) persistState() {
+	if s.stateSaver == nil {
+		return
+	}
+	identity := encodeIdentity(s.signingSK)
+	if identity == nil {
+		log.Warnf("DNSCRYPT: cannot persist identity — signing key is not Ed25519")
+		return
+	}
+	s.mu.RLock()
+	windows := windowsFromKeys(s.keys)
+	s.mu.RUnlock()
+	s.stateSaver.SetDNSCrypt(identity, windows)
 }
 
 func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {

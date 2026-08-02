@@ -2,22 +2,20 @@ package dnscrypt
 
 import (
 	"crypto/rand"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"time"
+	"zjdns/cache"
 	"zjdns/config"
-	"zjdns/database"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
 
 	"github.com/cloudflare/circl/sign/ed25519"
-	"github.com/dgraph-io/badger/v4"
 )
 
-// ── Key construction ─────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-// windowRecord is the decoded form of a single persisted cert window.
+// windowRecord is the decoded form of a single cert window.
 type windowRecord struct {
 	Serial     uint32
 	NotBefore  uint32
@@ -26,142 +24,63 @@ type windowRecord struct {
 	ResolverPk []byte // 32 bytes
 }
 
-// errNoIdentity is returned by loadIdentity when no signing key has been
-// persisted yet (first run).  Callers check err != nil to decide whether to
-// build a new identity from config.
+// StateSaver persists the DNSCrypt identity and cert windows. Implemented by
+// the cache (SetDNSCrypt) — the DNSCrypt server owns the data, the saver owns
+// the persist file. Nil saver disables persistence.
+type StateSaver interface {
+	SetDNSCrypt(identity []byte, windows []cache.Window)
+}
+
+// errNoIdentity is returned when no signing key has been persisted yet
+// (first run). Callers check err != nil to decide whether to build a new
+// identity from config.
 var errNoIdentity = errors.New("dnscrypt: no persisted identity")
 
-var (
-	dnscryptIdentityKey = []byte(database.PrefixDNSCrypt + "identity")
-	dnscryptWindowKey   = []byte(database.PrefixDNSCrypt + "window:")
-)
+// ── State encode/decode ───────────────────────────────────────────────────────
 
-func dnscryptWindowKeyBytes(serial uint32) []byte {
-	key := make([]byte, len(dnscryptWindowKey)+4)
-	copy(key, dnscryptWindowKey)
-	binary.BigEndian.PutUint32(key[len(dnscryptWindowKey):], serial)
-	return key
-}
-
-// ── Identity persistence ─────────────────────────────────────────────────────
-
-// saveIdentity persists the Ed25519 signing key to the database.  Written on
-// first run and whenever the config identity changes (auto-switch).
-func saveIdentity(db *database.DB, sk ed25519.PrivateKey) error {
+// encodeIdentity packs the Ed25519 signing key into the 96-byte layout
+// [0:64]sk [64:96]pk. Returns nil if the key is not Ed25519.
+func encodeIdentity(sk ed25519.PrivateKey) []byte {
 	pk, ok := sk.Public().(ed25519.PublicKey)
 	if !ok {
-		return errors.New("dnscrypt: signing key is not Ed25519")
+		return nil
 	}
-	val := database.EncodeDNSCryptIdentity([]byte(sk), []byte(pk))
-	if val == nil {
-		return errors.New("dnscrypt: identity key has wrong size")
-	}
-	return db.Update(func(txn *badger.Txn) error {
-		return txn.Set(dnscryptIdentityKey, val)
-	})
+	buf := make([]byte, 96)
+	copy(buf[0:64], sk)
+	copy(buf[64:96], pk)
+	return buf
 }
 
-// loadIdentity reads the persisted Ed25519 signing key.
-// Returns (nil, errNoIdentity) on first run when no key has been persisted yet.
-func loadIdentity(db *database.DB) (ed25519.PrivateKey, error) {
-	var sk ed25519.PrivateKey
-	found := false
-	err := db.View(func(txn *badger.Txn) error {
-		item, getErr := txn.Get(dnscryptIdentityKey)
-		if getErr != nil {
-			if errors.Is(getErr, badger.ErrKeyNotFound) {
-				return nil
-			}
-			return getErr
-		}
-		return item.Value(func(val []byte) error {
-			s, pk := database.DecodeDNSCryptIdentity(val)
-			if s == nil || pk == nil {
-				return errors.New("dnscrypt: corrupted identity in database")
-			}
-			sk = ed25519.PrivateKey(s)
-			found = true
-			return nil
-		})
-	})
-	if err != nil {
-		return nil, err
-	}
-	if !found {
+// decodeIdentity unpacks the 96-byte identity layout. Returns errNoIdentity
+// when state is absent (first run).
+func decodeIdentity(dc *cache.DNSCrypt) (ed25519.PrivateKey, error) {
+	if dc == nil || len(dc.Identity) != 96 {
 		return nil, errNoIdentity
 	}
-	return sk, nil
+	return ed25519.PrivateKey(dc.Identity[:64]), nil
 }
 
-// ── Window persistence ───────────────────────────────────────────────────────
-
-// saveWindow persists a single cert window with TTL so BadgerDB auto-evicts it
-// when expired.
-func saveWindow(db *database.DB, w windowRecord) error {
-	key := dnscryptWindowKeyBytes(w.Serial)
-	val := database.EncodeDNSCryptWindow(w.Serial, w.NotBefore, w.NotAfter, w.ResolverSk, w.ResolverPk)
-	if val == nil {
-		return fmt.Errorf("dnscrypt: window serial=%d has wrong-sized keys", w.Serial)
-	}
-
-	return db.Update(func(txn *badger.Txn) error {
-		e := badger.NewEntry(key, val)
-		// Include key overlap so windows survive restarts during the
-		// overlap period (the server serves them for NotAfter+overlap).
-		e.ExpiresAt = uint64(w.NotAfter) + uint64(config.DefaultDNSCryptKeyOverlap/time.Second) //nolint:gosec // G115: fits in uint64
-		return txn.SetEntry(e)
-	})
-}
-
-// loadWindows scans all surviving cert windows from the database.  Expired
-// windows are auto-evicted by BadgerDB, so only valid windows survive the scan.
-func loadWindows(db *database.DB) ([]windowRecord, error) {
-	var windows []windowRecord
-	err := db.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.Prefix = dnscryptWindowKey
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		for it.Rewind(); it.Valid(); it.Next() {
-			item := it.Item()
-			if item.IsDeletedOrExpired() {
-				continue // compaction hasn't caught up yet — skip
-			}
-			if valErr := item.Value(func(val []byte) error {
-				serial, notBefore, notAfter, resolverSk, resolverPk := database.DecodeDNSCryptWindow(val)
-				if resolverSk == nil {
-					return nil // corrupted entry — skip
-				}
-				windows = append(windows, windowRecord{
-					Serial:     serial,
-					NotBefore:  notBefore,
-					NotAfter:   notAfter,
-					ResolverSk: resolverSk,
-					ResolverPk: resolverPk,
-				})
-				return nil
-			}); valErr != nil {
-				return valErr
-			}
-		}
+// windowsFromState converts persisted windows into windowRecords, skipping
+// entries that are no longer served (past NotAfter + overlap).
+func windowsFromState(dc *cache.DNSCrypt) []windowRecord {
+	if dc == nil {
 		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("scanning dnscrypt windows: %w", err)
 	}
-	return windows, nil
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-// newRandomSeed generates a random 32-byte X25519 seed.
-func newRandomSeed() ([32]byte, error) {
-	var seed [32]byte
-	if _, err := rand.Read(seed[:]); err != nil {
-		return seed, fmt.Errorf("crypto/rand: %w", err)
+	cutoff := uint32(time.Now().Add(-config.DefaultDNSCryptKeyOverlap).Unix()) //nolint:gosec // G115: DNSCrypt window timestamps — protocol-bounded uint32
+	windows := make([]windowRecord, 0, len(dc.Windows))
+	for _, w := range dc.Windows {
+		if w.NotAfter < cutoff {
+			continue // no longer served — skip
+		}
+		windows = append(windows, windowRecord{
+			Serial:     w.Serial,
+			NotBefore:  w.NotBefore,
+			NotAfter:   w.NotAfter,
+			ResolverSk: w.ResolverSK,
+			ResolverPk: w.ResolverPK,
+		})
 	}
-	return seed, nil
+	return windows
 }
 
 // windowsToKeyEntries reconstructs keyEntry slices from persisted window records.
@@ -185,6 +104,33 @@ func windowsToKeyEntries(rc *ResolverConfig, windows []windowRecord) ([]keyEntry
 		log.Debugf("DNSCRYPT: restored window serial=%d (not_before=%d, not_after=%d)", w.Serial, w.NotBefore, w.NotAfter)
 	}
 	return entries, nil
+}
+
+// windowsFromKeys converts the in-memory key list back to persisted windows.
+func windowsFromKeys(keys []keyEntry) []cache.Window {
+	windows := make([]cache.Window, 0, len(keys))
+	for _, k := range keys {
+		c := k.pair.Classical
+		windows = append(windows, cache.Window{
+			Serial:     c.Serial,
+			NotBefore:  c.NotBefore,
+			NotAfter:   c.NotAfter,
+			ResolverSK: c.ResolverSk[:],
+			ResolverPK: c.ResolverPk[:],
+		})
+	}
+	return windows
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+// newRandomSeed generates a random 32-byte X25519 seed.
+func newRandomSeed() ([32]byte, error) {
+	var seed [32]byte
+	if _, err := rand.Read(seed[:]); err != nil {
+		return seed, fmt.Errorf("crypto/rand: %w", err)
+	}
+	return seed, nil
 }
 
 // generateNextPair creates the next cert pair using the deterministic seed chain.

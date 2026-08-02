@@ -171,7 +171,7 @@ pwsh scripts/install-hook.ps1                  # Windows
 
 Module path: `zjdns` (Go 1.26.4, pure Go — `CGO_ENABLED=0` compatible).
 
-Key dependencies: `codeberg.org/miekg/dns` (DNS), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/http` (eHTTP — net/http with native eTLS for DoH), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/pion/dtls/v3` (DTLS 1.2+), `github.com/dgraph-io/badger/v4` (embedded KV store), `github.com/cloudflare/circl` (X-Wing PQ/T KEM for DNSCrypt), `gitee.com/Trisia/gotlcp` (TLCP + DTLCP — SM2/SM3/SM4, pure Go).
+Key dependencies: `codeberg.org/miekg/dns` (DNS), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/http` (eHTTP — net/http with native eTLS for DoH), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/pion/dtls/v3` (DTLS 1.2+), `github.com/klauspost/compress` (zstd persist-file compression), `github.com/cloudflare/circl` (X-Wing PQ/T KEM for DNSCrypt), `gitee.com/Trisia/gotlcp` (TLCP + DTLCP — SM2/SM3/SM4, pure Go).
 
 ## Coding Standards
 
@@ -219,8 +219,8 @@ zjdns/
 ├── cmd/zjdns/          ← binary + CLI
 ├── config/             ← ServerConfig, ProtocolSettings, UpstreamServer, defaults
 ├── edns/               ← EDNS handler (ECS, Cookie, EDE, Padding)
-├── database/           ← Unified BadgerDB KV store (3 key prefixes: `e:` cache, `e:ip:` reverse index, `e:lat:` latency)
-├── cache/              ← DNS response cache (Store interface, BadgerDB-backed Cache)
+├── cache/              ← DNS response cache (in-memory LRU, Store interface, optional persist file)
+│   └── persist.go      ← PersistFile: typed binary schema + zstd + atomic write
 ├── stats/              ← In-memory query statistics (Collector: map+mutex, no persistence)
 ├── ruleset/            ← CIDR + domain tag matching (binary radix trie)
 ├── zone/               ← DNS zone rules (Evaluator, zone-file import)
@@ -305,7 +305,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | `ServerConfig` | `config` | Top-level config; owns `ECSConfig`, `ProtocolSettings`, `CertificateSettings` |
 | `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `SkipCache`, `Match`, `Proxy`, defense flags |
 | `ProtocolSettings` | `config` | Per-protocol port/endpoint: `UDP`, `TCP`, `TLS`, `QUIC`, `HTTPS`, `HTTP3`, `TLCP`, `DTLS`, `DTLCP`, `DNSCrypt` |
-| `DB` | `database` | Unified BadgerDB KV store; 3 key prefixes (e:, e:ip:, e:lat:) |
+| `PersistFile` | `cache` | Persist-file schema: typed entries (qname/ecs/dnssec/qtype/qclass + wire) + DNSCrypt state; Load/Save with zstd + atomic write |
 | `Store` | `cache` | Interface: Get/Set/ReverseLookup/UpdateLatency/LatencyLastProbe/FlushDB/Clear/Close |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL |
 | `Collector` | `stats` | In-memory stats: map+mutex, Record()/Stats()/Reset() |

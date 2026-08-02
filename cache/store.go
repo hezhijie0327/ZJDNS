@@ -1,34 +1,86 @@
 package cache
 
 import (
+	"bytes"
 	"net"
-	"slices"
+	"sync"
+	"sync/atomic"
 	"zjdns/config"
-	"zjdns/database"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
 	"zjdns/internal/pool"
 	"zjdns/internal/ttl"
 
-	zdnsutil "zjdns/internal/dnsutil"
-
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"github.com/dgraph-io/badger/v4"
 )
 
+// entryKey is the map key for a cached response — typed fields, no binary
+// encoding (the BadgerDB-era e: prefix and byte-packed keys are gone).
+type entryKey struct {
+	qname     string
+	ecsAddr   string
+	ecsPrefix uint16
+	dnssecOK  bool
+	qtype     uint16
+	qclass    uint16
+}
+
+// listEntry is one cached response, chained in LRU order. The embedded list
+// pointers follow the lrumap pattern (no container/list allocation).
+type listEntry struct {
+	key       entryKey
+	value     []byte // DNS wire format
+	ts        int64  // unix seconds at write
+	expiresAt int64  // ts + entryTTL + staleMaxAge — hard removal deadline
+	validated bool
+	prev      *listEntry
+	next      *listEntry
+}
+
 // latencyEntry holds an IP latency measurement with its expiry time, so the
-// in-memory LRU cache honours the same TTL semantics as the BadgerDB-backed
-// latency store (2 × DefaultLatencyProbeMinInterval).
+// in-memory LRU cache honours the same TTL semantics as before (2 ×
+// DefaultLatencyProbeMinInterval). Transient — never persisted.
 type latencyEntry struct {
 	value     int   // latency in milliseconds
 	expiresAt int64 // unix timestamp after which the entry is considered stale
 }
 
-// Cache is a DNS response cache backed by a BadgerDB key-value store.
+// ptrRecord is one reverse-lookup (PTR) record derived from a cache entry's
+// A/AAAA records. ownerKey links it to its source entry so eviction can
+// clean it up precisely.
+type ptrRecord struct {
+	name      string
+	ttl       int32
+	ts        int64
+	expiresAt int64
+	ownerKey  entryKey
+}
+
+// dnscryptState is the DNSCrypt server state handed to the cache for
+// persistence. The DNSCrypt server owns it; the cache just stores and saves.
+type dnscryptState struct {
+	identity []byte
+	windows  []Window
+}
+
+// Cache is an in-memory DNS response cache: O(1) map lookup, LRU eviction by
+// total value bytes, and optional persist file (load at startup, dump at
+// shutdown / DNSCrypt rotation).
 type Cache struct {
-	db           *database.DB
-	latencyCache *lrumap.Map[string, latencyEntry] // in-memory LRU for IP latencies — avoids a second BadgerDB View on every Get()
+	mu        sync.RWMutex
+	store     map[entryKey]*listEntry
+	head      *listEntry // sentinel: most-recent side
+	tail      *listEntry // sentinel: least-recent side
+	maxSize   int64      // max total value bytes
+	totalSize int64      // Σ len(value)
+	len       int
+
+	ptrIndex map[string][]*ptrRecord // ip → derived reverse records
+	latency  *lrumap.Map[string, latencyEntry]
+
+	file     string // persist file path; empty = no persistence
+	dnscrypt atomic.Pointer[dnscryptState]
 }
 
 // ecsCandidate is a single ECS cache-key candidate used during fallback lookup.
@@ -49,233 +101,83 @@ var (
 	ipv6FallbackPrefixes = []int{56, 48, 32, 0}
 )
 
-// New creates a BadgerDB-backed DNS cache. Panics if db is nil (caller must
-// provide a valid database handle — the server wiring always does).
-func New(db *database.DB) *Cache {
-	if db == nil {
-		panic("cache: nil database")
+// New creates an in-memory cache. maxSizeBytes caps total stored value bytes
+// (0 = config default); file is the optional persist path, loaded eagerly.
+func New(maxSizeBytes int64, file string) *Cache {
+	if maxSizeBytes <= 0 {
+		maxSizeBytes = int64(config.DefaultCacheMaxSizeMB) << 20
 	}
-	return &Cache{
-		db:           db,
-		latencyCache: lrumap.New[string, latencyEntry](config.DefaultLatencyCacheCapacity),
+	head := &listEntry{}
+	tail := &listEntry{}
+	head.next = tail
+	tail.prev = head
+	c := &Cache{
+		store:    make(map[entryKey]*listEntry),
+		head:     head,
+		tail:     tail,
+		maxSize:  maxSizeBytes,
+		ptrIndex: make(map[string][]*ptrRecord),
+		latency:  lrumap.New[string, latencyEntry](config.DefaultLatencyCacheCapacity),
+		file:     file,
 	}
+	c.loadFromDisk()
+	return c
 }
 
-// Close closes the database.
-func (c *Cache) Close() error {
-	return c.db.Close()
-}
-
-// ── Store interface ──────────────────────────────────────────────────────────
-
-// Get retrieves a cached DNS response by decompressing and unpacking the stored
-// wire format. Returns the entry, whether it was found, and whether it's expired.
+// Get retrieves a cached DNS response. Returns the entry, whether it was
+// found, and whether it's expired (expired entries are still returned for
+// stale-serving and prefetch — the middleware decides).
 func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool) {
-	if c.db.IsClosed() {
-		return nil, false, false
-	}
-
 	qname = dnsutil.Canonical(qname)
-	var validated bool
-	var msgWire []byte
-	var expiresAt uint64
-	found := false
-
-	_ = c.db.View(func(txn *badger.Txn) error {
-		for _, cand := range ecsFallbackCandidates(ecs) {
-			key := database.EntryKey(qname, cand.addr, cand.prefix, dnssecOK, qtype, qclass)
-			item, err := txn.Get(key)
-			if err != nil {
-				continue
-			}
-			validated = item.UserMeta() == database.UserMetaValidated(true)
-			expiresAt = item.ExpiresAt()
-			// ValueCopy: the []byte from item.Value is only valid inside the
-			// callback/transaction (Badger reuses an internal buffer for
-			// value-log entries) and msgWire is used after the View returns.
-			if msgWire, err = item.ValueCopy(nil); err != nil {
-				continue
-			}
-			found = true
-			return nil
+	for _, cand := range ecsFallbackCandidates(ecs) {
+		key := entryKey{qname: qname, ecsAddr: cand.addr, ecsPrefix: uint16(cand.prefix), dnssecOK: dnssecOK, qtype: qtype, qclass: qclass} //nolint:gosec // G115: prefix ≤ 128 by CIDR semantics
+		e := c.lookup(key)
+		if e == nil {
+			continue
 		}
-		return nil
-	})
 
-	if !found {
-		log.Debugf("CACHE: miss for %s (type=%d)", qname, qtype)
-		return nil, false, false
-	}
+		msg := pool.DefaultMessage.Get()
+		msg.Data = e.value
+		if err := msg.Unpack(); err != nil {
+			pool.DefaultMessage.Put(msg)
+			log.Debugf("CACHE: unpack wire for %s (type=%d): %v", qname, qtype, err)
+			continue
+		}
 
-	if len(msgWire) == 0 {
-		return nil, false, false
-	}
-
-	msg := pool.DefaultMessage.Get()
-	msg.Data = msgWire
-	if err := msg.Unpack(); err != nil {
+		// The pooled msg is zeroed on Put but its backing arrays survive —
+		// the returned Entry's RR slices stay valid (same contract as before).
+		entryTTL := minTTL(msg.Answer, msg.Ns, msg.Extra)
+		entry := &Entry{
+			Answer:     msg.Answer,
+			Authority:  msg.Ns,
+			Additional: msg.Extra,
+			Timestamp:  e.ts,
+			TTL:        entryTTL,
+			Validated:  e.validated,
+			Rcode:      int(msg.Rcode), //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
+		}
 		pool.DefaultMessage.Put(msg)
-		log.Debugf("CACHE: unpack wire for %s (type=%d): %v", qname, qtype, err)
-		return nil, false, false
+
+		return entry, true, ttl.IsExpired(e.ts, entryTTL)
 	}
-	defer pool.DefaultMessage.Put(msg)
-
-	// Derive entry TTL from the unpacked wire (minimum positive TTL across all sections).
-	// Derive store timestamp from Badger's native expiry clock.
-	// Badger TTL = entryTTL + defaultStaleMaxAge seconds.
-	// expiresAt = timestamp + entryTTL + defaultStaleMaxAge
-	// → timestamp = expiresAt - entryTTL - defaultStaleMaxAge
-	entryTTL := minTTL(msg.Answer, msg.Ns, msg.Extra)
-	var ts int64
-	if expiresAt != 0 {
-		ts = int64(expiresAt) - int64(entryTTL) - defaultStaleMaxAge
-	} else {
-		// Defensive: entry stored without TTL (should not happen).
-		ts = log.NowUnix()
-	}
-
-	entry := &Entry{
-		Answer:     msg.Answer,
-		Authority:  msg.Ns,
-		Additional: msg.Extra,
-		Timestamp:  ts,
-		TTL:        entryTTL,
-		Validated:  validated,
-		Rcode:      int(msg.Rcode), //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
-	}
-
-	// Sort A/AAAA answer records by latency.
-	c.sortAnswerByLatency(entry)
-
-	isExpired := ttl.IsExpired(ts, entryTTL)
-	return entry, true, isExpired
-}
-
-// sortAnswerByLatency reorders A/AAAA records in entry.Answer by probe
-// latency (fastest first), keeping non-A/AAAA records at the front.
-func (c *Cache) sortAnswerByLatency(entry *Entry) {
-	if len(entry.Answer) <= 1 {
-		return
-	}
-
-	rrToIP := make(map[dns.RR]string, len(entry.Answer))
-	addrRRs := make([]dns.RR, 0, len(entry.Answer))
-	for _, rr := range entry.Answer {
-		if ip, ok := zdnsutil.ExtractIPString(rr); ok {
-			rrToIP[rr] = ip
-			addrRRs = append(addrRRs, rr)
-		}
-	}
-	if len(addrRRs) <= 1 {
-		return
-	}
-
-	ips := make([]string, len(addrRRs))
-	for i, rr := range addrRRs {
-		ips[i] = rrToIP[rr]
-	}
-	latencies := c.LookupIPLatencies(ips)
-	if len(latencies) == 0 {
-		return
-	}
-
-	slices.SortStableFunc(addrRRs, func(a, b dns.RR) int {
-		aLat, aOK := latencies[rrToIP[a]]
-		bLat, bOK := latencies[rrToIP[b]]
-		switch {
-		case aOK != bOK:
-			if aOK {
-				return -1
-			}
-			return 1
-		case aOK:
-			if aLat != bLat {
-				return aLat - bLat
-			}
-		}
-		return dns.Compare(a, b)
-	})
-
-	// Merge sorted A/AAAA back into Answer — non-IP records stay in place.
-	j := 0
-	for i, rr := range entry.Answer {
-		if _, ok := rrToIP[rr]; ok {
-			entry.Answer[i] = addrRRs[j]
-			j++
-		}
-	}
-}
-
-// LookupIPLatencies fetches latencies for a batch of IPs (exported for the
-// resolver's root-server ordering). Results are served from an in-memory LRU
-// cache; BadgerDB is only queried on a cache miss, which keeps the hot read
-// path (cache.Get → sortAnswerByLatency) off the LSM tree entirely.
-func (c *Cache) LookupIPLatencies(ips []string) map[string]int {
-	if len(ips) > maxLatencyLookupIPs {
-		ips = ips[:maxLatencyLookupIPs]
-	}
-	latencies := make(map[string]int, min(len(ips), maxLatencyLookupIPs))
-
-	// Collect IPs not in the in-memory LRU cache, or whose LRU entry has
-	// expired (same TTL semantics as the BadgerDB e:lat: keys).
-	now := log.NowUnix()
-	var missing []string
-	for _, ip := range ips {
-		if e, ok := c.latencyCache.Get(ip); ok && now < e.expiresAt {
-			latencies[ip] = e.value
-		} else {
-			missing = append(missing, ip)
-		}
-	}
-
-	// Fall back to BadgerDB only for cache misses.
-	if len(missing) > 0 {
-		_ = c.db.View(func(txn *badger.Txn) error {
-			var buf []byte
-			for _, ip := range missing {
-				item, err := txn.Get(database.EIPLatencyKey(ip))
-				if err != nil {
-					continue
-				}
-				if item.IsDeletedOrExpired() {
-					continue
-				}
-				buf, err = item.ValueCopy(buf)
-				if err != nil {
-					continue
-				}
-				lat := database.DecodeLatencyValue(buf)
-				latencies[ip] = lat
-				// Populate LRU with the same expiry as the BadgerDB entry.
-				c.latencyCache.Set(ip, latencyEntry{
-					value:     lat,
-					expiresAt: int64(item.ExpiresAt()), //nolint:gosec // G115: unix timestamp — protocol-bounded int64
-				})
-			}
-			return nil
-		})
-	}
-
-	return latencies
+	log.Debugf("CACHE: miss for %s (type=%d)", qname, qtype)
+	return nil, false, false
 }
 
 // Set stores a DNS response in the cache. Wire format is raw DNS wire format
-// (BadgerDB handles block-level zstd compression at the SSTable layer).
+// (compression happens once, at persist-file write time — the in-memory hot
+// path is uncompressed). Returns whether the entry was stored (false when
+// TTL=0, which must not be cached per RFC 8767 §7).
 func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
 	answer, authority, additional []dns.RR, validated bool, rcode uint16,
-) int64 {
-	if c.db.IsClosed() {
-		return 0
-	}
-
-	// ── Prep work (parallel-safe) ─────────────────────────────────────────
+) bool {
 	now := log.NowUnix()
 	// Strip the EDNS OPT pseudo-record before computing the TTL — the OPT TTL
 	// field encodes flags/extended RCODE (RFC 6891), not a cacheable RR TTL.
 	additional = stripOPT(additional)
 	entryTTL := minTTL(answer, authority, additional)
 	if entryTTL <= 0 {
-		return 0 // RFC 8767 §7: TTL=0 data must not be cached
+		return false // RFC 8767 §7: TTL=0 data must not be cached
 	}
 
 	ecsAddr, ecsPrefix := ecsParams(ecs)
@@ -286,64 +188,166 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	authority = cloneRRs(authority)
 	additional = cloneRRs(additional)
 
-	// Pack wire format and compress.  The rcode is stored in the wire so
-	// Get can recover it (Entry.Rcode) — negative responses (NXDOMAIN) must
-	// be served and cached with their correct rcode.
+	// Pack wire format. The rcode is stored in the wire so Get can recover it
+	// (Entry.Rcode) — negative responses (NXDOMAIN) must be served and cached
+	// with their correct rcode.
 	msg := pool.DefaultMessage.Get()
 	msg.Rcode = rcode
 	msg.Answer = answer
 	msg.Ns = authority
 	msg.Extra = additional
-	var msgWire []byte
-	if err := msg.Pack(); err == nil {
-		msgWire = msg.Data
-	} else {
+	if err := msg.Pack(); err != nil {
 		log.Debugf("CACHE: pack failed for %s (type=%d): %v — not stored", qname, qtype, err)
 		pool.DefaultMessage.Put(msg)
-		return 0
+		return false
 	}
+	// Clone out of the pooled buffer: the pool reuses backing arrays, and the
+	// stored wire must stay stable while the pool churns.
+	wire := bytes.Clone(msg.Data)
 	pool.DefaultMessage.Put(msg)
 
-	// ── Transaction ──────────────────────────────────────────────────────
-	var entryID uint64
-	ttlDurationSec := int64(entryTTL) + defaultStaleMaxAge
-
-	err := c.db.Update(func(txn *badger.Txn) error {
-		id, idErr := c.db.NextEntryID()
-		if idErr != nil {
-			return idErr
-		}
-		entryID = id
-
-		key := database.EntryKey(qname, ecsAddr, ecsPrefix, dnssecOK, qtype, qclass)
-		e := badger.NewEntry(key, msgWire)
-		e.UserMeta = database.UserMetaValidated(validated)
-		e.ExpiresAt = uint64(now + ttlDurationSec) //nolint:gosec // G115: protocol-bounded value fits target type
-
-		if err := txn.SetEntry(e); err != nil {
-			return err
-		}
-
-		// Populate ptr_map for reverse (PTR) lookups — best-effort.
-		allRRs := make([]dns.RR, 0, len(answer)+len(authority)+len(additional))
-		allRRs = append(allRRs, answer...)
-		allRRs = append(allRRs, authority...)
-		allRRs = append(allRRs, additional...)
-		if ptrErr := insertPtrMap(txn, id, allRRs, now, ttlDurationSec); ptrErr != nil {
-			log.Warnf("CACHE: insert ptr_map failed for %s (non-fatal): %v", qname, ptrErr)
-		}
-
-		return nil
-	})
-	if err != nil {
-		log.Warnf("CACHE: insert entry failed for %s (type=%d): %v", qname, qtype, err)
-		return 0
-	}
-
-	return int64(entryID)
+	expiresAt := now + int64(entryTTL) + defaultStaleMaxAge
+	key := entryKey{qname: qname, ecsAddr: ecsAddr, ecsPrefix: uint16(ecsPrefix), dnssecOK: dnssecOK, qtype: qtype, qclass: qclass} //nolint:gosec // G115: prefix ≤ 128 by CIDR semantics
+	c.insert(key, wire, now, expiresAt, validated)
+	c.updatePtrIndex(key, answer, authority, additional, now, expiresAt)
+	return true
 }
 
-// ── Set-path helpers ──────────────────────────────────────────────────────
+// ── Store interface implementation (lifecycle + latency) ────────────────
+
+// LookupIPLatencies fetches latencies for a batch of IPs (exported for the
+// resolver's root-server ordering). Pure in-memory LRU — no backing store.
+func (c *Cache) LookupIPLatencies(ips []string) map[string]int {
+	if len(ips) > maxLatencyLookupIPs {
+		ips = ips[:maxLatencyLookupIPs]
+	}
+	latencies := make(map[string]int, min(len(ips), maxLatencyLookupIPs))
+	now := log.NowUnix()
+	for _, ip := range ips {
+		if e, ok := c.latency.Get(ip); ok && now < e.expiresAt {
+			latencies[ip] = e.value
+		}
+	}
+	return latencies
+}
+
+// UpdateLatency stores a latency measurement keyed by IP.
+func (c *Cache) UpdateLatency(ip string, latencyMS int) {
+	if latencyMS < 0 {
+		latencyMS = 0
+	}
+	c.latency.Set(ip, latencyEntry{
+		value:     latencyMS,
+		expiresAt: log.NowUnix() + config.DefaultLatencyProbeMinInterval*2,
+	})
+}
+
+// LatencyLastProbe returns the last probe time for an IP (derived from the
+// LRU entry's expiry, same semantics as the old BadgerDB key).
+func (c *Cache) LatencyLastProbe(ip string) (int64, bool) {
+	e, ok := c.latency.Get(ip)
+	if !ok || e.expiresAt < log.NowUnix() {
+		return 0, false
+	}
+	return e.expiresAt - int64(config.DefaultLatencyProbeMinInterval)*2, true
+}
+
+// Len returns the current number of cached entries.
+func (c *Cache) Len() int {
+	c.mu.RLock()
+	n := c.len
+	c.mu.RUnlock()
+	return n
+}
+
+// SizeBytes returns the current total value size in bytes.
+func (c *Cache) SizeBytes() int64 {
+	c.mu.RLock()
+	n := c.totalSize
+	c.mu.RUnlock()
+	return n
+}
+
+// ── LRU map operations (internal) ───────────────────────────────────────
+
+// lookup returns the entry for key, bumping it to the front. Expired entries
+// are returned — expiry is judged by the caller (stale-serve/prefetch need
+// the entry itself); physical removal happens on eviction, Save/Load, Clear.
+func (c *Cache) lookup(key entryKey) *listEntry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.store[key]; ok {
+		c.moveToFront(e)
+		return e
+	}
+	return nil
+}
+
+// insert stores (or updates) an entry, evicting least-recently-used entries
+// until the size budget allows the new value.
+func (c *Cache) insert(key entryKey, value []byte, ts, expiresAt int64, validated bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	size := int64(len(value))
+
+	if e, ok := c.store[key]; ok {
+		c.totalSize += size - int64(len(e.value))
+		e.value = value
+		e.ts = ts
+		e.expiresAt = expiresAt
+		e.validated = validated
+		c.moveToFront(e)
+		return
+	}
+	for c.totalSize+size > c.maxSize && c.len > 0 {
+		c.evictLocked()
+	}
+	c.totalSize += size
+	e := &listEntry{key: key, value: value, ts: ts, expiresAt: expiresAt, validated: validated}
+	c.store[key] = e
+	c.pushFront(e)
+	c.len++
+}
+
+// evictLocked removes the least-recently-used entry (just before the tail
+// sentinel) and its derived PTR records. Must hold c.mu.
+func (c *Cache) evictLocked() {
+	if e := c.tail.prev; e != c.head {
+		c.remove(e)
+		delete(c.store, e.key)
+		c.totalSize -= int64(len(e.value))
+		c.len--
+		c.cleanupPtrIndexLocked(e.key)
+	}
+}
+
+func (c *Cache) moveToFront(e *listEntry) {
+	if e.prev == c.head {
+		return // already at front
+	}
+	e.prev.next = e.next
+	e.next.prev = e.prev
+	e.prev = c.head
+	e.next = c.head.next
+	c.head.next.prev = e
+	c.head.next = e
+}
+
+func (c *Cache) pushFront(e *listEntry) {
+	e.prev = c.head
+	e.next = c.head.next
+	c.head.next.prev = e
+	c.head.next = e
+}
+
+func (c *Cache) remove(e *listEntry) {
+	e.prev.next = e.next
+	e.next.prev = e.prev
+	e.prev = nil
+	e.next = nil
+}
+
+// ── Set-path helpers (moved from the BadgerDB-era store) ────────────────
 
 // minTTL returns the smallest positive TTL across all RR sections.
 func minTTL(sections ...[]dns.RR) int {

@@ -1,167 +1,197 @@
 package cache
 
 import (
-	"errors"
 	"fmt"
-	"zjdns/config"
-	"zjdns/database"
 	"zjdns/internal/log"
-	"zjdns/internal/ttl"
+	"zjdns/internal/pool"
 
+	zdnsutil "zjdns/internal/dnsutil"
+
+	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"github.com/dgraph-io/badger/v4"
 )
 
-var errCacheClosed = errors.New("cache closed")
-
-// ReverseLookup returns all cached domain names mapped to the given IP address.
-func (c *Cache) ReverseLookup(ip string) []LookupResult {
-	if ip == "" || c.db.IsClosed() {
-		return nil //nolint:nilerr // key not found
-	}
-	var results []LookupResult
-	if err := c.db.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.Prefix = database.EIPReversePrefix(ip)
-		opts.PrefetchValues = true
-		it := txn.NewIterator(opts)
-		defer it.Close()
-		var buf []byte
-		for it.Rewind(); it.Valid(); it.Next() {
-			item := it.Item()
-			if item.IsDeletedOrExpired() {
-				continue
-			}
-			buf, err := item.ValueCopy(buf)
-			if err != nil {
-				// A transient BadgerDB failure must not look like an empty
-				// result (the PTR middleware would then delegate upstream).
-				log.Warnf("CACHE: reverse lookup ValueCopy failed for %s: %v", ip, err)
-				continue
-			}
-			ttlVal := database.DecodePtrMapValue(buf)
-			k := string(item.Key())
-			nameOff := 0
-			for nameOff < len(k) && k[nameOff] != 0 {
-				nameOff++
-			}
-			nameOff += 1 + 8 + 1
-			if nameOff < len(k) {
-				name := k[nameOff:]
-				// Exclude non-ptr keys that share the e:ip:{ip}\x00 prefix
-				// (e.g. an entry key whose qname starts with "ip:{ip}"):
-				// their "name" field is not an FQDN (it would contain the
-				// ECS address / binary key columns, which never end in ".").
-				if !dnsutil.IsFqdn(name) {
-					continue
-				}
-				ts := database.DecodePtrMapTimestamp(buf)
-				if ts == 0 {
-					// Legacy 4-byte value: fall back to the entry's expiry.
-					ts = int64(item.ExpiresAt()) - int64(ttlVal) //nolint:gosec // G115: unix timestamps — protocol-bounded int64
-				}
-				results = append(results, LookupResult{Name: name, TTL: ttl.RemainingTTL(ts, int(ttlVal), uint32(config.DefaultStaleTTL))})
-			}
-		}
-		return nil //nolint:nilerr // key not found
-	}); err != nil {
-		// Surface the failure instead of silently returning an empty result.
-		log.Warnf("CACHE: reverse lookup failed for %s: %v", ip, err)
-	}
-	return results
-}
-
-// FlushDB truncates a table: "cache", "zone", or "ruleset".
+// FlushDB truncates a table: "cache" clears all cached responses and derived
+// state. "zone" and "ruleset" are no-ops — they never used the persist store.
 func (c *Cache) FlushDB(target string) (int64, error) {
-	if c.db.IsClosed() {
-		return 0, errCacheClosed
-	}
 	switch target {
 	case "cache":
-		if err := c.db.DropPrefix(database.EntryKeyPrefix()); err != nil {
-			return 0, fmt.Errorf("flushDB cache: %w", err)
-		}
-		c.latencyCache.Clear()
-	case "zone":
-		if err := c.db.DropPrefix([]byte("z:")); err != nil {
-			return 0, fmt.Errorf("flushDB zone: %w", err)
-		}
-	case "ruleset":
-		if err := c.db.DropPrefix([]byte("r:")); err != nil {
-			return 0, fmt.Errorf("flushDB ruleset: %w", err)
-		}
+		c.mu.Lock()
+		c.store = make(map[entryKey]*listEntry)
+		c.head.next = c.tail
+		c.tail.prev = c.head
+		c.totalSize = 0
+		c.len = 0
+		c.ptrIndex = make(map[string][]*ptrRecord)
+		c.mu.Unlock()
+		c.latency.Clear()
+		log.Infof("CACHE: flushDB %s: done", target)
+		return 0, nil
+	case "zone", "ruleset":
+		log.Infof("CACHE: flushDB %s: done", target)
+		return 0, nil
 	default:
 		return 0, fmt.Errorf("flushDB: unknown target %q", target)
 	}
-	log.Infof("CACHE: flushDB %s: done", target)
-	return 0, nil
 }
 
 // Clear truncates cache entries.
 func (c *Cache) Clear() (int64, error) { return c.FlushDB("cache") }
 
-// UpdateLatency stores a latency measurement keyed by IP.
-func (c *Cache) UpdateLatency(ip string, latencyMS int) {
-	if latencyMS < 0 {
-		latencyMS = 0
+// Save dumps non-expired entries plus the current DNSCrypt state to the
+// persist file. Called on Close and on DNSCrypt key rotation.
+func (c *Cache) Save() error {
+	if c.file == "" {
+		return nil
 	}
-	if c.db.IsClosed() {
+	f := &PersistFile{Version: 1}
+	now := log.NowUnix()
+
+	c.mu.Lock()
+	for e := c.head.next; e != c.tail; e = e.next {
+		if e.expiresAt > 0 && e.expiresAt < now {
+			continue
+		}
+		f.Entries = append(f.Entries, PersistEntry{
+			Qname:     e.key.qname,
+			ECSAddr:   e.key.ecsAddr,
+			ECSPrefix: e.key.ecsPrefix,
+			DNSsecOK:  e.key.dnssecOK,
+			Qtype:     e.key.qtype,
+			Qclass:    e.key.qclass,
+			Value:     e.value,
+			ExpiresAt: e.expiresAt,
+			Validated: e.validated,
+		})
+	}
+	c.mu.Unlock()
+
+	if ds := c.dnscrypt.Load(); ds != nil {
+		f.DNSCrypt = &DNSCrypt{Identity: ds.identity, Windows: ds.windows}
+	}
+	return f.Save(c.file)
+}
+
+// Close persists the cache and clears it.
+func (c *Cache) Close() error {
+	if err := c.Save(); err != nil {
+		return err
+	}
+	_, _ = c.Clear()
+	return nil
+}
+
+// loadFromDisk populates the cache from the persist file (cold start when the
+// file is missing or corrupt — a corrupt file is logged, not fatal).
+func (c *Cache) loadFromDisk() {
+	if c.file == "" {
 		return
 	}
-	expiresAt := uint64(log.NowUnix() + config.DefaultLatencyProbeMinInterval*2) //nolint:gosec // G115: protocol-bounded value fits target type
-
-	if err := c.db.Update(func(txn *badger.Txn) error {
-		e := badger.NewEntry(database.EIPLatencyKey(ip), database.EncodeLatencyValue(latencyMS))
-		e.ExpiresAt = expiresAt
-		return txn.SetEntry(e)
-	}); err != nil {
-		log.Warnf("CACHE: latency write failed for %s: %v", ip, err)
-		return // don't populate LRU on failure — the DB is the source of truth
+	f, err := Load(c.file)
+	if err != nil {
+		log.Warnf("CACHE: persist load failed (starting cold): %v", err)
+		return
 	}
-	// Populate the in-memory LRU after a successful write, with the same
-	// expiry so the LRU naturally mirrors the BadgerDB TTL.
-	c.latencyCache.Set(ip, latencyEntry{
-		value:     latencyMS,
-		expiresAt: int64(expiresAt), //nolint:gosec // G115: unix timestamp — protocol-bounded int64
-	})
-}
-
-// DBSize returns the BadgerDB LSM and value log sizes in bytes.
-func (c *Cache) DBSize() (lsm, vlog int64) {
-	if c.db.IsClosed() {
-		return 0, 0
+	if f == nil {
+		return
 	}
-	return c.db.Badger.Size()
-}
 
-// DBEstimateSize returns the estimated on-disk size for a key prefix.
-func (c *Cache) DBEstimateSize(prefix []byte) (lsm, vlog uint64) {
-	if c.db.IsClosed() {
-		return 0, 0
-	}
-	return c.db.Badger.EstimateSize(prefix)
-}
-
-// LatencyLastProbe returns the last probe time for an IP.
-func (c *Cache) LatencyLastProbe(ip string) (int64, bool) {
-	if c.db.IsClosed() {
-		return 0, false
-	}
-	var lastProbe int64
-	found := false
-	_ = c.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get(database.EIPLatencyKey(ip))
-		if err != nil {
-			return nil //nolint:nilerr // key not found
+	now := log.NowUnix()
+	for _, pe := range f.Entries {
+		if pe.ExpiresAt > 0 && pe.ExpiresAt < now {
+			continue
 		}
-		// UpdateLatency stores the key with ExpiresAt = probeTime + 2*interval;
-		// recover the probe time so callers can compute the elapsed interval.
-		lastProbe = int64(item.ExpiresAt()) - int64(config.DefaultLatencyProbeMinInterval)*2 //nolint:gosec // G115: unix timestamps — protocol-bounded int64
-		found = true
-		return nil //nolint:nilerr // key not found
-	})
-	if !found {
-		return 0, false
+		key := entryKey{
+			qname:     pe.Qname,
+			ecsAddr:   pe.ECSAddr,
+			ecsPrefix: pe.ECSPrefix,
+			dnssecOK:  pe.DNSsecOK,
+			qtype:     pe.Qtype,
+			qclass:    pe.Qclass,
+		}
+		// Recover the write timestamp: expiresAt = ts + entryTTL + staleMaxAge.
+		msg := pool.DefaultMessage.Get()
+		msg.Data = pe.Value
+		if err := msg.Unpack(); err != nil {
+			pool.DefaultMessage.Put(msg)
+			log.Debugf("CACHE: skip unparseable persisted entry for %s (type=%d)", pe.Qname, pe.Qtype)
+			continue
+		}
+		entryTTL := minTTL(msg.Answer, msg.Ns, msg.Extra)
+		pool.DefaultMessage.Put(msg)
+		if entryTTL <= 0 {
+			continue
+		}
+		ts := pe.ExpiresAt - int64(entryTTL) - defaultStaleMaxAge
+		c.insert(key, pe.Value, ts, pe.ExpiresAt, pe.Validated)
 	}
-	return lastProbe, true
+	c.rebuildPtrIndex()
+
+	if f.DNSCrypt != nil {
+		c.dnscrypt.Store(&dnscryptState{identity: f.DNSCrypt.Identity, windows: f.DNSCrypt.Windows})
+	}
+	log.Infof("CACHE: loaded %d entries from %s", c.Len(), c.file)
+}
+
+// rebuildPtrIndex re-derives the PTR index from stored entries after loading
+// from disk (the index is derived data, never persisted itself).
+func (c *Cache) rebuildPtrIndex() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for e := c.head.next; e != c.tail; e = e.next {
+		msg := pool.DefaultMessage.Get()
+		msg.Data = e.value
+		if err := msg.Unpack(); err != nil {
+			pool.DefaultMessage.Put(msg)
+			continue
+		}
+		c.ptrIndexFromWireLocked(e.key, e.ts, e.expiresAt, msg.Answer, msg.Ns, msg.Extra)
+		pool.DefaultMessage.Put(msg)
+	}
+}
+
+// ptrIndexFromWireLocked inserts PTR records for a loaded entry. Must hold
+// c.mu. Dedup by (ip, name) within the entry, same as updatePtrIndex.
+func (c *Cache) ptrIndexFromWireLocked(owner entryKey, ts, expiresAt int64, sections ...[]dns.RR) {
+	seen := make(map[string]bool)
+	for _, rrs := range sections {
+		for _, rr := range rrs {
+			if rr == nil || dns.RRToType(rr) == dns.TypeOPT {
+				continue
+			}
+			ip, ok := zdnsutil.ExtractIPString(rr)
+			if !ok {
+				continue
+			}
+			name := dnsutil.Canonical(rr.Header().Name)
+			if seen[ip+"\x00"+name] {
+				continue
+			}
+			seen[ip+"\x00"+name] = true
+			c.ptrIndex[ip] = append(c.ptrIndex[ip], &ptrRecord{
+				name: name, ttl: int32(rr.Header().TTL), //nolint:gosec // G115: protocol-bounded value fits target type
+				ts:        ts,
+				expiresAt: expiresAt,
+				ownerKey:  owner,
+			})
+		}
+	}
+}
+
+// SetDNSCrypt records the DNSCrypt server state and persists it immediately
+// (key rotation must survive a restart). The DNSCrypt server owns the data.
+func (c *Cache) SetDNSCrypt(identity []byte, windows []Window) {
+	c.dnscrypt.Store(&dnscryptState{identity: identity, windows: windows})
+	if err := c.Save(); err != nil {
+		log.Warnf("CACHE: persist dnscrypt state failed: %v", err)
+	}
+}
+
+// DNSCryptState returns the persisted DNSCrypt state (nil on first run).
+func (c *Cache) DNSCryptState() (*DNSCrypt, bool) {
+	ds := c.dnscrypt.Load()
+	if ds == nil {
+		return nil, false
+	}
+	return &DNSCrypt{Identity: ds.identity, Windows: ds.windows}, true
 }

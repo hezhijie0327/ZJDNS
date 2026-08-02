@@ -1,66 +1,92 @@
 # Architecture Reference
 
 Detailed technical reference for ZJDNS. For working guidelines, see [CLAUDE.md](../CLAUDE.md).
+For the storage-layer redesign rationale, see [DESIGN-STORAGE](design.md).
 
-## DB Schema
+## Persistence Schema
 
-BadgerDB (`database/`) stores only DNS response cache entries and latency probes.
-Zone rules (`zone/`), rulesets (`ruleset/`), and query stats (`stats/`) are all
-in-memory data structures — loaded from config at startup, O(1) lookups, no persistence.
-All numeric fields use binary BigEndian encoding (not hex), consistent with value encoding.
+The cache is **in-memory first**: an O(1) map + embedded LRU list (eviction by
+total value bytes, `cache.max_size_mb`). A single optional persist file
+(`cache.db_file`) is loaded at startup and dumped at shutdown / DNSCrypt key
+rotation — zstd-compressed typed binary, written atomically (temp + rename).
+Only two things are persisted: cache entries and DNSCrypt state. Everything
+else is derived or transient:
 
-| Prefix | Purpose | Key Pattern | Value |
-|--------|---------|-------------|-------|
-| `e:` | DNS response cache | `e:{qname}\x00{ecs_addr}\x00{ecsPrefix:2B}\x00{dnssec:1B}\x00{qtype:2B}\x00{qclass:2B}` | `raw_wire` |
-| `e:ip:` | IP reverse index + latency | `e:ip:{ip}\x00{entryID:8B}\x00{name}` / `e:ip:{ip}\x00_lat` | reverse: `[0:4]ttl` / latency: `[0:2]latency_ms` |
+| Data | Persisted? | Why |
+|------|-----------|-----|
+| Cache entries {qname, ecs, dnssec, qtype, qclass, wire, expiresAt, validated} | ✅ | Warm restart |
+| DNSCrypt {identity, windows} | ✅ | sdns:// stamps break if identity lost |
+| PTR reverse index | ❌ | Derived — rebuilt from entries on load |
+| IP latency | ❌ | Transient; bounded LRU, re-probed |
+| Entry IDs | ❌ | No longer needed (no shared KV store) |
 
-`\x00` is the field separator for string fields. Binary fields use known offsets for parsing (NUL bytes inside binary integers would break separator-based parsing).
+### `database.File` — typed binary format
+
+`cache/persist.go` is pure serialization: `PersistFile{Version, Entries,
+DNSCrypt}` with `Load(path)` / `Save(path)`. No KV operations, no
+transactions — the cache owns its in-memory data.
+
+```
+[5B magic "ZJDNS"][2B version=1][8B entry_count]
+per Entry: [2B qname_len][qname][1B has_ecs]
+           (if has_ecs) [2B ecs_addr_len][ecs_addr][2B ecs_prefix]
+           [1B dnssec][2B qtype][2B qclass][4B value_len][value][8B expires_at][1B validated]
+[1B has_dnscrypt]
+if has_dnscrypt:
+  [4B identity_len][identity][2B window_count]
+  per Window: [4B serial][4B not_before][4B not_after][32B resolver_sk][32B resolver_pk]
+```
+
+Cache-key fields are typed (no byte-packed `e:` prefixes — the BadgerDB-era
+key encoding is gone). Numeric fields use binary BigEndian.
 
 ### Key Patterns
 
-- **Cache hit path**: `Get()` does a direct BadgerDB key lookup (`txn.Get()`) in a read-only View transaction. Raw DNS wire format is unpacked directly (no app-level decompression).
-- **Cache write path**: `Set()` packs wire format, writes entry + reverse index entries in a single Update transaction. Wire stored raw — BadgerDB block-level zstd handles compression.
-- **TTL**: BadgerDB native expiry via direct `Entry.ExpiresAt` assignment — entries auto-expire after `entryTTL + DefaultStaleMaxAge` seconds. Timestamp derived at read time from `Item.ExpiresAt()`. Reverse index and latency entries also use direct `ExpiresAt`. No custom eviction code.
-- **Latency**: Stored under `e:ip:{ip}\x00_lat` with no TTL — overwritten on each probe, cleaned when `DropPrefix("e:")` runs. `LatencyLastProbe` checks key existence.
+- **Cache hit path**: `Get()` does an O(1) `map[entryKey]` lookup per ECS
+  fallback candidate, unpacks the wire. Answers are pre-sorted by latency —
+  the probe writes the reordered answer back into the entry, so the hot path
+  does no sorting.
+- **Cache write path**: `Set()` packs wire format, `insert()` (LRU + size
+  budget), then updates the PTR index. Wire stored uncompressed in memory;
+  zstd happens once, at file write time.
+- **TTL**: each entry carries `ts` + `expiresAt = ts + entryTTL + staleMaxAge`.
+  Expired entries are returned for stale-serving/prefetch; physical removal
+  happens on LRU eviction, Save/Load filtering, or Clear.
+- **LRU eviction**: `insert()` evicts least-recently-used entries until the
+  new value fits `maxSizeBytes`. Eviction cleans the evicted entry's PTR
+  records (ownerKey linkage).
+- **Latency**: bounded `lrumap` (ip → {ms, expiresAt}), transient. Serves the
+  probe gate (`LatencyLastProbe`) and the resolver's cross-name NS ordering
+  (`LookupIPLatencies`). The probe itself re-sorts the answer and re-Sets it.
+- **Reverse lookup (PTR)**: in-memory `map[ip][]ptrRecord` derived from A/AAAA
+  records; rebuilt from entries on load. Expired records skipped on scan.
 - **Stats aggregation**: `stats.Collector` — plain `map[string]*entry` + `sync.Mutex`. `Record()` upserts directly with lock. `Stats()` iterates the map. All-time counters, reset via `Reset()`. No channel, no goroutine, no persistence.
-- **Auto-increment IDs**: BadgerDB `Sequence` (bandwidth=1000) for entry IDs. Leases up to 1000 IDs in memory before a disk write.
-- **Zone queries**: `Evaluator.Evaluate()` does in-memory exact-match lookup on `exact` map (O(1)), then wildcard suffix search on `wildcards` map (max 16 iterations). No BadgerDB — pure WORM maps.
+- **Zone queries**: `Evaluator.Evaluate()` does in-memory exact-match lookup on `exact` map (O(1)), then wildcard suffix search on `wildcards` map (max 16 iterations). Pure WORM maps.
 - **Ruleset matching**: `Engine.Match()` does CIDR via binary radix trie (O(128)) and domain suffix via map lookup (O(1)). All in-memory, loaded from config at startup.
-- **Reverse lookup**: Prefix scan on `e:ip:{ip}\x00` returns all cached domains for an IP. Expired entries filtered by `IsDeletedOrExpired()`.
-- **CHAOS endpoints**: `ZJDNS.stats` (read-only), `ZJDNS.cache.clear` (clear `e:` + `e:ip:`), `ZJDNS.stats.clear` (reset `s:`). Zone/ruleset clearing is not exposed.
+- **DNSCrypt**: identity + windows live in memory; the DNSCrypt server hands
+  them to the cache (`SetDNSCrypt`) on startup and rotation, which persists
+  immediately. Single writer (the cache) — no file races.
+- **CHAOS endpoints**: `ZJDNS.stats` (read-only), `ZJDNS.cache.clear` (clears
+  the in-memory cache + PTR index), `ZJDNS.stats.clear` (reset stats).
+  Zone/ruleset clearing is not exposed.
 
-### DB Configuration
-
-The `database.Options` struct exposes 3 memory budget knobs. All other BadgerDB
-settings are hardcoded as correct for DNS cache workloads. Pass `nil` to
-`database.Open()` for full defaults.
-
-| Field | Default | BadgerDB Setting | Purpose |
-|---|---|---|---|
-| `MemTableSizeMB` | 4 | `WithMemTableSize` | Single memtable write buffer (MB) |
-| `BlockCacheSizeMB` | 4 | `WithBlockCacheSize` | SSTable block read cache (MB) |
-| `IndexCacheSizeMB` | 8 | `WithIndexCacheSize` | Bloom filter + table index cache (MB) |
-
-Hardcoded constants:
-`ValueThreshold=64KB`, `ValueLogFileSize=64MB`, `MaxLevels=7`,
-`BaseLevelSizeMB=4`, `NumMemtables=2`, `NumCompactors=2`,
-`NumLevelZeroTables=2`, `NumGoroutines=2`, `ZSTDCompressionLevel=3`,
-`NumVersionsToKeep=1`, `DetectConflicts=false`, `SyncWrites=false`,
-`Compression=ZSTD`, `CompactL0OnClose=true`, `BaseTableSize=1MB`,
-`ValueLogMaxEntries=100K`.
+### Cache Configuration
 
 Config JSON:
 
 ```json
 {
-  "database": {
-    "db_path": "/var/lib/zjdns/cache.db",
-    "memtable_size_mb": 4,
-    "block_cache_size_mb": 4,
-    "index_cache_size_mb": 8
+  "cache": {
+    "prefer_stale": true,
+    "max_size_mb": 64,
+    "db_file": "/var/lib/zjdns/state.zst"
   }
 }
 ```
+
+- `max_size_mb`: in-memory value budget (LRU eviction), default 64.
+- `db_file`: optional persist file; empty = no persistence (in-memory only).
+- Missing/corrupt file at startup = cold start (logged, not fatal).
 
 ## Defense Mechanisms
 
@@ -174,5 +200,5 @@ Reuses SM2 certificate pair from TLCP. Wire format = DTLS (RFC 8094): 2-byte big
 
 ## Zone Rules (`zone/`)
 
-- **Storage**: Pure in-memory WORM (write-once-read-many) maps. `Evaluator` holds `exact` and `wildcards` (static rules), plus `dynamics` and `wildcardDynamics` (dynamic content generators), populated by `LoadRules` at startup. No BadgerDB dependency — evaluate is a lock-free map lookup.
+- **Storage**: Pure in-memory WORM (write-once-read-many) maps. `Evaluator` holds `exact` and `wildcards` (static rules), plus `dynamics` and `wildcardDynamics` (dynamic content generators), populated by `LoadRules` at startup. No persistence dependency — evaluate is a lock-free map lookup.
 - **Lookup**: `Evaluate()` first checks `bypass` rules, then exact dynamic rules + `exact` map (O(1), best-scored), then wildcard dynamic rules + `wildcards` suffix search (max 16 iterations). Exact and wildcard dynamic rules live in separate maps — the same name may carry both without overwriting. All fields use `sync/atomic` for lock-free reads.

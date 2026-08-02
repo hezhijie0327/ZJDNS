@@ -36,7 +36,7 @@
 | **函数排序** | 文件内声明顺序是否严格遵循 `type → const → var → func`（decorder 强制）；同一接收者的方法是否聚合而非散落；构造/初始化函数是否在最靠近类型的位置（即紧跟 var 块之后的第一个 func）；新增函数是否随机插入在无关函数之间 |
 | **Go 版本特性** | 代码是否采用了当前最低 Go 版本的语言/库特性；是否存在可用 `new(expr)`、`errors.AsType[T]`、`slices.Reverse` 等新版标准库替代的手写模式；`go fix` 现代器覆盖的迁移是否已应用 |
 | **流程图覆盖** | `docs/FLOWCHARTS.md` 是否覆盖全部核心功能和协议；新增特性/协议/中间件是否同步更新了流程图；mermaid 语法是否正确可渲染 |
-| **BadgerDB 存储** | TTL 使用是否正确（直接 `ExpiresAt` 赋值 + `IsDeletedOrExpired`）；`WriteBatch` vs `db.Update` 选择是否合理；key 编码是否二进制 BigEndian 一致；prefix scan 效率；`DropPrefix` 清理范围；`Sequence` bandwidth 和 crash 容忍；`UserMeta` 使用；是否存在应用层 zstd 双重压缩 |
+| **存储层** | LRU 淘汰与 PTR 清理一致性（ownerKey）；`totalSize` 预算不变量；热路径零压缩；Save/Load 过滤过期；单写入者（cache 独占文件）；`database.File` 编码 BigEndian 一致；zstd 只落盘一次 |
 
 ### 1.2 审计架构
 
@@ -367,48 +367,35 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 24. **Goroutine 无回收**：`go func()` 后无任何机制等待其退出 — errgroup、WaitGroup、done channel 三者至少有一 |
 25. **Go 特性滞后**：手写 `for i := len(s)-1; i >= 0; i--` 反向迭代（用 `slices.Backward`）、`errors.As` 循环（用 `errors.AsType[T]`）、裸 `new(T)` 可简化为 `new(expr)` |
 
-### 6.3 BadgerDB 专项审计
+### 6.3 存储层专项审计
 
-ZJDNS 使用 BadgerDB v4 LSM-tree KV 存储（`github.com/dgraph-io/badger/v4`）。以下 API 和行为是审计的关键基准。
+ZJDNS 存储层（v3.9.10 起）是内存 LRU + 可选持久化文件：`cache/` 持有 `map[entryKey]*listEntry`
+链表（LRU 淘汰按字节预算），`database/` 只做类型化二进制序列化（zstd + 原子写）。
+以下关注点是审计的关键基准。
 
-#### 6.3.1 BadgerDB API 参考
+#### 6.3.1 存储层 API 参考
 
 | API | 用途 | 审计关注点 |
 |-----|------|-----------|
-| `db.View(fn)` | 只读事务 | 闭包内不应调用 `txn.Set`/`txn.Delete`（会 panic）。View 不阻塞 Update |
-| `db.Update(fn)` | 读写事务 | 同步提交，适合关键数据。不应在热路径用 `Update` 写大批量数据 |
-| `WriteBatch` | 异步批量写入 | 内部自动拆分大事务，异步提交。适合 stats 等 best-effort 数据。`wb.Set` 错误应检查 |
-| `Entry.ExpiresAt` + `Item.ExpiresAt()` | 原生 TTL 过期 | 直接赋值 `Entry.ExpiresAt = uint64(now + dur)` 替代 `WithTTL()`。LSM compaction 时自动清理。TTL 值 = DNS TTL + stale max age。读时通过 `Item.ExpiresAt()` 反推 timestamp |
-| `Entry.WithMeta(b)` | 1 字节元数据 | ZJDNS 用 `UserMeta` 存 `validated` 标志（0/1）。`Item.UserMeta()` 读取 |
-| `Item.IsDeletedOrExpired()` | 条目有效性检查 | 遍历时过滤已过期/已删除条目，避免对僵尸条目操作 |
-| `Item.ExpiresAt()` | 读取 TTL 时间戳 | BadgerDB 原生 API，不需要在 value 里存 `expiresAt` |
-| `Item.KeyCopy(dst)` | 安全的 key 复制 | 跨迭代保存 key 时必须用 `KeyCopy`，`item.Key()` 仅在 `it.Next()` 前有效 |
-| `Sequence` | 单调递增 ID | bandwidth=1000（租约 1000 个 ID 后才写盘）。crash 时最多丢失 1000 个 ID，可接受 |
-| `DropPrefix(p)` | 批量删除 | 阻塞所有写入直到完成。适合管理操作，不适合热路径 |
-| `RunValueLogGC(ratio)` | vlog 垃圾回收 | ValueThreshold≥64KB 后 vlog 基本为空，不必定期调用 |
-| `Subscribe(ctx, cb, matches)` | 进程内 pub/sub | 不能用于跨实例缓存一致性。仅进程内通知 |
-| `Stream` / `StreamWriter` | 并发迭代 / 快速导入 | 适合备份恢复。Stream 产生无序输出。StreamWriter 覆盖已有数据 |
-| `MergeOperator` | 读-改-写优化 | 盲写增量，compaction 时合并。每个 key 一个 goroutine + ticker，不适合大量唯一 key 的 stats |
-| `WithValueThreshold(n)` | LSM inline 阈值 | 当前 64KB：DNS 值全部 inline，无 vlog IO |
-| `WithIndexCacheSize(n)` | Bloom filter 缓存 | 当前 64MB：移出 Go heap，减少 GC 压力 |
-| `WithNumVersionsToKeep(1)` | 禁用 MVCC | 每条 key 只保留最新版本，`DiscardEarlierVersions` 冗余 |
-| `WithDetectConflicts(false)` | 禁用冲突检测 | 缓存 upsert 模式，last-writer-wins 语义正确 |
-| `WithCompression(options.ZSTD)` | block 级 zstd | SSTable block 级压缩，应用层不应再做 zstd（双重压缩浪费 CPU） |
+| `cache.New(maxSizeBytes, file)` | 构造 | maxSizeBytes 应来自 `config.MaxSizeMB << 20`；file 为空 = 纯内存 |
+| `Get()` / `Set()` | 读写 | ECS fallback 候选逐个 map 查找；Set 先 pack wire 再 insert |
+| `insert()` + `evictLocked()` | LRU 淘汰 | 淘汰必须同步清理该条目的 PTR 记录（ownerKey）；totalSize 必须与 len(value) 一致 |
+| `expiresAt = ts + entryTTL + staleMaxAge` | 过期语义 | 过期条目返回供 stale-serve/prefetch；物理清理只在淘汰/Save/Load/Clear |
+| `Save()` / `Close()` | 落盘 | 遍历持有写锁，文件 IO 在锁外；跳过过期条目；DNSCrypt 态经 `atomic.Pointer` 读取 |
+| `database.File` 编码 | 序列化 | 字段化 key（无手工字节 key 编码）；BigEndian 数值；magic "ZJDNS" + version 校验 |
+| zstd + 原子写 | 文件 IO | `SpeedFastest`；temp + rename；目录必须存在（CreateTemp 失败应报错） |
+| PTR 索引 | 派生数据 | 不持久化，Load 后 `rebuildPtrIndex()`；`ptrRecord.ownerKey` 保证淘汰清理精准 |
+| latency LRU | 瞬态 | 有界 `lrumap`；`LatencyLastProbe` 检查过期；不落盘 |
 
-#### 6.3.2 BadgerDB 常见反模式
+#### 6.3.2 存储层常见反模式
 
-1. **应用层 zstd + BadgerDB zstd 双重压缩**：zdnsutil.Compress 后存入 BadgerDB，BadgerDB 再做 block 级 zstd。zstd 压缩已压缩数据无效，浪费 CPU。解法：直接存 raw wire，信任 BadgerDB block 级压缩
-2. **手写 TTL 驱逐替代原生 ExpiresAt**：自己扫描、排序、删除过期条目。`Entry.ExpiresAt` 直接赋值 + `IsDeletedOrExpired` 更高效，compaction 自动回收空间
-3. **value 里存冗余 metadata 字段**：BadgerDB 原生 `ExpiresAt` 管理物理过期，`UserMeta` 存储 validated 标志。value 即 raw DNS wire — timestamp 和 entryTTL 均在读时从 BadgerDB/解包后的 wire 反推，零 header 开销
-4. **`fmt.Appendf` 构造 key**：每次分配 + reflect。应用层 key/value 编码都用 `binary.BigEndian.PutUint*` + `copy`，与 value 编码风格一致
-5. **NUL 分隔符解析二进制字段**：数值字段 BE 编码可能含 `0x00` 字节（如 qtype=A=1 编码为 `[0x00, 0x01]`）。NUL 扫描会将这些字节误认为分隔符。解法：固定偏移 offset-based 解析
-6. **绕过 `database.DB` 包装层直接访问 `.Badger`**：所有调用方应通过 `db.View`/`db.Update`/`db.DropPrefix` 等方法访问，统一内置 `IsClosed` 检查
-7. **stats 用 `db.Update` 同步事务而非 `WriteBatch`**：`Update` 同步提交，stats 写多了阻塞热路径。`WriteBatch` 异步提交 + 内存预聚合是正确方案
-8. **`Sequence` bandwidth 过大或过小**：bandwidth=1000 平衡 crash 容忍（最多丢 1000 个 ID）和写盘频率。bandwidth=1 每次 `Next()` 都写盘
-9. **`NumVersionsToKeep(1)` 与 `DiscardEarlierVersions` 同时使用**：前者已全局禁用 MVCC，后者完全冗余
-10. **prefix scan 不设 `PrefetchValues=false`**：只计数时不读 value，省一次 LSM 查找
-11. **`Item.Key()` 跨迭代使用**：`it.Next()` 后 key 可能被覆盖，跨迭代保存必须 `Item.KeyCopy(nil)`
-12. **`Entry.WithDiscard()` 标记而非 `txn.Delete`**：对于大批量删除，标记丢弃让 compaction 回收比立即删除更高效
+1. **手写字节 key 编码**：`e:` 前缀 + `\x00` 分隔符是 BadgerDB 时代遗产，已删除。key 直接用 Go struct（`entryKey`），map 查找零编码开销
+2. **热路径 zstd**：wire 在内存中不压缩（O(1) 零开销），zstd 只在 `Save()` 落盘时整体压缩一次
+3. **多写入者竞争持久化文件**：只有 cache 写文件。DNSCrypt 通过 `SetDNSCrypt` 回调,不能直接碰文件
+4. **PTR 记录泄漏**：条目被淘汰/覆盖时必须清理其 PTR 记录,否则 `ReverseLookup` 返回僵尸结果
+5. **锁内做文件 IO**：`Save()` 在锁外序列化到 `database.File` 后写盘,遍历快照在锁内完成
+6. **Size 预算不变量破坏**：`totalSize` 必须在 insert/update/evict/Delete 每处同步调整,否则 LRU 预算失效
+7. **Load 时反推 ts**：`expiresAt - entryTTL - staleMaxAge`,unpack 失败/entryTTL=0 的条目应跳过
 
 ### 6.4 持续改进
 

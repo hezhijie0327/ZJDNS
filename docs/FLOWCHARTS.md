@@ -26,7 +26,7 @@ graph LR
 ```mermaid
 graph TD
     START[New Server] --> LOADCONF[Load Config<br/>+ Validate]
-    LOADCONF --> INITDB[Open BadgerDB<br/>KV Store]
+    LOADCONF --> INITDB[Open In-Memory Cache<br/>+ optional persist file]
     INITDB --> INITMW[Build Middleware Chain<br/>9 Layers]
     INITMW --> INITHANDLER[Create Handler<br/>+ Resolver + Zone + Ruleset]
     INITHANDLER --> STARTPROTO[Start Protocol Listeners<br/>UDP TCP DoT DoH DoH3<br/>DoQ DTLS TLCP DTLCP<br/>DNSCrypt]
@@ -70,7 +70,7 @@ graph LR
 graph TD
     Q[Query] --> ECSCAND[Build ECS Fallback Candidates<br/>addr/prefix granularities<br/>+ empty-ECS for non-ECS entries]
     ECSCAND --> LOOP{Loop candidates}
-    LOOP -->|next| QUERY[BadgerDB Key Lookup<br/>qname+qtype+qclass+ecs]
+    LOOP -->|next| QUERY[In-Memory Map Lookup<br/>entryKey struct]
     QUERY -->|found| UNPACK[dns.Msg Unpack]
     QUERY -->|not found| LOOP
     QUERY -->|error| MISS[Cache Miss]
@@ -485,7 +485,7 @@ graph LR
 ```mermaid
 graph TD
     QUERY[Cache Hit<br/>with A/AAAA Records] --> EXTRACT[Extract All IPs<br/>from Answer Section]
-    EXTRACT --> BATCH[Batch BadgerDB Lookup<br/>e:ip: prefix scan]
+    EXTRACT --> BATCH[Batch Latency LRU Lookup<br/>per-IP]
     BATCH -->|All Cached| SORT[Sort Records<br/>by Latency ASC]
     BATCH -->|Some Missing| PROBE[Background Probe<br/>per-IP concurrent]
 

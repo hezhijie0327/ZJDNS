@@ -55,7 +55,7 @@ func makeFlushFunc(op func() (int64, error), verb string) func() []string {
 		n, err := op()
 		if err != nil {
 			// Log the detailed error server-side; the TXT answer stays
-			// generic — FlushDB errors can expose badger/filesystem internals
+			// generic — FlushDB errors can expose persist-file internals
 			// to any client able to query these CHAOS names.
 			log.Errorf("SERVER: %s failed: %v", verb, err)
 			return []string{"error=flush-failed"}

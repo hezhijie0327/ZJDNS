@@ -56,14 +56,10 @@ func generateExampleConfig() (string, error) {
 	}
 
 	cfg.Server.Features.KTLS = &config.KTLSSettings{KernelTX: true}
-	cfg.Server.Features.Database = config.DatabaseSettings{
-		DBPath:           "cache.db",
-		MemTableSizeMB:   config.DefaultBadgerMemTableSizeMB,
-		BlockCacheSizeMB: config.DefaultBadgerBlockCacheSizeMB,
-		IndexCacheSizeMB: config.DefaultBadgerIndexCacheSizeMB,
-	}
 	cfg.Server.Features.Cache = config.CacheSettings{
 		PreferStale: true,
+		MaxSizeMB:   config.DefaultCacheMaxSizeMB,
+		DBFile:      "cache.db",
 	}
 	cfg.Server.Features.ECS = config.ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.LatencyProbe = []config.LatencyProbeStep{

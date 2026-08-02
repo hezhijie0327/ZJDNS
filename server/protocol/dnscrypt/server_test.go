@@ -4,21 +4,10 @@ import (
 	"testing"
 	"time"
 	"zjdns/config"
-	"zjdns/database"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 
 	"codeberg.org/miekg/dns"
 )
-
-func memDB(tb testing.TB) *database.DB {
-	tb.Helper()
-	db, err := database.Open("", nil)
-	if err != nil {
-		tb.Fatalf("open in-memory db: %v", err)
-	}
-	tb.Cleanup(func() { _ = db.Close() })
-	return db
-}
 
 func testCertCfg(tb testing.TB) *config.DNSCryptCertificate {
 	tb.Helper()
@@ -35,7 +24,7 @@ func testCertCfg(tb testing.TB) *config.DNSCryptCertificate {
 func TestKeyRotation(t *testing.T) {
 	certificateCfg := testCertCfg(t)
 
-	srv, err := New(memDB(t), certificateCfg, "0", "2.dnscrypt-cert.example.com")
+	srv, err := New(nil, nil, certificateCfg, "0", "2.dnscrypt-cert.example.com")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -103,7 +92,7 @@ func TestKeyRotation(t *testing.T) {
 func TestCertPairTXT(t *testing.T) {
 	certificateCfg := testCertCfg(t)
 
-	srv, err := New(memDB(t), certificateCfg, "0", "2.dnscrypt-cert.example.com")
+	srv, err := New(nil, nil, certificateCfg, "0", "2.dnscrypt-cert.example.com")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -132,7 +121,7 @@ func TestCertPairTXT(t *testing.T) {
 func TestHandshakeTTL(t *testing.T) {
 	certificateCfg := testCertCfg(t)
 
-	srv, err := New(memDB(t), certificateCfg, "0", "2.dnscrypt-cert.example.com")
+	srv, err := New(nil, nil, certificateCfg, "0", "2.dnscrypt-cert.example.com")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -250,7 +239,7 @@ func TestHandshakeTC_ClassicalPreserved(t *testing.T) {
 	// When the UDP cert query is too small for the PQ cert, the response
 	// must have TC=true with the classical cert preserved (§5.5/§10.3).
 	certificateCfg := testCertCfg(t)
-	srv, err := New(memDB(t), certificateCfg, "0", "2.dnscrypt-cert.example.com")
+	srv, err := New(nil, nil, certificateCfg, "0", "2.dnscrypt-cert.example.com")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -299,7 +288,7 @@ func TestHandshakeTC_ClassicalPreserved(t *testing.T) {
 func TestHandshakeTC_AllFit_NoTC(t *testing.T) {
 	// TCP query → no anti-amplification → both certs fit → TC=false.
 	certificateCfg := testCertCfg(t)
-	srv, err := New(memDB(t), certificateCfg, "0", "2.dnscrypt-cert.example.com")
+	srv, err := New(nil, nil, certificateCfg, "0", "2.dnscrypt-cert.example.com")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

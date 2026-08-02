@@ -7,18 +7,13 @@ import (
 	"testing"
 	"time"
 	"zjdns/config"
-	"zjdns/database"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/rdata"
 )
 
 func testStore() *Cache {
-	db, err := database.Open("", nil)
-	if err != nil {
-		panic(err)
-	}
-	return New(db)
+	return New(0, "")
 }
 
 func netParseIP(s string) netip.Addr { return netip.MustParseAddr(s) }
@@ -214,8 +209,8 @@ func TestClose(t *testing.T) {
 	if err := mc.Close(); err != nil {
 		t.Errorf("Close error: %v", err)
 	}
-	if !mc.db.IsClosed() {
-		t.Error("db should be closed")
+	if mc.Len() != 0 {
+		t.Error("cache should be cleared after Close")
 	}
 	_ = mc.Close()
 }
@@ -284,25 +279,17 @@ func TestFlushDB_UnknownTarget(t *testing.T) {
 }
 
 func TestDiskPersistence(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	dbFile := filepath.Join(t.TempDir(), "state.zst")
 
-	db, err := database.Open(dbPath, nil)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	mc := &Cache{db: db}
-
+	mc := New(0, dbFile)
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, dns.RcodeSuccess)
-	_ = mc.Close()
-
-	db2, err := database.Open(dbPath, nil)
-	if err != nil {
-		t.Fatalf("Reopen: %v", err)
+	if err := mc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
-	defer func() { _ = db2.Close() }()
-	mc2 := &Cache{db: db2}
+
+	mc2 := New(0, dbFile) // loads the persist file
+	defer func() { _ = mc2.Close() }()
 
 	entry, found, _ := mc2.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	if !found {
@@ -344,8 +331,7 @@ func TestECSFallbackCandidates_Nil(t *testing.T) {
 }
 
 func BenchmarkStoreSetGet(b *testing.B) {
-	db, _ := database.Open("", nil)
-	mc := &Cache{db: db}
+	mc := New(0, "")
 	defer func() { _ = mc.Close() }()
 
 	b.ResetTimer()
@@ -357,8 +343,7 @@ func BenchmarkStoreSetGet(b *testing.B) {
 }
 
 func BenchmarkStoreParallel(b *testing.B) {
-	db, _ := database.Open("", nil)
-	mc := &Cache{db: db}
+	mc := New(0, "")
 	defer func() { _ = mc.Close() }()
 
 	b.ResetTimer()
@@ -374,13 +359,11 @@ func BenchmarkStoreParallel(b *testing.B) {
 	})
 }
 
-// ── Native BadgerDB optimisations (894449f + 408c77b) ────────────────────────
+// ── Timestamp / TTL derivation ───────────────────────────────────────────────
 
 func TestSet_Get_TimestampDerived(t *testing.T) {
-	// 894449f: Timestamp is NOT stored in the value — it is derived from
-	// BadgerDB's native ExpiresAt() at read time.
-	// expiresAt = timestamp + entryTTL + staleMaxAge
-	// → timestamp = expiresAt - entryTTL - staleMaxAge
+	// The entry's write timestamp is captured at Set time and served as
+	// Entry.Timestamp; expiry is computed from it at Get time.
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
@@ -394,7 +377,7 @@ func TestSet_Get_TimestampDerived(t *testing.T) {
 		t.Fatal("entry not found")
 	}
 	if entry.Timestamp < beforeSet-5 || entry.Timestamp > afterSet+5 {
-		t.Errorf("Timestamp = %d, want ≈ [%d, %d] (derived from ExpiresAt)", entry.Timestamp, beforeSet, afterSet)
+		t.Errorf("Timestamp = %d, want ≈ [%d, %d]", entry.Timestamp, beforeSet, afterSet)
 	}
 	if entry.TTL != 300 {
 		t.Errorf("TTL = %d, want 300", entry.TTL)
@@ -494,18 +477,16 @@ func TestSet_Get_CNAMERecords(t *testing.T) {
 	}
 }
 
-func TestDBSize_AfterClose(t *testing.T) {
+func TestSizeAfterClose(t *testing.T) {
 	mc := testStore()
-	_ = mc.Close()
-
-	lsm, vlog := mc.DBSize()
-	if lsm != 0 || vlog != 0 {
-		t.Errorf("DBSize after close = (%d, %d), want (0, 0)", lsm, vlog)
+	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("1.2.3.4")}}
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, dns.RcodeSuccess)
+	if mc.Len() != 1 || mc.SizeBytes() == 0 {
+		t.Fatalf("before close: len=%d size=%d, want len=1 size>0", mc.Len(), mc.SizeBytes())
 	}
-
-	lsm2, vlog2 := mc.DBEstimateSize(database.EntryKeyPrefix())
-	if lsm2 != 0 || vlog2 != 0 {
-		t.Errorf("DBEstimateSize after close = (%d, %d), want (0, 0)", lsm2, vlog2)
+	_ = mc.Close()
+	if mc.Len() != 0 || mc.SizeBytes() != 0 {
+		t.Errorf("after close: len=%d size=%d, want (0, 0)", mc.Len(), mc.SizeBytes())
 	}
 }
 

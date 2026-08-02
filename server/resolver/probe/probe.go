@@ -20,7 +20,7 @@ import (
 // CacheSetter is the interface for updating latency measurements in the
 // cache after probing.
 type CacheSetter interface {
-	Set(qname string, qtype, qclass uint16, ecs *edns.ECSOption, dnssecOK bool, answer, authority, additional []dns.RR, validated bool, rcode uint16) int64
+	Set(qname string, qtype, qclass uint16, ecs *edns.ECSOption, dnssecOK bool, answer, authority, additional []dns.RR, validated bool, rcode uint16) bool
 	UpdateLatency(ip string, latencyMS int)
 	LatencyLastProbe(ip string) (int64, bool)
 }

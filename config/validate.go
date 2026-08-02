@@ -55,7 +55,7 @@ func validateConfig(cfg *ServerConfig) error {
 	if err := validateDDR(cfg); err != nil {
 		return err
 	}
-	if err := validateDatabase(cfg); err != nil {
+	if err := validateCache(cfg); err != nil {
 		return err
 	}
 	if err := validatePorts(cfg); err != nil {
@@ -261,9 +261,9 @@ func validateDDR(cfg *ServerConfig) error {
 	return nil
 }
 
-func validateDatabase(cfg *ServerConfig) error {
-	if strings.Contains(cfg.Server.Features.Database.DBPath, "..") {
-		return errors.New("server.features.database.db_path must not contain '..'")
+func validateCache(cfg *ServerConfig) error {
+	if strings.Contains(cfg.Server.Features.Cache.DBFile, "..") {
+		return errors.New("server.features.cache.db_file must not contain '..'")
 	}
 	return nil
 }

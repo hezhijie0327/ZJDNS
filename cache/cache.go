@@ -1,4 +1,5 @@
-// Package cache provides the DNS response cache interface backed by BadgerDB.
+// Package cache provides the DNS response cache — an in-memory LRU with
+// optional persist-file backing (load at startup, dump at shutdown).
 package cache
 
 import (
@@ -20,7 +21,7 @@ type StoreReader interface {
 // populate cache entries or record metrics should depend on this interface.
 type StoreWriter interface {
 	Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
-		answer, authority, additional []dns.RR, validated bool, rcode uint16) int64
+		answer, authority, additional []dns.RR, validated bool, rcode uint16) bool
 	UpdateLatency(ip string, latencyMS int)
 	// LookupIPLatencies returns the cached probe latency (ms) for each IP
 	// that has one; unprobed IPs are absent from the map.

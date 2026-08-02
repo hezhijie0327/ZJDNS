@@ -15,7 +15,6 @@ import (
 	"sync"
 	"zjdns/cache"
 	"zjdns/config"
-	"zjdns/database"
 	"zjdns/edns"
 	"zjdns/internal/dns64"
 	"zjdns/internal/log"
@@ -49,7 +48,6 @@ type Server struct {
 	handler     *handler.Handler
 	queryClient *upstream.Client
 
-	db              *database.DB
 	tls             *tls.Server
 	tlcpServer      *servertlcp.Server
 	dnscryptServer  *serverdnscrypt.Server
@@ -86,23 +84,16 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		tcpSem:          make(chan struct{}, config.DefaultServerGoroutineLimit),
 	}
 
-	db, err := s.initDatabase(cfg)
-	if err != nil {
-		cancel(err)
-		return nil, fmt.Errorf("database init: %w", err)
-	}
-	s.db = db
-	// Any later init failure must close the DB — BadgerDB holds an exclusive
-	// directory lock, so a leaked open handle would block every subsequent
-	// start of the server.
+	cacheSettings := &cfg.Server.Features.Cache
+	maxSizeBytes := int64(cacheSettings.MaxSizeMB) << 20
+	cacheStore := cache.New(maxSizeBytes, cacheSettings.DBFile) // *cache.Cache — exposes DNSCrypt persistence
+	// A later init failure must still release the persist file (open handles).
 	initOK := false
 	defer func() {
 		if !initOK {
-			_ = db.Close()
+			_ = cacheStore.Close()
 		}
 	}()
-
-	cacheStore := cache.New(db)
 	statsCollector := stats.New()
 	zoneEvaluator := zone.New()
 
@@ -112,7 +103,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("EDNS handler init: %w", err)
 	}
 
-	rulesetEngine, err := s.initZoneAndRulesets(cfg, cacheStore, statsCollector, zoneEvaluator, db)
+	rulesetEngine, err := s.initZoneAndRulesets(cfg, cacheStore, statsCollector, zoneEvaluator)
 	if err != nil {
 		cancel(err)
 		return nil, err
@@ -132,7 +123,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	s.handler = h
 
-	s.initProtocolListeners(cfg, h)
+	s.initProtocolListeners(cfg, h, cacheStore)
 
 	s.initPprof(cfg)
 
@@ -140,16 +131,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	initOK = true
 	return s, nil
-}
-
-// initDatabase opens the BadgerDB database at the configured path.
-func (s *Server) initDatabase(cfg *config.ServerConfig) (*database.DB, error) {
-	dbCfg := &cfg.Server.Features.Database
-	return database.Open(dbCfg.DBPath, &database.Options{
-		MemTableSizeMB:   dbCfg.MemTableSizeMB,
-		BlockCacheSizeMB: dbCfg.BlockCacheSizeMB,
-		IndexCacheSizeMB: dbCfg.IndexCacheSizeMB,
-	})
 }
 
 // initEDNS creates the EDNS handler and auto-detects ECS subnets.
@@ -160,7 +141,7 @@ func (s *Server) initEDNS(cfg *config.ServerConfig) (*edns.Handler, error) {
 // initZoneAndRulesets loads zone-file rules and CIDR/domain matching rulesets
 // from config.  Returns the ruleset engine (nil if none configured) and any
 // fatal error from loading.
-func (s *Server) initZoneAndRulesets(cfg *config.ServerConfig, cacheStore cache.Store, statsCollector *stats.Collector, zoneEvaluator *zone.Evaluator, db *database.DB) (*ruleset.Engine, error) {
+func (s *Server) initZoneAndRulesets(cfg *config.ServerConfig, cacheStore cache.Store, statsCollector *stats.Collector, zoneEvaluator *zone.Evaluator) (*ruleset.Engine, error) {
 	wireZoneDynamicContent(cacheStore, statsCollector, cfg.Zone)
 
 	if len(cfg.Zone) > 0 {
@@ -324,7 +305,7 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, s
 // initProtocolListeners creates and wires all protocol servers (TLS, TLCP,
 // DNSCrypt, Plain) into the Server struct.  Errors are non-fatal — the
 // server starts with the protocols that initialised successfully.
-func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Handler) {
+func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Handler, cacheStore *cache.Cache) {
 	if cfg.Server.Certificate.TLS.IsEnabled() {
 		tlsCfg := tls.Config{
 			TLSPort:       cfg.Server.Protocol.TLS,
@@ -352,7 +333,8 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 
 	if cfg.Server.Protocol.DNSCrypt != "" {
 		providerName := cfg.Server.Certificate.DNSCrypt.ProviderName(cfg.Server.Certificate.Domain)
-		dnscryptSrv, err := serverdnscrypt.New(s.db, &cfg.Server.Certificate.DNSCrypt, cfg.Server.Protocol.DNSCrypt, providerName)
+		dcState, _ := cacheStore.DNSCryptState()
+		dnscryptSrv, err := serverdnscrypt.New(dcState, cacheStore, &cfg.Server.Certificate.DNSCrypt, cfg.Server.Protocol.DNSCrypt, providerName)
 		if err != nil {
 			log.Warnf("SERVER: DNSCrypt listener init failed, continuing without it: %v", err)
 		} else {

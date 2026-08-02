@@ -5,7 +5,6 @@ import (
 	"net/netip"
 	"testing"
 	"zjdns/cache"
-	"zjdns/database"
 	"zjdns/edns"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
@@ -17,11 +16,7 @@ import (
 
 // newTestCacheStore creates a CacheStore with a real in-memory cache for testing.
 func newTestCacheStore() *CacheStore {
-	db, err := database.Open("", nil)
-	if err != nil {
-		panic(err)
-	}
-	store := cache.New(db)
+	store := cache.New(0, "")
 	collector := stats.New()
 	return &CacheStore{
 		store: store,

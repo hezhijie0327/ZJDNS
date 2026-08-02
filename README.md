@@ -9,12 +9,12 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.9.10-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.10.0-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
 
-高性能递归 DNS 服务器，内置 DNS 防污染、BadgerDB KV 缓存、DNSSEC、全协议加密传输（TLS/QUIC/HTTPS/HTTP3/DTLS/(PQ)DNSCrypt/TLCP/DTLCP）及 KTLS 内核卸载。
+高性能递归 DNS 服务器，内置 DNS 防污染、内存 LRU 缓存（可选落盘持久化）、DNSSEC、全协议加密传输（TLS/QUIC/HTTPS/HTTP3/DTLS/(PQ)DNSCrypt/TLCP/DTLCP）及 KTLS 内核卸载。
 
 ## 快速开始
 
@@ -137,16 +137,11 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
     "features": {
       "ecs_subnet": { "ipv4": "1.2.3.0/24", "ipv6": "2001:db8::/56" },
       "dns64": { "prefix": "64:ff9b::/96" },
-      "database": {
-        "db_path": "/var/lib/zjdns/cache.db",
-        "memtable_size_mb": 8,
-        "block_cache_size_mb": 8,
-        "index_cache_size_mb": 16,
-        "num_compactors": 2,
-        "num_level_zero_tables": 2,
-        "zstd_compression_level": 3
+      "cache": {
+        "prefer_stale": true,
+        "max_size_mb": 64,
+        "db_file": "/var/lib/zjdns/state.zst"
       },
-      "cache": { "prefer_stale": true },
       "ktls": { "kernel_tx": true, "kernel_rx": false }
     }
   }
@@ -156,6 +151,7 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 - **ECS**：CIDR 格式，设为 `"auto"` 自动检测公网 IP；[RFC 7871](docs/rfc/rfc7871.txt) 建议 `/24`（IPv4）、`/56`（IPv6）
 - **DNS64**：纯 IPv6/NAT64 网络必备
 - **prefer_stale**：上游不可达时返回过期缓存（[RFC 8767](docs/rfc/rfc8767.txt)）
+- **max_size_mb / db_file**：内存缓存按字节预算 LRU 淘汰；`db_file` 可选落盘（启动加载、关停保存），留空为纯内存
 - **self_signed**：自动生成自签名证书，跳过 `cert_file`/`key_file`
 - **KTLS**：需 `modprobe tls`，仅 Linux + TLS/HTTPS（TCP）生效
 
@@ -195,7 +191,7 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 ```bash
 dig @127.0.0.1 -p 53 CHAOS TXT ZJDNS.stats          # 统计：命中率、协议分布、Rcode、DNSSEC
 dig @127.0.0.1 -p 53 CHAOS TXT ZJDNS.stats.clear    # 重置统计
-dig @127.0.0.1 -p 53 CHAOS TXT ZJDNS.cache.clear    # 清空缓存（e: + e:ip:）
+dig @127.0.0.1 -p 53 CHAOS TXT ZJDNS.cache.clear    # 清空内存缓存
 ```
 
 ## 构建与测试

@@ -86,7 +86,6 @@ type FeatureFlags struct {
 	DNSSECEnforce bool               `json:"dnssec_enforce,omitzero"`
 	DDR           DDRSettings        `json:"ddr,omitzero"`
 	ECS           ECSConfig          `json:"ecs_subnet,omitzero"`
-	Database      DatabaseSettings   `json:"database,omitzero"`
 	Cache         CacheSettings      `json:"cache,omitzero"`
 	LatencyProbe  []LatencyProbeStep `json:"latency_probe,omitzero"`
 	DNS64         *DNS64Config       `json:"dns64,omitzero"`
@@ -110,19 +109,13 @@ type DDRSettings struct {
 	IPv6 string `json:"ipv6,omitzero"`
 }
 
-// DatabaseSettings configures the shared BadgerDB database backing cache, zone,
-// and ruleset. Only the memory budget is exposed — all other BadgerDB tunings
-// are hardcoded as correct for DNS cache workloads.
-type DatabaseSettings struct {
-	DBPath           string `json:"db_path,omitzero"`             // database directory path
-	MemTableSizeMB   int    `json:"memtable_size_mb,omitzero"`    // memtable write buffer (MB), 0 = default
-	BlockCacheSizeMB int    `json:"block_cache_size_mb,omitzero"` // block cache for reads (MB), 0 = default
-	IndexCacheSizeMB int    `json:"index_cache_size_mb,omitzero"` // bloom filters + table indices (MB), 0 = default
-}
-
-// CacheSettings configures DNS response cache size and stale serving.
+// CacheSettings configures the in-memory DNS response cache: size budget,
+// stale serving, and the optional persist file (loaded at startup, dumped
+// at shutdown).
 type CacheSettings struct {
-	PreferStale bool `json:"prefer_stale,omitzero"`
+	PreferStale bool   `json:"prefer_stale,omitzero"`
+	MaxSizeMB   int    `json:"max_size_mb,omitzero"` // cache size budget (MB), 0 = default
+	DBFile      string `json:"db_file,omitzero"`     // persist file path; empty = no persistence
 }
 
 // UpstreamServer defines a single upstream DNS server with address, protocol,

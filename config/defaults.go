@@ -33,9 +33,8 @@ const (
 // =============================================================================
 
 const (
-	DefaultBadgerMemTableSizeMB   = 4 // memtable write buffer (MB)
-	DefaultBadgerBlockCacheSizeMB = 4 // block cache for reads (MB)
-	DefaultBadgerIndexCacheSizeMB = 8 // bloom filters + table indices (MB)
+	// DefaultCacheMaxSizeMB caps the in-memory cache by total value bytes.
+	DefaultCacheMaxSizeMB = 64
 
 	DefaultTTL         = 10
 	DefaultStaleTTL    = 30
@@ -49,7 +48,7 @@ const (
 	DefaultPrefetchThrottleInterval  = 3 * time.Second
 
 	// DefaultLatencyCacheCapacity caps the in-memory IP latency LRU cache.
-	// 512 entries × ~16 bytes ≈ 8KB memory.  A miss falls back to BadgerDB.
+	// 512 entries × ~16 bytes ≈ 8KB memory.
 	DefaultLatencyCacheCapacity = 512
 
 	// DefaultPrefetchCooldownMaxEntries caps the PrefetchCooldown map size.
