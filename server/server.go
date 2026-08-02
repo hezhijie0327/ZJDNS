@@ -49,6 +49,7 @@ type Server struct {
 	handler     *handler.Handler
 	queryClient *upstream.Client
 	stats       *stats.Collector
+	cacheStore  *cache.Cache
 
 	tls             *tls.Server
 	tlcpServer      *servertlcp.Server
@@ -95,6 +96,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	cacheSettings := &cfg.Server.Features.Cache
 	maxSizeBytes := int64(cacheSettings.MaxSizeMB) << 20
 	cacheStore := cache.New(maxSizeBytes, cacheFile)
+	s.cacheStore = cacheStore
 	// A later init failure must still release the persist file (open handles).
 	initOK := false
 	defer func() {

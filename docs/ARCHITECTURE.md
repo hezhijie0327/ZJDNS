@@ -89,13 +89,16 @@ Config JSON:
 
 ```json
 {
-  "persist": { "dir": "/var/lib/zjdns" },
+  "persist": { "dir": "/var/lib/zjdns", "interval_seconds": 300 },
   "cache": { "prefer_stale": true, "max_size_mb": 64 }
 }
 ```
 
 - `persist.dir`: unified persist directory; each subsystem keeps its own file
   under it (`cache.zst`, `dnscrypt.zst`, `stats.zst`). Empty = pure in-memory.
+- `persist.interval_seconds`: periodic persist interval — cache, stats, and
+  DNSCrypt state are dumped every N seconds (bounded crash loss) in addition
+  to the shutdown dump. 0 (default) = shutdown-only.
 - `cache.max_size_mb`: in-memory value budget (LRU eviction), default 64.
 - Missing/corrupt file at startup = cold start for that subsystem (logged,
   not fatal) — one subsystem's corruption never affects the others.

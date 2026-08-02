@@ -19,7 +19,37 @@ func (s *Server) startBackgroundTasks() {
 	s.startECSRefresh()
 	s.startPrefetchCooldownCleanup()
 	s.startTCPWriteMuSweep()
+	s.startPeriodicPersist()
 	s.setupSignalHandling()
+}
+
+// startPeriodicPersist periodically dumps cache, stats, and DNSCrypt state
+// to disk, bounding crash loss to the configured interval (0 = disabled,
+// shutdown-only dump). DNSCrypt is included even though its state only
+// changes on rotation — the identity is the least disposable data there is.
+func (s *Server) startPeriodicPersist() {
+	interval := time.Duration(s.config.Server.Features.Persist.IntervalSeconds) * time.Second
+	if interval <= 0 {
+		return
+	}
+	dir := s.config.Server.Features.Persist.Dir
+	if dir == "" {
+		return
+	}
+	statsFile := filepath.Join(dir, "stats.zst")
+	s.runBackgroundTicker("periodic persist", interval, func() {
+		if err := s.cacheStore.Save(); err != nil {
+			log.Warnf("CACHE: periodic persist failed: %v", err)
+		}
+		if err := s.stats.SavePersist(statsFile); err != nil {
+			log.Warnf("SERVER: stats periodic persist failed: %v", err)
+		}
+		if s.dnscryptServer != nil {
+			if err := s.dnscryptServer.Save(); err != nil {
+				log.Warnf("DNSCRYPT: periodic persist failed: %v", err)
+			}
+		}
+	})
 }
 
 // runBackgroundTicker runs fn on each tick of a time.Ticker with the given

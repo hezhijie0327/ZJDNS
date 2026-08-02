@@ -115,6 +115,11 @@ type DDRSettings struct {
 // this directory. Empty dir = no persistence (pure in-memory).
 type PersistSettings struct {
 	Dir string `json:"dir,omitzero"` // persist directory; empty = no persistence
+
+	// IntervalSeconds is the periodic persist interval: cache, stats, and
+	// DNSCrypt state are written to disk every N seconds (bounded crash
+	// loss), in addition to the shutdown dump. 0 = only persist at shutdown.
+	IntervalSeconds int `json:"interval_seconds,omitzero"`
 }
 
 // CacheSettings configures the in-memory DNS response cache: size budget and

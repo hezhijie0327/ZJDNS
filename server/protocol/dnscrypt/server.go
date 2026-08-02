@@ -201,7 +201,9 @@ func New(stateFile string, certificateCfg *config.DNSCryptCertificate, port, pro
 
 	// Persist the (possibly fresh) identity + windows so a restart resumes
 	// from this state.
-	s.persistState()
+	if err := s.Save(); err != nil {
+		log.Warnf("DNSCRYPT: failed to persist initial state: %v", err)
+	}
 
 	// Derive ticket key from the Ed25519 signing key for PQ resumption.
 	// Same derivation as the reference implementation (encrypted-dns-server).
@@ -441,23 +443,24 @@ func (s *Server) rotateKeys() {
 	s.mu.Unlock()
 
 	// Persist the new window set outside the lock to avoid blocking queries.
-	s.persistState()
+	if err := s.Save(); err != nil {
+		log.Warnf("DNSCRYPT: failed to persist rotated state: %v", err)
+	}
 
 	log.Debugf("DNSCRYPT: rotated resolver keys (serial=%d, active=%d)", newPair.Classical.Serial, len(s.keys))
 }
 
-// persistState writes the identity + current windows to the state file.
-// Called on startup and rotation (rotation must survive a restart).
-func (s *Server) persistState() {
+// Save writes the identity + current windows to the state file. Called on
+// startup, rotation (rotation must survive a restart), and the server's
+// periodic persist ticker.
+func (s *Server) Save() error {
 	if s.stateFile == "" {
-		return
+		return nil
 	}
 	s.mu.RLock()
 	keys := s.keys
 	s.mu.RUnlock()
-	if err := saveStateFile(s.stateFile, s.signingSK, keys); err != nil {
-		log.Warnf("DNSCRYPT: failed to persist state: %v", err)
-	}
+	return saveStateFile(s.stateFile, s.signingSK, keys)
 }
 
 func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {

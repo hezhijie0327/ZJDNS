@@ -48,7 +48,8 @@
         "prefer_ipv4": true
       },
       "persist": {
-        "dir": "data"
+        "dir": "data",
+        "interval_seconds": 300
       },
       "cache": {
         "prefer_stale": true,
