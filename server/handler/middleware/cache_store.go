@@ -156,13 +156,14 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 
 	log.Debugf("RESULT: %s %s | rcode=%s, answer=%d, validated=%t", qname, dns.TypeToString[qtype], dns.RcodeToString[qr.Rcode], len(qr.Answer), validated)
 
-	// Set EDE from DNSSEC or upstream.
+	// Set EDE from DNSSEC or upstream. The code alone is self-explanatory
+	// (RFC 8914) — ExtraText is only kept when the upstream supplied its own.
 	if dnssecEDECode != 0 {
-		qctx.EDE = &dns.EDE{InfoCode: dnssecEDECode, ExtraText: "DNSSEC validation failed"}
+		qctx.EDE = &dns.EDE{InfoCode: dnssecEDECode, ExtraText: ""}
 	}
 	if qctx.EDE == nil && qr.UpstreamEDE != nil {
-		qctx.EDE = &dns.EDE{InfoCode: qr.UpstreamEDE.InfoCode, ExtraText: "(from " + qr.Server + ") " + qr.UpstreamEDE.ExtraText}
-		log.Debugf("UPSTREAM: passing through EDE %d (%s) from upstream", qr.UpstreamEDE.InfoCode, dns.ExtendedErrorToString[qr.UpstreamEDE.InfoCode])
+		qctx.EDE = &dns.EDE{InfoCode: qr.UpstreamEDE.InfoCode, ExtraText: qr.UpstreamEDE.ExtraText}
+		log.Debugf("UPSTREAM: passing through EDE %d (%s) from %s", qr.UpstreamEDE.InfoCode, dns.ExtendedErrorToString[qr.UpstreamEDE.InfoCode], qr.Server)
 	}
 
 	return msg
@@ -214,7 +215,15 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 
 	m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "error", Rcode: dns.RcodeServerFailure, ResponseTime: handler.ElapsedMS(qctx.StartTime), DNSSECStatus: dnssecStatus})
 
-	qctx.EDE = &dns.EDE{InfoCode: edeCode, ExtraText: "resolution error"}
+	// When all upstreams failed, the winning EDE comes from the last
+	// upstream response — pass code + text through as buildSuccess does.
+	// This also preserves an upstream EDE 0 (Other) with its own ExtraText
+	// (RFC 8914 §4.1: code 0 without text must not be sent).
+	if qr.UpstreamEDE != nil {
+		qctx.EDE = &dns.EDE{InfoCode: qr.UpstreamEDE.InfoCode, ExtraText: qr.UpstreamEDE.ExtraText}
+	} else {
+		qctx.EDE = &dns.EDE{InfoCode: edeCode, ExtraText: ""}
+	}
 	return msg
 }
 

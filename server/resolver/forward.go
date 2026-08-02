@@ -34,8 +34,9 @@ func captureUpstreamEDE(lastEDE *atomic.Pointer[dns.EDE], resp *dns.Msg, serverA
 	}
 	for _, rr := range resp.Pseudo {
 		if ede, ok := rr.(*dns.EDE); ok {
-			// Copy the EDE out of the pooled response (RFC 8914 §3:
-			// source attribution in ExtraText; safe copy for pool reuse).
+			// Copy the EDE out of the pooled response — the source server
+			// stays in the Debug log, not in client-facing ExtraText
+			// (RFC 8914 §3: forwarding is implementation dependent).
 			copied := &dns.EDE{InfoCode: ede.InfoCode, ExtraText: ede.ExtraText}
 			lastEDE.Store(copied)
 			log.Debugf("UPSTREAM: captured EDE %d (%s) from %s (rcode=%s)",

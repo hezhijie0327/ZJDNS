@@ -380,10 +380,10 @@ func (c *CryptoValidator) isDenialOfExistenceValid(response *dns.Msg, qname stri
 		return true, nil
 	}
 	if len(nsec3s) > 0 {
-		return false, fmt.Errorf("%w: NSEC3 records present but do not prove %s of %s (type=%s)", ErrBogusSignature, denialType, qname, dns.TypeToString[qtype])
+		return false, fmt.Errorf("%w: NSEC3 records present but do not prove %s of %s (type=%s)", ErrMissingNSEC, denialType, qname, dns.TypeToString[qtype])
 	}
 
-	return false, fmt.Errorf("%w: no signed NSEC/NSEC3 for %s", ErrBogusSignature, denialType)
+	return false, fmt.Errorf("%w: no signed NSEC/NSEC3 for %s", ErrMissingNSEC, denialType)
 }
 
 func (c *CryptoValidator) isNXDOMAINValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {

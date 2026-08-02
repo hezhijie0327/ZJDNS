@@ -399,7 +399,14 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 			log.Debugf("SECURITY: verified %s DNSKEY via DS from parent", currentDomain)
 		} else {
 			log.Debugf("SECURITY: DS→DNSKEY mismatch for %s: %v (bogus delegation)", currentDomain, err)
-			chain.lastEDECode = dns.ExtendedErrorDNSBogus
+			switch {
+			case errors.Is(err, dnssec.ErrUnsupportedDigest):
+				chain.lastEDECode = dns.ExtendedErrorUnsupportedDSDigestType // EDE 2
+			case errors.Is(err, dnssec.ErrNoZoneKeyBit):
+				chain.lastEDECode = dns.ExtendedErrorNoZoneKeyBitSet // EDE 11
+			default:
+				chain.lastEDECode = dns.ExtendedErrorDNSBogus // EDE 6
+			}
 			return false
 		}
 	case chain.dsPresentButUnverified:
@@ -451,6 +458,10 @@ func (r *Recursive) validateOrRetry(ctx context.Context, response *dns.Msg, name
 			chain.lastEDECode = dns.ExtendedErrorSignatureExpired // EDE 7
 		case errors.Is(err, dnssec.ErrSignatureNotYet):
 			chain.lastEDECode = dns.ExtendedErrorSignatureNotYetValid // EDE 8
+		case errors.Is(err, dnssec.ErrUnsupportedAlgorithm):
+			chain.lastEDECode = dns.ExtendedErrorUnsupportedDNSKEYAlgorithm // EDE 1
+		case errors.Is(err, dnssec.ErrMissingNSEC):
+			chain.lastEDECode = dns.ExtendedErrorNSECMissing // EDE 12
 		default:
 			chain.lastEDECode = dns.ExtendedErrorDNSBogus // EDE 6
 		}

@@ -9,6 +9,7 @@ import (
 	"time"
 	"zjdns/cache"
 	"zjdns/database"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -131,6 +132,156 @@ func TestVerifyDelegationDS_Matching(t *testing.T) {
 	}
 	if matchedKey.KeyTag() != ksk.KeyTag() {
 		t.Errorf("matched key tag %d != expected %d", matchedKey.KeyTag(), ksk.KeyTag())
+	}
+}
+
+func TestVerifyDelegationDS_UnsupportedDigest(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	childZone := "child.example.com"
+	ksk, _ := genTestKey(childZone, dns.FlagSEP|dns.FlagZONE)
+
+	// Digest type 3 (GOST) is not computable by ToDS (SHA1/256/384 only).
+	ds := &dns.DS{
+		Hdr: dns.Header{Name: dnsutil.Fqdn(childZone), Class: dns.ClassINET, TTL: 3600},
+		DS:  rdata.DS{KeyTag: ksk.KeyTag(), Algorithm: dns.ECDSAP256SHA256, DigestType: 3, Digest: "deadbeef"},
+	}
+
+	_, err := cv.VerifyDelegationDS([]*dns.DS{ds}, []*dns.DNSKEY{ksk})
+	if !errors.Is(err, ErrUnsupportedDigest) {
+		t.Errorf("unsupported digest type should map to ErrUnsupportedDigest, got %v", err)
+	}
+}
+
+func TestVerifyDelegationDS_NoZoneKeyBit(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	childZone := "child.example.com"
+	// Key without the Zone Key flag (RFC 4034 §2.1.1) — digest matches but
+	// the key is not allowed to sign zone data.
+	badKey, _ := genTestKey(childZone, dns.FlagSEP)
+	ds := badKey.ToDS(dns.SHA256)
+	if ds == nil {
+		t.Fatal("ToDS returned nil")
+	}
+
+	_, err := cv.VerifyDelegationDS([]*dns.DS{ds}, []*dns.DNSKEY{badKey})
+	if !errors.Is(err, ErrNoZoneKeyBit) {
+		t.Errorf("key without Zone Key flag should map to ErrNoZoneKeyBit, got %v", err)
+	}
+}
+
+func TestVerifyDelegationDS_ZoneKeyRollover(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	childZone := "child.example.com"
+	// Retired key with the Zone bit cleared (key rollover) alongside the
+	// current zone key — the scan must not short-circuit on the retired DS.
+	retired, _ := genTestKey(childZone, dns.FlagSEP)
+	current, _ := genTestKey(childZone, dns.FlagSEP|dns.FlagZONE)
+	dsRetired := retired.ToDS(dns.SHA256)
+	dsCurrent := current.ToDS(dns.SHA256)
+	if dsRetired == nil || dsCurrent == nil {
+		t.Fatal("ToDS returned nil")
+	}
+
+	matched, err := cv.VerifyDelegationDS([]*dns.DS{dsRetired, dsCurrent}, []*dns.DNSKEY{retired, current})
+	if err != nil {
+		t.Errorf("rollover DS set with a valid zone key should pass: %v", err)
+	}
+	if matched.KeyTag() != current.KeyTag() {
+		t.Errorf("matched key tag %d != current key tag %d", matched.KeyTag(), current.KeyTag())
+	}
+}
+
+func TestVerifyDelegationDS_NoZoneKeyOnly(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	childZone := "child.example.com"
+	badKey, _ := genTestKey(childZone, dns.FlagSEP)
+	ds := badKey.ToDS(dns.SHA256)
+	if ds == nil {
+		t.Fatal("ToDS returned nil")
+	}
+
+	_, err := cv.VerifyDelegationDS([]*dns.DS{ds}, []*dns.DNSKEY{badKey})
+	if !errors.Is(err, ErrNoZoneKeyBit) {
+		t.Errorf("only zone-flag-less keys should map to ErrNoZoneKeyBit, got %v", err)
+	}
+}
+
+func TestVerifyRRset_UnsupportedAlgorithm(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	zone := "example.com"
+	// Algorithm 200 is unknown to miekg/dns — RRSIG.Verify falls through to
+	// its default case and returns ErrAlg.
+	dnskey := &dns.DNSKEY{
+		Hdr:    dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
+		DNSKEY: rdata.DNSKEY{Flags: dns.FlagZONE, Protocol: 3, Algorithm: 200},
+	}
+	rrset := []dns.RR{&dns.A{
+		Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
+		A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+	}}
+	now := uint32(log.NowUnix()) //nolint:gosec // G115: DNS timestamp — protocol-bounded uint32
+	rrsig := &dns.RRSIG{
+		Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
+		RRSIG: rdata.RRSIG{
+			TypeCovered: dns.TypeA, Algorithm: 200, Labels: 2,
+			OrigTTL: 3600, Expiration: now + 3600, Inception: now - 3600,
+			KeyTag: dnskey.KeyTag(), SignerName: dnsutil.Fqdn(zone),
+		},
+	}
+
+	err := cv.VerifyRRset(rrset, rrsig, dnskey)
+	if !errors.Is(err, ErrUnsupportedAlgorithm) {
+		t.Errorf("unsupported algorithm should map to ErrUnsupportedAlgorithm, got %v", err)
+	}
+}
+
+func TestAnswerSection_UnsupportedAlgOrderIndependent(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	zone := "example.com"
+	ecdsaKey, _ := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	// DSA key — verification of its RRSIG fails with ErrAlg (EDE 1).
+	dsaKey := &dns.DNSKEY{
+		Hdr:    dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
+		DNSKEY: rdata.DNSKEY{Flags: dns.FlagZONE, Protocol: 3, Algorithm: dns.DSA},
+	}
+	_, wrongPriv := genTestKey("other.example.com", dns.FlagSEP|dns.FlagZONE)
+	rrset := []dns.RR{aRec(zone, "192.0.2.1")}
+
+	// RRSIGs over the same RRset: one DSA (unsupported), one ECDSA signed
+	// with a foreign key (bogus). Bogus-sig goes LAST — the EDE 1
+	// classification must not depend on RRSIG iteration order.
+	now := uint32(log.NowUnix()) //nolint:gosec // G115: DNS timestamp — protocol-bounded uint32
+	dsaSig := &dns.RRSIG{
+		Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+		RRSIG: rdata.RRSIG{
+			TypeCovered: dns.TypeA, Algorithm: dns.DSA, Labels: 2,
+			OrigTTL: 300, Expiration: now + 3600, Inception: now - 3600,
+			KeyTag: dsaKey.KeyTag(), SignerName: dnsutil.Fqdn(zone),
+		},
+	}
+	bogusSig := signRRset(rrset, zone, wrongPriv, ecdsaKey.KeyTag())
+
+	answer := []dns.RR{aRec(zone, "192.0.2.1"), dsaSig, bogusSig}
+	_, err := cv.isAnswerSectionValid(answer, nil, []*dns.DNSKEY{ecdsaKey, dsaKey})
+	if !errors.Is(err, ErrUnsupportedAlgorithm) {
+		t.Errorf("unsupported algorithm should win regardless of RRSIG order, got %v", err)
+	}
+}
+
+func TestDenialOfExistence_MissingNSEC(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	zone := "example.com"
+	ksk, _ := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+
+	// NODATA response with no NSEC/NSEC3 proof at all.
+	resp := &dns.Msg{}
+	dnsutil.SetQuestion(resp, dnsutil.Fqdn("www."+zone), dns.TypeA)
+	resp.Response = true
+	resp.Rcode = dns.RcodeSuccess
+
+	_, err := cv.isNODATAValid(resp, "www.example.com.", dns.TypeA, []*dns.DNSKEY{ksk})
+	if !errors.Is(err, ErrMissingNSEC) {
+		t.Errorf("missing NSEC proof should map to ErrMissingNSEC, got %v", err)
 	}
 }
 

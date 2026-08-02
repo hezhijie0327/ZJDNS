@@ -62,7 +62,8 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				msg.Response = true
 			}
 			msg.Rcode = dns.RcodeFormatError
-			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorOther, ExtraText: ""}
+			// RFC 8914 §4.1: code 0 (Other) SHOULD carry ExtraText.
+			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorOther, ExtraText: "malformed query"}
 			qctx.Res = msg
 			qctx.Responded = true
 			return nil
@@ -133,9 +134,12 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		msg.Rcode = dns.RcodeRefused
 
 		if len(qname) > config.MaxDomainLength || !dnsutil.IsName(qname) {
-			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorOther, ExtraText: ""}
+			// RFC 8914 §4.1: code 0 (Other) SHOULD carry ExtraText.
+			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorOther, ExtraText: "invalid domain name"}
 		} else {
-			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorNotSupported, ExtraText: ""}
+			// EDE 30 (Invalid Query Type, IANA registry) — the modern code for
+			// unsupported qtypes; Cloudflare 1.1.1.1 uses it for the same case.
+			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorInvalidQueryType, ExtraText: ""}
 		}
 		qctx.Res = msg
 		qctx.Responded = true
