@@ -48,6 +48,7 @@ type Server struct {
 	config      *config.ServerConfig
 	handler     *handler.Handler
 	queryClient *upstream.Client
+	stats       *stats.Collector
 
 	tls             *tls.Server
 	tlcpServer      *servertlcp.Server
@@ -85,9 +86,15 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		tcpSem:          make(chan struct{}, config.DefaultServerGoroutineLimit),
 	}
 
+	// Unified persist directory: each subsystem keeps its own file under it.
+	persistDir := cfg.Server.Features.Persist.Dir
+	cacheFile := ""
+	if persistDir != "" {
+		cacheFile = filepath.Join(persistDir, "cache.zst")
+	}
 	cacheSettings := &cfg.Server.Features.Cache
 	maxSizeBytes := int64(cacheSettings.MaxSizeMB) << 20
-	cacheStore := cache.New(maxSizeBytes, cacheSettings.DBFile) // *cache.Cache — exposes DNSCrypt persistence
+	cacheStore := cache.New(maxSizeBytes, cacheFile)
 	// A later init failure must still release the persist file (open handles).
 	initOK := false
 	defer func() {
@@ -96,6 +103,13 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		}
 	}()
 	statsCollector := stats.New()
+	s.stats = statsCollector
+	if persistDir != "" {
+		statsFile := filepath.Join(persistDir, "stats.zst")
+		if err := statsCollector.LoadPersist(statsFile); err != nil {
+			log.Warnf("SERVER: stats persist load failed (starting empty): %v", err)
+		}
+	}
 	zoneEvaluator := zone.New()
 
 	ednsH, err := s.initEDNS(cfg)
@@ -334,11 +348,11 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 
 	if cfg.Server.Protocol.DNSCrypt != "" {
 		providerName := cfg.Server.Certificate.DNSCrypt.ProviderName(cfg.Server.Certificate.Domain)
-		// DNSCrypt state lives in its own persist file, sibling to the cache
-		// file — a corrupt cache file must not invalidate the identity.
+		// DNSCrypt state lives in its own persist file under the persist
+		// directory — a corrupt cache file must not invalidate the identity.
 		dnscryptFile := ""
-		if dbFile := cfg.Server.Features.Cache.DBFile; dbFile != "" {
-			dnscryptFile = filepath.Join(filepath.Dir(dbFile), "dnscrypt.zst")
+		if dir := cfg.Server.Features.Persist.Dir; dir != "" {
+			dnscryptFile = filepath.Join(dir, "dnscrypt.zst")
 		}
 		dnscryptSrv, err := serverdnscrypt.New(dnscryptFile, &cfg.Server.Certificate.DNSCrypt, cfg.Server.Protocol.DNSCrypt, providerName)
 		if err != nil {

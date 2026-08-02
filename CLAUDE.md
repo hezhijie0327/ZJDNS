@@ -221,7 +221,7 @@ zjdns/
 ├── edns/               ← EDNS handler (ECS, Cookie, EDE, Padding)
 ├── cache/              ← DNS response cache (in-memory LRU, Store interface, optional persist file)
 │   └── persist.go      ← PersistFile: typed binary schema (entries only)
-├── stats/              ← In-memory query statistics (Collector: map+mutex, no persistence)
+├── stats/              ← In-memory query statistics (atomic counters; optional stats.zst persist)
 ├── ruleset/            ← CIDR + domain tag matching (binary radix trie)
 ├── zone/               ← DNS zone rules (Evaluator, zone-file import)
 ├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, lrumap, siphash, ipttl, dns64, dnscryptcrypto

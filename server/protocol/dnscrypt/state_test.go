@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
+	"zjdns/internal/persist"
 
 	"github.com/cloudflare/circl/sign/ed25519"
 )
@@ -89,6 +90,19 @@ func TestStateFile_Corrupt_ReturnsError(t *testing.T) {
 	}
 	if _, _, err := loadStateFile(path); err == nil {
 		t.Fatal("load corrupt state: want error, got nil")
+	}
+}
+
+func TestStateFile_UnsupportedVersion_ReturnsError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dnscrypt.zst")
+	// Valid zstd payload with an unsupported version — must be rejected.
+	payload := []byte{0, 99, 0, 0, 0, 96, 1, 2, 3} // version=99, identity_len=96
+	payload = append(payload, make([]byte, 96)...)
+	if err := persist.Save(path, payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadStateFile(path); err == nil {
+		t.Fatal("unsupported version: want error, got nil")
 	}
 }
 

@@ -3,7 +3,6 @@ package cache
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"zjdns/internal/persist"
@@ -31,14 +30,10 @@ type PersistEntry struct {
 	Validated bool   // DNSSEC validation status
 }
 
-// Persist file version and magic — "ZJDNS" is the project name.
-const (
-	fileVersion = 1
-	fileMagic   = "ZJDNS"
-)
-
-// ErrBadMagic is returned when the file does not carry the ZJDNS magic.
-var ErrBadMagic = errors.New("cache: bad magic")
+// Persist file version — the version gates format evolution. No magic: zstd
+// framing identifies the file type, and version + length-prefixed structure
+// checks are enough to reject foreign or corrupt data.
+const fileVersion = 1
 
 // Load reads the cache persist file. A missing file is not an error: it
 // returns a nil PersistFile (cold start). Corrupt files are surfaced as
@@ -70,14 +65,13 @@ func (f *PersistFile) Save(path string) error {
 
 // encode serializes f into the binary layout.
 //
-//	[5B magic][2B version][8B entry_count]
+//	[2B version][8B entry_count]
 //	per Entry: [2B qname_len][qname][1B has_ecs]
 //	           (if has_ecs) [2B ecs_addr_len][ecs_addr][2B ecs_prefix]
 //	           [1B dnssec][2B qtype][2B qclass][4B value_len][value][8B expires_at][1B validated]
 func encode(f *PersistFile) []byte {
 	var buf bytes.Buffer
 	buf.Grow(16 + 32) // header + per-entry overhead
-	buf.WriteString(fileMagic)
 	writeU16(&buf, fileVersion)
 	writeU64(&buf, uint64(len(f.Entries))) //nolint:gosec // G115: slice len bounded by memory
 	for _, e := range f.Entries {
@@ -109,13 +103,10 @@ func encode(f *PersistFile) []byte {
 
 // decode parses the binary layout produced by encode.
 func decode(raw []byte) (*PersistFile, error) {
-	if len(raw) < len(fileMagic)+2+8 {
+	if len(raw) < 2+8 {
 		return nil, io.ErrUnexpectedEOF
 	}
-	if string(raw[:len(fileMagic)]) != fileMagic {
-		return nil, ErrBadMagic
-	}
-	off := len(fileMagic)
+	off := 0
 	version := binary.BigEndian.Uint16(raw[off:])
 	off += 2
 	if version != fileVersion {

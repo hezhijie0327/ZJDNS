@@ -86,6 +86,7 @@ type FeatureFlags struct {
 	DNSSECEnforce bool               `json:"dnssec_enforce,omitzero"`
 	DDR           DDRSettings        `json:"ddr,omitzero"`
 	ECS           ECSConfig          `json:"ecs_subnet,omitzero"`
+	Persist       PersistSettings    `json:"persist,omitzero"`
 	Cache         CacheSettings      `json:"cache,omitzero"`
 	LatencyProbe  []LatencyProbeStep `json:"latency_probe,omitzero"`
 	DNS64         *DNS64Config       `json:"dns64,omitzero"`
@@ -109,13 +110,18 @@ type DDRSettings struct {
 	IPv6 string `json:"ipv6,omitzero"`
 }
 
-// CacheSettings configures the in-memory DNS response cache: size budget,
-// stale serving, and the optional persist file (loaded at startup, dumped
-// at shutdown).
+// PersistSettings configures the unified persist directory: every subsystem
+// with persistent state (cache, DNSCrypt, stats) stores its own file under
+// this directory. Empty dir = no persistence (pure in-memory).
+type PersistSettings struct {
+	Dir string `json:"dir,omitzero"` // persist directory; empty = no persistence
+}
+
+// CacheSettings configures the in-memory DNS response cache: size budget and
+// stale serving.
 type CacheSettings struct {
-	PreferStale bool   `json:"prefer_stale,omitzero"`
-	MaxSizeMB   int    `json:"max_size_mb,omitzero"` // cache size budget (MB), 0 = default
-	DBFile      string `json:"db_file,omitzero"`     // persist file path; empty = no persistence
+	PreferStale bool `json:"prefer_stale,omitzero"`
+	MaxSizeMB   int  `json:"max_size_mb,omitzero"` // cache size budget (MB), 0 = default
 }
 
 // UpstreamServer defines a single upstream DNS server with address, protocol,

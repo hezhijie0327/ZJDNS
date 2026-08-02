@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 	"zjdns/config"
@@ -274,6 +275,15 @@ func (s *Server) shutdownServer() {
 
 	if cacheStore := s.handler.CacheStore(); cacheStore != nil {
 		zdnsutil.CloseWithLog(cacheStore, "Cache store", "SERVER")
+	}
+
+	// Persist query stats last — after all queries have drained.
+	if s.stats != nil {
+		if dir := s.config.Server.Features.Persist.Dir; dir != "" {
+			if err := s.stats.SavePersist(filepath.Join(dir, "stats.zst")); err != nil {
+				log.Warnf("SERVER: stats persist failed: %v", err)
+			}
+		}
 	}
 
 	if s.shutdown != nil {

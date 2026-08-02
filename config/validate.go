@@ -262,8 +262,8 @@ func validateDDR(cfg *ServerConfig) error {
 }
 
 func validateCache(cfg *ServerConfig) error {
-	if strings.Contains(cfg.Server.Features.Cache.DBFile, "..") {
-		return errors.New("server.features.cache.db_file must not contain '..'")
+	if strings.Contains(cfg.Server.Features.Persist.Dir, "..") {
+		return errors.New("server.features.persist.dir must not contain '..'")
 	}
 	return nil
 }

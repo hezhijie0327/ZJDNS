@@ -28,17 +28,14 @@ type windowRecord struct {
 
 // ── Persist file ──────────────────────────────────────────────────────────────
 
-// Persist file layout — magic is the project name, so a project rename
-// invalidates old files (cold start), the intended format-identity coupling.
+// Persist file layout — version gates format evolution; no magic (zstd
+// framing + version + structure checks identify and validate the file).
 //
-//	[5B magic "ZJDNS"][2B version=1]
+//	[2B version=1]
 //	[4B identity_len][identity (96B: sk 64 + pk 32)]
 //	[2B window_count]
 //	per window: [4B serial][4B not_before][4B not_after][32B resolver_sk][32B resolver_pk]
-const (
-	stateFileVersion = 1
-	stateFileMagic   = "ZJDNS"
-)
+const stateFileVersion = 1
 
 var (
 	// errNoIdentity is returned when no signing key has been persisted yet
@@ -87,7 +84,6 @@ func saveStateFile(path string, sk ed25519.PrivateKey, keys []keyEntry) error {
 // encodeState serializes the identity + current key windows.
 func encodeState(sk ed25519.PrivateKey, keys []keyEntry) []byte {
 	var buf bytes.Buffer
-	buf.WriteString(stateFileMagic)
 	writeU16(&buf, stateFileVersion)
 
 	identity := encodeIdentity(sk)
@@ -108,13 +104,10 @@ func encodeState(sk ed25519.PrivateKey, keys []keyEntry) []byte {
 
 // decodeState parses the layout produced by encodeState.
 func decodeState(raw []byte) (ed25519.PrivateKey, []windowRecord, error) {
-	if len(raw) < len(stateFileMagic)+2+4 {
+	if len(raw) < 2+4 {
 		return nil, nil, errCorruptState
 	}
-	if string(raw[:len(stateFileMagic)]) != stateFileMagic {
-		return nil, nil, errCorruptState
-	}
-	off := len(stateFileMagic)
+	off := 0
 	if binary.BigEndian.Uint16(raw[off:]) != stateFileVersion {
 		return nil, nil, errCorruptState
 	}

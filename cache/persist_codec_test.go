@@ -2,11 +2,9 @@ package cache
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
-	"zjdns/internal/persist"
 )
 
 func TestSave_Load_RoundTrip(t *testing.T) {
@@ -78,19 +76,6 @@ func TestLoad_Corrupt_ReturnsError(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatal("Load on corrupt file: want error, got nil")
-	}
-}
-
-func TestLoad_BadMagic_ReturnsErrBadMagic(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "badmagic.zst")
-	// Valid zstd payload that lacks the ZJDNS magic — decompression succeeds,
-	// decoding fails at the magic check.
-	if err := persist.Save(path, []byte("garbage not starting with magic")); err != nil {
-		t.Fatal(err)
-	}
-	_, err := Load(path)
-	if !errors.Is(err, ErrBadMagic) {
-		t.Errorf("want ErrBadMagic, got %v", err)
 	}
 }
 

@@ -12,10 +12,11 @@ via the shared `internal/persist` substrate. A subsystem's file is loaded at
 startup and dumped at shutdown / rotation; a corrupt file only invalidates
 that subsystem (cache entries are disposable, the DNSCrypt identity is not).
 
-| Data | Persisted? | File | Why |
-|------|-----------|------|-----|
-| Cache entries {qname, ecs, dnssec, qtype, qclass, wire, expiresAt, validated} | ✅ | `cache.db_file` | Warm restart |
-| DNSCrypt {identity, windows} | ✅ | `dnscrypt.zst` (sibling of db_file) | sdns:// stamps break if identity lost |
+| Data | Persisted? | File (under persist.dir) | Why |
+|------|-----------|--------------------------|-----|
+| Cache entries {qname, ecs, dnssec, qtype, qclass, wire, expiresAt, validated} | ✅ | `cache.zst` | Warm restart |
+| DNSCrypt {identity, windows} | ✅ | `dnscrypt.zst` | sdns:// stamps break if identity lost |
+| Query stats (all counters) | ✅ | `stats.zst` | Long-term totals across restarts |
 | PTR reverse index | ❌ | — | Derived — rebuilt from entries on load |
 | IP latency | ❌ | — | Transient; bounded LRU, re-probed |
 | Entry IDs | ❌ | — | No longer needed (no shared KV store) |
@@ -26,7 +27,7 @@ that subsystem (cache entries are disposable, the DNSCrypt identity is not).
 serialization, no KV operations. The cache owns its in-memory data.
 
 ```
-[5B magic "ZJDNS"][2B version=1][8B entry_count]
+[2B version=1][8B entry_count]
 per Entry: [2B qname_len][qname][1B has_ecs]
            (if has_ecs) [2B ecs_addr_len][ecs_addr][2B ecs_prefix]
            [1B dnssec][2B qtype][2B qclass][4B value_len][value][8B expires_at][1B validated]
@@ -38,16 +39,18 @@ per Entry: [2B qname_len][qname][1B has_ecs]
 `saveStateFile` via `internal/persist`, written at startup and key rotation.
 
 ```
-[5B magic "ZJDNS"][2B version=1]
+[2B version=1]
 [4B identity_len][identity (96B: sk 64 + pk 32)]
 [2B window_count]
 per Window: [4B serial][4B not_before][4B not_after][32B resolver_sk][32B resolver_pk]
 ```
 
 Cache-key fields are typed (no byte-packed `e:` prefixes — the BadgerDB-era
-key encoding is gone). Numeric fields use binary BigEndian. `internal/persist`
-provides the shared `Save`/`Load` (zstd + atomic write); each subsystem
-defines its own format on top.
+key encoding is gone). Numeric fields use binary BigEndian. Formats are
+version-gated but carry no magic — zstd framing identifies the file type,
+and version + length-prefixed structure checks reject foreign data.
+`internal/persist` provides the shared `Save`/`Load` (zstd + atomic write);
+each subsystem defines its own format on top.
 
 ### Key Patterns
 
@@ -69,7 +72,7 @@ defines its own format on top.
   (`LookupIPLatencies`). The probe itself re-sorts the answer and re-Sets it.
 - **Reverse lookup (PTR)**: in-memory `map[ip][]ptrRecord` derived from A/AAAA
   records; rebuilt from entries on load. Expired records skipped on scan.
-- **Stats aggregation**: `stats.Collector` — plain `map[string]*entry` + `sync.Mutex`. `Record()` upserts directly with lock. `Stats()` iterates the map. All-time counters, reset via `Reset()`. No channel, no goroutine, no persistence.
+- **Stats aggregation**: `stats.Collector` — flat atomic counters (no maps, lock-free `Record()`), latency histogram buckets, `Reset()` via `ZJDNS.stats.clear`. Optional `stats.zst` persistence (shutdown snapshot, startup additive restore).
 - **Zone queries**: `Evaluator.Evaluate()` does in-memory exact-match lookup on `exact` map (O(1)), then wildcard suffix search on `wildcards` map (max 16 iterations). Pure WORM maps.
 - **Ruleset matching**: `Engine.Match()` does CIDR via binary radix trie (O(128)) and domain suffix via map lookup (O(1)). All in-memory, loaded from config at startup.
 - **DNSCrypt**: identity + windows live in memory; the server reads its own
@@ -80,23 +83,29 @@ defines its own format on top.
   the in-memory cache + PTR index), `ZJDNS.stats.clear` (reset stats).
   Zone/ruleset clearing is not exposed.
 
-### Cache Configuration
+### Persist Configuration
 
 Config JSON:
 
 ```json
 {
-  "cache": {
-    "prefer_stale": true,
-    "max_size_mb": 64,
-    "db_file": "/var/lib/zjdns/state.zst"
-  }
+  "persist": { "dir": "/var/lib/zjdns" },
+  "cache": { "prefer_stale": true, "max_size_mb": 64 }
 }
 ```
 
-- `max_size_mb`: in-memory value budget (LRU eviction), default 64.
-- `db_file`: optional persist file; empty = no persistence (in-memory only).
-- Missing/corrupt file at startup = cold start (logged, not fatal).
+- `persist.dir`: unified persist directory; each subsystem keeps its own file
+  under it (`cache.zst`, `dnscrypt.zst`, `stats.zst`). Empty = pure in-memory.
+- `cache.max_size_mb`: in-memory value budget (LRU eviction), default 64.
+- Missing/corrupt file at startup = cold start for that subsystem (logged,
+  not fatal) — one subsystem's corruption never affects the others.
+
+### Stats persistence
+
+`stats.Collector` snapshots all atomic counters to `stats.zst` at shutdown
+(`SavePersist`) and restores them at startup (`LoadPersist`, additive merge)
+— totals continue across restarts. Format: `[2B version]` + one BigEndian
+int64 per counter field.
 
 ## Defense Mechanisms
 

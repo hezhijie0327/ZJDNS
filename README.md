@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.10.1-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.10.2-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -137,10 +137,10 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
     "features": {
       "ecs_subnet": { "ipv4": "1.2.3.0/24", "ipv6": "2001:db8::/56" },
       "dns64": { "prefix": "64:ff9b::/96" },
+      "persist": { "dir": "/var/lib/zjdns" },
       "cache": {
         "prefer_stale": true,
-        "max_size_mb": 64,
-        "db_file": "/var/lib/zjdns/state.zst"
+        "max_size_mb": 64
       },
       "ktls": { "kernel_tx": true, "kernel_rx": false }
     }
@@ -151,7 +151,7 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 - **ECS**：CIDR 格式，设为 `"auto"` 自动检测公网 IP；[RFC 7871](docs/rfc/rfc7871.txt) 建议 `/24`（IPv4）、`/56`（IPv6）
 - **DNS64**：纯 IPv6/NAT64 网络必备
 - **prefer_stale**：上游不可达时返回过期缓存（[RFC 8767](docs/rfc/rfc8767.txt)）
-- **max_size_mb / db_file**：内存缓存按字节预算 LRU 淘汰；`db_file` 可选落盘（启动加载、关停保存），留空为纯内存。DNSCrypt 状态独立存储在同目录 `dnscrypt.zst`（缓存文件损坏不影响身份）
+- **persist.dir**：统一持久化目录，各子系统独立文件 —— `cache.zst`（缓存条目，启动加载、关停保存）、`dnscrypt.zst`（DNSCrypt 身份，启动/轮转保存）、`stats.zst`（查询统计，关停保存、重启合并累计）。留空 = 纯内存
 - **self_signed**：自动生成自签名证书，跳过 `cert_file`/`key_file`
 - **KTLS**：需 `modprobe tls`，仅 Linux + TLS/HTTPS（TCP）生效
 

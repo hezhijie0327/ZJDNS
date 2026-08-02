@@ -33,8 +33,8 @@
         "self_signed": true
       },
       "dnscrypt": {
-        "private_key": "4526A28E37A87E436770D0680D0E522F215C052A24AF286E9E5B460930CB51EAFFCCE2B1DB6039D87554999D9BFBAF6F76EEE8DFDB026A55BEC4F8F75E0A368D",
-        "public_key": "FFCCE2B1DB6039D87554999D9BFBAF6F76EEE8DFDB026A55BEC4F8F75E0A368D"
+        "private_key": "196D5AD12B88B3C00C3187D3108A4904D231E4EF5D73184A409AF2BC668FADC62FDBD2D201A7E367FBEB2E411A71F743A77903B8EAB4F1F569A9F430AC508331",
+        "public_key": "2FDBD2D201A7E367FBEB2E411A71F743A77903B8EAB4F1F569A9F430AC508331"
       }
     },
     "features": {
@@ -47,14 +47,12 @@
         "ipv6": "auto",
         "prefer_ipv4": true
       },
-      "database": {
-        "db_path": "cache.db",
-        "memtable_size_mb": 4,
-        "block_cache_size_mb": 4,
-        "index_cache_size_mb": 8
+      "persist": {
+        "dir": "data"
       },
       "cache": {
-        "prefer_stale": true
+        "prefer_stale": true,
+        "max_size_mb": 64
       },
       "latency_probe": [
         {
