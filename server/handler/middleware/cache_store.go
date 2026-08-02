@@ -72,6 +72,11 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	cacheable := qr.Cacheable
 
 	msg := handler.BuildResponseMsg(qctx.Req)
+	// Preserve the resolution rcode (NXDOMAIN etc.) — BuildResponseMsg
+	// defaults to NOERROR.
+	if qr.Rcode != 0 {
+		msg.Rcode = qr.Rcode
+	}
 
 	// Determine DNSSEC status and EDE code.
 	var dnssecStatus string
@@ -125,11 +130,13 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 		if responseECS != nil && responseECS.ScopePrefix == 0 {
 			cacheECS = nil
 		}
-		_ = m.store.Set(qname, qtype, qclass, cacheECS, dnssecOK, qr.Answer, qr.Authority, qr.Additional, validated)
+		_ = m.store.Set(qname, qtype, qclass, cacheECS, dnssecOK, qr.Answer, qr.Authority, qr.Additional, validated, qr.Rcode)
 	}
 
-	// Request log.
-	m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "miss", ResponseTime: handler.ElapsedMS(qctx.StartTime), Rcode: dns.RcodeSuccess, Poisoned: qr.Poisoned, DNSSECStatus: dnssecStatus})
+	// Request log.  Record the real rcode — negative responses (NXDOMAIN)
+	// served here must not be counted as NOERROR, or the rcode distribution
+	// skews availability metrics.
+	m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "miss", ResponseTime: handler.ElapsedMS(qctx.StartTime), Rcode: int(qr.Rcode), Poisoned: qr.Poisoned, DNSSECStatus: dnssecStatus}) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
 
 	// Latency probe.
 	if m.prober != nil {
@@ -147,7 +154,7 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	msg.Ns = cache.ClampTTL(msg.Ns, config.DefaultMaxCacheableTTL)
 	msg.Extra = cache.ClampTTL(msg.Extra, config.DefaultMaxCacheableTTL)
 
-	log.Debugf("RESULT: %s %s | rcode=NOERROR, answer=%d, validated=%t", qname, dns.TypeToString[qtype], len(qr.Answer), validated)
+	log.Debugf("RESULT: %s %s | rcode=%s, answer=%d, validated=%t", qname, dns.TypeToString[qtype], dns.RcodeToString[qr.Rcode], len(qr.Answer), validated)
 
 	// Set EDE from DNSSEC or upstream.
 	if dnssecEDECode != 0 {

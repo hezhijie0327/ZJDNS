@@ -128,11 +128,21 @@ func (r *Recursive) updateDNSSECChain(ctx context.Context, response *dns.Msg, cu
 		// §5.2). Unverifiable delegations are treated as bogus, never as
 		// insecure. When the parent has no verifiable DNSKEYs (a genuinely
 		// unsigned parent), the delegation is insecure.
+		noDS, dsRaced := r.verifyNoDSInParent(ctx, nameservers, childZone, currentDomain, chain)
 		switch {
-		case r.verifyNoDSInParent(ctx, nameservers, childZone, currentDomain, chain):
+		case noDS:
 			chain.childDS = nil
 			chain.dsPresentButUnverified = false
 			log.Debugf("SECURITY: authenticated no-DS denial for %s (insecure delegation)", childZone)
+		case dsRaced:
+			// The DS query raced the delegation: verifyNoDSInParent verified
+			// the DS inline and recorded the outcome in the chain — a
+			// verified DS is set in chain.childDS, a failed verification
+			// left dsPresentButUnverified set, so the delegation stays
+			// unverifiable, never downgraded to insecure.
+			if chain.dsPresentButUnverified {
+				log.Debugf("SECURITY: raced DS for %s could not be verified — delegation unverifiable", childZone)
+			}
 		case len(chain.zoneDNSKEYs) == 0:
 			chain.childDS = nil
 			chain.dsPresentButUnverified = false
@@ -155,13 +165,16 @@ func (r *Recursive) updateDNSSECChain(ctx context.Context, response *dns.Msg, cu
 
 // verifyNoDSInParent confirms that a signed parent zone has no DS record at
 // the delegation point by requiring an authenticated NSEC/NSEC3 denial from
-// the parent's authoritative servers. Returns false when the denial cannot
-// be proven (the delegation must then be treated as unverifiable, not
-// insecure).
-func (r *Recursive) verifyNoDSInParent(ctx context.Context, nameservers []string, childZone, currentDomain string, chain *dnssecChain) bool {
+// the parent's authoritative servers.  Returns (denialValid, dsRaced):
+// denialValid is false when the denial cannot be proven (the delegation must
+// then be treated as unverifiable, not insecure); dsRaced is true when the DS
+// query found DS records — the delegation response simply raced the
+// delegation, so the DS was verified inline against the parent's keys and
+// chain.childDS / chain.dsPresentButUnverified were set accordingly.
+func (r *Recursive) verifyNoDSInParent(ctx context.Context, nameservers []string, childZone, currentDomain string, chain *dnssecChain) (denialValid, dsRaced bool) {
 	crypto := r.resolver.validator.Crypto
 	if crypto == nil {
-		return false
+		return false, false
 	}
 	if len(chain.zoneDNSKEYs) == 0 {
 		// The denial can only be verified against the parent zone's keys,
@@ -170,28 +183,41 @@ func (r *Recursive) verifyNoDSInParent(ctx context.Context, nameservers []string
 	}
 	if len(chain.zoneDNSKEYs) == 0 {
 		// Parent has no verifiable DNSKEYs — cannot authenticate a denial.
-		return false
+		return false, false
 	}
 
 	dsQuestion := Question{Name: dnsutil.Fqdn(childZone), Qtype: dns.TypeDS, Qclass: dns.ClassINET}
 	resp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dsQuestion, nil, false, currentDomain, r.resolver.validator.Poisonguard)
 	if err != nil || resp == nil {
 		log.Debugf("SECURITY: DS query for %s failed: %v", childZone, err)
-		return false
+		return false, false
 	}
 	defer pool.DefaultMessage.Put(resp)
 
-	// A DS answer means our referral simply raced the delegation; the
-	// caller's DS-present branch handles verification.
-	if len(dnssec.FindDS(resp.Answer))+len(dnssec.FindDS(resp.Ns)) > 0 {
-		return false
+	// A DS answer means the delegation response raced the delegation — e.g.
+	// a same-server parent+child shortcut answered the referral without DS.
+	// The caller has no response to verify, so verify it here against the
+	// parent's keys and record it in the chain.
+	dsRecords := dnssec.FindDS(resp.Answer)
+	dsRecords = append(dsRecords, dnssec.FindDS(resp.Ns)...)
+	if len(dsRecords) > 0 {
+		if verified := r.verifyDelegationDSRRSIG(resp, childZone, chain, dsRecords); len(verified) > 0 {
+			chain.childDS = verified
+			chain.dsPresentButUnverified = false
+			log.Debugf("SECURITY: verified %d DS record(s) for delegation to %s (raced)", len(verified), childZone)
+		} else {
+			chain.childDS = nil
+			chain.dsPresentButUnverified = true
+			log.Debugf("SECURITY: raced DS records for %s could not be verified — delegation unverifiable", childZone)
+		}
+		return false, true
 	}
 
 	validated, valErr := crypto.IsResponseValid(resp, childZone, chain.zoneDNSKEYs)
 	if valErr != nil {
 		log.Debugf("SECURITY: no-DS denial verification error for %s: %v", childZone, valErr)
 	}
-	return validated
+	return validated, false
 }
 
 func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string, zone string, chain *dnssecChain) {

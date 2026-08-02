@@ -162,6 +162,9 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			// qctx.Res already has stale response; replace with fresh.
 			msg := handler.BuildResponseMsg(qctx.Req)
 			dnssecOK := qctx.ClientRequestedDNSSEC
+			if qr.Rcode != 0 {
+				msg.Rcode = qr.Rcode
+			}
 			msg.Answer = cache.ProcessRecords(qr.Answer, 0, false, dnssecOK)
 			msg.Ns = cache.ProcessRecords(qr.Authority, 0, false, dnssecOK)
 			msg.Extra = cache.ProcessRecords(qr.Additional, 0, false, dnssecOK)
@@ -179,7 +182,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			// expired and every subsequent request repeats the full
 			// foreground-refresh cycle.
 			if qr.Cacheable {
-				m.store.Set(qname, qtype, qclass, ecsOpt, false, qr.Answer, qr.Authority, qr.Additional, qr.Validated)
+				m.store.Set(qname, qtype, qclass, ecsOpt, false, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
 			}
 			// The stale-serve path set an EDE 3 (Stale Answer); the
 			// refreshed response is not stale — clear it.
@@ -187,7 +190,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			qctx.Res = msg
 			qctx.Responded = true
 			qctx.CacheServed = false
-			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "miss", ResponseTime: handler.ElapsedMS(qctx.StartTime), Rcode: dns.RcodeSuccess, Poisoned: qr.Poisoned, DNSSECStatus: dnssecStatus})
+			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "miss", ResponseTime: handler.ElapsedMS(qctx.StartTime), Rcode: int(qr.Rcode), Poisoned: qr.Poisoned, DNSSECStatus: dnssecStatus}) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
 		} else {
 			// Refresh failed — serve stale response.
 			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
@@ -207,7 +210,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 				case <-done:
 					if qr != nil && qr.Err == nil && qr.Cacheable {
 						m.store.Set(qname, qtype, qclass, ecsOpt, false, // dnssecOK — background refresh does not need DNSSEC
-							qr.Answer, qr.Authority, qr.Additional, qr.Validated)
+							qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
 					}
 				case <-m.refreshCtx.Done():
 				}
@@ -240,7 +243,7 @@ func (m *CacheLookup) refreshCacheEntry(qname string, qtype, qclass uint16, ecsO
 		log.Debugf("CACHE: refresh skipped for %s (type=%d) — response not cacheable", qname, qtype)
 		return nil
 	}
-	m.store.Set(qname, qtype, qclass, ecsOpt, false, qr.Answer, qr.Authority, qr.Additional, qr.Validated)
+	m.store.Set(qname, qtype, qclass, ecsOpt, false, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
 	log.Debugf("CACHE: refresh updated %s (type=%d, answer=%d)", qname, qtype, len(qr.Answer))
 	m.stats.Record(&stats.Request{Result: "prefetch"})
 	return nil

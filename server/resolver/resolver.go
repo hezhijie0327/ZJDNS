@@ -36,6 +36,7 @@ type QueryResult struct {
 	Answer      []dns.RR
 	Authority   []dns.RR
 	Additional  []dns.RR
+	Rcode       uint16 // response rcode (e.g. NXDOMAIN) — default NOERROR
 	Validated   bool
 	Cacheable   bool
 	ECS         *edns.ECSOption

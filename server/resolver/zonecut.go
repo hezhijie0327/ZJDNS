@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -15,7 +16,17 @@ import (
 
 // stripCrossZoneRecords removes answer records whose RRSIG signer name is
 // from a different zone hierarchy than the given zone. These records need
-// independent DNSSEC validation via CNAME chain following.
+// independent DNSSEC validation via CNAME chain following.  RRSIG records
+// covering kept RRsets are kept — RFC 4035 §3.1.1: a signed RRset placed in
+// the Answer section MUST be accompanied by its RRSIGs (a DO=1 client
+// cannot validate without them).  RRSIGs covering stripped RRsets are
+// dropped with them.
+//
+// Note: only RRSIGs located in the Answer section are emitted.  Upstream
+// servers that place an answer RRset's signatures in the Additional section
+// (non-standard — RFC 4035 §3.1.1 keeps RRset and RRSIGs together) keep
+// them there; callers preserve response.Extra separately, so the signatures
+// still reach DO=1 clients.
 func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
 	fqZone := dnsutil.Fqdn(zone)
 	if fqZone == "." {
@@ -23,9 +34,15 @@ func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
 	}
 	allSigs := dnssec.CollectRRSIGs(answer, extra)
 
-	result := make([]dns.RR, 0, len(answer))
+	// Pass 1: decide which data RRsets survive the zone filter.  RRSIG
+	// records are skipped here — their fate is decided by the RRset they
+	// cover in pass 2.
+	keepRRset := make(map[string]bool, len(answer))
 	for _, r := range answer {
 		if r == nil {
+			continue
+		}
+		if _, isSig := r.(*dns.RRSIG); isSig {
 			continue
 		}
 		h := r.Header()
@@ -38,7 +55,7 @@ func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
 				log.Debugf("SECURITY: dropping unsigned record %s/%s in signed %s answer", h.Name, dns.TypeToString[dns.RRToType(r)], zone)
 				continue
 			}
-			result = append(result, r)
+			keepRRset[rrsetKey(h.Name, dns.RRToType(r))] = true
 			continue
 		}
 		inZone := false
@@ -52,12 +69,39 @@ func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
 			}
 		}
 		if inZone {
-			result = append(result, r)
+			keepRRset[rrsetKey(h.Name, dns.RRToType(r))] = true
 		} else {
 			log.Debugf("SECURITY: stripping cross-zone record %s/%s from %s answer", h.Name, dns.TypeToString[dns.RRToType(r)], zone)
 		}
 	}
+
+	// Pass 2: emit the kept data records in order, together with the
+	// RRSIGs covering them.
+	result := make([]dns.RR, 0, len(answer))
+	for _, r := range answer {
+		if r == nil {
+			continue
+		}
+		if sig, ok := r.(*dns.RRSIG); ok {
+			if keepRRset[rrsetKey(sig.Header().Name, sig.TypeCovered)] {
+				result = append(result, r)
+			}
+			continue
+		}
+		if keepRRset[rrsetKey(r.Header().Name, dns.RRToType(r))] {
+			result = append(result, r)
+		}
+	}
 	return result
+}
+
+// rrsetKey builds a collision-free key for the keepRRset map: the canonical
+// (lowercased) owner name and the numeric RR type.  Unknown types (RFC 3597,
+// e.g. TYPE1234) have no entry in dns.TypeToString and would otherwise
+// collapse distinct RRsets into a single "name/" key; raw owner names would
+// not match RRSIGs that differ from the data record only in case.
+func rrsetKey(name string, typ uint16) string {
+	return dnsutil.Canonical(name) + "/" + strconv.Itoa(int(typ))
 }
 
 func (r *Recursive) getZoneCutSigner(response *dns.Msg, currentDomain string) string {
@@ -117,44 +161,58 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 	}
 	defer pool.DefaultMessage.Put(dsResp)
 
+	var verifiedDS []*dns.DS
 	dsRecords := dnssec.FindDS(dsResp.Answer)
 	dsRecords = append(dsRecords, dnssec.FindDS(dsResp.Ns)...)
 	if len(dsRecords) == 0 {
 		// A signed parent must prove the absence of DS with an
 		// authenticated NSEC/NSEC3 denial; a bare NODATA is not proof.
-		if r.verifyNoDSInParent(ctx, nameservers, childZone, currentDomain, chain) {
+		noDS, dsRaced := r.verifyNoDSInParent(ctx, nameservers, childZone, currentDomain, chain)
+		switch {
+		case noDS:
 			chain.childDS = nil
 			chain.dsPresentButUnverified = false
 			return false, nil
-		}
-		return false, fmt.Errorf("no authenticated denial for missing DS at %s (signed parent)", childZone)
-	}
-
-	allSigs := dnssec.CollectRRSIGs(dsResp.Answer, dsResp.Ns, dsResp.Extra)
-	dsRRSIGs := dnssec.FindRRSIGs(allSigs, dnsutil.Fqdn(childZone), dns.TypeDS)
-	if len(dsRRSIGs) == 0 {
-		return false, fmt.Errorf("no RRSIG for DS records of %s", childZone)
-	}
-
-	rrset := make([]dns.RR, len(dsRecords))
-	for i, ds := range dsRecords {
-		rrset[i] = ds
-	}
-
-	var verifiedDS []*dns.DS
-	for _, rrsig := range dsRRSIGs {
-		for _, key := range parentKeys {
-			if key.KeyTag() != rrsig.KeyTag {
-				continue
+		case dsRaced:
+			// The DS query raced the delegation: verifyNoDSInParent
+			// verified the DS inline and recorded it in chain.childDS —
+			// continue the zone cut with the verified DS below.  A failed
+			// inline verification left dsPresentButUnverified set; report
+			// the raced outcome explicitly instead of the generic RRSIG
+			// verification error below.
+			verifiedDS = chain.childDS
+			if chain.dsPresentButUnverified {
+				return false, fmt.Errorf("raced DS for %s could not be verified — delegation unverifiable", childZone)
 			}
-			if err := crypto.VerifyRRset(rrset, rrsig, key); err == nil {
-				verifiedDS = dsRecords
-				log.Debugf("SECURITY: zone cut — verified DS for %s (key_tag=%d)", childZone, key.KeyTag())
+		default:
+			return false, fmt.Errorf("no authenticated denial for missing DS at %s (signed parent)", childZone)
+		}
+	} else {
+		allSigs := dnssec.CollectRRSIGs(dsResp.Answer, dsResp.Ns, dsResp.Extra)
+		dsRRSIGs := dnssec.FindRRSIGs(allSigs, dnsutil.Fqdn(childZone), dns.TypeDS)
+		if len(dsRRSIGs) == 0 {
+			return false, fmt.Errorf("no RRSIG for DS records of %s", childZone)
+		}
+
+		rrset := make([]dns.RR, len(dsRecords))
+		for i, ds := range dsRecords {
+			rrset[i] = ds
+		}
+
+		for _, rrsig := range dsRRSIGs {
+			for _, key := range parentKeys {
+				if key.KeyTag() != rrsig.KeyTag {
+					continue
+				}
+				if err := crypto.VerifyRRset(rrset, rrsig, key); err == nil {
+					verifiedDS = dsRecords
+					log.Debugf("SECURITY: zone cut — verified DS for %s (key_tag=%d)", childZone, key.KeyTag())
+					break
+				}
+			}
+			if len(verifiedDS) > 0 {
 				break
 			}
-		}
-		if len(verifiedDS) > 0 {
-			break
 		}
 	}
 	if len(verifiedDS) == 0 {

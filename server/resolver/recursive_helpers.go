@@ -47,11 +47,12 @@ func (r *Recursive) collectBestNSMatch(response *dns.Msg, normalizedQname, query
 		copy(nsSlice, response.Ns)
 		extraSlice := make([]dns.RR, len(response.Extra))
 		copy(extraSlice, response.Extra)
+		rcode := response.Rcode
 		pool.DefaultMessage.Put(response)
 		return "", nil, false, &QueryResult{
 			Cacheable: true,
 			Answer:    nil, Authority: nsSlice, Additional: extraSlice,
-			Validated: validated, ECS: ecsResponse,
+			Rcode: rcode, Validated: validated, ECS: ecsResponse,
 			Server: config.ProtoRecursive, Poisoned: false, Err: nil,
 		}
 	}
@@ -74,6 +75,69 @@ func (r *Recursive) applyQnameMinimisation(question Question, qname, currentDoma
 		return Question{Name: minQname, Qtype: qtype, Qclass: question.Qclass}, minimiseSteps + 1
 	}
 	return question, minimiseSteps
+}
+
+// isApexSOANODATA reports whether the response is an authoritative NODATA
+// whose SOA owner is the queried name.  A parent server that also hosts the
+// child zone on the same platform answers a minimised query for a delegated
+// name from its child-zone copy (aa + SOA at the qname) instead of referring;
+// the SOA proves the qname is a zone apex, i.e. a zone cut.
+func isApexSOANODATA(response *dns.Msg, queryName string) bool {
+	if response == nil || !response.Authoritative || len(response.Answer) > 0 {
+		return false
+	}
+	for _, rr := range response.Ns {
+		if soa, ok := rr.(*dns.SOA); ok && dns.EqualName(dnsutil.Fqdn(soa.Header().Name), dnsutil.Fqdn(queryName)) {
+			return true
+		}
+	}
+	return false
+}
+
+// advanceApexZoneCut advances the walk through a zone cut revealed by an
+// authoritative NODATA at the minimised qname (see isApexSOANODATA).  The
+// qname's NS RRset is fetched from the same servers and the delegation is
+// processed through the DNSSEC chain like any other zone cut.  Returns the
+// next-level nameservers and zone, or ok=false when the cut cannot be
+// established and the caller should keep exposing labels.
+func (r *Recursive) advanceApexZoneCut(ctx context.Context, queryName string, nameservers []string, currentDomain string, ecs *edns.ECSOption, chain *dnssecChain, depth int, forceTCP bool, qname string) (nextNS []string, nextZone string, ok bool) {
+	nsQuestion := Question{Name: dnsutil.Fqdn(queryName), Qtype: dns.TypeNS, Qclass: dns.ClassINET}
+	nsResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, nsQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+	if err != nil || nsResp == nil {
+		log.Debugf("RECURSION: NS query for zone-cut candidate %s failed: %v", queryName, err)
+		return nil, "", false
+	}
+	defer pool.DefaultMessage.Put(nsResp)
+
+	// The NS RRset may appear in the Answer section (same server hosts both
+	// parent and child zones) or in a referral's Authority section.
+	var nsRecords []*dns.NS
+	for _, rrec := range append(nsResp.Ns, nsResp.Answer...) {
+		if ns, isNS := rrec.(*dns.NS); isNS && dns.EqualName(dnsutil.Fqdn(rrec.Header().Name), dnsutil.Fqdn(queryName)) {
+			nsRecords = append(nsRecords, ns)
+		}
+	}
+	if len(nsRecords) == 0 {
+		log.Debugf("RECURSION: no NS records for zone-cut candidate %s", queryName)
+		return nil, "", false
+	}
+
+	nsResult := r.resolveNextNameservers(ctx, nsRecords, nsResp, qname, currentDomain, depth, forceTCP)
+	if len(nsResult.addrs) == 0 {
+		// The cut cannot be established — return without touching the
+		// chain, so the walk's parent-zone state stays intact for the next
+		// iteration.
+		return nil, "", false
+	}
+	// Only mutate the chain once the cut is established: a partially
+	// updated chain for a zone the walk never reaches could make the next
+	// iteration validate parent responses against the candidate zone's
+	// keys or treat a would-be-insecure delegation as unverifiable.
+	r.updateDNSSECChain(ctx, nsResp, currentDomain, queryName, nameservers, chain)
+	r.cacheGlueRecords(nsResult.glue)
+	log.Debugf("RECURSION: zone=%s via authoritative-NODATA zone cut, %d NS names -> %d addresses (source=%s): %v",
+		queryName, len(nsRecords), len(nsResult.addrs), nsResult.source, nsResult.addrs)
+	return nsResult.addrs, dnsutil.Canonical(queryName), true
 }
 
 // checkLameDelegation detects lame delegations where NS records point back

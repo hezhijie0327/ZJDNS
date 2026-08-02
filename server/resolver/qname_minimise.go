@@ -78,9 +78,18 @@ func labelsToAdd(originalQname, currentZone string, stepsTaken, minimisationCoun
 		return remainingLabels
 	}
 
-	// First MINIMISE_ONE_LAB steps: add one label at a time (cumulative).
+	// First MINIMISE_ONE_LAB steps: add one label at a time.  The count is
+	// cumulative from the root while remainingLabels counts labels beyond
+	// the current zone, which has already advanced by zoneLabels labels
+	// (RFC 9156 §2.3 — each step exposes exactly one label beyond the
+	// closest known zone: cn. → com.cn. → apple.com.cn. → …).  Without the
+	// rebase, the step after "cn." would expose two labels at once
+	// ("apple.com.cn."), skipping "com.cn." entirely — an intermediate
+	// delegation is then never walked and its DNSKEY never verified,
+	// breaking DNSSEC when the parent server answers with child-zone
+	// NSEC3 proofs.
 	if stepsTaken < minimiseOneLabel {
-		exposed := stepsTaken + 1 // cumulative: step 0 → 1 label, step 3 → 4 labels
+		exposed := max(stepsTaken+1-zoneLabels, 1)
 		if exposed > remainingLabels {
 			return remainingLabels
 		}

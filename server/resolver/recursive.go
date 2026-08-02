@@ -119,9 +119,10 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		}
 		cryptoValidated := r.isValidWithDNSSEC(response, currentDomain, chain)
 		ecsResponse := r.resolver.edns.ParseFromDNS(response)
+		rcode := response.Rcode
 		answer, authority, additional := response.Answer, response.Ns, response.Extra
 		pool.DefaultMessage.Put(response)
-		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Validated: cryptoValidated, ECS: ecsResponse, Server: config.ProtoRecursive, Poisoned: poisonSeen, DNSSECEDE: chain.lastEDECode}
+		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Rcode: rcode, Validated: cryptoValidated, ECS: ecsResponse, Server: config.ProtoRecursive, Poisoned: poisonSeen, DNSSECEDE: chain.lastEDECode}
 	}
 
 	for {
@@ -201,11 +202,32 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 		validated = r.validateNODATAWithNSEC(response, ctx, nameservers, currentDomain, chain, validated)
 
+		// An authoritative NODATA whose SOA owner is the minimised qname
+		// proves the qname is a zone apex — a parent server that also hosts
+		// the child zone answered from its child-zone copy instead of
+		// referring (RFC 1034 §4.3.2; e.g. CNNIC's cn/com.cn platform).
+		// Advance the walk through the zone cut below instead of skipping
+		// it — skipping breaks DNSSEC: the no-DS denial for names below the
+		// cut is signed by the skipped zone's DNSKEY, which the chain never
+		// verified.
+		apexCut := qnameMinimise && !strings.EqualFold(queryQuestion.Name, qname) &&
+			isApexSOANODATA(response, queryQuestion.Name)
+
 		bestMatch, bestNSRecords, cont, termRes := r.collectBestNSMatch(response, normalizedQname, queryQuestion.Name, qname, qnameMinimise, validated, ecsResponse)
 		if termRes != nil {
 			return *termRes
 		}
 		if cont {
+			if apexCut {
+				if nextNS, nextZone, ok := r.advanceApexZoneCut(ctx, queryQuestion.Name, nameservers, currentDomain, ecs, chain, depth, authoritativeForceTCP, qname); ok {
+					if dnsutil.Labels(dnsutil.Fqdn(nextZone)) == 1 {
+						tldServers = nextNS
+					}
+					nameservers = nextNS
+					currentDomain = nextZone
+					continue
+				}
+			}
 			continue
 		}
 		if termRes := r.checkLameDelegation(response, currentDomain, bestMatch, validated, ecsResponse); termRes != nil {
@@ -296,6 +318,7 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	var usedServer string
 	var poisonOccurred bool
 	allValidated := true
+	var finalRcode uint16
 	var allDNSSECEDE uint16
 
 	currentQuestion := question
@@ -345,6 +368,7 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 		if qr.ECS != nil {
 			finalECSResponse = qr.ECS
 		}
+		finalRcode = qr.Rcode
 
 		for _, rr := range qr.Answer {
 			h := rr.Header()
@@ -393,5 +417,5 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	if chainExhausted {
 		log.Debugf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, dnsutil.Canonical(question.Name))
 	}
-	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Poisoned: poisonOccurred, DNSSECEDE: allDNSSECEDE}
+	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Rcode: finalRcode, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Poisoned: poisonOccurred, DNSSECEDE: allDNSSECEDE}
 }

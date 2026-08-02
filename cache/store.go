@@ -225,7 +225,7 @@ func (c *Cache) LookupIPLatencies(ips []string) map[string]int {
 // Set stores a DNS response in the cache. Wire format is raw DNS wire format
 // (BadgerDB handles block-level zstd compression at the SSTable layer).
 func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
-	answer, authority, additional []dns.RR, validated bool,
+	answer, authority, additional []dns.RR, validated bool, rcode uint16,
 ) int64 {
 	if c.db.IsClosed() {
 		return 0
@@ -249,8 +249,11 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	authority = cloneRRs(authority)
 	additional = cloneRRs(additional)
 
-	// Pack wire format and compress.
+	// Pack wire format and compress.  The rcode is stored in the wire so
+	// Get can recover it (Entry.Rcode) — negative responses (NXDOMAIN) must
+	// be served and cached with their correct rcode.
 	msg := pool.DefaultMessage.Get()
+	msg.Rcode = rcode
 	msg.Answer = answer
 	msg.Ns = authority
 	msg.Extra = additional
