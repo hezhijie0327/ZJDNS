@@ -202,14 +202,15 @@ func (s *Server) shutdownServer() {
 		}
 	}
 
-	if s.pprofServer != nil {
+	if len(s.pprofServers) > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 		defer cancel()
-		if err := s.pprofServer.Shutdown(ctx); err != nil {
-			log.Errorf("PPROF: pprof server shutdown failed: %v", err)
-		} else {
-			log.Infof("PPROF: pprof server shut down successfully")
+		for _, pprofSrv := range s.pprofServers {
+			if err := pprofSrv.Shutdown(ctx); err != nil {
+				log.Errorf("PPROF: pprof server shutdown failed: %v", err)
+			}
 		}
+		log.Infof("PPROF: pprof server(s) shut down successfully")
 	}
 
 	if s.tlcpServer != nil {

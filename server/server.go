@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	_ "net/http/pprof" //nolint:gosec // G108: pprof binds 127.0.0.1 only and is off unless configured
+	_ "net/http/pprof" //nolint:gosec // G108: pprof is off unless configured
 	"os"
 	"runtime"
 	"strings"
@@ -54,7 +54,7 @@ type Server struct {
 	tlcpServer      *servertlcp.Server
 	dnscryptServer  *serverdnscrypt.Server
 	plain           *serverplain.Server
-	pprofServer     *http.Server
+	pprofServers    []*http.Server
 	shutdown        chan struct{}
 	tcpSem          chan struct{}
 	tcpWriteMu      sync.Map
@@ -372,23 +372,29 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 	s.plain = serverplain.New(cfg)
 }
 
-// initPprof starts the optional pprof HTTP listener on 127.0.0.1.
+// initPprof starts the optional pprof HTTP listeners on all non-link-local
+// unicast addresses (same bind logic as the DNS listeners via
+// ResolveBindAddrs), so remote profiling works from any reachable interface.
 func (s *Server) initPprof(cfg *config.ServerConfig) {
 	if cfg.Server.Pprof == "" {
 		return
 	}
-	if err := zdnsutil.TryBind("tcp", "127.0.0.1:"+cfg.Server.Pprof); err != nil {
-		log.Warnf("PPROF: skipping — 127.0.0.1:%s unavailable: %v", cfg.Server.Pprof, err)
+	addrs, err := zdnsutil.ResolveBindAddrs("tcp", cfg.Server.Pprof)
+	if err != nil {
+		log.Warnf("PPROF: skipping — no available bind address for port %s: %v", cfg.Server.Pprof, err)
 		return
 	}
-	s.pprofServer = &http.Server{
-		Addr:              "127.0.0.1:" + cfg.Server.Pprof,
-		ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
-		ReadTimeout:       0,
-		IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
-		// net/http/pprof's init registers /debug/pprof/ here; without a
-		// handler every pprof path would 404.
-		Handler: http.DefaultServeMux,
+	s.pprofServers = make([]*http.Server, 0, len(addrs))
+	for _, addr := range addrs {
+		s.pprofServers = append(s.pprofServers, &http.Server{
+			Addr:              addr,
+			ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
+			ReadTimeout:       0,
+			IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
+			// net/http/pprof's init registers /debug/pprof/ here; without a
+			// handler every pprof path would 404.
+			Handler: http.DefaultServeMux,
+		})
 	}
 }
 
@@ -460,11 +466,15 @@ func (s *Server) Start() error {
 	// If plain.Start() or other inits fail, Start() returns before the
 	// coordinator goroutine calls g.Wait(), and the pprof goroutine would
 	// be orphaned in the errgroup.
-	if s.pprofServer != nil {
+	pprofAddrs := make([]string, len(s.pprofServers))
+	for i, pprofSrv := range s.pprofServers {
+		pprofAddrs[i] = pprofSrv.Addr
+	}
+	log.Infof("PPROF: pprof server started on %v", pprofAddrs)
+	for _, pprofSrv := range s.pprofServers {
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("pprof server")
-			log.Infof("PPROF: pprof server started on port %s", s.config.Server.Pprof)
-			err := s.pprofServer.ListenAndServe()
+			err := pprofSrv.ListenAndServe()
 
 			if err != nil && err != http.ErrServerClosed {
 				return fmt.Errorf("pprof startup: %w", err)
@@ -538,8 +548,8 @@ func (s *Server) logServer(role string, server *config.UpstreamServer) {
 }
 
 func (s *Server) displayExtras() {
-	if s.pprofServer != nil {
-		log.Infof("PPROF: pprof server enabled on: %s, via: %s", s.config.Server.Pprof, config.DefaultPprofPath)
+	if len(s.pprofServers) > 0 {
+		log.Infof("PPROF: pprof server enabled on port %s (%d address(es)), via: %s", s.config.Server.Pprof, len(s.pprofServers), config.DefaultPprofPath)
 	}
 
 	if s.tls != nil {
