@@ -6,28 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
-
-	"github.com/klauspost/compress/zstd"
+	"zjdns/internal/persist"
 )
 
-// PersistFile is the on-disk persist format for the cache: cache records plus
-// the DNSCrypt state that rides along in the same file. Both are optional —
-// a PersistFile with zero Entries and nil DNSCrypt is valid.
-//
-// The cache is the only reader and writer: New() loads it, Close() and
-// DNSCrypt key rotation save it. Load/Save are the whole API — no KV
-// operations, callers own their in-memory data.
+// PersistFile is the on-disk persist format for the cache: cache records
+// only (DNSCrypt state lives in its own file — see server/protocol/dnscrypt).
 type PersistFile struct {
-	Version  uint16
-	Entries  []PersistEntry
-	DNSCrypt *DNSCrypt
+	Version uint16
+	Entries []PersistEntry
 }
 
-// PersistEntry is a single cached DNS response in wire format. Cache-key fields are
-// typed — no hand-rolled binary key encoding; callers use them directly as an
-// in-memory map key.
+// PersistEntry is a single cached DNS response in wire format. Cache-key
+// fields are typed — no hand-rolled binary key encoding; callers use them
+// directly as an in-memory map key.
 type PersistEntry struct {
 	Qname     string // query name (canonical, with trailing dot)
 	ECSAddr   string // ECS client address; empty = no ECS
@@ -40,47 +31,25 @@ type PersistEntry struct {
 	Validated bool   // DNSSEC validation status
 }
 
-// DNSCrypt is the server-scoped DNSCrypt state.
-type DNSCrypt struct {
-	Identity []byte // EncodeDNSCryptIdentity result (sk+pk)
-	Windows  []Window
-}
-
-// Window is one DNSCrypt certificate window.
-type Window struct {
-	Serial     uint32
-	NotBefore  uint32
-	NotAfter   uint32
-	ResolverSK []byte
-	ResolverPK []byte
-}
-
 // Persist file version and magic — "ZJDNS" is the project name.
 const (
 	fileVersion = 1
 	fileMagic   = "ZJDNS"
-	zstdLevel   = zstd.SpeedFastest
 )
 
 // ErrBadMagic is returned when the file does not carry the ZJDNS magic.
 var ErrBadMagic = errors.New("cache: bad magic")
 
-// Load reads, decompresses, and decodes the persist file at path.
-// A missing file is not an error: it returns a nil PersistFile (cold start).
-// Corrupt files are surfaced as errors — silently discarding them would
-// hide data loss.
+// Load reads the cache persist file. A missing file is not an error: it
+// returns a nil PersistFile (cold start). Corrupt files are surfaced as
+// errors — silently discarding them would hide data loss.
 func Load(path string) (*PersistFile, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // G304: path is operator-configured persist file
+	raw, err := persist.Load(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil //nolint:nilnil // cold start — missing file is not an error
-		}
-		return nil, fmt.Errorf("cache: read %s: %w", path, err)
+		return nil, err
 	}
-
-	raw, err := zstdDecompress(data)
-	if err != nil {
-		return nil, fmt.Errorf("cache: decompress %s: %w", path, err)
+	if raw == nil {
+		return nil, nil //nolint:nilnil // cold start — missing file is not an error
 	}
 	f, err := decode(raw)
 	if err != nil {
@@ -89,16 +58,10 @@ func Load(path string) (*PersistFile, error) {
 	return f, nil
 }
 
-// Save encodes, compresses, and atomically writes the file to path
-// (write temp + rename, so a crash never leaves a truncated file).
+// Save encodes and persists the file (zstd + atomic write via internal/persist).
 func (f *PersistFile) Save(path string) error {
-	raw := encode(f)
-	compressed, err := zstdCompress(raw)
-	if err != nil {
-		return fmt.Errorf("cache: compress: %w", err)
-	}
-	if err := atomicWrite(path, compressed); err != nil {
-		return fmt.Errorf("cache: write %s: %w", path, err)
+	if err := persist.Save(path, encode(f)); err != nil {
+		return err
 	}
 	return nil
 }
@@ -111,14 +74,9 @@ func (f *PersistFile) Save(path string) error {
 //	per Entry: [2B qname_len][qname][1B has_ecs]
 //	           (if has_ecs) [2B ecs_addr_len][ecs_addr][2B ecs_prefix]
 //	           [1B dnssec][2B qtype][2B qclass][4B value_len][value][8B expires_at][1B validated]
-//	[1B has_dnscrypt]
-//	if has_dnscrypt:
-//	  [4B identity_len][identity]
-//	  [2B window_count]
-//	  per Window: [4B serial][4B not_before][4B not_after][32B sk][32B pk]
 func encode(f *PersistFile) []byte {
 	var buf bytes.Buffer
-	buf.Grow(16 + 32 + 17 + 80) // header + per-entry overhead + dnscrypt overhead
+	buf.Grow(16 + 32) // header + per-entry overhead
 	buf.WriteString(fileMagic)
 	writeU16(&buf, fileVersion)
 	writeU64(&buf, uint64(len(f.Entries))) //nolint:gosec // G115: slice len bounded by memory
@@ -145,21 +103,6 @@ func encode(f *PersistFile) []byte {
 		} else {
 			buf.WriteByte(0)
 		}
-	}
-
-	if f.DNSCrypt == nil {
-		buf.WriteByte(0)
-		return buf.Bytes()
-	}
-	buf.WriteByte(1)
-	writeBytesU32(&buf, f.DNSCrypt.Identity)
-	writeU16(&buf, uint16(len(f.DNSCrypt.Windows))) //nolint:gosec // G115: window count capped at 2 by DNSCrypt rotation
-	for _, w := range f.DNSCrypt.Windows {
-		writeU32(&buf, w.Serial)
-		writeU32(&buf, w.NotBefore)
-		writeU32(&buf, w.NotAfter)
-		buf.Write(w.ResolverSK)
-		buf.Write(w.ResolverPK)
 	}
 	return buf.Bytes()
 }
@@ -231,39 +174,6 @@ func decode(raw []byte) (*PersistFile, error) {
 		off++
 		f.Entries = append(f.Entries, e)
 	}
-
-	if off >= len(raw) {
-		return nil, io.ErrUnexpectedEOF
-	}
-	if raw[off] == 0 {
-		return f, nil
-	}
-	off++
-	dc := &DNSCrypt{}
-	var err error
-	if dc.Identity, off, err = takeBytesU32(raw, off); err != nil {
-		return nil, err
-	}
-	if off+2 > len(raw) {
-		return nil, io.ErrUnexpectedEOF
-	}
-	wcount := int(binary.BigEndian.Uint16(raw[off:])) //nolint:gosec // G115: protocol-bounded uint16
-	off += 2
-	for range wcount {
-		if off+32 > len(raw) {
-			return nil, io.ErrUnexpectedEOF
-		}
-		w := Window{
-			Serial:     binary.BigEndian.Uint32(raw[off:]),
-			NotBefore:  binary.BigEndian.Uint32(raw[off+4:]),
-			NotAfter:   binary.BigEndian.Uint32(raw[off+8:]),
-			ResolverSK: raw[off+12 : off+44],
-			ResolverPK: raw[off+44 : off+76],
-		}
-		off += 76
-		dc.Windows = append(dc.Windows, w)
-	}
-	f.DNSCrypt = dc
 	return f, nil
 }
 
@@ -321,56 +231,4 @@ func takeBytesU32(raw []byte, off int) (b []byte, next int, err error) {
 		return nil, 0, io.ErrUnexpectedEOF
 	}
 	return raw[off : off+n], off + n, nil
-}
-
-// ── zstd ───────────────────────────────────────────────────────────────
-
-// zstdCompress compresses raw with the fastest level — the persist file is
-// written at shutdown and on DNSCrypt rotation only, so latency is irrelevant.
-func zstdCompress(raw []byte) ([]byte, error) {
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstdLevel))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = enc.Close() }()
-	return enc.EncodeAll(raw, nil), nil
-}
-
-// zstdDecompress decompresses raw.
-func zstdDecompress(raw []byte) ([]byte, error) {
-	dec, err := zstd.NewReader(nil)
-	if err != nil {
-		return nil, err
-	}
-	defer dec.Close()
-	return dec.DecodeAll(raw, nil)
-}
-
-// ── Atomic write ───────────────────────────────────────────────────────
-
-// atomicWrite writes data to path via a temp file in the same directory and
-// an atomic rename, so a crash mid-write never leaves a truncated persist
-// file. The directory must exist.
-func atomicWrite(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".zjdns-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	return os.Rename(tmpName, path)
 }

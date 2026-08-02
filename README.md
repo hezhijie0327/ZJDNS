@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.10.0-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.10.1-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -151,7 +151,7 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 - **ECS**：CIDR 格式，设为 `"auto"` 自动检测公网 IP；[RFC 7871](docs/rfc/rfc7871.txt) 建议 `/24`（IPv4）、`/56`（IPv6）
 - **DNS64**：纯 IPv6/NAT64 网络必备
 - **prefer_stale**：上游不可达时返回过期缓存（[RFC 8767](docs/rfc/rfc8767.txt)）
-- **max_size_mb / db_file**：内存缓存按字节预算 LRU 淘汰；`db_file` 可选落盘（启动加载、关停保存），留空为纯内存
+- **max_size_mb / db_file**：内存缓存按字节预算 LRU 淘汰；`db_file` 可选落盘（启动加载、关停保存），留空为纯内存。DNSCrypt 状态独立存储在同目录 `dnscrypt.zst`（缓存文件损坏不影响身份）
 - **self_signed**：自动生成自签名证书，跳过 `cert_file`/`key_file`
 - **KTLS**：需 `modprobe tls`，仅 Linux + TLS/HTTPS（TCP）生效
 

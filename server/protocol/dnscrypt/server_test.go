@@ -24,7 +24,7 @@ func testCertCfg(tb testing.TB) *config.DNSCryptCertificate {
 func TestKeyRotation(t *testing.T) {
 	certificateCfg := testCertCfg(t)
 
-	srv, err := New(nil, nil, certificateCfg, "0", "2.dnscrypt-cert.example.com")
+	srv, err := New("", certificateCfg, "0", "2.dnscrypt-cert.example.com")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestKeyRotation(t *testing.T) {
 func TestCertPairTXT(t *testing.T) {
 	certificateCfg := testCertCfg(t)
 
-	srv, err := New(nil, nil, certificateCfg, "0", "2.dnscrypt-cert.example.com")
+	srv, err := New("", certificateCfg, "0", "2.dnscrypt-cert.example.com")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestCertPairTXT(t *testing.T) {
 func TestHandshakeTTL(t *testing.T) {
 	certificateCfg := testCertCfg(t)
 
-	srv, err := New(nil, nil, certificateCfg, "0", "2.dnscrypt-cert.example.com")
+	srv, err := New("", certificateCfg, "0", "2.dnscrypt-cert.example.com")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestHandshakeTC_ClassicalPreserved(t *testing.T) {
 	// When the UDP cert query is too small for the PQ cert, the response
 	// must have TC=true with the classical cert preserved (§5.5/§10.3).
 	certificateCfg := testCertCfg(t)
-	srv, err := New(nil, nil, certificateCfg, "0", "2.dnscrypt-cert.example.com")
+	srv, err := New("", certificateCfg, "0", "2.dnscrypt-cert.example.com")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestHandshakeTC_ClassicalPreserved(t *testing.T) {
 func TestHandshakeTC_AllFit_NoTC(t *testing.T) {
 	// TCP query → no anti-amplification → both certs fit → TC=false.
 	certificateCfg := testCertCfg(t)
-	srv, err := New(nil, nil, certificateCfg, "0", "2.dnscrypt-cert.example.com")
+	srv, err := New("", certificateCfg, "0", "2.dnscrypt-cert.example.com")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

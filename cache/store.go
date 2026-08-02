@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"net"
 	"sync"
-	"sync/atomic"
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
@@ -57,13 +56,6 @@ type ptrRecord struct {
 	ownerKey  entryKey
 }
 
-// dnscryptState is the DNSCrypt server state handed to the cache for
-// persistence. The DNSCrypt server owns it; the cache just stores and saves.
-type dnscryptState struct {
-	identity []byte
-	windows  []Window
-}
-
 // Cache is an in-memory DNS response cache: O(1) map lookup, LRU eviction by
 // total value bytes, and optional persist file (load at startup, dump at
 // shutdown / DNSCrypt rotation).
@@ -79,8 +71,7 @@ type Cache struct {
 	ptrIndex map[string][]*ptrRecord // ip → derived reverse records
 	latency  *lrumap.Map[string, latencyEntry]
 
-	file     string // persist file path; empty = no persistence
-	dnscrypt atomic.Pointer[dnscryptState]
+	file string // persist file path; empty = no persistence
 }
 
 // ecsCandidate is a single ECS cache-key candidate used during fallback lookup.

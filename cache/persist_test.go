@@ -27,10 +27,6 @@ func TestPersist_RoundTrip(t *testing.T) {
 	mc := New(0, file)
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{aRR("example.com.", "192.0.2.1")}, nil, nil, false, dns.RcodeSuccess)
 
-	identity := make([]byte, 96)
-	mc.SetDNSCrypt(identity, []Window{
-		{Serial: 7, NotBefore: 100, NotAfter: 200, ResolverSK: make([]byte, 32), ResolverPK: make([]byte, 32)},
-	})
 	if err := mc.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -47,14 +43,6 @@ func TestPersist_RoundTrip(t *testing.T) {
 	}
 	if entry.Validated {
 		t.Error("validated = true, want false")
-	}
-
-	dc, ok := mc2.DNSCryptState()
-	if !ok {
-		t.Fatal("dnscrypt state not persisted")
-	}
-	if len(dc.Identity) != 96 || len(dc.Windows) != 1 || dc.Windows[0].Serial != 7 {
-		t.Errorf("dnscrypt state mismatch: identity=%d windows=%d serial=%d", len(dc.Identity), len(dc.Windows), dc.Windows[0].Serial)
 	}
 }
 

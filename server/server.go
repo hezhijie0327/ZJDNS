@@ -10,6 +10,7 @@ import (
 	"net/http"
 	_ "net/http/pprof" //nolint:gosec // G108: pprof is off unless configured
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -333,8 +334,13 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 
 	if cfg.Server.Protocol.DNSCrypt != "" {
 		providerName := cfg.Server.Certificate.DNSCrypt.ProviderName(cfg.Server.Certificate.Domain)
-		dcState, _ := cacheStore.DNSCryptState()
-		dnscryptSrv, err := serverdnscrypt.New(dcState, cacheStore, &cfg.Server.Certificate.DNSCrypt, cfg.Server.Protocol.DNSCrypt, providerName)
+		// DNSCrypt state lives in its own persist file, sibling to the cache
+		// file — a corrupt cache file must not invalidate the identity.
+		dnscryptFile := ""
+		if dbFile := cfg.Server.Features.Cache.DBFile; dbFile != "" {
+			dnscryptFile = filepath.Join(filepath.Dir(dbFile), "dnscrypt.zst")
+		}
+		dnscryptSrv, err := serverdnscrypt.New(dnscryptFile, &cfg.Server.Certificate.DNSCrypt, cfg.Server.Protocol.DNSCrypt, providerName)
 		if err != nil {
 			log.Warnf("SERVER: DNSCrypt listener init failed, continuing without it: %v", err)
 		} else {

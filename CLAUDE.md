@@ -220,11 +220,12 @@ zjdns/
 ├── config/             ← ServerConfig, ProtocolSettings, UpstreamServer, defaults
 ├── edns/               ← EDNS handler (ECS, Cookie, EDE, Padding)
 ├── cache/              ← DNS response cache (in-memory LRU, Store interface, optional persist file)
-│   └── persist.go      ← PersistFile: typed binary schema + zstd + atomic write
+│   └── persist.go      ← PersistFile: typed binary schema (entries only)
 ├── stats/              ← In-memory query statistics (Collector: map+mutex, no persistence)
 ├── ruleset/            ← CIDR + domain tag matching (binary radix trie)
 ├── zone/               ← DNS zone rules (Evaluator, zone-file import)
 ├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, lrumap, siphash, ipttl, dns64, dnscryptcrypto
+│   └── persist/        ← zstd + atomic write (shared persist-file IO substrate)
 └── server/
     ├── handler/        ← query pipeline adapter + QueryContext
     │   └── middleware/ ← 9 composable middleware + AssembleChain

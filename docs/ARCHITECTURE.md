@@ -6,39 +6,48 @@ For the storage-layer redesign rationale, see [DESIGN-STORAGE](design.md).
 ## Persistence Schema
 
 The cache is **in-memory first**: an O(1) map + embedded LRU list (eviction by
-total value bytes, `cache.max_size_mb`). A single optional persist file
-(`cache.db_file`) is loaded at startup and dumped at shutdown / DNSCrypt key
-rotation — zstd-compressed typed binary, written atomically (temp + rename).
-Only two things are persisted: cache entries and DNSCrypt state. Everything
-else is derived or transient:
+total value bytes, `cache.max_size_mb`). Each subsystem persists its own
+small file — zstd-compressed typed binary, written atomically (temp + rename)
+via the shared `internal/persist` substrate. A subsystem's file is loaded at
+startup and dumped at shutdown / rotation; a corrupt file only invalidates
+that subsystem (cache entries are disposable, the DNSCrypt identity is not).
 
-| Data | Persisted? | Why |
-|------|-----------|-----|
-| Cache entries {qname, ecs, dnssec, qtype, qclass, wire, expiresAt, validated} | ✅ | Warm restart |
-| DNSCrypt {identity, windows} | ✅ | sdns:// stamps break if identity lost |
-| PTR reverse index | ❌ | Derived — rebuilt from entries on load |
-| IP latency | ❌ | Transient; bounded LRU, re-probed |
-| Entry IDs | ❌ | No longer needed (no shared KV store) |
+| Data | Persisted? | File | Why |
+|------|-----------|------|-----|
+| Cache entries {qname, ecs, dnssec, qtype, qclass, wire, expiresAt, validated} | ✅ | `cache.db_file` | Warm restart |
+| DNSCrypt {identity, windows} | ✅ | `dnscrypt.zst` (sibling of db_file) | sdns:// stamps break if identity lost |
+| PTR reverse index | ❌ | — | Derived — rebuilt from entries on load |
+| IP latency | ❌ | — | Transient; bounded LRU, re-probed |
+| Entry IDs | ❌ | — | No longer needed (no shared KV store) |
 
-### `database.File` — typed binary format
+### `cache/persist.go` — typed binary format (entries)
 
-`cache/persist.go` is pure serialization: `PersistFile{Version, Entries,
-DNSCrypt}` with `Load(path)` / `Save(path)`. No KV operations, no
-transactions — the cache owns its in-memory data.
+`PersistFile{Version, Entries}` with `Load(path)` / `Save(path)` — pure
+serialization, no KV operations. The cache owns its in-memory data.
 
 ```
 [5B magic "ZJDNS"][2B version=1][8B entry_count]
 per Entry: [2B qname_len][qname][1B has_ecs]
            (if has_ecs) [2B ecs_addr_len][ecs_addr][2B ecs_prefix]
            [1B dnssec][2B qtype][2B qclass][4B value_len][value][8B expires_at][1B validated]
-[1B has_dnscrypt]
-if has_dnscrypt:
-  [4B identity_len][identity][2B window_count]
-  per Window: [4B serial][4B not_before][4B not_after][32B resolver_sk][32B resolver_pk]
+```
+
+### DNSCrypt state file — typed binary format
+
+`server/protocol/dnscrypt/state.go` owns its format: `loadStateFile` /
+`saveStateFile` via `internal/persist`, written at startup and key rotation.
+
+```
+[5B magic "ZJDNS"][2B version=1]
+[4B identity_len][identity (96B: sk 64 + pk 32)]
+[2B window_count]
+per Window: [4B serial][4B not_before][4B not_after][32B resolver_sk][32B resolver_pk]
 ```
 
 Cache-key fields are typed (no byte-packed `e:` prefixes — the BadgerDB-era
-key encoding is gone). Numeric fields use binary BigEndian.
+key encoding is gone). Numeric fields use binary BigEndian. `internal/persist`
+provides the shared `Save`/`Load` (zstd + atomic write); each subsystem
+defines its own format on top.
 
 ### Key Patterns
 
@@ -63,9 +72,10 @@ key encoding is gone). Numeric fields use binary BigEndian.
 - **Stats aggregation**: `stats.Collector` — plain `map[string]*entry` + `sync.Mutex`. `Record()` upserts directly with lock. `Stats()` iterates the map. All-time counters, reset via `Reset()`. No channel, no goroutine, no persistence.
 - **Zone queries**: `Evaluator.Evaluate()` does in-memory exact-match lookup on `exact` map (O(1)), then wildcard suffix search on `wildcards` map (max 16 iterations). Pure WORM maps.
 - **Ruleset matching**: `Engine.Match()` does CIDR via binary radix trie (O(128)) and domain suffix via map lookup (O(1)). All in-memory, loaded from config at startup.
-- **DNSCrypt**: identity + windows live in memory; the DNSCrypt server hands
-  them to the cache (`SetDNSCrypt`) on startup and rotation, which persists
-  immediately. Single writer (the cache) — no file races.
+- **DNSCrypt**: identity + windows live in memory; the server reads its own
+  state file at startup (`loadStateFile`) and writes it at startup + key
+  rotation (`saveStateFile`) — independent of the cache, so a corrupt cache
+  file never invalidates the identity.
 - **CHAOS endpoints**: `ZJDNS.stats` (read-only), `ZJDNS.cache.clear` (clears
   the in-memory cache + PTR index), `ZJDNS.stats.clear` (reset stats).
   Zone/ruleset clearing is not exposed.

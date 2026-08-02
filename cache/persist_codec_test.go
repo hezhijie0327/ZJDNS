@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"zjdns/internal/persist"
 )
 
 func TestSave_Load_RoundTrip(t *testing.T) {
@@ -15,12 +16,6 @@ func TestSave_Load_RoundTrip(t *testing.T) {
 		Entries: []PersistEntry{
 			{Qname: "example.com.", ECSAddr: "1.2.3.0", ECSPrefix: 24, DNSsecOK: true, Qtype: 1, Qclass: 1, Value: []byte("wire-data"), ExpiresAt: 12345, Validated: true},
 			{Qname: "test.org.", Qtype: 28, Qclass: 1, Value: []byte{0xde, 0xad, 0xbe, 0xef}, ExpiresAt: 0, Validated: false},
-		},
-		DNSCrypt: &DNSCrypt{
-			Identity: []byte("identity-bytes"),
-			Windows: []Window{
-				{Serial: 42, NotBefore: 100, NotAfter: 200, ResolverSK: make([]byte, 32), ResolverPK: make([]byte, 32)},
-			},
 		},
 	}
 	if err := f.Save(path); err != nil {
@@ -50,19 +45,6 @@ func TestSave_Load_RoundTrip(t *testing.T) {
 			t.Errorf("Entry %d mismatch: expires=%d validated=%v", i, gotE.ExpiresAt, gotE.Validated)
 		}
 	}
-	if got.DNSCrypt == nil {
-		t.Fatal("DNSCrypt = nil, want non-nil")
-	}
-	if string(got.DNSCrypt.Identity) != "identity-bytes" {
-		t.Errorf("Identity = %q", got.DNSCrypt.Identity)
-	}
-	if len(got.DNSCrypt.Windows) != 1 {
-		t.Fatalf("len(Windows) = %d, want 1", len(got.DNSCrypt.Windows))
-	}
-	w := got.DNSCrypt.Windows[0]
-	if w.Serial != 42 || w.NotBefore != 100 || w.NotAfter != 200 {
-		t.Errorf("Window mismatch: %+v", w)
-	}
 }
 
 func TestSave_Load_EmptyFile(t *testing.T) {
@@ -74,7 +56,7 @@ func TestSave_Load_EmptyFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(got.Entries) != 0 || got.DNSCrypt != nil {
+	if len(got.Entries) != 0 {
 		t.Errorf("want empty file, got %+v", got)
 	}
 }
@@ -103,14 +85,10 @@ func TestLoad_BadMagic_ReturnsErrBadMagic(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "badmagic.zst")
 	// Valid zstd payload that lacks the ZJDNS magic — decompression succeeds,
 	// decoding fails at the magic check.
-	data, err := zstdCompress([]byte("garbage not starting with magic"))
-	if err != nil {
+	if err := persist.Save(path, []byte("garbage not starting with magic")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, err = Load(path)
+	_, err := Load(path)
 	if !errors.Is(err, ErrBadMagic) {
 		t.Errorf("want ErrBadMagic, got %v", err)
 	}
@@ -164,21 +142,6 @@ func TestRoundTrip_LargeValue(t *testing.T) {
 		if b != big[i] {
 			t.Fatalf("byte %d = %d, want %d", i, b, big[i])
 		}
-	}
-}
-
-func TestRoundTrip_NoDNSCrypt(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.zst")
-	f := &PersistFile{Version: 1, Entries: []PersistEntry{{Qname: "k.example.", Qtype: 1, Value: []byte("v"), ExpiresAt: 999}}}
-	if err := f.Save(path); err != nil {
-		t.Fatal(err)
-	}
-	got, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.DNSCrypt != nil {
-		t.Errorf("DNSCrypt = %v, want nil", got.DNSCrypt)
 	}
 }
 

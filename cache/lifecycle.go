@@ -66,9 +66,6 @@ func (c *Cache) Save() error {
 	}
 	c.mu.Unlock()
 
-	if ds := c.dnscrypt.Load(); ds != nil {
-		f.DNSCrypt = &DNSCrypt{Identity: ds.identity, Windows: ds.windows}
-	}
 	return f.Save(c.file)
 }
 
@@ -127,9 +124,6 @@ func (c *Cache) loadFromDisk() {
 	}
 	c.rebuildPtrIndex()
 
-	if f.DNSCrypt != nil {
-		c.dnscrypt.Store(&dnscryptState{identity: f.DNSCrypt.Identity, windows: f.DNSCrypt.Windows})
-	}
 	log.Infof("CACHE: loaded %d entries from %s", c.Len(), c.file)
 }
 
@@ -176,22 +170,4 @@ func (c *Cache) ptrIndexFromWireLocked(owner entryKey, ts, expiresAt int64, sect
 			})
 		}
 	}
-}
-
-// SetDNSCrypt records the DNSCrypt server state and persists it immediately
-// (key rotation must survive a restart). The DNSCrypt server owns the data.
-func (c *Cache) SetDNSCrypt(identity []byte, windows []Window) {
-	c.dnscrypt.Store(&dnscryptState{identity: identity, windows: windows})
-	if err := c.Save(); err != nil {
-		log.Warnf("CACHE: persist dnscrypt state failed: %v", err)
-	}
-}
-
-// DNSCryptState returns the persisted DNSCrypt state (nil on first run).
-func (c *Cache) DNSCryptState() (*DNSCrypt, bool) {
-	ds := c.dnscrypt.Load()
-	if ds == nil {
-		return nil, false
-	}
-	return &DNSCrypt{Identity: ds.identity, Windows: ds.windows}, true
 }

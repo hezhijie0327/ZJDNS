@@ -10,7 +10,6 @@ import (
 	"net"
 	"sync"
 	"time"
-	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
@@ -69,9 +68,9 @@ type Server struct {
 	// goroutine creation under high load.
 	workerCap chan struct{}
 
-	// stateSaver persists identity + cert windows across restarts (the cache
-	// implements it). Nil when persistence is not available.
-	stateSaver StateSaver
+	// stateFile persists identity + cert windows across restarts.
+	// Empty disables persistence.
+	stateFile string
 	// seed is the X25519 secret key used to derive the next cert window's
 	// resolver key.  It forms a deterministic chain: each new window's
 	// resolver secret key becomes the seed for the one after it.
@@ -93,10 +92,9 @@ func (k *keyEntry) remainingTTL() uint32 {
 
 // New creates a new DNSCrypt Server from the given configuration.
 // port is the listener port, providerName is auto-derived as "2.dnscrypt-cert.<ddr.domain>".
-// state is the persisted identity + windows loaded by the cache (nil on first
-// run); stateSaver persists them back (the cache). Nil stateSaver disables
+// stateFile is the persist path for identity + cert windows; empty disables
 // persistence.
-func New(state *cache.DNSCrypt, stateSaver StateSaver, certificateCfg *config.DNSCryptCertificate, port, providerName string) (*Server, error) {
+func New(stateFile string, certificateCfg *config.DNSCryptCertificate, port, providerName string) (*Server, error) {
 	// ── Resolve signing identity ──────────────────────────────────────────
 	// Require explicit keys in config — like TLS requires a certificate.
 	if certificateCfg.PublicKey == "" || certificateCfg.PrivateKey == "" {
@@ -104,13 +102,14 @@ func New(state *cache.DNSCrypt, stateSaver StateSaver, certificateCfg *config.DN
 	}
 
 	// Try loading the persisted identity; auto-switch if config keys changed.
-	signingSK, err := decodeIdentity(state)
+	var persistedWindows []windowRecord
+	signingSK, persistedWindows, err := loadStateFile(stateFile)
 	if err == nil {
 		cfgPKBytes, derr := dnscryptcrypto.HexDecodeKey(certificateCfg.PublicKey)
 		if derr != nil || !bytes.Equal(cfgPKBytes, []byte(signingSK.Public().(ed25519.PublicKey))) {
 			log.Warnf("DNSCRYPT: config public_key changed, dropping old persisted state and switching identity")
-			state = nil
 			signingSK = nil
+			persistedWindows = nil
 		}
 	}
 	if signingSK == nil {
@@ -141,7 +140,7 @@ func New(state *cache.DNSCrypt, stateSaver StateSaver, certificateCfg *config.DN
 	var entries []keyEntry
 	var seed [32]byte
 
-	if windows := windowsFromState(state); len(windows) > 0 {
+	if windows := windowsFromState(persistedWindows); len(windows) > 0 {
 		var wErr error
 		entries, wErr = windowsToKeyEntries(&rc, windows)
 		if wErr == nil && len(entries) > 0 {
@@ -184,7 +183,7 @@ func New(state *cache.DNSCrypt, stateSaver StateSaver, certificateCfg *config.DN
 	ctx, cancel := context.WithCancelCause(context.Background())
 
 	s := &Server{
-		stateSaver:     stateSaver,
+		stateFile:      stateFile,
 		seed:           seed,
 		keys:           entries,
 		port:           port,
@@ -447,21 +446,18 @@ func (s *Server) rotateKeys() {
 	log.Debugf("DNSCRYPT: rotated resolver keys (serial=%d, active=%d)", newPair.Classical.Serial, len(s.keys))
 }
 
-// persistState hands the current identity + windows to the state saver
-// (the cache), which writes the persist file. Called on startup and rotation.
+// persistState writes the identity + current windows to the state file.
+// Called on startup and rotation (rotation must survive a restart).
 func (s *Server) persistState() {
-	if s.stateSaver == nil {
-		return
-	}
-	identity := encodeIdentity(s.signingSK)
-	if identity == nil {
-		log.Warnf("DNSCRYPT: cannot persist identity — signing key is not Ed25519")
+	if s.stateFile == "" {
 		return
 	}
 	s.mu.RLock()
-	windows := windowsFromKeys(s.keys)
+	keys := s.keys
 	s.mu.RUnlock()
-	s.stateSaver.SetDNSCrypt(identity, windows)
+	if err := saveStateFile(s.stateFile, s.signingSK, keys); err != nil {
+		log.Warnf("DNSCRYPT: failed to persist state: %v", err)
+	}
 }
 
 func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
