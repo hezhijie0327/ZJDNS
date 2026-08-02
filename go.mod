@@ -8,8 +8,8 @@ require (
 	github.com/cloudflare/circl v1.6.5-0.20260731205605-df9fbeabf921
 	github.com/dgraph-io/badger/v4 v4.9.5
 	github.com/emmansun/gmsm v0.44.1
-	github.com/pion/dtls/v3 v3.1.3-0.20260731152804-023f3e85f869
-	github.com/quic-go/quic-go v0.61.1-0.20260727032127-9bfbf4cd052b
+	github.com/pion/dtls/v3 v3.1.3-0.20260802080153-4216cc8f0885
+	github.com/quic-go/quic-go v0.61.1-0.20260802031509-f1cdf4e08b24
 	gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f
 	gitlab.com/go-extension/tls v0.0.0-20260715144009-d75c84d8b9d2
 	golang.org/x/crypto v0.54.0

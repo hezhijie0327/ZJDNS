@@ -115,8 +115,8 @@ sleep 3
 
 ### Client Ports Reference
 
-All forwarding clients accept queries on **UDP** (except `client-tcp` which has
-both UDP+TCP).  The "Protocol" column is the upstream forwarding protocol.
+All forwarding clients accept queries on both **UDP and TCP** (same port).
+The "Protocol" column is the upstream forwarding protocol.
 
 | Client Config | Client Port | Upstream | Server Port |
 | `client-udp.json` | 10553 | UDP | 10533 |
@@ -133,31 +133,28 @@ both UDP+TCP).  The "Protocol" column is the upstream forwarding protocol.
 | `client-dnscrypt-classic.json` | 12445 | DNSCrypt (classical) | 12443 |
 | `client-dnscrypt-ephemeral.json` | 12445 | DNSCrypt + ephemeral_keys + PQ | 12443 |
 
+> [!NOTE]
+> Forwarding client configs set `tcp` to the same port as `udp`. Without it,
+> the default TCP port 53 (privileged) makes non-root startup fail with
+> "no available tcp addresses for port 53".
+
 ### Quick Tests
 
 **Test methodology**: The server listens on both UDP and TCP for 10533 — `dig`
-works with either.  Forwarding clients (`client-*.json`) accept queries on UDP
-and forward them over the configured upstream protocol (TLS/QUIC/HTTPS/etc.).
-They do **not** have a TCP listener — use `+notcp` or omit `+tcp` (dig defaults
-to UDP).  The only exception is `client-tcp` which has both.
+works with either.  Forwarding clients (`client-*.json`) also listen on both
+UDP and TCP (same port) and forward queries over the configured upstream
+protocol (TLS/QUIC/HTTPS/etc.).
 
 ```bash
 # Direct to server — UDP or TCP both work.
 dig @127.0.0.1 -p 10533 www.baidu.com A +short
 
-# Forwarding clients — MUST use UDP (dig default, or +notcp explicitly).
-# The client listens on UDP only; +tcp will get "connection refused".
+# Forwarding clients — UDP (dig default) or +tcp, same port.
 /tmp/zjdns -config docs/debug/loopback/client-tls.json &
 sleep 2
 dig @127.0.0.1 -p 10753 www.baidu.com A +short          # UDP (default)
-dig @127.0.0.1 -p 10753 www.baidu.com A +short +notcp    # UDP (explicit)
+dig @127.0.0.1 -p 10753 www.baidu.com A +short +tcp     # TCP
 pkill -f "client-tls"
-
-# client-tcp is the only forwarding client with a TCP listener.
-/tmp/zjdns -config docs/debug/loopback/client-tcp.json &
-sleep 2
-dig @127.0.0.1 -p 10653 www.baidu.com A +short +tcp      # TCP works
-pkill -f "client-tcp"
 ```
 
 ## DNSSEC Test

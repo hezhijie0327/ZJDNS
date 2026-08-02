@@ -14,6 +14,7 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"github.com/pion/dtls/v3"
+	"github.com/pion/dtls/v3/pkg/protocol"
 )
 
 // startDTLSServer binds UDP sockets and starts DTLS listeners for DNS-over-DTLS.
@@ -31,6 +32,15 @@ func (s *Server) startDTLSServer() error {
 		}
 
 		listener, err := dtls.ListenWithOptions("udp", udpAddr,
+			// DTLS 1.3 only.  Dual-version [1.2,1.3] is blocked by a pion bug:
+			// the dual-stack client (negotiateVersionClient) never retransmits
+			// its ClientHello, so the server's fsm13 wait() is never woken to
+			// parse the cached ClientHello — the handshake deadlocks with zero
+			// packets exchanged.  This breaks ZJDNS client ↔ ZJDNS server
+			// (both [1.2,1.3]); external pure-1.2 clients still connect.
+			// Revisit after pion fixes upstream.
+			dtls.WithMinVersion(protocol.Version1_3),
+			dtls.WithMaxVersion(protocol.Version1_3),
 			dtls.WithCertificates(s.stdCert),
 			dtls.WithSessionStore(lrumap.NewDTLSSessionStore(config.DefaultDTLSSessionCacheSize)),
 			dtls.WithVerifyConnection(func(state *dtls.State) error {
