@@ -329,8 +329,17 @@ func TestMaskIP_IPv6(t *testing.T) {
 
 func TestECSFallbackCandidates_Nil(t *testing.T) {
 	candidates := ecsFallbackCandidates(nil)
-	if len(candidates) != 1 || candidates[0].addr != "" || candidates[0].prefix != 0 {
-		t.Errorf("nil ECS should return single zero-value candidate: %+v", candidates)
+	if len(candidates) != 3 {
+		t.Fatalf("nil ECS should return 3 candidates (no-ECS + IPv4 /0 + IPv6 /0): got %d: %+v", len(candidates), candidates)
+	}
+	if candidates[0].addr != "" || candidates[0].prefix != 0 {
+		t.Errorf("first candidate should be no-ECS: %+v", candidates[0])
+	}
+	if candidates[1].addr != "0.0.0.0" || candidates[1].prefix != 0 {
+		t.Errorf("second candidate should be IPv4 /0: %+v", candidates[1])
+	}
+	if candidates[2].addr != "::" || candidates[2].prefix != 0 {
+		t.Errorf("third candidate should be IPv6 /0: %+v", candidates[2])
 	}
 }
 

@@ -81,6 +81,7 @@ func (c *Cache) FlushDB(target string) (int64, error) {
 		if err := c.db.DropPrefix(database.EntryKeyPrefix()); err != nil {
 			return 0, fmt.Errorf("flushDB cache: %w", err)
 		}
+		c.latencyCache.Clear()
 	case "zone":
 		if err := c.db.DropPrefix([]byte("z:")); err != nil {
 			return 0, fmt.Errorf("flushDB zone: %w", err)
@@ -107,14 +108,22 @@ func (c *Cache) UpdateLatency(ip string, latencyMS int) {
 	if c.db.IsClosed() {
 		return
 	}
+	expiresAt := uint64(log.NowUnix() + config.DefaultLatencyProbeMinInterval*2) //nolint:gosec // G115: protocol-bounded value fits target type
+
 	if err := c.db.Update(func(txn *badger.Txn) error {
 		e := badger.NewEntry(database.EIPLatencyKey(ip), database.EncodeLatencyValue(latencyMS))
-		e.ExpiresAt = uint64(log.NowUnix() + config.DefaultLatencyProbeMinInterval*2) //nolint:gosec // G115: protocol-bounded value fits target type
+		e.ExpiresAt = expiresAt
 		return txn.SetEntry(e)
 	}); err != nil {
-		// A failed latency write currently looks like a successful probe.
 		log.Warnf("CACHE: latency write failed for %s: %v", ip, err)
+		return // don't populate LRU on failure — the DB is the source of truth
 	}
+	// Populate the in-memory LRU after a successful write, with the same
+	// expiry so the LRU naturally mirrors the BadgerDB TTL.
+	c.latencyCache.Set(ip, latencyEntry{
+		value:     latencyMS,
+		expiresAt: int64(expiresAt), //nolint:gosec // G115: unix timestamp — protocol-bounded int64
+	})
 }
 
 // DBSize returns the BadgerDB LSM and value log sizes in bytes.

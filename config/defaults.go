@@ -48,6 +48,10 @@ const (
 	DefaultServeExpiredClientTimeout = 600 * time.Millisecond // RFC 8767 §5.2: short wait before serving stale
 	DefaultPrefetchThrottleInterval  = 3 * time.Second
 
+	// DefaultLatencyCacheCapacity caps the in-memory IP latency LRU cache.
+	// 512 entries × ~16 bytes ≈ 8KB memory.  A miss falls back to BadgerDB.
+	DefaultLatencyCacheCapacity = 512
+
 	// DefaultPrefetchCooldownMaxEntries caps the PrefetchCooldown map size.
 	// When exceeded, the oldest half of entries are evicted to prevent
 	// unbounded growth under sustained diverse-query load.

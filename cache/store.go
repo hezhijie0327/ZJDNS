@@ -6,6 +6,7 @@ import (
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 	"zjdns/internal/pool"
 	"zjdns/internal/ttl"
 
@@ -16,9 +17,18 @@ import (
 	"github.com/dgraph-io/badger/v4"
 )
 
+// latencyEntry holds an IP latency measurement with its expiry time, so the
+// in-memory LRU cache honours the same TTL semantics as the BadgerDB-backed
+// latency store (2 × DefaultLatencyProbeMinInterval).
+type latencyEntry struct {
+	value     int   // latency in milliseconds
+	expiresAt int64 // unix timestamp after which the entry is considered stale
+}
+
 // Cache is a DNS response cache backed by a BadgerDB key-value store.
 type Cache struct {
-	db *database.DB
+	db           *database.DB
+	latencyCache *lrumap.Map[string, latencyEntry] // in-memory LRU for IP latencies — avoids a second BadgerDB View on every Get()
 }
 
 // ecsCandidate is a single ECS cache-key candidate used during fallback lookup.
@@ -45,7 +55,10 @@ func New(db *database.DB) *Cache {
 	if db == nil {
 		panic("cache: nil database")
 	}
-	return &Cache{db: db}
+	return &Cache{
+		db:           db,
+		latencyCache: lrumap.New[string, latencyEntry](config.DefaultLatencyCacheCapacity),
+	}
 }
 
 // Close closes the database.
@@ -194,31 +207,55 @@ func (c *Cache) sortAnswerByLatency(entry *Entry) {
 }
 
 // LookupIPLatencies fetches latencies for a batch of IPs (exported for the
-// resolver's root-server ordering).
+// resolver's root-server ordering). Results are served from an in-memory LRU
+// cache; BadgerDB is only queried on a cache miss, which keeps the hot read
+// path (cache.Get → sortAnswerByLatency) off the LSM tree entirely.
 func (c *Cache) LookupIPLatencies(ips []string) map[string]int {
 	if len(ips) > maxLatencyLookupIPs {
 		ips = ips[:maxLatencyLookupIPs]
 	}
 	latencies := make(map[string]int, min(len(ips), maxLatencyLookupIPs))
 
-	_ = c.db.View(func(txn *badger.Txn) error {
-		var buf []byte
-		for _, ip := range ips {
-			item, err := txn.Get(database.EIPLatencyKey(ip))
-			if err != nil {
-				continue
-			}
-			if item.IsDeletedOrExpired() {
-				continue
-			}
-			buf, err = item.ValueCopy(buf)
-			if err != nil {
-				continue
-			}
-			latencies[ip] = database.DecodeLatencyValue(buf)
+	// Collect IPs not in the in-memory LRU cache, or whose LRU entry has
+	// expired (same TTL semantics as the BadgerDB e:lat: keys).
+	now := log.NowUnix()
+	var missing []string
+	for _, ip := range ips {
+		if e, ok := c.latencyCache.Get(ip); ok && now < e.expiresAt {
+			latencies[ip] = e.value
+		} else {
+			missing = append(missing, ip)
 		}
-		return nil
-	})
+	}
+
+	// Fall back to BadgerDB only for cache misses.
+	if len(missing) > 0 {
+		_ = c.db.View(func(txn *badger.Txn) error {
+			var buf []byte
+			for _, ip := range missing {
+				item, err := txn.Get(database.EIPLatencyKey(ip))
+				if err != nil {
+					continue
+				}
+				if item.IsDeletedOrExpired() {
+					continue
+				}
+				buf, err = item.ValueCopy(buf)
+				if err != nil {
+					continue
+				}
+				lat := database.DecodeLatencyValue(buf)
+				latencies[ip] = lat
+				// Populate LRU with the same expiry as the BadgerDB entry.
+				c.latencyCache.Set(ip, latencyEntry{
+					value:     lat,
+					expiresAt: int64(item.ExpiresAt()), //nolint:gosec // G115: unix timestamp — protocol-bounded int64
+				})
+			}
+			return nil
+		})
+	}
+
 	return latencies
 }
 
@@ -355,10 +392,14 @@ func maskIP(ip net.IP, prefixBits int) net.IP {
 }
 
 // ecsFallbackCandidates generates ECS cache-key candidates from most specific
-// to least specific.
+// to least specific. The final candidate is always the no-ECS key to handle
+// scope=0 entries (RFC 7871 §7.3.1: when the authoritative response scope is
+// zero, the answer is cached globally without an ECS key).
 func ecsFallbackCandidates(ecs *config.ECSOption) []ecsCandidate {
 	if ecs == nil {
-		return []ecsCandidate{{"", 0}}
+		// Include both address-family /0 fallbacks so that entries stored with
+		// an ECS key (from a prior ECS query) can be found by a non-ECS query.
+		return []ecsCandidate{{"", 0}, {"0.0.0.0", 0}, {"::", 0}}
 	}
 	var standardPrefixes []int
 	if ecs.Address.To4() != nil {
@@ -375,6 +416,10 @@ func ecsFallbackCandidates(ecs *config.ECSOption) []ecsCandidate {
 			candidates = append(candidates, ecsCandidate{masked.String(), p})
 		}
 	}
+	// Always include the no-ECS fallback: authoritatives with scope=0
+	// produce cache entries without an ECS key, and those must be
+	// reachable from ECS queries.
+	candidates = append(candidates, ecsCandidate{"", 0})
 	return candidates
 }
 
