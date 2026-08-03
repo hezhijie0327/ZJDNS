@@ -38,7 +38,7 @@ type statsSaver struct {
 	file string
 }
 
-func (s *statsSaver) Save() error { return s.c.SavePersist(s.file) }
+func (s *statsSaver) Save() error { return s.c.SavePersist() }
 
 // initPersistManager registers every subsystem with persistent state on the
 // unified persist manager. Subsystems whose file paths are empty (persistence
@@ -120,7 +120,7 @@ func wireZoneDynamicContent(store cachePersister, statsCollector *stats.Collecto
 				// Persist the reset immediately: otherwise a crash before the
 				// next periodic flush restores the cleared totals from stats.zst.
 				if statsFile != "" {
-					if err := statsCollector.SavePersist(statsFile); err != nil {
+					if err := statsCollector.SavePersist(); err != nil {
 						return int64(0), err
 					}
 				}

@@ -221,7 +221,7 @@ zjdns/
 ├── edns/               ← EDNS handler (ECS, Cookie, EDE, Padding)
 ├── cache/              ← DNS response cache (lrumap.Map store, Store interface, codec-based persist)
 │   └── codec.go        ← lrumap.Codec: typed key/value binary encoding (v2)
-├── stats/              ← In-memory query statistics (atomic counters; optional stats.zst persist)
+├── stats/              ← In-memory query statistics (atomic counters; single-entry lrumap persist)
 ├── ruleset/            ← CIDR + domain tag matching (binary radix trie)
 ├── zone/               ← DNS zone rules (Evaluator, zone-file import)
 ├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, lrumap, siphash, ipttl, dns64, dnscryptcrypto
@@ -306,11 +306,11 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | `ServerConfig` | `config` | Top-level config; owns `ECSConfig`, `ProtocolSettings`, `CertificateSettings` |
 | `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `SkipCache`, `Match`, `Proxy`, defense flags |
 | `ProtocolSettings` | `config` | Per-protocol port/endpoint: `UDP`, `TCP`, `TLS`, `QUIC`, `HTTPS`, `HTTP3`, `TLCP`, `DTLS`, `DTLCP`, `DNSCrypt` |
-| `Codec[K, V]` / `PersistConfig[K, V]` | `internal/lrumap` | Optional file persistence for `Map`: per-map codec (typed key/value encoding, version-gated), Keep filter, zstd + atomic write via `internal/persist` |
+| `Codec[K, V]` / `PersistConfig[K, V]` | `internal/lrumap` | Optional file persistence for `Map`: per-map codec (typed key/value encoding, version-gated), Keep filter, old-format/corrupt files backed up to `.bak`, zstd + atomic write via `internal/persist` |
 | `Manager` | `internal/persist` | Unified periodic + shutdown persist sink: subsystems register `Saver`, `Run(ctx, interval)` drives all of them |
 | `Store` | `cache` | Interface: Get/Set/ReverseLookup/UpdateLatency/LatencyLastProbe/FlushDB/Clear/Close |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL |
-| `Collector` | `stats` | In-memory stats: map+mutex, Record()/Stats()/Reset() |
+| `Collector` | `stats` | In-memory stats: flat atomic counters (lock-free `Record()`), `Reset()`, single-entry lrumap persist (`SetPersist`/`SavePersist`) |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `QueryContext` | `server/handler` | Mutable struct carrying all request state through the middleware chain |
 | `QueryHandler` | `server/handler` | Interface: `ServeDNS(ctx, qctx) error` |
@@ -321,7 +321,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | `Conn` / `ConnPool` | `server/upstream/pool` | RFC 7766 pipelined TCP/DoT connection pool |
 | `Detector` | `server/defense` | DNS poison detection; `Verdict` type (Clean/Poisoned/Uncertain) |
 | `Engine` | `ruleset` | CIDR + domain tag matching; CIDR uses binary radix trie O(128) |
-| `Map[K, V]` | `internal/lrumap` | Generic concurrent-safe bounded LRU map — count-based or weight-based eviction (`SetWeight`), optional persistence (`EnablePersist`) — replaces all manual map+mutex+eviction patterns |
+| `Map[K, V]` | `internal/lrumap` | Generic concurrent-safe bounded LRU map — count-based or weight-based eviction (`SetWeight`), optional persistence (`EnablePersist` returns restore count, backs up old-format files to `.bak`) — the single container for every cache/persisted state in the project |
 | `DTLSSessionStore` | `internal/lrumap` | DTLS session store backed by LRU map |
 | `Message` / `Buffer` | `internal/pool` | sync.Pool allocators for DNS messages |
 | `DNSStamp` | `internal/stamp` | sdns:// stamp parser/encoder (8 protocol types) |

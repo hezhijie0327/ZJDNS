@@ -10,7 +10,6 @@ import (
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
-	"zjdns/internal/persist"
 
 	"github.com/cloudflare/circl/sign/ed25519"
 )
@@ -26,128 +25,96 @@ type windowRecord struct {
 	ResolverPk []byte // 32 bytes
 }
 
-// ── Persist file ──────────────────────────────────────────────────────────────
+// dnscryptState is the single persisted entry: the Ed25519 identity plus all
+// cert windows, stored via the shared lrumap persistence mechanism (backup on
+// version mismatch, zstd + atomic write, unified load logs).
+type dnscryptState struct {
+	identity []byte // 96B: sk (64) + pk (32); nil = no identity yet
+	windows  []windowRecord
+}
 
-// Persist file layout — version gates format evolution; no magic (zstd
-// framing + version + structure checks identify and validate the file).
+// dnscryptCodec implements lrumap.Codec for the DNSCrypt state entry.
+type dnscryptCodec struct{}
+
+// dnscryptPersistVersion gates the lrumap-framed format; the old
+// standalone layout (stateFileVersion 1) is backed up and rebuilt.
+const dnscryptPersistVersion = 2
+
+// errCorruptState is returned when the state file fails to decode.
+var errCorruptState = errors.New("dnscrypt: corrupted state file")
+
+func (dnscryptCodec) Version() uint16 { return dnscryptPersistVersion }
+
+func (dnscryptCodec) EncodeKey(k string) []byte { return []byte(k) }
+
+func (dnscryptCodec) DecodeKey(b []byte) (string, error) { return string(b), nil }
+
+// EncodeValue serializes the state:
 //
-//	[2B version=1]
+//	[2B inner layout version=1]
 //	[4B identity_len][identity (96B: sk 64 + pk 32)]
 //	[2B window_count]
 //	per window: [4B serial][4B not_before][4B not_after][32B resolver_sk][32B resolver_pk]
-const stateFileVersion = 1
-
-var (
-	// errNoIdentity is returned when no signing key has been persisted yet
-	// (first run). Callers check err != nil to decide whether to build a new
-	// identity from config.
-	errNoIdentity = errors.New("dnscrypt: no persisted identity")
-	// errCorruptState is returned when the state file fails to decode.
-	errCorruptState = errors.New("dnscrypt: corrupted state file")
-)
-
-// loadStateFile reads the DNSCrypt identity + windows persist file.
-// A missing file returns errNoIdentity (first run); corrupt files are errors.
-func loadStateFile(path string) (sk ed25519.PrivateKey, windows []windowRecord, err error) {
-	if path == "" {
-		return nil, nil, errNoIdentity
-	}
-	raw, err := persist.Load(path)
-	if err != nil {
-		_ = persist.Backup(path) // corrupt state — preserve the identity
-		return nil, nil, err
-	}
-	if raw == nil {
-		return nil, nil, errNoIdentity
-	}
-	sk, windows, err = decodeState(raw)
-	if err != nil {
-		// Corrupt or unsupported-version state — preserve it (the identity is
-		// the least disposable data in the server) before a fresh write.
-		_ = persist.Backup(path)
-		return nil, nil, fmt.Errorf("dnscrypt: decode %s: %w", path, err)
-	}
-	return sk, windows, nil
-}
-
-// saveStateFile writes the identity + windows persist file (zstd + atomic
-// write via internal/persist). Called on startup and key rotation — key
-// rotation must survive a restart.
-func saveStateFile(path string, sk ed25519.PrivateKey, keys []keyEntry) error {
-	if path == "" {
-		return nil
-	}
-	if err := persist.Save(path, encodeState(sk, keys)); err != nil {
-		return err
-	}
-	return nil
-}
-
-// ── State encode/decode ───────────────────────────────────────────────────────
-
-// encodeState serializes the identity + current key windows.
-func encodeState(sk ed25519.PrivateKey, keys []keyEntry) []byte {
+func (dnscryptCodec) EncodeValue(s dnscryptState) []byte {
 	var buf bytes.Buffer
-	writeU16(&buf, stateFileVersion)
-
-	identity := encodeIdentity(sk)
-	writeU32(&buf, uint32(len(identity))) //nolint:gosec // G115: identity is 96 bytes
-	buf.Write(identity)
-
-	writeU16(&buf, uint16(len(keys))) //nolint:gosec // G115: window count capped at 2 by rotation
-	for _, k := range keys {
-		c := k.pair.Classical
-		writeU32(&buf, c.Serial)
-		writeU32(&buf, c.NotBefore)
-		writeU32(&buf, c.NotAfter)
-		buf.Write(c.ResolverSk[:])
-		buf.Write(c.ResolverPk[:])
+	writeU16(&buf, 1)
+	writeU32(&buf, uint32(len(s.identity))) //nolint:gosec // G115: identity is 96 bytes
+	buf.Write(s.identity)
+	writeU16(&buf, uint16(len(s.windows))) //nolint:gosec // G115: window count capped at 2 by rotation
+	for _, w := range s.windows {
+		writeU32(&buf, w.Serial)
+		writeU32(&buf, w.NotBefore)
+		writeU32(&buf, w.NotAfter)
+		buf.Write(w.ResolverSk)
+		buf.Write(w.ResolverPk)
 	}
 	return buf.Bytes()
 }
 
-// decodeState parses the layout produced by encodeState.
-func decodeState(raw []byte) (ed25519.PrivateKey, []windowRecord, error) {
-	if len(raw) < 2+4 {
-		return nil, nil, errCorruptState
+// DecodeValue parses the layout produced by EncodeValue.
+func (dnscryptCodec) DecodeValue(b []byte) (dnscryptState, bool, error) {
+	if len(b) < 2+4 {
+		return dnscryptState{}, false, errCorruptState
 	}
 	off := 0
-	if binary.BigEndian.Uint16(raw[off:]) != stateFileVersion {
-		return nil, nil, errCorruptState
+	if binary.BigEndian.Uint16(b[off:]) != 1 {
+		return dnscryptState{}, false, errCorruptState
 	}
 	off += 2
 
 	// Identity: length-prefixed 96-byte sk+pk.
-	ilen := int(binary.BigEndian.Uint32(raw[off:])) //nolint:gosec // G115: bounded by file size below
+	ilen := int(binary.BigEndian.Uint32(b[off:])) //nolint:gosec // G115: bounded by file size below
 	off += 4
-	if off+ilen > len(raw) || ilen != 96 {
-		return nil, nil, errCorruptState
+	if off+ilen > len(b) || ilen != 96 {
+		return dnscryptState{}, false, errCorruptState
 	}
-	sk := ed25519.PrivateKey(raw[off : off+64])
+	identity := b[off : off+ilen]
 	off += ilen
 
 	// Windows.
-	if off+2 > len(raw) {
-		return nil, nil, errCorruptState
+	if off+2 > len(b) {
+		return dnscryptState{}, false, errCorruptState
 	}
-	wcount := int(binary.BigEndian.Uint16(raw[off:])) //nolint:gosec // G115: protocol-bounded uint16
+	wcount := int(binary.BigEndian.Uint16(b[off:])) //nolint:gosec // G115: protocol-bounded uint16
 	off += 2
 	windows := make([]windowRecord, 0, wcount)
 	for range wcount {
-		if off+76 > len(raw) {
-			return nil, nil, errCorruptState
+		if off+76 > len(b) {
+			return dnscryptState{}, false, errCorruptState
 		}
 		windows = append(windows, windowRecord{
-			Serial:     binary.BigEndian.Uint32(raw[off:]),
-			NotBefore:  binary.BigEndian.Uint32(raw[off+4:]),
-			NotAfter:   binary.BigEndian.Uint32(raw[off+8:]),
-			ResolverSk: raw[off+12 : off+44],
-			ResolverPk: raw[off+44 : off+76],
+			Serial:     binary.BigEndian.Uint32(b[off:]),
+			NotBefore:  binary.BigEndian.Uint32(b[off+4:]),
+			NotAfter:   binary.BigEndian.Uint32(b[off+8:]),
+			ResolverSk: b[off+12 : off+44],
+			ResolverPk: b[off+44 : off+76],
 		})
 		off += 76
 	}
-	return sk, windows, nil
+	return dnscryptState{identity: identity, windows: windows}, true, nil
 }
+
+// ── State helpers ─────────────────────────────────────────────────────────────
 
 // encodeIdentity packs the Ed25519 signing key into the 96-byte layout
 // [0:64]sk [64:96]pk. Returns nil if the key is not Ed25519.
@@ -196,6 +163,22 @@ func windowsToKeyEntries(rc *ResolverConfig, windows []windowRecord) ([]keyEntry
 		log.Debugf("DNSCRYPT: restored window serial=%d (not_before=%d, not_after=%d)", w.Serial, w.NotBefore, w.NotAfter)
 	}
 	return entries, nil
+}
+
+// stateWindows converts keyEntry windows to the persisted record form.
+func stateWindows(keys []keyEntry) []windowRecord {
+	windows := make([]windowRecord, 0, len(keys))
+	for _, k := range keys {
+		c := k.pair.Classical
+		windows = append(windows, windowRecord{
+			Serial:     c.Serial,
+			NotBefore:  c.NotBefore,
+			NotAfter:   c.NotAfter,
+			ResolverSk: c.ResolverSk[:],
+			ResolverPk: c.ResolverPk[:],
+		})
+	}
+	return windows
 }
 
 // ── Primitive writers ────────────────────────────────────────────────────────

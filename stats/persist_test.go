@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -11,13 +12,22 @@ func TestPersist_RoundTrip(t *testing.T) {
 	c := New()
 	c.Record(&Request{Protocol: "udp", Result: "hit", ResponseTime: 5, Rcode: 0})
 	c.Record(&Request{Protocol: "tls", Result: "miss", ResponseTime: 12, Rcode: 2})
-	if err := c.SavePersist(path); err != nil {
+	if n, err := c.SetPersist(path); err != nil {
+		t.Fatalf("SetPersist: %v", err)
+	} else if n != 0 {
+		t.Errorf("SetPersist on fresh file returned %d, want 0", n)
+	}
+	if err := c.SavePersist(); err != nil {
 		t.Fatalf("SavePersist: %v", err)
 	}
 
 	got := New()
-	if err := got.LoadPersist(path); err != nil {
-		t.Fatalf("LoadPersist: %v", err)
+	n, err := got.SetPersist(path)
+	if err != nil {
+		t.Fatalf("SetPersist (2): %v", err)
+	}
+	if n != 1 {
+		t.Errorf("SetPersist returned %d, want 1 (snapshot restored)", n)
 	}
 	if got.total.Load() != 2 {
 		t.Errorf("total = %d, want 2", got.total.Load())
@@ -41,13 +51,16 @@ func TestPersist_Merge(t *testing.T) {
 
 	c := New()
 	c.Record(&Request{Protocol: "udp", Result: "hit", ResponseTime: 5, Rcode: 0})
-	if err := c.SavePersist(path); err != nil {
+	if _, err := c.SetPersist(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SavePersist(); err != nil {
 		t.Fatal(err)
 	}
 
 	got := New()
 	got.Record(&Request{Protocol: "tcp", Result: "miss", ResponseTime: 7, Rcode: 3})
-	if err := got.LoadPersist(path); err != nil {
+	if _, err := got.SetPersist(path); err != nil {
 		t.Fatal(err)
 	}
 	if got.total.Load() != 2 {
@@ -58,30 +71,56 @@ func TestPersist_Merge(t *testing.T) {
 	}
 }
 
-func TestPersist_EmptyPath_Noop(t *testing.T) {
+func TestPersist_NoPersistConfigured_Noop(t *testing.T) {
 	c := New()
-	if err := c.SavePersist(""); err != nil {
-		t.Errorf("SavePersist empty path: %v", err)
+	if err := c.SavePersist(); err != nil {
+		t.Errorf("SavePersist without SetPersist: %v", err)
 	}
-	if err := c.LoadPersist(""); err != nil {
-		t.Errorf("LoadPersist empty path: %v", err)
+	if _, err := c.SetPersist(""); err != nil {
+		t.Errorf("SetPersist empty path: %v", err)
 	}
 }
 
 func TestPersist_MissingFile_ColdStart(t *testing.T) {
 	c := New()
-	if err := c.LoadPersist(filepath.Join(t.TempDir(), "nope.zst")); err != nil {
-		t.Fatalf("LoadPersist missing: %v", err)
+	n, err := c.SetPersist(filepath.Join(t.TempDir(), "nope.zst"))
+	if err != nil {
+		t.Fatalf("SetPersist missing: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("SetPersist returned %d, want 0 (cold start)", n)
 	}
 	if c.total.Load() != 0 {
 		t.Errorf("total = %d, want 0 (cold start)", c.total.Load())
 	}
 }
 
-func TestPersist_Corrupt_ReturnsError(t *testing.T) {
+func TestPersist_VersionMismatch_BackedUp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stats.zst")
+
 	c := New()
-	err := c.LoadPersist(filepath.Join(t.TempDir(), "nope"))
+	c.Record(&Request{Protocol: "udp", Result: "hit", ResponseTime: 5, Rcode: 0})
+	if _, err := c.SetPersist(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SavePersist(); err != nil {
+		t.Fatal(err)
+	}
+	orig, err := os.ReadFile(path) //nolint:gosec // G304: test fixture
 	if err != nil {
-		t.Fatalf("missing file should be nil, got %v", err)
+		t.Fatal(err)
+	}
+
+	// Truncate the file — a corrupt snapshot must be backed up, not silently
+	// overwritten by the next save.
+	if err := os.WriteFile(path, orig[:len(orig)/2], 0o600); err != nil { //nolint:gosec // G703: test fixture
+		t.Fatal(err)
+	}
+	if _, err := c.SetPersist(path); err == nil {
+		t.Fatal("SetPersist on corrupt file should error")
+	}
+	if _, err := os.Stat(path + ".bak"); err != nil {
+		t.Errorf("corrupt file not backed up: %v", err)
 	}
 }

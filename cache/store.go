@@ -102,7 +102,7 @@ func New(maxSizeBytes int64, file string) *Cache {
 	store.SetWeight(maxSizeBytes, func(e cacheEntry) int64 { return int64(len(e.value)) })
 	store.SetOnEvict(func(k entryKey, _ cacheEntry) { c.cleanupPtrIndex(k) })
 	if file != "" {
-		if err := store.EnablePersist(lrumap.PersistConfig[entryKey, cacheEntry]{
+		if n, err := store.EnablePersist(lrumap.PersistConfig[entryKey, cacheEntry]{
 			Path:  file,
 			Codec: cacheCodec{},
 			Keep: func(_ entryKey, e cacheEntry) bool {
@@ -110,6 +110,8 @@ func New(maxSizeBytes int64, file string) *Cache {
 			},
 		}); err != nil {
 			log.Warnf("CACHE: persist load failed (starting cold): %v", err)
+		} else if n > 0 {
+			log.Infof("CACHE: loaded %d entries from %s", n, file)
 		}
 	}
 	return c
@@ -123,7 +125,7 @@ func (c *Cache) SetPtrPersist(path string) {
 	if path == "" {
 		return
 	}
-	if err := c.ptrIndex.EnablePersist(lrumap.PersistConfig[string, []*ptrRecord]{
+	n, err := c.ptrIndex.EnablePersist(lrumap.PersistConfig[string, []*ptrRecord]{
 		Path:  path,
 		Codec: ptrCodec{},
 		Keep: func(_ string, recs []*ptrRecord) bool {
@@ -135,8 +137,11 @@ func (c *Cache) SetPtrPersist(path string) {
 			}
 			return false
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		log.Warnf("CACHE: ptr persist load failed (deriving index from entries): %v", err)
+	} else if n > 0 {
+		log.Infof("CACHE: loaded %d ptr records from %s", n, path)
 	}
 	if c.ptrIndex.Len() == 0 {
 		// Cold start, or the file was missing/corrupt/empty — derive the
@@ -155,14 +160,17 @@ func (c *Cache) SetLatencyPersist(path string) {
 	if path == "" {
 		return
 	}
-	if err := c.latency.EnablePersist(lrumap.PersistConfig[string, latencyEntry]{
+	n, err := c.latency.EnablePersist(lrumap.PersistConfig[string, latencyEntry]{
 		Path:  path,
 		Codec: latencyCodec{},
 		Keep: func(_ string, v latencyEntry) bool {
 			return v.expiresAt == 0 || v.expiresAt >= log.NowUnix()
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		log.Warnf("CACHE: latency persist load failed (starting empty): %v", err)
+	} else if n > 0 {
+		log.Infof("CACHE: loaded %d latency entries from %s", n, path)
 	}
 }
 

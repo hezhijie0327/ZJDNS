@@ -2,16 +2,13 @@ package dnscrypt
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
-	"zjdns/internal/persist"
-
-	"github.com/cloudflare/circl/sign/ed25519"
+	"zjdns/internal/lrumap"
 )
 
 // testKeyEntry builds one keyEntry via the seed chain (state test helper).
@@ -33,102 +30,183 @@ func testKeyEntry(tb testing.TB, seed *[32]byte) keyEntry {
 	return keyEntry{pair: pair, createdAt: time.Now()}
 }
 
-func TestStateFile_RoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "dnscrypt.zst")
+// testCertConfig returns a DNSCrypt certificate config with fresh keys.
+func testCertConfig(t *testing.T) *config.DNSCryptCertificate {
+	t.Helper()
+	pkBytes, skBytes, err := dnscryptcrypto.GenerateEd25519Keypair() //nolint:gocritic // (public, private) order
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &config.DNSCryptCertificate{
+		PrivateKey: dnscryptcrypto.HexEncodeKey(skBytes),
+		PublicKey:  dnscryptcrypto.HexEncodeKey(pkBytes),
+	}
+}
 
+// testServer builds a DNSCrypt server on a temp state file.
+func testServer(t *testing.T, stateFile string) *Server {
+	t.Helper()
+	s, err := New(stateFile, testCertConfig(t), "12443", "2.dnscrypt-cert.example.com")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return s
+}
+
+func TestState_RoundTrip(t *testing.T) {
+	// Codec-level round trip via the shared lrumap persistence.
+	file := filepath.Join(t.TempDir(), "dnscrypt.zst")
+	pk, sk, err := dnscryptcrypto.GenerateEd25519Keypair() //nolint:gocritic // (public, private) order
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := append(append([]byte{}, sk...), pk...)
 	seed, err := newRandomSeed()
 	if err != nil {
 		t.Fatal(err)
 	}
-	skBytes, _, err := dnscryptcrypto.GenerateEd25519Keypair()
+	entry := testKeyEntry(t, &seed)
+	c := entry.pair.Classical
+
+	m := lrumap.New[string, dnscryptState](1)
+	if _, err := m.EnablePersist(lrumap.PersistConfig[string, dnscryptState]{
+		Path:  file,
+		Codec: dnscryptCodec{},
+	}); err != nil {
+		t.Fatalf("EnablePersist: %v", err)
+	}
+	m.Set("state", dnscryptState{
+		identity: identity,
+		windows: []windowRecord{{
+			Serial:     c.Serial,
+			NotBefore:  c.NotBefore,
+			NotAfter:   c.NotAfter,
+			ResolverSk: c.ResolverSk[:],
+			ResolverPk: c.ResolverPk[:],
+		}},
+	})
+	if err := m.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	m2 := lrumap.New[string, dnscryptState](1)
+	n, err := m2.EnablePersist(lrumap.PersistConfig[string, dnscryptState]{
+		Path:  file,
+		Codec: dnscryptCodec{},
+	})
+	if err != nil {
+		t.Fatalf("EnablePersist (2): %v", err)
+	}
+	if n != 1 {
+		t.Errorf("EnablePersist returned %d, want 1", n)
+	}
+	st, ok := m2.Get("state")
+	if !ok {
+		t.Fatal("state not restored")
+	}
+	if !bytes.Equal(st.identity, identity) {
+		t.Error("identity mismatch after round trip")
+	}
+	if len(st.windows) != 1 || st.windows[0].Serial != c.Serial {
+		t.Errorf("windows = %d (serial=%d), want 1 (serial=%d)", len(st.windows), st.windows[0].Serial, c.Serial)
+	}
+}
+
+func TestState_ServerRoundTrip(t *testing.T) {
+	// Full server path: identity + windows survive Save → reload.
+	stateFile := filepath.Join(t.TempDir(), "dnscrypt.zst")
+	cfg := testCertConfig(t)
+	s1, err := New(stateFile, cfg, "12443", "2.dnscrypt-cert.example.com")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s1.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	s2, err := New(stateFile, cfg, "12443", "2.dnscrypt-cert.example.com")
+	if err != nil {
+		t.Fatalf("New (2): %v", err)
+	}
+	if !bytes.Equal(s2.signingSK, s1.signingSK) {
+		t.Error("signing identity not restored")
+	}
+	if s2.current().Classical.Serial != s1.current().Classical.Serial {
+		t.Errorf("cert window not restored: serial %d != %d", s2.current().Classical.Serial, s1.current().Classical.Serial)
+	}
+}
+
+func TestState_ConfigKeyChanged_DropsState(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "dnscrypt.zst")
+	cfg1 := testCertConfig(t)
+	s1, err := New(stateFile, cfg1, "12443", "2.dnscrypt-cert.example.com")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s1.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Different config key: the persisted state must be dropped, a fresh
+	// identity generated from the new config.
+	cfg2 := testCertConfig(t)
+	s2, err := New(stateFile, cfg2, "12443", "2.dnscrypt-cert.example.com")
+	if err != nil {
+		t.Fatalf("New (2): %v", err)
+	}
+	if bytes.Equal(s2.signingSK, s1.signingSK) {
+		t.Error("identity should have switched with the config key")
+	}
+}
+
+func TestState_MissingFile_GeneratesIdentity(t *testing.T) {
+	s := testServer(t, filepath.Join(t.TempDir(), "missing.zst"))
+	if len(s.signingSK) != 64 {
+		t.Errorf("signingSK len = %d, want 64 (generated from config)", len(s.signingSK))
+	}
+}
+
+func TestState_EmptyPath_NoPersistence(t *testing.T) {
+	s, err := New("", testCertConfig(t), "12443", "2.dnscrypt-cert.example.com")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save with empty path: %v", err)
+	}
+}
+
+func TestState_Corrupt_BackedUpAndRebuilt(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "dnscrypt.zst")
+	s1 := testServer(t, stateFile)
+	if err := s1.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	data, err := os.ReadFile(stateFile) //nolint:gosec // G304: test fixture
 	if err != nil {
 		t.Fatal(err)
 	}
-	sk := ed25519.PrivateKey(skBytes)
-	keys := []keyEntry{testKeyEntry(t, &seed)}
-
-	if err := saveStateFile(path, sk, keys); err != nil {
-		t.Fatalf("saveStateFile: %v", err)
+	if err := os.WriteFile(stateFile, data[:len(data)/2], 0o600); err != nil { //nolint:gosec // G703: test fixture
+		t.Fatal(err)
 	}
 
-	gotSK, windows, err := loadStateFile(path)
+	// Corrupt state: server starts fresh (identity from config), old file
+	// preserved as .bak.
+	s2, err := New(stateFile, testCertConfig(t), "12443", "2.dnscrypt-cert.example.com")
 	if err != nil {
-		t.Fatalf("loadStateFile: %v", err)
+		t.Fatalf("New on corrupt state: %v", err)
 	}
-	if len(gotSK) != 64 {
-		t.Errorf("sk len = %d, want 64", len(gotSK))
+	if len(s2.signingSK) != 64 {
+		t.Error("server did not rebuild an identity after corrupt state")
 	}
-	if len(windows) != 1 {
-		t.Fatalf("windows = %d, want 1", len(windows))
-	}
-	w := windows[0]
-	if w.Serial != keys[0].pair.Classical.Serial || w.NotBefore != keys[0].pair.Classical.NotBefore ||
-		w.NotAfter != keys[0].pair.Classical.NotAfter {
-		t.Errorf("window mismatch: %+v", w)
-	}
-	if len(w.ResolverSk) != 32 || len(w.ResolverPk) != 32 {
-		t.Errorf("resolver key sizes: sk=%d pk=%d", len(w.ResolverSk), len(w.ResolverPk))
-	}
-}
-
-func TestStateFile_Missing_ReturnsErrNoIdentity(t *testing.T) {
-	_, _, err := loadStateFile(filepath.Join(t.TempDir(), "nope.zst"))
-	if !errors.Is(err, errNoIdentity) {
-		t.Errorf("want errNoIdentity, got %v", err)
-	}
-}
-
-func TestStateFile_EmptyPath_ReturnsErrNoIdentity(t *testing.T) {
-	_, _, err := loadStateFile("")
-	if !errors.Is(err, errNoIdentity) {
-		t.Errorf("want errNoIdentity, got %v", err)
-	}
-}
-
-func TestStateFile_Corrupt_ReturnsError(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "dnscrypt.zst")
-	if err := os.WriteFile(path, []byte("corrupt state"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := loadStateFile(path); err == nil {
-		t.Fatal("load corrupt state: want error, got nil")
-	}
-}
-
-func TestStateFile_UnsupportedVersion_ReturnsError(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "dnscrypt.zst")
-	// Valid zstd payload with an unsupported version — must be rejected.
-	payload := []byte{0, 99, 0, 0, 0, 96, 1, 2, 3} // version=99, identity_len=96
-	payload = append(payload, make([]byte, 96)...)
-	if err := persist.Save(path, payload); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := loadStateFile(path); err == nil {
-		t.Fatal("unsupported version: want error, got nil")
-	}
-}
-
-func TestStateFile_SaveEmptyPath_Noop(t *testing.T) {
-	seed, err := newRandomSeed()
-	if err != nil {
-		t.Fatal(err)
-	}
-	sk, _, _ := dnscryptcrypto.GenerateEd25519Keypair()
-	if err := saveStateFile("", sk, []keyEntry{testKeyEntry(t, &seed)}); err != nil {
-		t.Fatalf("saveStateFile with empty path: %v", err)
+	if _, err := os.Stat(stateFile + ".bak"); err != nil {
+		t.Errorf("corrupt state not backed up: %v", err)
 	}
 }
 
 func TestResetKeys(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "dnscrypt.zst")
-	pkBytes, skBytes, err := dnscryptcrypto.GenerateEd25519Keypair() //nolint:gocritic // (public, private) order
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := &config.DNSCryptCertificate{
-		PrivateKey: dnscryptcrypto.HexEncodeKey(skBytes),
-		PublicKey:  dnscryptcrypto.HexEncodeKey(pkBytes),
-	}
+	cfg := testCertConfig(t)
 	s, err := New(stateFile, cfg, "12443", "2.dnscrypt-cert.example.com")
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -150,16 +228,13 @@ func TestResetKeys(t *testing.T) {
 		t.Error("signing identity changed after reset (must stay config-bound)")
 	}
 
-	// Persisted immediately: reloading the file yields the new window.
-	gotSK, windows, err := loadStateFile(stateFile)
+	// Persisted immediately: a fresh server on the same file restores the
+	// new window.
+	s2, err := New(stateFile, cfg, "12443", "2.dnscrypt-cert.example.com")
 	if err != nil {
-		t.Fatalf("loadStateFile: %v", err)
+		t.Fatalf("New (2): %v", err)
 	}
-	if len(windows) != 1 || windows[0].Serial != s.current().Classical.Serial {
-		t.Errorf("persisted windows = %d (serial=%d), want 1 (serial=%d)",
-			len(windows), windows[0].Serial, s.current().Classical.Serial)
-	}
-	if !bytes.Equal(gotSK, oldSK) {
-		t.Error("persisted identity differs from config identity")
+	if s2.current().Classical.ResolverPk != s.current().Classical.ResolverPk {
+		t.Error("reset window not persisted")
 	}
 }

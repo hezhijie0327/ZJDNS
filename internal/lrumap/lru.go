@@ -351,10 +351,11 @@ func (m *Map[K, V]) evictLocked() {
 // ── Persistence ──────────────────────────────────────────────────────────
 
 // EnablePersist attaches file persistence to the map and eagerly loads any
-// existing file. A missing file is a cold start (no-op); a corrupt or
-// version-mismatched file is returned as an error — the caller logs and
-// continues with an empty map.
-func (m *Map[K, V]) EnablePersist(cfg PersistConfig[K, V]) error {
+// existing file, returning the number of entries restored. A missing file is
+// a cold start (0, nil); a corrupt or version-mismatched file is returned as
+// an error — the caller logs and continues with an empty map. The caller
+// logs the restore (e.g. "CACHE: loaded N entries from ...").
+func (m *Map[K, V]) EnablePersist(cfg PersistConfig[K, V]) (int, error) {
 	m.mu.Lock()
 	m.persistPath = cfg.Path
 	m.codec = cfg.Codec
@@ -399,33 +400,34 @@ func (m *Map[K, V]) Save() error {
 	return persist.Save(path, buf.Bytes())
 }
 
-// load populates the map from the persist file. Entries are inserted in file
-// order (most-recent first at save time, which is also the Range order), so
-// hot entries stay hot after a restart. Expired entries — DecodeValue
-// returning include=false — are skipped.
-func (m *Map[K, V]) load() error {
+// load populates the map from the persist file, reporting the number of
+// entries restored. Entries are inserted in file order (most-recent first at
+// save time, which is also the Range order), so hot entries stay hot after a
+// restart. Expired entries — DecodeValue returning include=false — are
+// skipped.
+func (m *Map[K, V]) load() (int, error) {
 	m.mu.Lock()
 	path := m.persistPath
 	codec := m.codec
 	m.mu.Unlock()
 	if path == "" || codec == nil {
-		return nil
+		return 0, nil
 	}
 	raw, err := persist.Load(path)
 	if err != nil {
 		// Corrupt file (zstd framing or decompression failed) — preserve it
 		// before the next Save would overwrite it.
 		if berr := persist.Backup(path); berr != nil {
-			return errors.Join(err, fmt.Errorf("lrumap: backup %s: %w", path, berr))
+			return 0, errors.Join(err, fmt.Errorf("lrumap: backup %s: %w", path, berr))
 		}
-		return err
+		return 0, err
 	}
 	if raw == nil {
-		return nil // cold start — no file yet
+		return 0, nil // cold start — no file yet
 	}
 	if len(raw) < 2+8 {
 		_ = persist.Backup(path) // truncated file — preserve it
-		return errors.New("lrumap: persist file too short")
+		return 0, errors.New("lrumap: persist file too short")
 	}
 	off := 0
 	version := binary.BigEndian.Uint16(raw[off:])
@@ -434,35 +436,37 @@ func (m *Map[K, V]) load() error {
 		// Format upgrade — back the old file up instead of letting the next
 		// Save overwrite it: the old data stays recoverable.
 		_ = persist.Backup(path)
-		return ErrVersionMismatch
+		return 0, ErrVersionMismatch
 	}
 	count := binary.BigEndian.Uint64(raw[off:])
 	off += 8
 	if count > uint64(len(raw)) { // each entry needs at least 8 bytes of framing
-		return errors.New("lrumap: persist entry count exceeds file size")
+		return 0, errors.New("lrumap: persist entry count exceeds file size")
 	}
+	loaded := 0
 	for range count { //nolint:gosec // count bounded by file size above
 		var keyB, valB []byte
 		var err error
 		if keyB, off, err = takeBytes(raw, off); err != nil {
-			return err
+			return 0, err
 		}
 		if valB, off, err = takeBytes(raw, off); err != nil {
-			return err
+			return 0, err
 		}
 		key, err := codec.DecodeKey(keyB)
 		if err != nil {
-			return fmt.Errorf("lrumap: decode key: %w", err)
+			return 0, fmt.Errorf("lrumap: decode key: %w", err)
 		}
 		val, include, err := codec.DecodeValue(valB)
 		if err != nil {
-			return fmt.Errorf("lrumap: decode value: %w", err)
+			return 0, fmt.Errorf("lrumap: decode value: %w", err)
 		}
 		if include {
 			m.Set(key, val)
+			loaded++
 		}
 	}
-	return nil
+	return loaded, nil
 }
 
 // writeU16 appends v as BigEndian uint16.

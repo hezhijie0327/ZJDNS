@@ -71,6 +71,8 @@ type Server struct {
 	// stateFile persists identity + cert windows across restarts.
 	// Empty disables persistence.
 	stateFile string
+	// state is the lrumap-backed persistence store for identity + windows.
+	state *lrumap.Map[string, dnscryptState]
 	// seed is the X25519 secret key used to derive the next cert window's
 	// resolver key.  It forms a deterministic chain: each new window's
 	// resolver secret key becomes the seed for the one after it.
@@ -101,10 +103,28 @@ func New(stateFile string, certificateCfg *config.DNSCryptCertificate, port, pro
 		return nil, errors.New("dnscrypt: public_key and private_key are required in config certificate.dnscrypt")
 	}
 
-	// Try loading the persisted identity; auto-switch if config keys changed.
+	// Load the persisted identity + windows via the shared lrumap persistence
+	// (backup on version mismatch, unified load logs, zstd + atomic write).
+	state := lrumap.New[string, dnscryptState](1)
 	var persistedWindows []windowRecord
-	signingSK, persistedWindows, err := loadStateFile(stateFile)
-	if err == nil {
+	var signingSK ed25519.PrivateKey
+	if stateFile != "" {
+		if n, err := state.EnablePersist(lrumap.PersistConfig[string, dnscryptState]{
+			Path:  stateFile,
+			Codec: dnscryptCodec{},
+		}); err != nil {
+			log.Warnf("DNSCRYPT: state load failed (starting fresh): %v", err)
+		} else if n > 0 {
+			if st, ok := state.Get("state"); ok {
+				signingSK = ed25519.PrivateKey(st.identity[:64])
+				persistedWindows = st.windows
+				log.Infof("DNSCRYPT: loaded persisted identity (%d cert window(s))", len(persistedWindows))
+			}
+		}
+	}
+
+	// Auto-switch if config keys changed.
+	if signingSK != nil {
 		cfgPKBytes, derr := dnscryptcrypto.HexDecodeKey(certificateCfg.PublicKey)
 		if derr != nil || !bytes.Equal(cfgPKBytes, []byte(signingSK.Public().(ed25519.PublicKey))) {
 			log.Warnf("DNSCRYPT: config public_key changed, dropping old persisted state and switching identity")
@@ -117,13 +137,12 @@ func New(stateFile string, certificateCfg *config.DNSCryptCertificate, port, pro
 		if rcErr != nil {
 			return nil, fmt.Errorf("building resolver config: %w", rcErr)
 		}
-		signingSK, err = dnscryptcrypto.HexDecodeKey(rc.PrivateKey)
-		if err != nil {
-			return nil, fmt.Errorf("decoding ed25519 private key: %w", err)
+		skBytes, derr := dnscryptcrypto.HexDecodeKey(rc.PrivateKey)
+		if derr != nil {
+			return nil, fmt.Errorf("decoding ed25519 private key: %w", derr)
 		}
+		signingSK = ed25519.PrivateKey(skBytes)
 		log.Infof("DNSCRYPT: identity generated from config")
-	} else {
-		log.Infof("DNSCRYPT: loaded persisted identity")
 	}
 
 	signingPK, ok := signingSK.Public().(ed25519.PublicKey)
@@ -184,6 +203,7 @@ func New(stateFile string, certificateCfg *config.DNSCryptCertificate, port, pro
 
 	s := &Server{
 		stateFile:      stateFile,
+		state:          state,
 		seed:           seed,
 		keys:           entries,
 		port:           port,
@@ -505,17 +525,19 @@ func (s *Server) ResetKeys() error {
 	return nil
 }
 
-// Save writes the identity + current windows to the state file. Called on
-// startup, rotation (rotation must survive a restart), and the server's
-// periodic persist ticker.
+// Save writes the identity + current windows to the state file via the
+// shared lrumap persistence. Called on startup, rotation (rotation must
+// survive a restart), and the server's periodic persist ticker.
 func (s *Server) Save() error {
 	if s.stateFile == "" {
 		return nil
 	}
 	s.mu.RLock()
 	keys := s.keys
+	sk := s.signingSK
 	s.mu.RUnlock()
-	return saveStateFile(s.stateFile, s.signingSK, keys)
+	s.state.Set("state", dnscryptState{identity: encodeIdentity(sk), windows: stateWindows(keys)})
+	return s.state.Save()
 }
 
 func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {

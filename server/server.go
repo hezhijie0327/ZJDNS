@@ -117,8 +117,10 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	statsFile := ""
 	if persistDir != "" {
 		statsFile = filepath.Join(persistDir, "stats.zst")
-		if err := statsCollector.LoadPersist(statsFile); err != nil {
+		if n, err := statsCollector.SetPersist(statsFile); err != nil {
 			log.Warnf("SERVER: stats persist load failed (starting empty): %v", err)
+		} else if n > 0 {
+			log.Infof("SERVER: loaded stats snapshot from %s", statsFile)
 		}
 	}
 	zoneEvaluator := zone.New()

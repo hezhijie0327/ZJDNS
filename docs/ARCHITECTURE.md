@@ -41,25 +41,25 @@ qclass) and `cacheEntry` (wire value + expiresAt + validated). The PTR index
 (`latency.zst`, ip → {ms, expiresAt}) each have their own small codec. A
 `Keep` filter skips expired entries at Save; `DecodeValue` skips entries that
 expired while on disk. The PTR index is derived data: when `ptr.zst` is
-missing/corrupt/empty it is rebuilt from the loaded cache entries. Non-KV
-state (stats counters, DNSCrypt identity) keeps its fixed-layout format and
-registers with the Manager instead.
+missing/corrupt/empty it is rebuilt from the loaded cache entries. Every
+persistent subsystem is a lrumap entry — including the two single-value
+stores below (stats snapshot, DNSCrypt state), which use a fixed key and a
+capacity of 1. All five files share one mechanism: version-gated framing,
+zstd + atomic write, backup of old-format/corrupt files to `path.bak` before
+rebuilding, and unified startup logs (`<PREFIX>: loaded N <unit> from <path>`).
 
-### DNSCrypt state file — typed binary format
+### DNSCrypt state — single-entry lrumap
 
-`server/protocol/dnscrypt/state.go` owns its format: `loadStateFile` /
-`saveStateFile` via `internal/persist`, written at startup and key rotation.
+`server/protocol/dnscrypt/state.go` implements `dnscryptCodec` for the
+single `dnscryptState` entry (identity + cert windows), written at startup
+and key rotation. The old standalone layout is detected as a version
+mismatch, backed up, and rebuilt — clients must re-fetch the certificate.
 
-```
-[2B version=1]
-[4B identity_len][identity (96B: sk 64 + pk 32)]
-[2B window_count]
-per Window: [4B serial][4B not_before][4B not_after][32B resolver_sk][32B resolver_pk]
-```
+### Stats snapshot — single-entry lrumap
 
-Numeric fields use binary BigEndian. Formats are version-gated but carry no
-magic — zstd framing identifies the file type, and version + length-prefixed
-structure checks reject foreign data.
+`stats/persist.go` implements `statsCodec` for the single `counters` entry:
+one BigEndian int64 per counter field, in Collector field order, restored
+with an additive merge.
 
 ### Key Patterns
 
@@ -87,16 +87,17 @@ structure checks reject foreign data.
   skipped on scan. Best-effort: `ptr.zst` and `cache.zst` are written in the
   same persist round, so drift is bounded to one interval and costs hit-rate,
   never correctness.
-- **Stats aggregation**: `stats.Collector` — flat atomic counters (no maps, lock-free `Record()`), latency histogram buckets, `Reset()` via `ZJDNS.stats.clear`. Optional `stats.zst` persistence (periodic + shutdown snapshot, startup additive restore).
+- **Stats aggregation**: `stats.Collector` — flat atomic counters (no maps, lock-free `Record()`), latency histogram buckets, `Reset()` via `ZJDNS.stats.clear`. `stats.zst` persistence via the single-entry lrumap (`SetPersist` / no-arg `SavePersist`; periodic + shutdown snapshot, startup additive restore).
 - **Zone queries**: `Evaluator.Evaluate()` does in-memory exact-match lookup on `exact` map (O(1)), then wildcard suffix search on `wildcards` map (max 16 iterations). Pure WORM maps.
 - **Ruleset matching**: `Engine.Match()` does CIDR via binary radix trie (O(128)) and domain suffix via map lookup (O(1)). All in-memory, loaded from config at startup.
-- **DNSCrypt**: identity + windows live in memory; the server reads its own
-  state file at startup (`loadStateFile`) and writes it at startup + key
-  rotation (`saveStateFile`) — independent of the cache, so a corrupt cache
-  file never invalidates the identity.
-- **CHAOS endpoints**: `ZJDNS.stats` (read-only), `ZJDNS.cache.clear` (clears
-  the in-memory cache + PTR index), `ZJDNS.stats.clear` (reset stats).
-  Zone/ruleset clearing is not exposed.
+- **DNSCrypt**: identity + windows live in memory; the single-entry lrumap
+  (`dnscrypt.zst`) is written at startup, rotation, and reset — independent
+  of the cache, so a corrupt cache file never invalidates the identity.
+- **CHAOS endpoints**: `ZJDNS.stats` (read-only) and five destructive
+  loopback-only clear endpoints — `ZJDNS.cache.clear` (cache + PTR + latency),
+  `ZJDNS.ptr.clear`, `ZJDNS.latency.clear`, `ZJDNS.stats.clear`,
+  `ZJDNS.dnscrypt.clear` (fresh seed, new cert windows). Every clear persists
+  the cleared state immediately. Zone/ruleset clearing is not exposed.
 
 ### Persist Configuration
 
@@ -110,21 +111,16 @@ Config JSON:
 ```
 
 - `persist.dir`: unified persist directory; each subsystem keeps its own file
-  under it (`cache.zst`, `dnscrypt.zst`, `stats.zst`). Empty = pure in-memory.
-- `persist.interval_seconds`: periodic persist interval — cache, stats, and
-  DNSCrypt state are dumped every N seconds (bounded crash loss) in addition
-  to the shutdown dump. 0 (default) = shutdown-only.
+  under it (`cache.zst`, `ptr.zst`, `latency.zst`, `stats.zst`,
+  `dnscrypt.zst`). Empty = pure in-memory.
+- `persist.interval_seconds`: periodic persist interval — all five files are
+  dumped every N seconds (bounded crash loss) in addition to the shutdown
+  dump. 0 (default) = shutdown-only.
 - `cache.max_size_mb`: in-memory value budget (LRU eviction), default 64.
 - Missing/corrupt file at startup = cold start for that subsystem (logged,
-  not fatal) — one subsystem's corruption never affects the others.
-
-### Stats persistence
-
-`stats.Collector` snapshots all atomic counters to `stats.zst` on the persist
-interval and at shutdown (driven by `internal/persist.Manager` via
-`SavePersist`) and restores them at startup (`LoadPersist`, additive merge) —
-totals continue across restarts. Format: `[2B version]` + one BigEndian int64
-per counter field.
+  not fatal) — one subsystem's corruption never affects the others. An
+  old-format or corrupt file is backed up to `path.bak` before rebuilding,
+  never silently destroyed.
 
 ## Defense Mechanisms
 

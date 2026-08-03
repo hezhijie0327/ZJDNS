@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 
 	"codeberg.org/miekg/dns"
 )
@@ -49,6 +50,10 @@ type Collector struct {
 
 	latCounts [latBuckets]atomic.Int64
 	latTotal  atomic.Int64
+
+	// persist is the lrumap-backed snapshot store; nil until SetPersist.
+	// Record() never touches it — only SavePersist / SetPersist do.
+	persist *lrumap.Map[string, []int64]
 }
 
 type metric struct {

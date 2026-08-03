@@ -138,7 +138,7 @@ func TestPersist_RoundTrip(t *testing.T) {
 	m := New[string, int](10)
 	m.Set("a", 1)
 	m.Set("b", 2)
-	if err := m.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
+	if _, err := m.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
 		t.Fatalf("EnablePersist: %v", err)
 	}
 	// Save after load — file now exists with all entries.
@@ -151,7 +151,7 @@ func TestPersist_RoundTrip(t *testing.T) {
 	}
 
 	m2 := New[string, int](10)
-	if err := m2.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
+	if _, err := m2.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
 		t.Fatalf("EnablePersist (2): %v", err)
 	}
 	for k, want := range map[string]int{"a": 1, "b": 2, "c": 3} {
@@ -169,7 +169,7 @@ func TestPersist_LoadPreservesOrder(t *testing.T) {
 	}
 	// Access "0" — it becomes most recent and is saved first.
 	m.Get("0")
-	if err := m.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
+	if _, err := m.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
 		t.Fatalf("EnablePersist: %v", err)
 	}
 	if err := m.Save(); err != nil {
@@ -177,7 +177,7 @@ func TestPersist_LoadPreservesOrder(t *testing.T) {
 	}
 
 	m2 := New[string, int](5)
-	if err := m2.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
+	if _, err := m2.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
 		t.Fatalf("EnablePersist (2): %v", err)
 	}
 	// After reload, "0" must be the most recently used entry: inserting a new
@@ -194,7 +194,7 @@ func TestPersist_LoadPreservesOrder(t *testing.T) {
 func TestPersist_ColdStartMissingFile(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "missing.zst")
 	m := New[string, int](10)
-	if err := m.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
+	if _, err := m.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
 		t.Fatalf("EnablePersist on missing file: %v", err)
 	}
 	if m.Len() != 0 {
@@ -207,7 +207,7 @@ func TestPersist_VersionMismatch(t *testing.T) {
 	file := filepath.Join(dir, "test.zst")
 	m := New[string, int](10)
 	m.Set("a", 1)
-	if err := m.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
+	if _, err := m.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
 		t.Fatalf("EnablePersist: %v", err)
 	}
 	if err := m.Save(); err != nil {
@@ -219,7 +219,7 @@ func TestPersist_VersionMismatch(t *testing.T) {
 	}
 
 	m2 := New[string, int](10)
-	err = m2.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 2}})
+	_, err = m2.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 2}})
 	if !errors.Is(err, ErrVersionMismatch) {
 		t.Fatalf("EnablePersist with wrong version: got %v, want ErrVersionMismatch", err)
 	}
@@ -241,7 +241,7 @@ func TestPersist_CorruptFileBackedUp(t *testing.T) {
 	file := filepath.Join(dir, "test.zst")
 	m := New[string, int](10)
 	m.Set("a", 1)
-	if err := m.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
+	if _, err := m.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
 		t.Fatalf("EnablePersist: %v", err)
 	}
 	if err := m.Save(); err != nil {
@@ -257,7 +257,7 @@ func TestPersist_CorruptFileBackedUp(t *testing.T) {
 	}
 
 	m2 := New[string, int](10)
-	if err := m2.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err == nil {
+	if _, err := m2.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err == nil {
 		t.Fatal("EnablePersist on corrupt file should error")
 	}
 	if m2.Len() != 0 {
@@ -273,7 +273,7 @@ func TestPersist_DecodeSkipFilter(t *testing.T) {
 	m := New[string, int](10)
 	m.Set("a", 2)
 	m.Set("b", 3)
-	if err := m.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
+	if _, err := m.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
 		t.Fatalf("EnablePersist: %v", err)
 	}
 	if err := m.Save(); err != nil {
@@ -281,7 +281,7 @@ func TestPersist_DecodeSkipFilter(t *testing.T) {
 	}
 
 	m2 := New[string, int](10)
-	err := m2.EnablePersist(PersistConfig[string, int]{Path: file, Codec: skipEvenCodec{stringCodec{version: 1}}})
+	_, err := m2.EnablePersist(PersistConfig[string, int]{Path: file, Codec: skipEvenCodec{stringCodec{version: 1}}})
 	if err != nil {
 		t.Fatalf("EnablePersist with skip codec: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestPersist_KeepFilterOnSave(t *testing.T) {
 	m := New[string, int](10)
 	m.Set("keep", 1)
 	m.Set("drop", 2)
-	err := m.EnablePersist(PersistConfig[string, int]{
+	_, err := m.EnablePersist(PersistConfig[string, int]{
 		Path:  file,
 		Codec: stringCodec{version: 1},
 		Keep:  func(k string, _ int) bool { return k == "keep" },
@@ -311,7 +311,7 @@ func TestPersist_KeepFilterOnSave(t *testing.T) {
 	}
 
 	m2 := New[string, int](10)
-	if err := m2.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
+	if _, err := m2.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
 		t.Fatalf("EnablePersist (2): %v", err)
 	}
 	if _, ok := m2.Get("keep"); !ok {
