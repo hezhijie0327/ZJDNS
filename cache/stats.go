@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
@@ -24,6 +25,14 @@ import (
 //
 // When the async writer is nil (e.g. in tests), RecordRequest falls back to
 // synchronous writes so callers can observe results immediately.
+// statsMetric is a single (name, count, percentage) entry for the stats TXT
+// output.  Zero-count entries are omitted by formatStatsLine.
+type statsMetric struct {
+	name  string
+	count int64
+	pct   float64
+}
+
 func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 	if r == nil {
 		return
@@ -240,26 +249,102 @@ func (s *SQLiteCache) Stats() []string {
 		avgMs = float64(totalMS) / float64(total)
 	}
 
-	return []string{
-		fmt.Sprintf("entries=%d total=%d avg=%.1fms",
-			entries, total, avgMs),
-		fmt.Sprintf("hits=%d misses=%d stales=%d zones=%d",
-			hits, misses, stales, zones),
-		fmt.Sprintf("errors=%d blocked=%d badcookie=%d",
-			errCount, blockedCount, badcookieCount),
-		fmt.Sprintf("noerr=%d formerr=%d servfail=%d nx=%d nimp=%d ref=%d other=%d",
-			noerr, formerr, servfail, nxdomain, notimp, refused, other),
-		fmt.Sprintf("udp=%d tcp=%d",
-			udp, tcp),
-		fmt.Sprintf("tls=%d quic=%d https=%d http3=%d dtls=%d",
-			tls, quic, https, http3, dtls),
-		fmt.Sprintf("dnscrypt=%d dnscrypt-tcp=%d",
-			dnscrypt, dnscryptTCP),
-		fmt.Sprintf("tlcp=%d http-tlcp=%d dtlcp=%d",
-			tlcp, httpTLCP, dtlcp),
-		fmt.Sprintf("secure=%d insecure=%d bogus=%d poisoned=%d",
-			secureCount, insecureCount, bogusCount, poisoned),
+	// Percentages relative to total (DNSSEC rows relative to the validated
+	// subset, mirroring the partitioned selfdb stats layout).
+	pct := func(v int64) float64 {
+		if total == 0 {
+			return 0
+		}
+		return float64(v) / float64(total) * 100
 	}
+	hitR, missR, staleR, zoneR := pct(hits), pct(misses), pct(stales), pct(zones)
+	blockedR, badcookieR, errorR := pct(blockedCount), pct(badcookieCount), pct(errCount)
+	noerrR, formerrR, servfailR := pct(noerr), pct(formerr), pct(servfail)
+	nxR, nimpR, refR, otherR := pct(nxdomain), pct(notimp), pct(refused), pct(other)
+	udpR, tcpR, tlsR, quicR := pct(udp), pct(tcp), pct(tls), pct(quic)
+	httpsR, http3R, dtlsR := pct(https), pct(http3), pct(dtls)
+	dnscryptR, dnscryptTCPR, tlcpR, httpTLCPR, dtlcpR := pct(dnscrypt), pct(dnscryptTCP), pct(tlcp), pct(httpTLCP), pct(dtlcp)
+	dnssecTotal := secureCount + insecureCount + bogusCount
+	poisonedR := pct(poisoned)
+	var dnssecR, dnssecIR, dnssecBR float64
+	if dnssecTotal > 0 {
+		dt := float64(dnssecTotal)
+		dnssecR = float64(secureCount) / dt * 100
+		dnssecIR = float64(insecureCount) / dt * 100
+		dnssecBR = float64(bogusCount) / dt * 100
+	}
+
+	out := make([]string, 0, 7)
+	out = append(out, fmt.Sprintf("entries=%d total=%d avg=%.1fms",
+		entries, total, avgMs))
+
+	// Results — omit zero-count entries (selfdb stats format).
+	if s := formatStatsLine(
+		statsMetric{"hit", hits, hitR}, statsMetric{"miss", misses, missR},
+		statsMetric{"stale", stales, staleR}, statsMetric{"zone", zones, zoneR},
+		statsMetric{"blocked", blockedCount, blockedR}, statsMetric{"badcookie", badcookieCount, badcookieR},
+		statsMetric{"error", errCount, errorR},
+	); s != "" {
+		out = append(out, s)
+	}
+
+	// Rcodes.
+	if s := formatStatsLine(
+		statsMetric{"noerr", noerr, noerrR}, statsMetric{"formerr", formerr, formerrR},
+		statsMetric{"servfail", servfail, servfailR}, statsMetric{"nx", nxdomain, nxR},
+		statsMetric{"nimp", notimp, nimpR}, statsMetric{"ref", refused, refR},
+		statsMetric{"other", other, otherR},
+	); s != "" {
+		out = append(out, s)
+	}
+
+	// Transport protocols.
+	if s := formatStatsLine(
+		statsMetric{"udp", udp, udpR}, statsMetric{"tcp", tcp, tcpR},
+		statsMetric{"tls", tls, tlsR}, statsMetric{"quic", quic, quicR},
+		statsMetric{"https", https, httpsR}, statsMetric{"http3", http3, http3R},
+		statsMetric{"dtls", dtls, dtlsR}, statsMetric{"dnscrypt", dnscrypt, dnscryptR},
+		statsMetric{"dnscrypt-tcp", dnscryptTCP, dnscryptTCPR}, statsMetric{"tlcp", tlcp, tlcpR},
+		statsMetric{"http-tlcp", httpTLCP, httpTLCPR}, statsMetric{"dtlcp", dtlcp, dtlcpR},
+	); s != "" {
+		out = append(out, s)
+	}
+
+	// DNSSEC — percentages relative to the DNSSEC-validated subset.
+	if s := formatStatsLine(
+		statsMetric{"secure", secureCount, dnssecR}, statsMetric{"insecure", insecureCount, dnssecIR},
+		statsMetric{"bogus", bogusCount, dnssecBR}, statsMetric{"poisoned", poisoned, poisonedR},
+	); s != "" {
+		out = append(out, s)
+	}
+
+	return out
+}
+
+// formatStatsLine renders a partitioned stats line: zero-count entries are
+// skipped, nonzero entries appear as "name=count(pct%)" (selfdb format).
+func formatStatsLine(metrics ...statsMetric) string {
+	n := 0
+	for _, m := range metrics {
+		if m.count != 0 {
+			n++
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(n * 40)
+	for _, m := range metrics {
+		if m.count == 0 {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "%s=%d(%.1f%%)", m.name, m.count, m.pct)
+	}
+	return b.String()
 }
 
 // UpdateLatency stores a latency measurement keyed by IP only. All domains
