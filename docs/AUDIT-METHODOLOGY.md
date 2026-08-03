@@ -36,7 +36,7 @@
 | **函数排序** | 文件内声明顺序是否严格遵循 `type → const → var → func`（decorder 强制）；同一接收者的方法是否聚合而非散落；构造/初始化函数是否在最靠近类型的位置（即紧跟 var 块之后的第一个 func）；新增函数是否随机插入在无关函数之间 |
 | **Go 版本特性** | 代码是否采用了当前最低 Go 版本的语言/库特性；是否存在可用 `new(expr)`、`errors.AsType[T]`、`slices.Reverse` 等新版标准库替代的手写模式；`go fix` 现代器覆盖的迁移是否已应用 |
 | **流程图覆盖** | `docs/FLOWCHARTS.md` 是否覆盖全部核心功能和协议；新增特性/协议/中间件是否同步更新了流程图；mermaid 语法是否正确可渲染 |
-| **存储层** | LRU 淘汰与 PTR 清理一致性（ownerKey）；`totalSize` 预算不变量；热路径零压缩；Save/Load 过滤过期；单写入者（cache 独占文件）；`database.File` 编码 BigEndian 一致；zstd 只落盘一次 |
+| **存储层** | LRU 淘汰与 PTR 清理一致性（ownerKey）；`totalSize` 预算不变量；热路径零压缩；Save/Load 过滤过期；单写入者（cache 独占文件）；lrumap codec 版本门禁 + `.bak` 备份 + 原子写；统一加载日志 |
 
 ### 1.2 审计架构
 
@@ -45,7 +45,7 @@
 ```
 Phase 1: 包级审计（7 agent 并行）
 ├── Foundation audit: internal/* 基础包
-├── Domain audit:     config / database / cache / edns / zone / ruleset
+├── Domain audit:     config / cache / edns / zone / ruleset
 ├── Protocol audit:   server/protocol/{plain,tls,tlcp,dnscrypt}
 ├── Upstream audit:   server/upstream/*
 ├── Resolver audit:   server/resolver/*
@@ -267,7 +267,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 | **并发安全** | 临界区过窄或缺失（锁-drop 窗口、无锁写入） | 锁保护区域明确注释；`go test -race` 作为 CI 必需项 |
 | **防御算法** | 状态机缺少逃逸路径、过度拒绝合法响应 | 每个防御模块必须有 fuzz 测试和边界条件用例 |
 | **死代码/冗余** | 重构后遗留（中间件、迁移、未用字段） | `staticcheck -checks U1000` 集成 CI |
-| **键值编码** | 编码格式不一致、NUL 字节碰撞二进制字段、偏移计算错误 | 统一使用 `database/keys.go` 二进制 BigEndian 编码函数；二进制字段用 offset-based 解析（不用 NUL 分隔）；每对 encode/decode 必须有 round-trip 测试 |
+| **键值编码** | 编码格式不一致、NUL 字节碰撞二进制字段、偏移计算错误 | 统一使用 lrumap Codec 接口抽象 key/value 编解码；二进制字段用 BigEndian + length-prefixed 而非 NUL 分隔；每对 encode/decode 必须有 round-trip 测试 |
 | **跨协议一致性** | 同类型 bug 在不同协议处理器中重复出现（DTLS/DTLCP 固定缓冲区） | 修复一个协议 bug 后，全局搜索相同模式到所有协议处理器 |
 | **Pool buffer 生命周期** | `response.Data` 指向已归还的 pool buffer（use-after-free） | `pool.Put` 前必须 `response.Data = nil`，参考 `tcp.go` 的 `resp.Data = nil` 模式 |
 | **TODO 管理** | TODO 注释累积但不实现，变成虚假安全感 | 每个 TODO 要么实现、要么改为 NOTE 并说明原因、要么删除 |
@@ -369,33 +369,36 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 
 ### 6.3 存储层专项审计
 
-ZJDNS 存储层（v3.9.10 起）是内存 LRU + 可选持久化文件：`cache/` 持有 `map[entryKey]*listEntry`
-链表（LRU 淘汰按字节预算），`database/` 只做类型化二进制序列化（zstd + 原子写）。
-以下关注点是审计的关键基准。
+ZJDNS 存储层(v3.11.0+)是全 lrumap 架构:所有跨请求缓存和持久化状态均以 `lrumap.Map[K, V]`
+为单一容器。持久化是 Map 的**一个选项**(`EnablePersist` + `Codec`),不是独立系统。5 个持久化
+子系统(cache、ptr、latency、stats、dnscrypt)共用一套机制:版本门禁 + `.bak` 备份 +
+zstd 原子写 + `persist.Manager` 统一周期/关停落盘 + 统一加载日志。
 
 #### 6.3.1 存储层 API 参考
 
 | API | 用途 | 审计关注点 |
 |-----|------|-----------|
-| `cache.New(maxSizeBytes, file)` | 构造 | maxSizeBytes 应来自 `config.MaxSizeMB << 20`；file 为空 = 纯内存 |
-| `Get()` / `Set()` | 读写 | ECS fallback 候选逐个 map 查找；Set 先 pack wire 再 insert |
-| `insert()` + `evictLocked()` | LRU 淘汰 | 淘汰必须同步清理该条目的 PTR 记录（ownerKey）；totalSize 必须与 len(value) 一致 |
-| `expiresAt = ts + entryTTL + staleMaxAge` | 过期语义 | 过期条目返回供 stale-serve/prefetch；物理清理只在淘汰/Save/Load/Clear |
-| `Save()` / `Close()` | 落盘 | 遍历持有写锁，文件 IO 在锁外；跳过过期条目；DNSCrypt 态经 `atomic.Pointer` 读取 |
-| `database.File` 编码 | 序列化 | 字段化 key（无手工字节 key 编码）；BigEndian 数值；magic "ZJDNS" + version 校验 |
-| zstd + 原子写 | 文件 IO | `SpeedFastest`；temp + rename；目录必须存在（CreateTemp 失败应报错） |
-| PTR 索引 | 派生数据 | 不持久化，Load 后 `rebuildPtrIndex()`；`ptrRecord.ownerKey` 保证淘汰清理精准 |
-| latency LRU | 瞬态 | 有界 `lrumap`；`LatencyLastProbe` 检查过期；不落盘 |
+| `lrumap.New[K, V](cap)` / `SetWeight` | 构造/淘汰 | cap 仅预分配 hash map 上限(<=1024);权重淘汰用 `SetWeight`(字节预算) |
+| `lrumap.EnablePersist(cfg)` | 持久化 | 加载旧文件返回恢复条数;版本不匹配/损坏 -> 备份 `.bak` + 冷启动(不覆盖旧数据);codec Version 唯一 |
+| `lrumap.Codec[K, V]` | 编解码 | 每对 encode/decode 必须有 round-trip 测试;Key 用固定字段(非 ` ` 分隔);Version 不随意修改 |
+| `cache.New(maxSizeBytes, file)` | DNS 缓存 | `lrumap[entryKey, cacheEntry]` 字节权重淘汰;entry 值类型(非指针);OnEvict -> cleanupPtrIndex |
+| `ptrIndex` | PTR 派生索引 | `lrumap[string, []entryKey]`(只存 key 映射,名称/TTL 从 entry 派生);字节权重淘汰;OnEvict 清理 |
+| `latency` | 延迟缓存 | `lrumap[string, latencyEntry]` count 512 条上限;`LatencyLastProbe` 检查过期 |
+| `stats.SetPersist(path)` / `SavePersist()` | 统计 | 单键 `counters` 快照 + 加法合并恢复;lrumap cap=1;`SetPersist` 先挂载再加载(失败不丢持久化) |
+| `dnscrypt state` | DNSCrypt | 单键 `state` 条目(dnscryptState);identity 来自 config,seed 链派生窗口;`ResetKeys` 立即落盘 |
+| `persist.Manager` | 周期/关停 | 注册 `Saver` 后统一 timing;`Run(ctx, interval)` 在 errgroup 内驱动;`SaveAll` 逐个 Save 失败不阻断 |
+| `persist.Backup(path)` | 文件备份 | `os.Rename(path, path+".bak")`;版本不匹配/损坏时由 lrumap/DNSCrypt/stats 调用;出错不阻塞启动 |
 
 #### 6.3.2 存储层常见反模式
 
-1. **手写字节 key 编码**：`e:` 前缀 + `\x00` 分隔符是 BadgerDB 时代遗产，已删除。key 直接用 Go struct（`entryKey`），map 查找零编码开销
-2. **热路径 zstd**：wire 在内存中不压缩（O(1) 零开销），zstd 只在 `Save()` 落盘时整体压缩一次
-3. **多写入者竞争持久化文件**：只有 cache 写文件。DNSCrypt 通过 `SetDNSCrypt` 回调,不能直接碰文件
-4. **PTR 记录泄漏**：条目被淘汰/覆盖时必须清理其 PTR 记录,否则 `ReverseLookup` 返回僵尸结果
-5. **锁内做文件 IO**：`Save()` 在锁外序列化到 `database.File` 后写盘,遍历快照在锁内完成
-6. **Size 预算不变量破坏**：`totalSize` 必须在 insert/update/evict/Delete 每处同步调整,否则 LRU 预算失效
-7. **Load 时反推 ts**：`expiresAt - entryTTL - staleMaxAge`,unpack 失败/entryTTL=0 的条目应跳过
+1. **持久化文件版本不匹配时静默覆盖**:旧格式文件必须在 Load 失败前 `Backup` 到 `.bak`,不能让新版本直接覆盖。lrumap 内置此行为(`ErrVersionMismatch`);非 lrumap 的子系统自行调用 `persist.Backup`
+2. **热路径 zstd**:wire 在内存中不压缩,zstd 只在 `Save()` 落盘时压缩一次。`persist.Save` 使用 `SpeedFastest`
+3. **同一持久化文件多写入者**:每个子系统独占其 persist 文件;Manager 串行 `SaveAll` 避免并发写同一文件
+4. **PTR 映射泄漏**:条目被淘汰/覆盖时必须通过 OnEvict 清理其 PTR 映射(entryKey 被删除但映射残留),否则 `ReverseLookup` 返回冗余/僵尸 key
+5. **锁内做持久化 IO**:`Save()` 在 lrumap 锁内收集快照,编码和 IO 在锁外
+6. **Codec Version 随意修改**:版本号改变意味着旧文件被标记为不匹配 -> 备份 + 重建。用于格式变更,不用于修正 bug。一旦改了,旧文件数据只能通过 `.bak` 人工恢复
+7. **持久化注册后 `SavePersist` 静默失败**:如果设置持久化路径过程中状态错误导致 store 未挂载,`SavePersist` 是 no-op —— 数据不会被保存。挂载必须在加载之前(setter 先 assign store,再 enablePersist)
+8. **lrumap 预分配膨胀**:`lrumap.New(cap)` 的 map 预分配上限为 1024(非 cap),大 capacity 值(如 1M)不会触发 96MB 预分配。审计确认 `make(map, min(cap, 1024))` — 手动 `make(map, largeCap)` 仍然是错误
 
 ### 6.4 持续改进
 
@@ -433,7 +436,7 @@ ZJDNS 存储层（v3.9.10 起）是内存 LRU + 可选持久化文件：`cache/`
 ```
 docs/audit/<YYYY-MM>-<主题>/
 ├── 01-foundation.md     ← internal/* 包审计
-├── 02-domain.md         ← config / database / cache / edns / zone / ruleset
+├── 02-domain.md         ← config / cache / edns / zone / ruleset
 ├── 03-protocol.md       ← server/protocol/*
 ├── 04-upstream.md       ← server/upstream/*
 ├── 05-resolver.md       ← server/resolver/*
