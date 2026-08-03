@@ -23,7 +23,8 @@ type tcpResponseWriter struct {
 }
 
 const (
-	defaultReadTimeout = config.DefaultDNSCryptReadTimeout
+	defaultReadTimeout  = config.DefaultDNSCryptReadTimeout
+	defaultWriteTimeout = config.DefaultDNSCryptWriteTimeout
 )
 
 // tcpResponseWriter writes DNSCrypt-encrypted responses over TCP.
@@ -36,6 +37,10 @@ func (w *tcpResponseWriter) WriteMsg(_ context.Context, m *dns.Msg) error {
 	res, err := w.encrypt(m, w.query, false)
 	if err != nil {
 		return fmt.Errorf("encrypting response: %w", err)
+	}
+	// A client that stops reading must not block this goroutine forever.
+	if err := w.conn.SetWriteDeadline(time.Now().Add(defaultWriteTimeout)); err != nil {
+		return fmt.Errorf("setting write deadline: %w", err)
 	}
 	return dnscryptcrypto.WritePrefixed(res, w.conn)
 }
@@ -60,11 +65,19 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 			if !s.isStarted() {
 				return
 			}
-			if zdnsutil.IsTemporaryError(err) {
+			if !zdnsutil.IsTemporaryError(err) {
+				// Non-temporary accept errors (EMFILE etc.) are usually
+				// transient resource conditions — returning here would take
+				// the whole TCP listener down permanently with only a Debug
+				// line. Back off and keep serving, like the TLS listeners.
+				log.Warnf("DNSCRYPT: TCP accept error: %v — retrying", err)
+				time.Sleep(config.DefaultAcceptRetryDelay)
 				continue
 			}
-			log.Debugf("DNSCRYPT: TCP accept error: %v", err)
-			return
+			// Temporary error: back off too, or a sustained condition spins
+			// at 100% CPU (all other accept loops sleep on retry).
+			time.Sleep(config.DefaultAcceptRetryDelay)
+			continue
 		}
 
 		// Track the connection for graceful shutdown.
@@ -102,7 +115,13 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 // implementation (encrypted-dns-server) and draft-denis-dprive-dnscrypt-10
 // §5.4.4, which prohibits multiple transactions over the same connection.
 func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
-	_ = conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
+	// ReadPrefixed requires a read deadline: without one, a peer that sends
+	// nothing occupies the worker slot indefinitely.
+	if err := conn.SetReadDeadline(time.Now().Add(defaultReadTimeout)); err != nil {
+		log.Debugf("DNSCRYPT: setting TCP read deadline for %s: %v", conn.RemoteAddr(), err)
+		_ = conn.Close()
+		return
+	}
 
 	b, err := dnscryptcrypto.ReadPrefixed(conn)
 	if err != nil {

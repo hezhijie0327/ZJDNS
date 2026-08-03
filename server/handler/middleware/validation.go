@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"strings"
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -17,6 +18,38 @@ import (
 // response with an EDE error code.
 type Validation struct{}
 
+// wireNameLength returns the RFC 1035 §2.3.4 wire-form length (per-label
+// length octets + label octets + root octet) of a presentation-form FQDN,
+// or -1 when the name cannot be a valid wire name. Escaped octets (\DDD or
+// \X) count as one octet.
+func wireNameLength(name string) int {
+	if !strings.HasSuffix(name, ".") {
+		return -1
+	}
+	total := 1 // root octet
+	labelLen := 0
+	// Iterate the FULL name: the trailing dot terminates the final label.
+	for i := 0; i < len(name); i++ {
+		switch c := name[i]; {
+		case c == '\\' && i+1 < len(name):
+			i++ // escaped octet counts as one wire octet
+			labelLen++
+		case c == '.':
+			if labelLen == 0 || labelLen > 63 {
+				return -1
+			}
+			total += 1 + labelLen // length octet + label
+			labelLen = 0
+		default:
+			labelLen++
+		}
+		if labelLen > 63 {
+			return -1
+		}
+	}
+	return total
+}
+
 // Wrap implements Wrapper.
 func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
@@ -29,7 +62,8 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				msg.Response = true
 			}
 			msg.Rcode = dns.RcodeFormatError
-			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorInvalidData, ExtraText: ""}
+			// RFC 8914 §4.1: code 0 (Other) SHOULD carry ExtraText.
+			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorOther, ExtraText: "malformed query"}
 			qctx.Res = msg
 			return nil
 		}
@@ -40,6 +74,18 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			msg := pool.DefaultMessage.Get()
 			dnsutil.SetReply(msg, req)
 			msg.Rcode = dns.RcodeNotImplemented
+			qctx.Res = msg
+			return nil
+		}
+
+		// Only a single question is handled anywhere downstream (Question[0]
+		// indexing, SetReply echoing one question) — a multi-question query
+		// could smuggle an invalid name or ANY/AXFR/IXFR type past this gate.
+		if len(qctx.Req.Question) != 1 {
+			log.Debugf("QUERY: rejecting multi-question query (%d questions) with FORMERR", len(qctx.Req.Question))
+			msg := pool.DefaultMessage.Get()
+			dnsutil.SetReply(msg, qctx.Req)
+			msg.Rcode = dns.RcodeFormatError
 			qctx.Res = msg
 			return nil
 		}
@@ -59,7 +105,13 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return nil
 		}
 
-		if len(qname) <= config.MaxDomainLength &&
+		// Compare against the RFC 1035 wire-form limit (255 octets incl. the
+		// root): the presentation length overcounts \DDD escapes and the
+		// trailing dot, falsely rejecting valid max-length names, and
+		// undercounts nothing — an invalid name with many labels passes a
+		// presentation check while exceeding 255 wire octets.
+		wireLen := wireNameLength(qname)
+		if wireLen >= 0 && wireLen <= 255 &&
 			qtype != dns.TypeANY &&
 			qtype != dns.TypeAXFR &&
 			qtype != dns.TypeIXFR &&
@@ -78,9 +130,12 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		msg.Rcode = dns.RcodeRefused
 
 		if len(qname) > config.MaxDomainLength || !dnsutil.IsName(qname) {
-			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorInvalidData, ExtraText: ""}
+			// RFC 8914 §4.1: code 0 (Other) SHOULD carry ExtraText.
+			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorOther, ExtraText: "invalid domain name"}
 		} else {
-			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorNotSupported, ExtraText: ""}
+			// EDE 30 (Invalid Query Type, IANA registry) — the modern code for
+			// unsupported qtypes; Cloudflare 1.1.1.1 uses it for the same case.
+			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorInvalidQueryType, ExtraText: ""}
 		}
 		qctx.Res = msg
 		return nil

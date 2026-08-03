@@ -25,13 +25,15 @@ func Normalize(proto string, req, res *dns.Msg, maxWireLen int) {
 		// UDP DNSCrypt: the wire budget is the binding constraint — the
 		// encrypted response MUST NOT exceed the query size (§10.3).  EDNS
 		// buffer is irrelevant because the DNS payload is encrypted.
-		size = maxWireLen - ResponseOverhead - 1
+		// Use PQ overhead (51 bytes) as the safe upper bound; classical
+		// encrypt() will handle the precise 48-byte check internally.
+		size = maxWireLen - MinResponseOverhead(XWingPQ)
 	} else {
 		size = DNSSize(proto, req)
 		size -= EDNSSize
-	}
-	if size < dns.MinMsgSize {
-		size = dns.MinMsgSize
+		if size < dns.MinMsgSize {
+			size = dns.MinMsgSize
+		}
 	}
 	if res.Len() > size {
 		dnsutil.Truncate(res)
@@ -101,7 +103,12 @@ func WritePrefixed(b []byte, conn net.Conn) (err error) {
 		return errors.New("dnscrypt: nil connection")
 	}
 	var l [2]byte
-	binary.BigEndian.PutUint16(l[:], uint16(len(b))) //nolint:gosec // G115: DNS message length bounded by MaxMsgSize
+	if len(b) > dns.MaxMsgSize {
+		// The 16-bit prefix cannot represent the length — a wrapped length
+		// would corrupt the frame.
+		return ErrQueryTooLarge
+	}
+	binary.BigEndian.PutUint16(l[:], uint16(len(b))) //nolint:gosec // G115: bounded by the MaxMsgSize check above
 	_, err = (&net.Buffers{l[:], b}).WriteTo(conn)
 	if err != nil {
 		return fmt.Errorf("writing to connection: %w", err)

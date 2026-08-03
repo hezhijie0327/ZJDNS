@@ -167,7 +167,7 @@ var (
 //	              <serial> <ts-start> <ts-end> <extensions>
 //
 // Classical certs are CertByteLength (124) bytes; PQ certs are PQCertByteLength
-// (1320) bytes.  err is always nil.
+// (1320) bytes.  Always returns nil error (required by encoding.BinaryMarshaler).
 func (c *Certificate) MarshalBinary() (serialized []byte, err error) {
 	if c.ESVersion.IsPQ() {
 		return c.marshalPQ()
@@ -183,6 +183,10 @@ func (c *Certificate) MarshalBinary() (serialized []byte, err error) {
 
 // marshalPQ serializes a post-quantum certificate (1320 bytes).
 func (c *Certificate) marshalPQ() ([]byte, error) {
+	if len(c.PqPublicKey) != PQPublicKeySize {
+		// Never emit a structurally valid cert with a broken X-Wing key.
+		return nil, fmt.Errorf("dnscrypt: PQ public key must be %d bytes, got %d", PQPublicKeySize, len(c.PqPublicKey))
+	}
 	serialized := make([]byte, PQCertByteLength)
 	copy(serialized[CertMagicOff:CertMagicOff+CertMagicLen], CertMagic[:])
 	binary.BigEndian.PutUint16(serialized[CertESVersionOff:CertESVersionOff+2], uint16(c.ESVersion))
@@ -193,35 +197,49 @@ func (c *Certificate) marshalPQ() ([]byte, error) {
 }
 
 // UnmarshalBinary implements the encoding.BinaryUnmarshaler interface.
+// The DNSCrypt v2 wire format is fixed-size: the whole buffer is validated
+// before any field is populated, so a failed parse never leaves a partially
+// populated certificate that a caller might mistake for valid.
 func (c *Certificate) UnmarshalBinary(b []byte) (err error) {
-	if len(b) < CertByteLength {
+	// The DNSCrypt v2 wire format is fixed-size: a classical cert is exactly
+	// CertByteLength (124) bytes, a PQ cert exactly PQCertByteLength (1320).
+	// Trailing bytes are rejected deterministically.
+	if len(b) != CertByteLength && len(b) != PQCertByteLength {
 		return ErrCertTooShort
 	}
 	if !bytes.Equal(b[:4], CertMagic[:4]) {
 		return ErrCertMagic
 	}
 
-	switch esVersion := binary.BigEndian.Uint16(b[4:6]); esVersion {
+	var esVersion CryptoConstruction
+	switch v := binary.BigEndian.Uint16(b[4:6]); v {
 	case uint16(XChacha20Poly1305):
-		c.ESVersion = XChacha20Poly1305
+		esVersion = XChacha20Poly1305
 	case uint16(XWingPQ):
-		c.ESVersion = XWingPQ
+		esVersion = XWingPQ
 	default:
 		return ErrESVersion
 	}
 
 	// PQ certificate: 1320-byte layout with X-Wing public key and profile extension.
-	if c.ESVersion.IsPQ() {
-		return c.unmarshalPQ(b)
+	if esVersion.IsPQ() {
+		if err := c.unmarshalPQ(b); err != nil {
+			return err
+		}
+		c.ESVersion = esVersion
+		return nil
 	}
 
-	copy(c.Signature[:], b[CertSigOff:CertSigOff+CertSigLen])
-	copy(c.ResolverPk[:], b[CertClassicalPkOff:CertClassicalPkOff+CertClassicalPkLen])
-	copy(c.ClientMagic[:], b[CertClassicalMagicOff:CertClassicalMagicOff+ClientMagicSize])
-	if !isClientMagicValid(c.ClientMagic) {
+	var magic [ClientMagicSize]byte
+	copy(magic[:], b[CertClassicalMagicOff:CertClassicalMagicOff+ClientMagicSize])
+	if !isClientMagicValid(magic) {
 		return ErrClientMagicQUIC
 	}
 
+	c.ESVersion = esVersion
+	copy(c.Signature[:], b[CertSigOff:CertSigOff+CertSigLen])
+	copy(c.ResolverPk[:], b[CertClassicalPkOff:CertClassicalPkOff+CertClassicalPkLen])
+	copy(c.ClientMagic[:], b[CertClassicalMagicOff:CertClassicalMagicOff+ClientMagicSize])
 	c.Serial = binary.BigEndian.Uint32(b[CertClassicalSerialOff : CertClassicalSerialOff+4])
 	c.NotBefore = binary.BigEndian.Uint32(b[CertClassicalTSOff : CertClassicalTSOff+4])
 	c.NotAfter = binary.BigEndian.Uint32(b[CertClassicalTSOff+4 : CertClassicalTEEnd])
@@ -231,7 +249,7 @@ func (c *Certificate) UnmarshalBinary(b []byte) (err error) {
 
 // unmarshalPQ parses a 1320-byte post-quantum certificate.
 func (c *Certificate) unmarshalPQ(b []byte) error {
-	if len(b) < PQCertByteLength {
+	if len(b) != PQCertByteLength {
 		return ErrPQCertTooShort
 	}
 
@@ -310,6 +328,10 @@ func (c *Certificate) VerifySignature(publicKey ed25519.PublicKey) (ok bool) {
 func (c *Certificate) Sign(privateKey ed25519.PrivateKey) {
 	if !isClientMagicValid(c.ClientMagic) {
 		panic("dnscrypt: ClientMagic starts with seven zero bytes — collides with QUIC")
+	}
+	if c.ESVersion.IsPQ() && len(c.PqPublicKey) != PQPublicKeySize {
+		// Never sign a structurally valid cert with a broken X-Wing key.
+		panic(fmt.Sprintf("dnscrypt: PQ public key must be %d bytes, got %d", PQPublicKeySize, len(c.PqPublicKey)))
 	}
 	b := make([]byte, c.signedSize())
 	c.writeSigned(b)

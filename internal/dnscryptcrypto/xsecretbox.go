@@ -62,9 +62,10 @@ func XchachaSeal(out, nonce, message, key []byte) (res []byte, err error) {
 	}
 
 	var firstBlock [XchachaBlockSize]byte
-	// key/nonce sizes already validated by panic checks above;
-	// NewUnauthenticatedCipher cannot fail with valid parameters.
-	cipher, _ := chacha20.NewUnauthenticatedCipher(key, nonce) // _ = error: key/nonce sizes validated above // _ = error: key/nonce sizes validated above
+	cipher, err := chacha20.NewUnauthenticatedCipher(key, nonce)
+	if err != nil {
+		return nil, err
+	}
 	cipher.XORKeyStream(firstBlock[:], firstBlock[:])
 	var polyKey [XchachaKeySize]byte
 	copy(polyKey[:], firstBlock[:XchachaKeySize])
@@ -89,8 +90,9 @@ func XchachaSeal(out, nonce, message, key []byte) (res []byte, err error) {
 	var tag [poly1305.TagSize]byte
 	hash := poly1305.New(&polyKey)
 	_, _ = hash.Write(ciphertext) // _ = error: poly1305 hash Write never fails
-	hash.Sum(tag[:0])             // Sum is infallible for poly1305
-	copy(tagOut, tag[:])
+	// Capture the returned slice: relying on Sum reusing the caller's
+	// backing array is an undocumented side effect.
+	copy(tagOut, hash.Sum(tag[:0]))
 
 	return res, nil
 }

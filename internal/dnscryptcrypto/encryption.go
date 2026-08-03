@@ -59,6 +59,9 @@ func PadTCP(packet []byte) (padded []byte, err error) {
 // linkable server behaviour.  Matches encrypted-dns-server's SipHash-based
 // approach (crypto.rs encrypt_into).
 func PadResponse(packet []byte, sharedKey *[SharedKeySize]byte, clientNonce []byte) []byte {
+	if sharedKey == nil {
+		return packet
+	}
 	h := sha256.Sum256(append(sharedKey[:], clientNonce...))
 	padSize := 1 + int(h[0])                     // 1–256 bytes (§5.4.5)
 	target := (len(packet) + padSize + 63) &^ 63 // next 64-byte boundary
@@ -72,6 +75,9 @@ func PadResponse(packet []byte, sharedKey *[SharedKeySize]byte, clientNonce []by
 // the lone 0x80 delimiter.  Fails when even that one byte would not fit.
 // Ref: encrypted-dns-server pq.rs pad7816_within().
 func PadResponseWithin(packet []byte, sharedKey *[SharedKeySize]byte, clientNonce []byte, maxLen int) ([]byte, error) {
+	if sharedKey == nil {
+		return nil, errors.New("dnscrypt: nil shared key")
+	}
 	if len(packet) >= maxLen {
 		return nil, ErrNoRoomForPadding
 	}
@@ -102,12 +108,11 @@ func CryptoRandIntn(n int) (int, error) {
 // DNS packet so the encrypted query reaches that size.  Aligned with
 // dnscrypt-proxy's dynamic sizing:
 //
-//	minQuestionSize = max(MinQueryLen, QueryOverhead + len(packet))
-//	targetWire      = min(4096, roundup64(max(minQuestionSize, QueryOverhead) + 1))
+//	minWire = roundup64(max(minWireSize, QueryOverhead + len(packet) + 1))
+//	targetWire = min(minWire, MaxDNSUDPPacketSize)
+//	paddedLen  = min(targetWire - QueryOverhead, roundup64(len(packet)+1))
 //
-// The +1 accounts for the 0x80 padding delimiter (ISO/IEC 7816-4).  MinQueryLen
-// is the minimum wire query size — matches dnscrypt-proxy's
-// questionSizeEstimator.MinQuestionSize().
+// The +1 accounts for the 0x80 padding delimiter (ISO/IEC 7816-4).
 //
 // Ref: dnscrypt-proxy crypto.go Encrypt() — paddedLength formula
 func encryptPadding(packet []byte, minWireSize int) []byte {
@@ -115,7 +120,11 @@ func encryptPadding(packet []byte, minWireSize int) []byte {
 		// +1 for 0x80 delimiter
 		minWireSize, QueryOverhead+len(packet)+1)
 	minWire = min((minWire+63)&^63, MaxDNSUDPPacketSize)
-	return Pad(packet, minWire-QueryOverhead)
+	// The final padding must not push the sealed UDP query past the cap:
+	// Pad re-rounds len(packet)+1 up to the next 64-byte boundary, so the
+	// requested length is clamped to MaxDNSUDPPacketSize - QueryOverhead.
+	paddedLen := min(max(minWire-QueryOverhead, (len(packet)+1+63)&^63), MaxDNSUDPPacketSize-QueryOverhead)
+	return Pad(packet, paddedLen)
 }
 
 // unpad removes ISO/IEC 7816-4 padding from the packet.

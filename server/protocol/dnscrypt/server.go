@@ -3,6 +3,7 @@ package dnscrypt
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -55,8 +56,10 @@ type Server struct {
 	// ticketKey / ticketKeyID seal PQ resumption tickets.  They are
 	// derived from the Ed25519 signing key and stay fixed across rotations
 	// so that tickets survive a key rotation.
-	ticketKey   [dnscryptcrypto.XchachaKeySize]byte
-	ticketKeyID [dnscryptcrypto.TicketKeyIDSize]byte
+	ticketKey       [dnscryptcrypto.XchachaKeySize]byte
+	ticketKeyID     [dnscryptcrypto.TicketKeyIDSize]byte
+	prevTicketKey   [dnscryptcrypto.XchachaKeySize]byte // previous TK for overlap validation
+	prevTicketKeyID [dnscryptcrypto.TicketKeyIDSize]byte
 
 	// Rotation goroutine control.
 	rotateCh chan struct{} // closed when rotation goroutine should stop
@@ -225,7 +228,15 @@ func (s *Server) ResetKeys() error {
 	}
 
 	s.mu.Lock()
+	// Clear old shared key cache before replacing to release cached keys.
+	s.sharedKeyCache.Clear()
 	s.sharedKeyCache = lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize)
+	// RFC §11.7: rotate ticket keys alongside cert keys.
+	s.prevTicketKey = s.ticketKey
+	s.prevTicketKeyID = s.ticketKeyID
+	if _, randErr := rand.Read(s.ticketKey[:]); randErr == nil {
+		s.ticketKeyID[3]++
+	}
 	s.keys = []keyEntry{{pair: pair, createdAt: time.Now()}}
 	s.mu.Unlock()
 
@@ -442,7 +453,15 @@ func (s *Server) rotateKeys() {
 			buildCertTXTForCert(newPair.PQ),
 		},
 	}
+	// Clear old shared key cache before replacing to release cached keys.
+	s.sharedKeyCache.Clear()
 	s.sharedKeyCache = lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize)
+	// RFC §11.7: rotate ticket keys alongside cert keys.
+	s.prevTicketKey = s.ticketKey
+	s.prevTicketKeyID = s.ticketKeyID
+	if _, randErr := rand.Read(s.ticketKey[:]); randErr == nil {
+		s.ticketKeyID[3]++
+	}
 	s.keys = append([]keyEntry{entry}, s.keys...)
 
 	// Purge expired keys.

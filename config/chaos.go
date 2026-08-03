@@ -2,7 +2,7 @@ package config
 
 import (
 	"os"
-	"strconv"
+	"strings"
 
 	"codeberg.org/miekg/dns"
 )
@@ -10,6 +10,11 @@ import (
 // addChaosRecord generates CHAOS-class TXT zone rules for standard DNS
 // introspection queries: id.server, hostname.bind, version.server, version.bind,
 // and per-table cache/stats clearing endpoints.
+//
+// The .clear endpoints (cache/stats/ptr/latency/dnscrypt) are destructive
+// and are gated to loopback clients in the Zone middleware — operators can
+// add their own rules for the same names, which take precedence (see
+// hasZoneRule).
 func addChaosRecord(cfg *ServerConfig) {
 	version := DefaultVersion
 	if version == "" || version == "dev" {
@@ -19,28 +24,33 @@ func addChaosRecord(cfg *ServerConfig) {
 	if err != nil || hostname == "" {
 		hostname = DefaultProjectName
 	}
-	chaosRecords := map[string]string{
-		"id.server":      hostname,
-		"hostname.bind":  hostname,
-		"version.server": version,
-		"version.bind":   version,
+	// Fixed slice, not a map: map iteration would randomize the zone rule
+	// order on every run, making cfg.Zone non-reproducible.
+	chaosRecords := []struct{ name, value string }{
+		{"id.server", hostname},
+		{"hostname.bind", hostname},
+		{"version.server", version},
+		{"version.bind", version},
 	}
-	for name, value := range chaosRecords {
+	for i := range chaosRecords {
+		if hasZoneRule(cfg, chaosRecords[i].name) {
+			// An operator-defined rule with the same name wins; appending
+			// ours would be dead (first match wins in the evaluator).
+			continue
+		}
 		cfg.Zone = append(cfg.Zone, ZoneRule{
-			Name: name,
+			Name: chaosRecords[i].name,
 			Answer: []ZoneRecord{{
 				Type:    dns.TypeTXT,
 				Class:   dns.ClassCHAOS,
 				TTL:     DefaultTTL,
-				Content: strconv.Quote(value),
+				Content: quoteTXT(chaosRecords[i].value),
 			}},
 		})
 	}
 	// Query names embed DefaultProjectName for self-identification and operator
 	// discoverability (e.g. ZJDNS.stats, ZJDNS.cache.clear). This is intentional —
 	// the project name identifies the server to clients that query these CHAOS records.
-	// The .clear endpoints are destructive and gated to loopback clients in the
-	// Zone middleware.
 	for _, name := range []string{
 		DefaultProjectName + ".stats",
 		DefaultProjectName + ".stats.clear",
@@ -49,9 +59,34 @@ func addChaosRecord(cfg *ServerConfig) {
 		DefaultProjectName + ".latency.clear",
 		DefaultProjectName + ".dnscrypt.clear",
 	} {
+		if hasZoneRule(cfg, name) {
+			continue
+		}
+		// Placeholder Answer: this records only exists so the evaluator stores
+		// a type-filtered entry (TXT CHAOS).  At query time wireZoneDynamicContent
+		// replaces the static content with a live DynamicContent function.
 		cfg.Zone = append(cfg.Zone, ZoneRule{
 			Name:   name,
-			Answer: []ZoneRecord{{Type: dns.TypeTXT, Class: dns.ClassCHAOS, TTL: 0, Content: ""}},
+			Answer: []ZoneRecord{{Type: dns.TypeTXT, Class: dns.ClassCHAOS, TTL: 0, Content: `"dynamic"`}},
 		})
 	}
+}
+
+// hasZoneRule reports whether a zone rule with the given name already exists.
+func hasZoneRule(cfg *ServerConfig, name string) bool {
+	for i := range cfg.Zone {
+		if strings.EqualFold(cfg.Zone[i].Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// quoteTXT quotes a value for DNS TXT rdata. strconv.Quote produces Go
+// escapes (\u, \x) that zone-file parsing does not understand — a non-ASCII
+// hostname would be mangled. Escaping backslashes and quotes is the DNS
+// master-file convention (RFC 1035 §5.1).
+func quoteTXT(value string) string {
+	escaped := strings.ReplaceAll(strings.ReplaceAll(value, "\\", "\\\\"), "\"", "\\\"")
+	return "\"" + escaped + "\""
 }

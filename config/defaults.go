@@ -287,7 +287,8 @@ const (
 	DefaultDNSCryptUDPSize             = 4096
 	DefaultDNSCryptCertificateCacheTTL = 1 * time.Hour
 	DefaultDNSCryptReadTimeout         = 2 * time.Second
-	DefaultDNSCryptResponseBuffer      = 512 // cert queries use no EDNS0; TC retry goes over TCP
+	DefaultDNSCryptWriteTimeout        = 10 * time.Second // DNSCrypt TCP response write
+	DefaultDNSCryptResponseBuffer      = 512              // cert queries use no EDNS0; TC retry goes over TCP
 	DefaultDNSCryptPQTicketLifetime    = 600 * time.Second
 	DefaultDNSCryptKeyOverlap          = 1 * time.Hour
 	DefaultDNSCryptMinQueryLen         = 512 // min wire query size (matches dnscrypt-proxy InitialMinQuestionSize)

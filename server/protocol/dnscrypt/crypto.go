@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"time"
 	"zjdns/config"
@@ -40,9 +41,16 @@ func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP boo
 		budget = dnscryptcrypto.MaxDNSUDPPacketSize
 	}
 	if budget > 0 {
+		// TCP responses use PadResponse (up to 256 bytes + 64-byte alignment) —
+		// the actual wire size can be minOverhead + maxPadding larger than the
+		// plaintext.  Reserve worst-case padding budget to stay under the 4096 cap.
+		paddingBudget := 0
+		if !isUDP {
+			paddingBudget = 256 + 64
+		}
 		for {
 			minOverhead := dnscryptcrypto.MinResponseOverhead(q.ESVersion)
-			if len(packet)+minOverhead <= budget {
+			if len(packet)+minOverhead+paddingBudget <= budget {
 				break // fits
 			}
 			if m.Truncated {
@@ -60,22 +68,35 @@ func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP boo
 	}
 
 	if q.ESVersion.IsPQ() {
-		return s.encryptPQ(packet, q, r, isUDP, maxWireLen)
+		return s.encryptPQ(packet, q, r, maxWireLen)
 	}
 
-	curr := s.current()
-	sharedKey, err := dnscryptcrypto.ComputeSharedKey(dnscryptcrypto.XChacha20Poly1305, &curr.Classical.ResolverSk, &q.ClientPk)
-	if err != nil {
-		return nil, fmt.Errorf("computing shared key: %w", err)
+	// Reuse the shared key from decrypt when available — the query may
+	// have matched a previous key pair during rotation overlap. Computing
+	// with s.current() would encrypt with the wrong key (audit finding A).
+	sharedKey := q.SharedKey
+	if sharedKey == [dnscryptcrypto.SharedKeySize]byte{} {
+		curr := s.current()
+		if curr == nil {
+			return nil, errors.New("dnscrypt: no active key pair")
+		}
+		var err error
+		sharedKey, err = dnscryptcrypto.ComputeSharedKey(dnscryptcrypto.XChacha20Poly1305, &curr.Classical.ResolverSk, &q.ClientPk)
+		if err != nil {
+			return nil, fmt.Errorf("computing shared key: %w", err)
+		}
 	}
-	return r.Encrypt(packet, sharedKey, isUDP, maxWireLen)
+	return r.Encrypt(packet, sharedKey, maxWireLen)
 }
 
 // encryptPQ encrypts a DNS response for a PQ query.  For initial queries it
 // issues a resumption ticket in the response control block.
-func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *dnscryptcrypto.EncryptedResponse, isUDP bool, maxWireLen int) ([]byte, error) {
+func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *dnscryptcrypto.EncryptedResponse, maxWireLen int) ([]byte, error) {
 	var sharedKey [dnscryptcrypto.SharedKeySize]byte
 	curr := s.current()
+	if curr == nil {
+		return nil, errors.New("dnscrypt: no active key pair")
+	}
 
 	var err error
 	if len(q.PQCiphertext) > 0 {
@@ -85,7 +106,10 @@ func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *d
 		if q.SharedKey != [dnscryptcrypto.SharedKeySize]byte{} {
 			sharedKey = q.SharedKey
 		} else {
-			kemSS := dnscryptcrypto.PQDecapsulate(q.PQCiphertext, curr.PQ.PqPrivateKey)
+			kemSS, kemErr := dnscryptcrypto.PQDecapsulate(q.PQCiphertext, curr.PQ.PqPrivateKey)
+			if kemErr != nil {
+				return nil, fmt.Errorf("decapsulating PQ ciphertext: %w", kemErr)
+			}
 			sharedKey, err = dnscryptcrypto.PQDeriveSharedKey(kemSS, q.ClientMagic, curr.PQ.PqCertContext, q.PQCiphertext)
 			if err != nil {
 				return nil, fmt.Errorf("deriving PQ shared key: %w", err)
@@ -109,7 +133,14 @@ func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *d
 		if _, randErr := rand.Read(nonce[:]); randErr != nil {
 			return nil, fmt.Errorf("generating ticket nonce: %w", randErr)
 		}
-		sealed, err := dnscryptcrypto.PQSealTicket(s.ticketKey, s.ticketKeyID, nonce, plaintext)
+		// Snapshot ticket keys under read lock — rotateKeys() writes them
+		// under write lock; a torn key/ID pair would seal a ticket the
+		// server itself cannot open.
+		s.mu.RLock()
+		ticketKey := s.ticketKey
+		ticketKeyID := s.ticketKeyID
+		s.mu.RUnlock()
+		sealed, err := dnscryptcrypto.PQSealTicket(ticketKey, ticketKeyID, nonce, plaintext)
 		if err != nil {
 			return nil, fmt.Errorf("sealing PQ ticket: %w", err)
 		}
@@ -121,12 +152,15 @@ func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *d
 		log.Debugf("DNSCRYPT: PQ resumed response")
 	}
 
-	return r.Encrypt(packet, sharedKey, isUDP, maxWireLen)
+	return r.Encrypt(packet, sharedKey, maxWireLen)
 }
 
 // decrypt tries to decrypt the query: PQ resumed → PQ ciphertext → classical.
 // Keys are tried newest-first to handle rotation overlap (§8).
 func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.EncryptedQuery, err error) {
+	if len(b) < dnscryptcrypto.ClientMagicSize {
+		return nil, nil, fmt.Errorf("dnscrypt: packet too short (%d bytes)", len(b))
+	}
 	// PQ resumed queries don't carry a client magic — try them first.
 	if len(b) >= dnscryptcrypto.PQResumeMagicLen && bytes.Equal(b[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:]) {
 		log.Debugf("DNSCRYPT: PQ resumed query")
@@ -212,15 +246,29 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *dnscryptcrypto
 		return nil, nil, fmt.Errorf("parsing PQ resumed query: %w", err)
 	}
 
-	ticketPlain, err := dnscryptcrypto.PQOpenTicket(&s.ticketKey, &s.ticketKeyID, ticket)
+	// Snapshot ticket keys under read lock — rotateKeys() writes them under
+	// write lock; a torn key/ID pair would spuriously fail PQ ticket opens.
+	s.mu.RLock()
+	ticketKey := s.ticketKey
+	ticketKeyID := s.ticketKeyID
+	prevTicketKey := s.prevTicketKey
+	prevTicketKeyID := s.prevTicketKeyID
+	s.mu.RUnlock()
+
+	ticketPlain, err := dnscryptcrypto.PQOpenTicket(&ticketKey, &ticketKeyID, &prevTicketKey, &prevTicketKeyID, ticket)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening PQ ticket: %w", err)
 	}
-	clientMagic, resumeSecret, ticketExpiry, err := dnscryptcrypto.DecodeTicketPlaintext(ticketPlain)
+	ticketInfo, err := dnscryptcrypto.DecodeTicketPlaintext(ticketPlain)
 	if err != nil {
 		return nil, nil, fmt.Errorf("decoding PQ ticket: %w", err)
 	}
-	if ticketExpiry < dnscryptcrypto.NowUnix32() {
+	// Enforce the ticket's profile/version binding here instead of
+	// re-indexing the raw plaintext.
+	if !bytes.Equal(ticketInfo.ESVersion[:], dnscryptcrypto.PQESVersion[:]) {
+		return nil, nil, dnscryptcrypto.ErrPQInvalidTicket
+	}
+	if ticketInfo.Expiry < dnscryptcrypto.NowUnix32() {
 		return nil, nil, dnscryptcrypto.ErrPQTicketExpired
 	}
 
@@ -233,11 +281,10 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *dnscryptcrypto
 
 	var matchedPair *dnscryptcrypto.CertPair
 	for _, k := range keysSnapshot {
-		if clientMagic == k.pair.PQ.ClientMagic &&
-			bytes.Equal(ticketPlain[dnscryptcrypto.TicketPlaintextESOff:dnscryptcrypto.TicketPlaintextESOff+dnscryptcrypto.TicketPlaintextESLen], dnscryptcrypto.PQESVersion[:]) &&
+		if ticketInfo.ClientMagic == k.pair.PQ.ClientMagic &&
 			binary.BigEndian.Uint32(ticketPlain[dnscryptcrypto.TicketPlaintextSerialOff:dnscryptcrypto.TicketPlaintextSerialOff+dnscryptcrypto.TicketPlaintextSerialLen]) == k.pair.Classical.Serial &&
 			binary.BigEndian.Uint32(ticketPlain[dnscryptcrypto.TicketPlaintextTSEndOff:dnscryptcrypto.TicketPlaintextTSEndOff+dnscryptcrypto.TicketPlaintextTSEndLen]) == k.pair.Classical.NotAfter &&
-			bytes.Equal(ticketPlain[dnscryptcrypto.TicketPlaintextPEHashOff:dnscryptcrypto.TicketPlaintextPEHashOff+dnscryptcrypto.TicketPlaintextPEHashLen], peHash[:]) {
+			bytes.Equal(ticketInfo.ProfileExtHash[:], peHash[:]) {
 			matchedPair = k.pair
 			break
 		}
@@ -246,7 +293,7 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *dnscryptcrypto
 		return nil, nil, dnscryptcrypto.ErrPQInvalidTicket
 	}
 
-	sharedKey, err := dnscryptcrypto.PQResumedSharedKey(resumeSecret, matchedPair.PQ.ClientMagic, nonceHalf, ticket)
+	sharedKey, err := dnscryptcrypto.PQResumedSharedKey(ticketInfo.ResumeSecret, matchedPair.PQ.ClientMagic, nonceHalf, ticket)
 	if err != nil {
 		return nil, nil, fmt.Errorf("deriving PQ resumed shared key: %w", err)
 	}

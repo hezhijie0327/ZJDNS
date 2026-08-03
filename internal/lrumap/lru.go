@@ -137,6 +137,22 @@ func (m *Map[K, V]) Delete(key K) {
 	m.mu.Unlock()
 }
 
+// Clear removes all entries from the map.
+// OnEvict is called for each evicted entry.
+func (m *Map[K, V]) Clear() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for e := m.head.next; e != m.tail; e = e.next {
+		if m.OnEvict != nil {
+			m.OnEvict(e.key, e.val)
+		}
+	}
+	m.m = make(map[K]*lruEntry[K, V], m.cap)
+	m.head.next = m.tail
+	m.tail.prev = m.head
+	m.len = 0
+}
+
 // CompareAndDelete removes the entry for key only if it currently holds val.
 // It reports whether the entry was removed. Atomic Get→compare→Delete: a
 // concurrent Set installing a different value for the same key is preserved.

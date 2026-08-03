@@ -223,14 +223,12 @@ func (s *Server) shutdownServer() {
 		}
 	}
 
-	if s.pprofServer != nil {
+	for _, p := range s.pprofServers {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
-		defer cancel()
-		if err := s.pprofServer.Shutdown(ctx); err != nil {
+		if err := p.Shutdown(ctx); err != nil {
 			log.Errorf("PPROF: pprof server shutdown failed: %v", err)
-		} else {
-			log.Infof("PPROF: pprof server shut down successfully")
 		}
+		cancel()
 	}
 
 	if s.tlcpServer != nil {

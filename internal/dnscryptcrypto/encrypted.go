@@ -106,7 +106,6 @@ type EncryptedResponse struct {
 func (r *EncryptedResponse) Encrypt(
 	packet []byte,
 	sharedKey [SharedKeySize]byte,
-	isUDP bool,
 	maxWireLen int,
 ) (response []byte, err error) {
 	// The resolver nonce (bytes 12-23) is fully random, per §7.2 of
@@ -115,11 +114,11 @@ func (r *EncryptedResponse) Encrypt(
 		return nil, fmt.Errorf("generating resolver nonce: %w", err)
 	}
 
-	response = append(response, ResolverMagic...)
+	response = append(response, ResolverMagic[:]...)
 	response = append(response, r.Nonce[:]...)
 
 	if r.ESVersion.IsPQ() {
-		return r.encryptPQResponse(packet, sharedKey, isUDP, maxWireLen, response)
+		return r.encryptPQResponse(packet, sharedKey, maxWireLen, response)
 	}
 
 	// Classical path: deterministic padding per §5.4.5 — derived from
@@ -160,7 +159,6 @@ func (r *EncryptedResponse) Encrypt(
 func (r *EncryptedResponse) encryptPQResponse(
 	packet []byte,
 	sharedKey [SharedKeySize]byte,
-	isUDP bool,
 	maxWireLen int,
 	response []byte,
 ) ([]byte, error) {
@@ -200,6 +198,8 @@ func (r *EncryptedResponse) encryptPQResponse(
 						return nil, err
 					}
 					return response, nil
+				case XChacha20Poly1305:
+					return nil, ErrESVersion
 				default:
 					return nil, ErrESVersion
 				}
@@ -222,6 +222,8 @@ func (r *EncryptedResponse) encryptPQResponse(
 							return nil, err
 						}
 						return response, nil
+					case XChacha20Poly1305:
+						return nil, ErrESVersion
 					default:
 						return nil, ErrESVersion
 					}
@@ -245,6 +247,8 @@ func (r *EncryptedResponse) encryptPQResponse(
 			return nil, sealErr
 		}
 		response = sealed
+	case XChacha20Poly1305:
+		return nil, ErrESVersion
 	default:
 		return nil, ErrESVersion
 	}
@@ -268,7 +272,7 @@ func (r *EncryptedResponse) Decrypt(
 
 	magic := [ResolverMagicSize]byte{}
 	copy(magic[:], response[:ResolverMagicSize])
-	if !bytes.Equal(magic[:], ResolverMagic) {
+	if !bytes.Equal(magic[:], ResolverMagic[:]) {
 		return nil, ErrInvalidResolverMagic
 	}
 
@@ -306,6 +310,10 @@ func (r *EncryptedResponse) Decrypt(
 				if controlLen > 0 {
 					r.PQControl = make([]byte, controlLen)
 					copy(r.PQControl, packet[2:2+controlLen])
+				} else {
+					// A reused EncryptedResponse must not re-report a stale
+					// ticket from a previous response.
+					r.PQControl = nil
 				}
 				packet = packet[2+controlLen:]
 			}
@@ -338,7 +346,9 @@ func (q *EncryptedQuery) Encrypt(
 
 	if q.ESVersion.IsPQ() {
 		query, clientNonce, err = q.EncryptPQ(packet, sharedKey)
-		if err == nil && len(query) > MaxDNSUDPPacketSize {
+		// MaxDNSUDPPacketSize is a UDP anti-fragmentation limit; TCP
+		// DNSCrypt queries may be up to 65535 bytes.
+		if err == nil && !q.IsTCP && len(query) > MaxDNSUDPPacketSize {
 			err = ErrQueryTooLarge
 		}
 		return query, clientNonce, err
@@ -365,6 +375,8 @@ func (q *EncryptedQuery) Encrypt(
 		if err != nil {
 			return nil, Nonce{}, err
 		}
+	case XWingPQ:
+		return nil, Nonce{}, ErrESVersion
 	default:
 		return nil, Nonce{}, ErrESVersion
 	}
@@ -412,7 +424,17 @@ func (q *EncryptedQuery) EncryptPQ(
 	if len(q.PQCiphertext) == 0 {
 		return nil, Nonce{}, ErrInvalidQuery
 	}
-	padded := PQPad(packet, PQMinPaddingInitial)
+	// Per §5.4.3, client queries over TCP must use random 1–256 byte padding
+	// (PadTCP), mirroring the resumed path.
+	var padded []byte
+	if q.IsTCP {
+		padded, err = PadTCP(packet)
+		if err != nil {
+			return nil, Nonce{}, err
+		}
+	} else {
+		padded = PQPad(packet, PQMinPaddingInitial)
+	}
 	var ct []byte
 	ct, err = XchachaSeal(nil, clientNonce[:], padded, sharedKey[:])
 	if err != nil {
@@ -453,14 +475,14 @@ func (q *EncryptedQuery) Decrypt(
 	idx := ClientMagicSize
 	copy(q.ClientPk[:KeySize], query[idx:idx+KeySize])
 
+	// Derive the classical key unconditionally: q.SharedKey may hold a stale
+	// PQ-derived key from a reused EncryptedQuery, which would authenticate
+	// under the wrong key. The classical key is always derivable from
+	// ClientPk + serverSecretKey.
 	var sharedKey [SharedKeySize]byte
-	if q.SharedKey != [SharedKeySize]byte{} {
-		sharedKey = q.SharedKey
-	} else {
-		sharedKey, err = ComputeSharedKey(q.ESVersion, &serverSecretKey, &q.ClientPk)
-		if err != nil {
-			return nil, fmt.Errorf("computing shared key: %w", err)
-		}
+	sharedKey, err = ComputeSharedKey(q.ESVersion, &serverSecretKey, &q.ClientPk)
+	if err != nil {
+		return nil, fmt.Errorf("computing shared key: %w", err)
 	}
 
 	idx += KeySize
@@ -507,7 +529,10 @@ func (q *EncryptedQuery) DecryptPQInitial(query, serverPrivateKey []byte) (packe
 	encrypted := query[idx:]
 
 	// Decapsulate X-Wing to get KEM shared secret.
-	kemSS := PQDecapsulate(ct, serverPrivateKey)
+	kemSS, kemErr := PQDecapsulate(ct, serverPrivateKey)
+	if kemErr != nil {
+		return nil, fmt.Errorf("decapsulating PQ ciphertext: %w", kemErr)
+	}
 	sharedKey, err := PQDeriveSharedKey(kemSS, q.ClientMagic, q.PQCertContext, ct)
 	if err != nil {
 		return nil, fmt.Errorf("deriving PQ shared key: %w", err)
@@ -542,6 +567,13 @@ func ParsePQResumedHeader(query []byte) (ticket, nonceHalf []byte, payloadOffset
 	idx += PQTicketLenSize
 	if idx+ticketLen+NonceSize/2 > len(query) {
 		return nil, nil, 0, ErrPQInvalidTicket
+	}
+	// The minimum-length guard above assumes a zero-length ticket; an
+	// attacker-controlled ticketLen can leave an arbitrarily short encrypted
+	// payload. Enforce the declared minimum after parsing the ticket so the
+	// AEAD open sees a valid ciphertext.
+	if len(query)-(idx+ticketLen+NonceSize/2) < TagSize+MinDNSPacketSize {
+		return nil, nil, 0, ErrInvalidQuery
 	}
 	ticket = make([]byte, ticketLen)
 	copy(ticket, query[idx:idx+ticketLen])
