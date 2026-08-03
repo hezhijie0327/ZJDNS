@@ -141,6 +141,22 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		fmt.Fprintln(os.Stderr, "error: --probe requires one of --pipeline, --conn-reuse or --idle-timeout")
 		return "", true, 1
 	}
+	// --dnsstamp sub-modes: --decode and --encode are mutually exclusive —
+	// the dispatch below silently runs decode when both are set.
+	if dnsStampDecode && dnsStampEncode {
+		fmt.Fprintln(os.Stderr, "error: --decode and --encode are mutually exclusive")
+		return "", true, 1
+	}
+	// Flags that only make sense under their parent mode are diagnosed
+	// instead of silently ignored.
+	if (dnsStampDecode || dnsStampEncode) && !runDNSStamp {
+		fmt.Fprintln(os.Stderr, "error: --decode and --encode require --dnsstamp")
+		return "", true, 1
+	}
+	if dnscrypt && !generateConfig {
+		fmt.Fprintln(os.Stderr, "error: --dnscrypt, --provider and --addr require --generate-config")
+		return "", true, 1
+	}
 
 	// ── Dispatch ─────────────────────────────────────────────────────────
 	// --version

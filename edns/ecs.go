@@ -140,7 +140,7 @@ func isECSOptionEqual(a, b *ECSOption) bool {
 func (h *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, error) {
 	subnet = strings.ToLower(strings.TrimSpace(subnet))
 	if subnet == config.ECSModeAuto {
-		ecs := h.detectVia(forceIPv6, false)
+		ecs := h.detectVia(forceIPv6)
 		if ecs == nil {
 			// A broken/unreachable AutoDetectURL would otherwise leave the
 			// default ECS unset forever with no diagnostic.
@@ -186,17 +186,13 @@ func (h *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, err
 	return ecs, nil
 }
 
-// detectVia resolves ECS options via IP detection. allowFallback is reserved
-// for future IPv4→IPv6 fallback support and is currently always false.
-func (h *Handler) detectVia(forceIPv6, allowFallback bool) *ECSOption {
+// detectVia resolves ECS options via IP detection.
+func (h *Handler) detectVia(forceIPv6 bool) *ECSOption {
 	var ip net.IP
 	if forceIPv6 {
 		ip = h.detector.IPv6()
 	} else {
 		ip = h.detector.IPv4()
-	}
-	if ip == nil && allowFallback && !forceIPv6 {
-		ip = h.detector.IPv6()
 	}
 	if ip == nil {
 		return nil

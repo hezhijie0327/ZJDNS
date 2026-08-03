@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"slices"
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -37,19 +38,21 @@ func ptrIndexWeight(keys []entryKey) int64 {
 // updatePtrIndex records the entry's IPs in the reverse index. Re-Setting
 // the same entry replaces its old mappings (cleanup first), so repeated
 // probes do not grow the index.
-func (c *Cache) updatePtrIndex(owner entryKey, answer, authority, additional []dns.RR) {
-	ips := extractIPs(answer, authority, additional)
+func (c *Cache) updatePtrIndex(owner entryKey, ips []string) {
 	if len(ips) == 0 {
 		return
 	}
-	c.cleanupPtrIndex(owner)
+	c.cleanupPtrIndex(owner, nil) // full scan: the previous entry's IP set is unknown here
 	for _, ip := range ips {
 		old, ok := c.ptrIndex.Get(ip)
 		if !ok {
 			c.ptrIndex.Set(ip, []entryKey{owner})
 			continue
 		}
-		c.ptrIndex.Set(ip, append(old, owner))
+		// Clone before append: lrumap.Get returns a slice sharing the map's
+		// backing array — appending in place races concurrent ReverseLookup
+		// iterations and a second updatePtrIndex on the same IP.
+		c.ptrIndex.Set(ip, append(slices.Clone(old), owner))
 	}
 }
 
@@ -75,16 +78,47 @@ func extractIPs(sections ...[]dns.RR) []string {
 }
 
 // cleanupPtrIndex removes all reverse mappings owned by the entry with the
-// given key, deleting now-empty IP entries. Runs from the store's OnEvict
-// callback (store lock held) — it must not touch the store itself.
-func (c *Cache) cleanupPtrIndex(owner entryKey) {
+// given key, deleting now-empty IP entries. When ips is non-empty (the
+// eviction path — the store's OnEvict runs with the store lock held), only
+// those IPs are touched: a full scan of the PTR index under the store write
+// lock would otherwise cost O(index size) per eviction at steady-state cache
+// pressure. Pass nil for the full scan (re-Set paths; entries restored from
+// persist carry no IP set).
+func (c *Cache) cleanupPtrIndex(owner entryKey, ips []string) {
+	if len(ips) > 0 {
+		for _, ip := range ips {
+			old, ok := c.ptrIndex.Get(ip)
+			if !ok {
+				continue
+			}
+			// Copy-filter: never rewrite the map's shared backing array in
+			// place (races ReverseLookup's lock-free iteration).
+			kept := make([]entryKey, 0, len(old))
+			for _, k := range old {
+				if k != owner {
+					kept = append(kept, k)
+				}
+			}
+			switch {
+			case len(kept) == 0:
+				c.ptrIndex.Delete(ip)
+			case len(kept) != len(old):
+				c.ptrIndex.Set(ip, kept)
+			}
+		}
+		return
+	}
+
 	type change struct {
 		ip   string
 		keys []entryKey
 	}
 	changes := make([]change, 0, 8)
 	c.ptrIndex.Range(func(ip string, keys []entryKey) bool {
-		kept := keys[:0]
+		// Copy-filter: keys[:0] compaction would rewrite the map's shared
+		// backing array in place, racing ReverseLookup's lock-free
+		// iteration of a previously returned slice header.
+		kept := make([]entryKey, 0, len(keys))
 		for _, k := range keys {
 			if k != owner {
 				kept = append(kept, k)

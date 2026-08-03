@@ -5,7 +5,6 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"net"
 	"sync/atomic"
 	"time"
@@ -142,13 +141,6 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 
 	err := h.chain.ServeDNS(h.ctx, qctx)
 
-	if errors.Is(err, ErrDrop) || qctx.Dropped {
-		// NOTE: Do NOT Put(req) here — the protocol caller owns the
-		// request message lifecycle and will Put it after ServeDNS returns.
-		// Putting here would cause a double-put race with the caller.
-		return nil
-	}
-
 	if err != nil && qctx.Res == nil {
 		msg := BuildResponseMsg(req)
 		msg.Rcode = dns.RcodeServerFailure
@@ -158,7 +150,9 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	if err != nil {
 		// A chain error with a partially built response must not vanish:
 		// the partial response is served but the failure is observable.
-		log.Errorf("QUERY: chain error %v (partial response rcode=%s)", err, dns.RcodeToString[qctx.Res.Rcode])
+		// Warn, not Error: recoverable per-query chain failures repeat at
+		// query rate during upstream outages.
+		log.Warnf("QUERY: chain error %v (partial response rcode=%s)", err, dns.RcodeToString[qctx.Res.Rcode])
 		h.stats.Record(&stats.Request{Result: "error", Protocol: protocol, Rcode: int(qctx.Res.Rcode), //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
 			ResponseTime: ElapsedMS(qctx.StartTime)})
 	}

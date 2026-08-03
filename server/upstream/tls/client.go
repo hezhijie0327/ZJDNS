@@ -103,6 +103,9 @@ func (c *Client) Close() {
 		return
 	}
 
+	// Note: the LRU maps are intentionally NOT nil'd here — in-flight
+	// queries read them (guarded by nil checks at the call sites), and a
+	// nil write would race those reads. The maps die with the Client.
 	if c.dohTransports != nil {
 		c.dohTransports.Range(func(key string, client *http.Client) bool {
 			if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
@@ -110,7 +113,6 @@ func (c *Client) Close() {
 			}
 			return true
 		})
-		c.dohTransports = nil
 	}
 	if c.doh3Transports != nil {
 		c.doh3Transports.Range(func(key string, client *http.Client) bool {
@@ -119,7 +121,6 @@ func (c *Client) Close() {
 			}
 			return true
 		})
-		c.doh3Transports = nil
 	}
 
 	if c.dotPool != nil {
@@ -194,7 +195,12 @@ func (c *Client) getQUICConfig(key string, skipVerify bool) *quic.Config {
 		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
 		TokenStore:            quic.NewLRUTokenStore(config.DefaultTokenStoreCapacity, config.DefaultTokenStoreMaxEntries),
 	}
-	c.quicConfigs.Set(key, cfg)
+	// LoadOrStore: concurrent misses would otherwise build one config (and
+	// TokenStore) each and overwrite — the loser's 0-RTT token store then
+	// splits from the cached one and resetQUICConfig can never heal it.
+	if actual, loaded := c.quicConfigs.LoadOrStore(key, cfg); loaded {
+		return actual
+	}
 	return cfg
 }
 

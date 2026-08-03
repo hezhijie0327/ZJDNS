@@ -250,5 +250,3 @@ func (s *DNSStamp) BuildDoHURL() string {
 	}
 	return "https://" + net.JoinHostPort(host, port) + path
 }
-
-// String encodes the stamp back to an sdns:// URI.

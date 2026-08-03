@@ -205,12 +205,11 @@ func (c *Client) executeOnce(
 	response.Data = nil
 
 	if response.Truncated {
-		const maxQueryLen = 4096
 		state.mu.Lock()
 		// §5.4.2: escalate by at least 64 bytes on TC.  We double each
 		// round to converge in O(log n) — matching dnscrypt-proxy's
 		// blindAdjust().  The +64 floor is the RFC minimum.
-		next := min(max(state.minQueryLen*2, state.minQueryLen+64), maxQueryLen)
+		next := min(max(state.minQueryLen*2, state.minQueryLen+64), dnscryptcrypto.MaxDNSUDPPacketSize)
 		if next > state.minQueryLen {
 			state.minQueryLen = next
 			log.Debugf("UPSTREAM: DNSCrypt min-query-len escalated to %d after TC", state.minQueryLen)
@@ -226,6 +225,11 @@ func (c *Client) executeOnce(
 			resp, err := c.Execute(ctx, msg, server, true)
 			return resp, false, err
 		}
+		// TCP still truncated at the max escalation: deliver an error, not
+		// a truncated payload — the caller would otherwise parse and cache
+		// incomplete data without any TC awareness.
+		pool.DefaultMessage.Put(response)
+		return nil, false, errors.New("dnscrypt: response still truncated over TCP at max query length")
 	}
 
 	return response, false, nil
@@ -238,6 +242,8 @@ func (c *Client) WarmUp(ctx context.Context, server *config.UpstreamServer) {
 		log.Debugf("UPSTREAM: DNSCrypt WarmUp failed for %s: %v", server.Address, err)
 		return
 	}
+	// _ = error: WarmUp is best-effort — a cert-fetch failure here is only a
+	// missed pre-warm; the first real query will fetch the state itself.
 	_, _ = c.state(ctx, addr, providerName, publicKey, server, server.Protocol == config.ProtoDNSCryptTCP)
 }
 

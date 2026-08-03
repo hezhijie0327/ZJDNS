@@ -72,6 +72,11 @@ func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) (sorted []ne
 	if p == nil || len(ips) <= 1 || len(p.steps) == 0 {
 		return ips, nil
 	}
+	if ctx == nil {
+		// measureIPLatency derives step contexts via WithTimeout — a nil ctx
+		// would panic there. Defensive, mirroring New's bgCtx nil guard.
+		ctx = context.Background()
+	}
 
 	n := len(ips)
 

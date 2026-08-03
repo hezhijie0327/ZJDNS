@@ -45,6 +45,11 @@ func (s *DTLSSessionStore) Get(key []byte) (dtls.Session, error) {
 	if !ok {
 		return dtls.Session{}, nil // pion/dtls treats error as fatal; nil session = full handshake
 	}
+	// Deep-copy like Set: the map's value is evictable at any moment, and
+	// OnEvict zeroes ID/Secret in place — returning the shared slices would
+	// wipe an in-flight handshake's key material mid-derivation.
+	sess.ID = slices.Clone(sess.ID)
+	sess.Secret = slices.Clone(sess.Secret)
 	log.Debugf("UPSTREAM: DTLS session resumed (id=%x)", sess.ID)
 	return sess, nil
 }

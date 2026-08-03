@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -83,6 +84,15 @@ func (c *Client) ExecuteDTLCP(ctx context.Context, msg *dns.Msg, server *config.
 		}
 	}
 	defer zdnsutil.CloseWithLog(conn, "DTLCP connection", "UPSTREAM")
+
+	// The handshake consumed the dial deadline — restore ctx-bound
+	// deadlines so a stalled server cannot hang the read (and its
+	// goroutine and socket) forever.
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stop()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
 
 	if err := msg.Pack(); err != nil {
 		return nil, fmt.Errorf("dtlcp: pack query: %w", err)

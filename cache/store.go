@@ -32,6 +32,7 @@ type cacheEntry struct {
 	ts        int64  // unix seconds at write
 	expiresAt int64  // ts + entryTTL + staleMaxAge — hard removal deadline
 	validated bool
+	ips       []string // distinct IPs in the entry (for targeted PTR-index cleanup on eviction; not persisted)
 }
 
 // latencyEntry holds an IP latency measurement with its expiry time, so the
@@ -90,7 +91,7 @@ func New(maxSizeBytes int64, file string) *Cache {
 		latency:  lrumap.New[string, latencyEntry](config.DefaultLatencyCacheCapacity),
 	}
 	store.SetWeight(maxSizeBytes, func(e cacheEntry) int64 { return int64(len(e.value)) })
-	store.SetOnEvict(func(k entryKey, _ cacheEntry) { c.cleanupPtrIndex(k) })
+	store.SetOnEvict(func(k entryKey, e cacheEntry) { c.cleanupPtrIndex(k, e.ips) })
 	// Byte-budget the PTR index: one IP can map to hundreds of entries, so a
 	// count cap alone would not bound memory. Same mechanism as the cache.
 	c.ptrIndex.SetWeight(config.DefaultPtrIndexMaxBytes, ptrIndexWeight)
@@ -254,8 +255,12 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 
 	expiresAt := now + int64(entryTTL) + defaultStaleMaxAge
 	key := entryKey{qname: qname, ecsAddr: ecsAddr, ecsPrefix: uint16(ecsPrefix), dnssecOK: dnssecOK, qtype: qtype, qclass: qclass} //nolint:gosec // G115: prefix ≤ 128 by CIDR semantics
-	c.store.Set(key, cacheEntry{value: wire, ts: now, expiresAt: expiresAt, validated: validated})
-	c.updatePtrIndex(key, answer, authority, additional)
+	// Extract the IP set once and store it on the entry: on eviction the
+	// OnEvict callback can then remove the owner from exactly these PTR
+	// mappings instead of scanning the whole index under the store lock.
+	ips := extractIPs(answer, authority, additional)
+	c.store.Set(key, cacheEntry{value: wire, ts: now, expiresAt: expiresAt, validated: validated, ips: ips})
+	c.updatePtrIndex(key, ips)
 	return true
 }
 

@@ -82,10 +82,9 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// synthetic response below: CacheStore uses it to skip building a
 		// response, so setting it before the fall-through delegation would
 		// silently drop the resolution result (the client gets nothing).
-		qctx.ZoneResult = &zoneResult
-
 		// Non-success rcode → build error response.
 		if zoneResult.Rcode != dns.RcodeSuccess {
+			qctx.ZoneResult = &zoneResult
 			log.Debugf("RESULT: %s %s | rcode=%s, blocked by zone rule", qname, dns.TypeToString[qtype], dns.RcodeToString[uint16(zoneResult.Rcode)]) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
 			response := handler.BuildResponseMsg(qctx.Req)
 			response.Rcode = uint16(zoneResult.Rcode) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
@@ -103,6 +102,7 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// Successful zone response with records.
 		hasRecords := len(zoneResult.Answer) > 0 || len(zoneResult.Authority) > 0 || len(zoneResult.Additional) > 0
 		if hasRecords {
+			qctx.ZoneResult = &zoneResult
 			elapsed := ttl.Elapsed(zoneResult.CreatedAt)
 			response := handler.BuildResponseMsg(qctx.Req)
 			response.Answer = ttl.DeductElapsedCyclical(zoneResult.Answer, elapsed)
@@ -117,16 +117,8 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return nil
 		}
 
-		// Zone rule matched but changed the domain (wildcard rewrite).
-		// qctx.RewrittenName is set so the Response middleware can restore
-		// original owner names in the response rdata sections without mutating
-		// the shared request message. Wildcard CNAME chains (where intermediate
-		// targets differ from the original query name) are not restored — this
-		// is an accepted limitation for zone rewrite.
-		if zoneResult.Domain != qname {
-			qctx.OriginalName = qname
-			qctx.RewrittenName = zoneResult.Domain
-		}
+		// Zone rule matched with rcode-only or delegation (no records).
+		// Delegate to downstream middleware for resolution.
 		return next.ServeDNS(ctx, qctx)
 	})
 }

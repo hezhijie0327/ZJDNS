@@ -140,7 +140,6 @@ func addDDRRecords(cfg *ServerConfig) {
 			r = &aggRecord{port: d.port, alpns: make(map[string]bool)}
 			byPort[d.port] = r
 		}
-		r.alpns[d.alpn] = true
 		if d.endpoint != "" && r.dohpath == "" {
 			r.dohpath = normalizeEndpoint(d.endpoint)
 			if r.dohpath == "" && d.endpoint != "" {
@@ -148,6 +147,7 @@ func addDDRRecords(cfg *ServerConfig) {
 				continue
 			}
 		}
+		r.alpns[d.alpn] = true
 	}
 
 	// Sort records: HTTP-based first (those with dohpath), then stream-based,

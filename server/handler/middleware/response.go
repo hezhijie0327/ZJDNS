@@ -3,7 +3,6 @@ package middleware
 import (
 	"context"
 	"net"
-	"slices"
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
@@ -70,19 +69,25 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
 	// either. qctx.EDE alone should NOT trigger adding OPT to non-EDNS
 	// queries. Padding is gated separately by clientWantsPadding.
 	hasRequestEDNS := qctx.Req.UDPSize != 0 || len(qctx.Req.Pseudo) > 0
-	shouldAddEDNS := hasRequestEDNS || qctx.ClientRequestedDNSSEC || cookieStr != ""
+	// qctx.EDE also requires an OPT carrier: on the plain UDP/TCP path the
+	// fork unpacks only the question, so a request that DID carry OPT (and
+	// was then rejected by Validation with an EDE) leaves Pseudo empty —
+	// without this term the EDE set by Validation/EDNS middleware would be
+	// silently dropped on those short-circuit responses.
+	shouldAddEDNS := hasRequestEDNS || qctx.ClientRequestedDNSSEC || cookieStr != "" || qctx.EDE != nil
 
 	// BADCOOKIE responses already have EDNS applied by the EDNS middleware.
 	if shouldAddEDNS && m.edns != nil && msg.Rcode != dns.RcodeBadCookie {
 		if ecsOpt != nil && qctx.ResolutionResult != nil && qctx.ResolutionResult.ECS != nil {
-			ecsOpt.ScopePrefix = qctx.ResolutionResult.ECS.ScopePrefix
+			// Copy before writing: without client ECS, ecsOpt is the shared
+			// default-ECS singleton (ECSForQType atomic load) — mutating its
+			// ScopePrefix in place races every concurrent query and leaks
+			// one query's scope into another's cache partitioning decision.
+			ecs := *ecsOpt
+			ecs.ScopePrefix = qctx.ResolutionResult.ECS.ScopePrefix
+			ecsOpt = &ecs
 		}
 		m.edns.ApplyToMessage(msg, ecsOpt, qctx.IsSecure, cookieStr, qctx.EDE, false, clientWantsPadding, qctx.TCPKeepalive)
-	}
-
-	// Restore original domain name if zone rule rewrote it.
-	if qctx.OriginalName != "" {
-		m.restoreDomain(msg, qctx.EffectiveName(), qctx.OriginalName)
 	}
 }
 
@@ -117,52 +122,4 @@ func (m *Response) generateCookieStr(cookieOpt *edns.CookieOption, clientIP net.
 		return ""
 	}
 	return edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
-}
-
-// restoreDomain rewrites owner names of RRs that exactly match currentName
-// back to originalName. It is called after zone wildcard rewrites.
-//
-// Limitation: only exact owner name matches are restored. Intermediate CNAME
-// targets in a wildcard chain (e.g., *.example.com → <random>.cdn.net) are
-// not matched, so their names remain in rewritten form. This is acceptable
-// because wildcard-rewritten responses rarely contain CNAME chains, and the
-// restored original name is sufficient for client-side validation.
-func (m *Response) restoreDomain(msg *dns.Msg, currentName, originalName string) {
-	if msg == nil || dns.EqualName(currentName, originalName) {
-		return
-	}
-	// Renaming the owner of an RRset invalidates its RRSIG (signatures
-	// cover the owner name) and its NSEC/NSEC3 denials — a validating
-	// client would see BOGUS. Strip DNSSEC records covering the renamed
-	// name and clear the AD bit.
-	for _, rr := range msg.Answer {
-		if rr == nil {
-			continue
-		}
-		switch rr.(type) {
-		case *dns.RRSIG, *dns.NSEC, *dns.NSEC3:
-			if dns.EqualName(rr.Header().Name, currentName) {
-				rr.Header().Class = dns.ClassNONE // sentinel: filtered below
-			}
-		}
-	}
-	msg.Answer = slices.DeleteFunc(msg.Answer, func(rr dns.RR) bool {
-		return rr != nil && rr.Header().Class == dns.ClassNONE && dns.EqualName(rr.Header().Name, currentName)
-	})
-	msg.AuthenticatedData = false
-	for _, rr := range msg.Answer {
-		if rr != nil && dns.EqualName(rr.Header().Name, currentName) {
-			rr.Header().Name = originalName
-		}
-	}
-	for _, rr := range msg.Ns {
-		if rr != nil && dns.EqualName(rr.Header().Name, currentName) {
-			rr.Header().Name = originalName
-		}
-	}
-	for _, rr := range msg.Extra {
-		if rr != nil && dns.EqualName(rr.Header().Name, currentName) {
-			rr.Header().Name = originalName
-		}
-	}
 }

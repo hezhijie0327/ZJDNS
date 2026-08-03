@@ -56,7 +56,6 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 		log.Warnf("DNSCRYPT: Failed to configure UDP socket: %v", err)
 	}
 
-	s.wg.Add(1)
 	defer s.wg.Done()
 
 	buf := pool.DefaultBuffer.Get()
@@ -78,14 +77,12 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 		n, addr, err := udpConn.ReadFromUDP(buf)
 		if err != nil {
 			if !s.isStarted() {
-				pool.DefaultBuffer.Put(buf)
 				return
 			}
 			if zdnsutil.IsTemporaryError(err) {
 				continue
 			}
 			log.Debugf("DNSCRYPT: UDP read error: %v", err)
-			pool.DefaultBuffer.Put(buf)
 			return
 		}
 
@@ -114,8 +111,6 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 			s.handleUDPPacket(ctx, packet, addr, udpConn)
 		})
 	}
-	// Loop exited via isStarted() → return the held buffer.
-	pool.DefaultBuffer.Put(buf)
 }
 
 // handleUDPPacket processes a single UDP datagram.

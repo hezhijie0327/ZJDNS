@@ -49,7 +49,9 @@ func (s *Server) startDOHServer(port string) error {
 		tlsConfig.GetConfigForClient = s.getConfigForClient(config.NextProtoDOH)
 
 		httpsListener := eTLS.NewListener(rawListener, tlsConfig)
+		s.listenerMu.Lock()
 		s.httpsListeners = append(s.httpsListeners, httpsListener)
+		s.listenerMu.Unlock()
 
 		// eHTTP server with native eTLS-aware HTTP/2 — the bundled h2
 		// detects eTLS connections from the listener automatically.
@@ -61,7 +63,9 @@ func (s *Server) startDOHServer(port string) error {
 			WriteTimeout:      config.DefaultHTTPServerWriteTimeout,
 			IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
 		}
+		s.listenerMu.Lock()
 		s.dohServers = append(s.dohServers, dohSrv)
+		s.listenerMu.Unlock()
 
 		capturedSrv := dohSrv
 		capturedListener := httpsListener

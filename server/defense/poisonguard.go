@@ -131,7 +131,7 @@ func (d *Detector) classify(zone, name string, rrtype uint16) Verdict {
 	case zone == ".":
 		return d.classifyRoot(name, rrtype)
 	case d.isTLD(zone):
-		return d.classifyTLD(zone, name)
+		return d.classifyTLD(zone, name, rrtype)
 	default:
 		// Authoritative level: the zone can legitimately return
 		// these records, but we can't distinguish real answers from
@@ -163,9 +163,16 @@ func (d *Detector) classifyRoot(name string, rrtype uint16) Verdict {
 
 // classifyTLD validates responses from TLD servers.  TLD servers should only
 // return records for the TLD itself (e.g. SOA for "com"), never A/AAAA for
-// subdomains.
-func (d *Detector) classifyTLD(zone, name string) Verdict {
+// subdomains — with one legitimate exception: delegation records (DS/NS) for
+// subdomains, which TLD servers answer routinely (e.g. DS for example.com
+// from the com servers). This mirrors the delegation exemption in
+// classifyRoot; without it, DS queries for signed child zones were judged
+// Poisoned and the DNSSEC chain broke with SERVFAIL.
+func (d *Detector) classifyTLD(zone, name string, rrtype uint16) Verdict {
 	if name != zone {
+		if (rrtype == dns.TypeDS || rrtype == dns.TypeNS) && dnsutil.IsBelow(dnsutil.Fqdn(zone), dnsutil.Fqdn(name)) {
+			return VerdictClean
+		}
 		return VerdictPoisoned
 	}
 	return VerdictClean

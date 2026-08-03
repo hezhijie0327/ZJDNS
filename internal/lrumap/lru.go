@@ -173,6 +173,14 @@ func (m *Map[K, V]) Set(key K, val V) {
 	if e, ok := m.m[key]; ok {
 		if m.weightOf != nil {
 			m.totalWeight += m.weightOf(val) - m.weightOf(e.val)
+			// Update path: evicting on insert only would let totalWeight
+			// drift over maxWeight while a heavy value is repeatedly
+			// refreshed under the same key. The just-updated entry is at
+			// the front, so evictLocked (LRU tail) never removes it while
+			// len > 1.
+			for m.totalWeight > m.maxWeight && m.len > 1 {
+				m.evictLocked()
+			}
 		}
 		e.val = val
 		m.moveToFront(e)
@@ -253,6 +261,9 @@ func (m *Map[K, V]) Delete(key K) {
 // CompareAndDelete removes the entry for key only if it currently holds val.
 // It reports whether the entry was removed. Atomic Get→compare→Delete: a
 // concurrent Set installing a different value for the same key is preserved.
+// CompareAndDelete deletes the entry for key only if its current value
+// equals val (interface equality — V must be a comparable type; slice/map/
+// func values would panic here).
 func (m *Map[K, V]) CompareAndDelete(key K, val V) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -278,7 +289,9 @@ func (m *Map[K, V]) Clear() {
 			m.onEvict(e.key, e.val)
 		}
 	}
-	m.m = make(map[K]*lruEntry[K, V], m.cap)
+	// Bound the preallocation like New — a large-capacity map must not pay
+	// for its full ceiling on every Clear (memory spike on FlushDB).
+	m.m = make(map[K]*lruEntry[K, V], min(m.cap, defaultPrealloc))
 	m.head.next = m.tail
 	m.tail.prev = m.head
 	m.len = 0
@@ -441,6 +454,7 @@ func (m *Map[K, V]) load() (int, error) {
 	count := binary.BigEndian.Uint64(raw[off:])
 	off += 8
 	if count > uint64(len(raw)) { // each entry needs at least 8 bytes of framing
+		_ = persist.Backup(path)
 		return 0, errors.New("lrumap: persist entry count exceeds file size")
 	}
 	loaded := 0
@@ -448,18 +462,18 @@ func (m *Map[K, V]) load() (int, error) {
 		var keyB, valB []byte
 		var err error
 		if keyB, off, err = takeBytes(raw, off); err != nil {
-			return 0, err
+			return 0, m.abortPartialLoad(path, fmt.Errorf("lrumap: truncated key: %w", err))
 		}
 		if valB, off, err = takeBytes(raw, off); err != nil {
-			return 0, err
+			return 0, m.abortPartialLoad(path, fmt.Errorf("lrumap: truncated value: %w", err))
 		}
 		key, err := codec.DecodeKey(keyB)
 		if err != nil {
-			return 0, fmt.Errorf("lrumap: decode key: %w", err)
+			return 0, m.abortPartialLoad(path, fmt.Errorf("lrumap: decode key: %w", err))
 		}
 		val, include, err := codec.DecodeValue(valB)
 		if err != nil {
-			return 0, fmt.Errorf("lrumap: decode value: %w", err)
+			return 0, m.abortPartialLoad(path, fmt.Errorf("lrumap: decode value: %w", err))
 		}
 		if include {
 			m.Set(key, val)
@@ -467,6 +481,16 @@ func (m *Map[K, V]) load() (int, error) {
 		}
 	}
 	return loaded, nil
+}
+
+// abortPartialLoad handles a mid-file decode failure: back the corrupt file
+// up (like the other corruption paths) and drop the partially restored
+// entries — keeping them would let the next Save silently overwrite the old
+// file with truncated data and no recoverable copy.
+func (m *Map[K, V]) abortPartialLoad(path string, err error) error {
+	_ = persist.Backup(path)
+	m.Clear()
+	return err
 }
 
 // writeU16 appends v as BigEndian uint16.

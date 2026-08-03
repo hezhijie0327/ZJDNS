@@ -10,7 +10,8 @@ import (
 )
 
 // NowUnix returns the current Unix timestamp. Override in tests for
-// deterministic results.  This is an exported var so that test packages
+// deterministic results.  This is an exported var so that test packages can
+// swap it without touching the hot path.
 var NowUnix = log.NowUnix //nolint:gocritic // variable allows test override
 
 // IsExpired reports whether the TTL has elapsed relative to timestamp.

@@ -119,11 +119,17 @@ func buildRecord(domain string, record *config.ZoneRecord) dns.RR {
 	if len(content) >= 2 && content[0] == '\\' && content[1] == '#' {
 		fields := strings.Fields(content[2:])
 		if len(fields) == 2 {
-			if _, err := strconv.ParseUint(fields[0], 10, 16); err == nil {
-				if _, err := hex.DecodeString(fields[1]); err == nil {
-					return &dns.RFC3597{
-						Hdr:     dns.Header{Name: name, Class: class, TTL: ttl},
-						RFC3597: rdata.RFC3597{RRType: record.Type, Data: fields[1]},
+			if n, err := strconv.ParseUint(fields[0], 10, 16); err == nil {
+				// RFC 3597: the declared length must match the hex data —
+				// a mismatch would pack a wire record with a wrong rdata
+				// length. Mismatched content falls through to the warn
+				// below rather than emitting a malformed record.
+				if len(fields[1]) == 2*int(n) {
+					if _, err := hex.DecodeString(fields[1]); err == nil {
+						return &dns.RFC3597{
+							Hdr:     dns.Header{Name: name, Class: class, TTL: ttl},
+							RFC3597: rdata.RFC3597{RRType: record.Type, Data: fields[1]},
+						}
 					}
 				}
 			}

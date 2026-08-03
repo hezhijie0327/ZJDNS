@@ -22,8 +22,8 @@ func TestHopGuard_LearningPhase_AllPass(t *testing.T) {
 			t.Errorf("learning phase: call %d should pass", i+1)
 		}
 	}
-	if hg.Expected(testServer) != 0 {
-		t.Error("Expected() should return 0 before armed")
+	if hg.armed(testServer) {
+		t.Error("armed() should be false before the sample threshold")
 	}
 }
 
@@ -102,11 +102,11 @@ func TestHopGuard_LRUSeparation(t *testing.T) {
 	// Server B: TTL=50 dominates
 	feedTTL(hg, "1.1.1.1", 50, 32)
 
-	if hg.Expected("8.8.8.8") != 100 {
-		t.Errorf("8.8.8.8 baseline should be 100, got %d", hg.Expected("8.8.8.8"))
+	if !hg.armed("8.8.8.8") {
+		t.Error("8.8.8.8 should be armed after 32 samples")
 	}
-	if hg.Expected("1.1.1.1") != 50 {
-		t.Errorf("1.1.1.1 baseline should be 50, got %d", hg.Expected("1.1.1.1"))
+	if !hg.armed("1.1.1.1") {
+		t.Error("1.1.1.1 should be armed after 32 samples")
 	}
 
 	// TTL=50 passes for 1.1.1.1 but not 8.8.8.8
@@ -124,10 +124,7 @@ func TestHopGuard_NilGuard(t *testing.T) {
 	if !hg.Validate("8.8.8.8", 42) {
 		t.Error("nil guard should always return true")
 	}
-	hg.Feed("8.8.8.8", 42) // nil guard: no-op
-	if hg.Expected("8.8.8.8") != 0 {
-		t.Errorf("nil guard Expected() should be 0, got %d", hg.Expected("8.8.8.8"))
-	}
+	hg.Feed("8.8.8.8", 42) // nil guard: no-op — must not panic
 }
 
 func TestHopGuard_ZeroTTL(t *testing.T) {

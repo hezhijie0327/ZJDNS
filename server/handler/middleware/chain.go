@@ -72,6 +72,11 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	if deps == nil {
 		panic("middleware: nil Dependencies — programming error")
 	}
+	// Fail fast at startup instead of on the first query: every required
+	// field is dereferenced unconditionally by its middleware.
+	if deps.Config == nil || deps.Cache == nil || deps.EDNS == nil || deps.Resolver == nil || deps.Stats == nil {
+		panic("middleware: Dependencies missing required field (Config/Cache/EDNS/Resolver/Stats) — programming error")
+	}
 	// Innermost: no-op terminal stub — not reached in normal operation
 	// (Resolution is always configured).  Resolution is the real terminal
 	// — it ignores next and never calls this stub.
@@ -101,7 +106,7 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	}
 
 	// PTR reverse lookup only fires on cache miss.
-	h = (&PTR{store: deps.Cache}).Wrap(h)
+	h = (&PTR{store: deps.Cache, stats: deps.Stats}).Wrap(h)
 
 	// Cache lookup: short-circuits on fresh/stale hit.
 	h = (&CacheLookup{

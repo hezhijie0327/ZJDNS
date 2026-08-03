@@ -130,6 +130,13 @@ func loadTrustAnchorsFromFile(path string) ([]*dns.DNSKEY, error) {
 				continue
 			}
 			ds := dnskey.ToDS(kd.DigestType)
+			if ds == nil {
+				// Fork's ToDS returns nil for unsupported digest types (e.g. GOST)
+				// and un-packable keys — fail closed like every other malformed
+				// anchor branch instead of dereferencing nil.
+				log.Debugf("SECURITY: unsupported digest type %d for trust anchor key_tag=%d — skipping", kd.DigestType, kd.KeyTag)
+				continue
+			}
 			got, err := hex.DecodeString(ds.Digest)
 			if err != nil || !bytes.Equal(got, want) {
 				log.Debugf("SECURITY: trust anchor digest mismatch (key_tag=%d) — skipping", kd.KeyTag)

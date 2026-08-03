@@ -36,7 +36,6 @@ type Server struct {
 	dohServers     []*http.Server
 	dtlcpListeners []net.Listener
 	serverGroup    *errgroup.Group
-	serverCtx      context.Context
 }
 
 // New creates a TLCP Server, loading or generating SM2 certificate pairs.
@@ -115,7 +114,7 @@ func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, 
 	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())
-	serverGroup, serverCtx := errgroup.WithContext(ctx)
+	serverGroup, _ := errgroup.WithContext(ctx)
 	serverGroup.SetLimit(config.DefaultServerGoroutineLimit)
 
 	s := &Server{
@@ -128,7 +127,6 @@ func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, 
 		ctx:         ctx,
 		cancel:      cancel,
 		serverGroup: serverGroup,
-		serverCtx:   serverCtx,
 	}
 
 	displayCertificateInfo(&signCert)

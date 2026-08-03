@@ -49,8 +49,6 @@ type Server struct {
 	config         *config.ServerConfig
 	handler        *handler.Handler
 	queryClient    *upstream.Client
-	stats          *stats.Collector
-	cacheStore     *cache.Cache
 	persistManager *persist.Manager
 
 	tls             *tls.Server
@@ -104,7 +102,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		cacheStore.SetPtrPersist(filepath.Join(persistDir, "ptr.zst"))
 		cacheStore.SetLatencyPersist(filepath.Join(persistDir, "latency.zst"))
 	}
-	s.cacheStore = cacheStore
 	// A later init failure must still release the persist file (open handles).
 	initOK := false
 	defer func() {
@@ -113,7 +110,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		}
 	}()
 	statsCollector := stats.New()
-	s.stats = statsCollector
 	statsFile := ""
 	if persistDir != "" {
 		statsFile = filepath.Join(persistDir, "stats.zst")
@@ -272,11 +268,27 @@ func (s *Server) warmUpConnections(cfg *config.ServerConfig, queryClient *upstre
 
 // initHandler builds the middleware chain and returns the assembled handler.
 func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, statsCollector *stats.Collector, ednsH *edns.Handler, zoneEvaluator *zone.Evaluator, dnsResolver *resolver.Resolver, rulesetEngine *ruleset.Engine, cacheRefreshGroup *errgroup.Group, cacheRefreshCtx, backgroundCtx context.Context) *handler.Handler {
+	// isClosed is a forward-reference trick: every closure below captures the
+	// variable isClosed, not its value. After h is created, isClosed is
+	// updated to h.IsClosed so CacheLookup and the probe scheduler see the
+	// real health check.
+	isClosed := func() bool { return false }
+
 	var prober handler.LatencyProber
 	if len(cfg.Server.Features.LatencyProbe) > 0 {
 		prober = probe.New(
 			cacheStore,
-			func(fn func() error) { s.backgroundGroup.Go(fn) },
+			func(fn func() error) {
+				// Skip scheduling once shutdown began: backgroundGroup.Wait()
+				// may already be running, and errgroup.Go with a zero counter
+				// during Wait panics ("WaitGroup misuse: Add called
+				// concurrently with Wait"). In-flight queries are not tracked
+				// by shutdown, so this guard is what keeps them out.
+				if isClosed() {
+					return
+				}
+				s.backgroundGroup.Go(fn)
+			},
 			backgroundCtx,
 			cfg.Server.Features.LatencyProbe,
 		)
@@ -284,11 +296,6 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, s
 
 	prefetchCooldown := handler.NewPrefetchCooldown()
 	ctx := s.ctx
-
-	// isClosed is a forward-reference trick: the closure below captures the
-	// variable isClosed, not its value. After h is created, isClosed is
-	// updated to h.IsClosed so CacheLookup sees the real health check.
-	isClosed := func() bool { return false }
 
 	deps := &middleware.Dependencies{
 		Config:           cfg,

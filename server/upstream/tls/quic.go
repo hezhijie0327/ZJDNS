@@ -222,6 +222,16 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 	}
 	response.Data = nil
 
+	// RFC 9250 §4.2.1: the DNS message ID MUST be zero on DoQ. A
+	// non-zero ID indicates a protocol violation — discard the response
+	// instead of silently rewriting the ID (the stream is 1:1 so the
+	// query is unambiguous, but the violation must not be papered over).
+	if response.ID != 0 {
+		msg.ID = originalID
+		pool.DefaultMessage.Put(response)
+		return nil, errors.New("doq: response message ID is non-zero (RFC 9250 §4.2.1 violation)")
+	}
+
 	msg.ID = originalID
 	response.ID = originalID
 

@@ -2,9 +2,11 @@ package resolver
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"strings"
+	"sync/atomic"
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
@@ -24,6 +26,11 @@ const (
 )
 
 var errNoRootHints = errors.New("no root servers found")
+
+// lastLoadErrAt throttles the Error log for repeated load failures — the
+// retry-on-next-query design would otherwise print one Error per recursive
+// query while the data file is missing (hot-path spam drowning real signals).
+var lastLoadErrAt atomic.Int64
 
 // rootHints maps root server FQDNs to their addresses (ip:port), stored as a
 // single-entry lrumap (capacity 1 — LRU eviction can never displace the
@@ -50,12 +57,12 @@ func loadHints() map[string][]string {
 
 	path := zdnsutil.ResolveDataFile(rootHintsFileName, rootHintsURL)
 	if path == "" {
-		log.Errorf("RECURSION: cannot determine root hints path — no root hints loaded")
+		logLoadError("cannot determine root hints path — no root hints loaded")
 		return nil
 	}
 	hints, err := loadRootHintsFromFile(path)
 	if err != nil {
-		log.Errorf("RECURSION: failed to load root hints from %s: %v — will retry on next query", path, err)
+		logLoadError(fmt.Sprintf("failed to load root hints from %s: %v — will retry on next query", path, err))
 		// Do NOT cache the failure: a nil map here means the next call
 		// retries. Caching an empty map would permanently disable root
 		// resolution after one transient failure (e.g. startup offline).
@@ -64,6 +71,18 @@ func loadHints() map[string][]string {
 	rootHints.Set(rootHintsKey, hints)
 	log.Infof("RECURSION: loaded %d root server(s) from %s", len(hints), path)
 	return hints
+}
+
+// logLoadError logs a root-hints load failure at Error level at most once per
+// minute; the intervening failures go to Debug.
+func logLoadError(msg string) {
+	now := log.NowUnix()
+	if now-lastLoadErrAt.Load() >= 60 {
+		lastLoadErrAt.Store(now)
+		log.Errorf("RECURSION: %s", msg)
+	} else {
+		log.Debugf("RECURSION: %s", msg)
+	}
 }
 
 // loadRootHintsFromFile parses a BIND-style named.root zone file and returns a

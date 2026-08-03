@@ -120,6 +120,13 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	if cacheable {
 		// RFC 4035 §5.3.3: cap TTL of authenticated RRsets.
 		if validated {
+			// Deep-clone before capping: qr may be shared with singleflight
+			// followers whose DNS64 middleware rewrites the same RR headers
+			// concurrently (middleware/dns64.go) — capping in place would
+			// race those readers.
+			qr.Answer = cloneRRs(qr.Answer)
+			qr.Authority = cloneRRs(qr.Authority)
+			qr.Additional = cloneRRs(qr.Additional)
 			dnssec.CapValidatedTTL(qr.Answer, qr.Authority, qr.Additional)
 		}
 
@@ -250,4 +257,20 @@ func (m *CacheStore) buildFromCacheEntry(qctx *handler.QueryContext, entry *cach
 	}
 
 	return msg
+}
+
+// cloneRRs returns a deep copy of rrs so the caller can mutate RR headers
+// (e.g. CapValidatedTTL) without racing other goroutines that share the
+// same records (singleflight followers, DNS64 middleware).
+func cloneRRs(rrs []dns.RR) []dns.RR {
+	if len(rrs) == 0 {
+		return nil
+	}
+	out := make([]dns.RR, len(rrs))
+	for i, rr := range rrs {
+		if rr != nil {
+			out[i] = rr.Clone()
+		}
+	}
+	return out
 }

@@ -62,6 +62,41 @@ type metric struct {
 	pct   float64
 }
 
+// Result constants for Request.Result.
+const (
+	ResultHit       = "hit"
+	ResultMiss      = "miss"
+	ResultStale     = "stale"
+	ResultZone      = "zone"
+	ResultBlocked   = "blocked"
+	ResultBadCookie = "badcookie"
+	ResultPrefetch  = "prefetch"
+	ResultError     = "error"
+)
+
+// Protocol constants for Request.Protocol.
+const (
+	ProtoUDP         = "udp"
+	ProtoTCP         = "tcp"
+	ProtoTLS         = "tls"
+	ProtoQUIC        = "quic"
+	ProtoHTTPS       = "https"
+	ProtoHTTP3       = "http3"
+	ProtoDTLS        = "dtls"
+	ProtoDNSCrypt    = "dnscrypt"
+	ProtoDNSCryptTCP = "dnscrypt-tcp"
+	ProtoTLCP        = "tlcp"
+	ProtoHTTPTLCP    = "http-tlcp"
+	ProtoDTLCP       = "dtlcp"
+)
+
+// DNSSEC status constants for Request.DNSSECStatus.
+const (
+	DNSSECSecure   = "secure"
+	DNSSECInsecure = "insecure"
+	DNSSECBogus    = "bogus"
+)
+
 const latBuckets = 12
 
 var latBounds = [latBuckets]int64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000}
@@ -82,62 +117,62 @@ func (c *Collector) Record(r *Request) {
 	c.totalMS.Add(r.ResponseTime)
 
 	switch r.Result {
-	case "hit":
+	case ResultHit:
 		c.hit.Add(1)
-	case "miss":
+	case ResultMiss:
 		c.miss.Add(1)
-	case "stale":
+	case ResultStale:
 		c.stale.Add(1)
-	case "zone":
+	case ResultZone:
 		c.zone.Add(1)
-	case "blocked":
+	case ResultBlocked:
 		c.blocked.Add(1)
-	case "badcookie":
+	case ResultBadCookie:
 		c.badcookie.Add(1)
-	case "prefetch":
+	case ResultPrefetch:
 		c.prefetch.Add(1)
-	case "error":
+	case ResultError:
 		c.errorCount.Add(1)
 	}
 
 	// Prefetch is a background operation — no protocol, rcode, or DNSSEC context.
-	if r.Result == "prefetch" {
+	if r.Result == ResultPrefetch {
 		return
 	}
 
 	switch r.Protocol {
-	case "udp":
+	case ProtoUDP:
 		c.udp.Add(1)
-	case "tcp":
+	case ProtoTCP:
 		c.tcp.Add(1)
-	case "tls":
+	case ProtoTLS:
 		c.tls.Add(1)
-	case "quic":
+	case ProtoQUIC:
 		c.quic.Add(1)
-	case "https":
+	case ProtoHTTPS:
 		c.https.Add(1)
-	case "http3":
+	case ProtoHTTP3:
 		c.http3.Add(1)
-	case "dtls":
+	case ProtoDTLS:
 		c.dtls.Add(1)
-	case "dnscrypt":
+	case ProtoDNSCrypt:
 		c.dnscrypt.Add(1)
-	case "dnscrypt-tcp":
+	case ProtoDNSCryptTCP:
 		c.dnscryptTCP.Add(1)
-	case "tlcp":
+	case ProtoTLCP:
 		c.tlcp.Add(1)
-	case "http-tlcp":
+	case ProtoHTTPTLCP:
 		c.httpTLCP.Add(1)
-	case "dtlcp":
+	case ProtoDTLCP:
 		c.dtlcp.Add(1)
 	}
 
 	switch r.DNSSECStatus {
-	case "secure":
+	case DNSSECSecure:
 		c.secure.Add(1)
-	case "insecure":
+	case DNSSECInsecure:
 		c.insecure.Add(1)
-	case "bogus":
+	case DNSSECBogus:
 		c.bogus.Add(1)
 	}
 	if r.Poisoned {

@@ -3,6 +3,7 @@ package plain
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"net"
 	"sync"
@@ -222,16 +223,18 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 			return nil, err
 		}
 
-		// HopGuard: feed every observed TTL to the histogram so new TTLs
-		// after routing changes can be learned. Validate still gates
-		// packet acceptance, but recording is decoupled — rejected TTLs
-		// accumulate in the histogram and become trusted after decay
-		// cycles if they repeat consistently.
-		if hg != nil {
-			hg.Feed(server.Address, ttl)
-		}
+		// HopGuard: validate gates packet acceptance first; Feed happens
+		// only for accepted TTLs (and again on final adoption below), so
+		// GFW-injected TTLs never enter the histogram — honoring the
+		// hopguard docstring contract "Only trusted DNS content is used
+		// for TTL learning". An unconditional Feed here would let spoofed
+		// packets with a fixed TTL become the mode and be promoted to
+		// trusted, permanently rejecting legitimate responses.
 		if hg != nil && !hg.Validate(server.Address, ttl) {
 			continue
+		}
+		if hg != nil {
+			hg.Feed(server.Address, ttl)
 		}
 
 		if n < 12 || uint16(buf[0])<<8|uint16(buf[1]) != msg.ID {
@@ -263,6 +266,13 @@ func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr str
 		return nil, err
 	}
 	defer func() { _ = pconn.Close() }()
+	// The ASSOCIATE handshake consumed the dial deadline — restore
+	// ctx-bound deadlines or a lost datagram hangs ReadFrom forever.
+	stop := context.AfterFunc(ctx, func() { _ = pconn.SetDeadline(time.Now()) })
+	defer stop()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = pconn.SetDeadline(deadline)
+	}
 
 	respBuf, ok := socks5.ReadPool.Get().(*[]byte)
 	if !ok {
@@ -282,7 +292,12 @@ func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr str
 		return nil, err
 	}
 	response.Data = nil
-	response.ID = msg.ID
+	// Reject ID mismatches like the TCP proxy path — silently rewriting
+	// the ID would accept a datagram that belongs to a different query.
+	if response.ID != msg.ID {
+		pool.DefaultMessage.Put(response)
+		return nil, fmt.Errorf("udp proxy response id mismatch: expected %d, got %d", msg.ID, response.ID)
+	}
 	return response, nil
 }
 

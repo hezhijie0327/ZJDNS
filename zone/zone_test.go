@@ -1352,6 +1352,31 @@ func TestEvaluator_DynamicKeySpaces(t *testing.T) {
 	}
 }
 
+// TestEvaluator_DynamicNonConfigQtype verifies that a dynamic rule does not
+// answer for qtypes it wasn”'t configured for — a dynamic rule generating
+// TXT/CHAOS must not match an A/INET query.
+func TestEvaluator_DynamicNonConfigQtype(t *testing.T) {
+	z := New()
+	err := z.LoadRules([]config.ZoneRule{
+		{Name: "dynamic.example.com", DynamicContent: func() []string { return []string{"hello"} }},
+	})
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	// Matching qtype (TXT/CHAOS) — should answer.
+	r := z.Evaluate("dynamic.example.com.", dns.TypeTXT, dns.ClassCHAOS, nil)
+	if !r.Matched || len(r.Answer) == 0 {
+		t.Fatal("dynamic rule must answer configured qtype (TXT/CHAOS)")
+	}
+
+	// Non-matching qtype (A/INET) — must NOT answer.
+	r = z.Evaluate("dynamic.example.com.", dns.TypeA, dns.ClassINET, nil)
+	if r.Matched {
+		t.Fatal("dynamic rule must not answer non-configured qtype (A/INET)")
+	}
+}
+
 // TestEvaluator_DynamicScoreVsStatic verifies a static wildcard rule with
 // stronger match tags wins over a generic wildcard dynamic rule.
 func TestEvaluator_DynamicScoreVsStatic(t *testing.T) {

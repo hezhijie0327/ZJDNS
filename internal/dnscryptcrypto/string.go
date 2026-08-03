@@ -24,7 +24,10 @@ func UnpackTxtString(s string) (msg []byte) {
 			// silently wrapping the value.
 			return nil
 		}
-		msg = append(msg, unescapeChar(bs[i]))
+		// DNS TXT/master-file escaping (RFC 1035 §5.1) defines \X as the
+		// literal character X — there is no \t→TAB mapping; unknown escapes
+		// pass through unchanged.
+		msg = append(msg, bs[i])
 	}
 	return msg
 }
@@ -48,11 +51,4 @@ func dddToByte(s []byte) (res byte, ok bool) {
 		return 0, false
 	}
 	return byte(n), true //nolint:gosec // G115: n clamped to 0..255 above
-}
-
-// unescapeChar returns the byte corresponding to the escaped character.
-// DNS TXT/master-file escaping (RFC 1035 §5.1) defines \X as the literal
-// character X — there is no \t→TAB mapping. Unknown escapes pass through.
-func unescapeChar(b byte) (escaped byte) {
-	return b
 }

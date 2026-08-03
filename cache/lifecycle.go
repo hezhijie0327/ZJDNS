@@ -52,7 +52,7 @@ func (c *Cache) Save() error {
 // final Save has already run when Close is called at shutdown, so a Clear
 // here is a pure memory release.
 func (c *Cache) Close() error {
-	_, _ = c.Clear()
+	_, _ = c.Clear() // _ = error: shutdown best-effort — Clear only frees memory; persistence already ran
 	return nil
 }
 

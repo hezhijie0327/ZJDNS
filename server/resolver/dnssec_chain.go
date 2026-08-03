@@ -76,6 +76,14 @@ func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, c
 				log.Debugf("SECURITY: root DNSKEY self-verification failed: %v", err)
 				return false
 			}
+			// The self-signature only proves internal consistency — a MITM
+			// can trivially generate a self-signed key set. The embedded
+			// trust anchors (RFC 7958) prove it is the real root; without
+			// this cross-check the whole chain of trust can be forged.
+			if !crypto.ContainsRootKey(dnskeyRecords) {
+				log.Debugf("SECURITY: root DNSKEY set does not match embedded trust anchors")
+				return false
+			}
 			chain.zoneDNSKEYs = dnskeyRecords
 			crypto.CacheZoneKeys(currentDomain, dnskeyRecords)
 
@@ -414,6 +422,14 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 		return false
 	case currentDomain == config.DNSRootZone:
 		if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err == nil {
+			// Cross-check against embedded trust anchors (RFC 7958) — a
+			// self-signature alone can be forged by a MITM of the root
+			// DNSKEY query (see ensureZoneDNSKEYs for the same check).
+			if !crypto.ContainsRootKey(dnskeyRecords) {
+				log.Debugf("SECURITY: root DNSKEY set does not match embedded trust anchors")
+				chain.lastEDECode = dns.ExtendedErrorDNSBogus
+				return false
+			}
 			keysVerified = true
 			log.Debugf("SECURITY: self-verified root DNSKEY")
 		} else {

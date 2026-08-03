@@ -394,17 +394,14 @@ graph TD
     SCORE --> TYPE{Response Type}
     TYPE -->|ANSWER| BUILDANS[Build Answer Section<br/>A/AAAA/CNAME/TXT...]
     TYPE -->|RCODE| BUILDRC[Return RCODE Only<br/>NXDOMAIN/SERVFAIL...]
-    BUILDANS --> REWRITE{Rewrite QNAME?}
-    REWRITE -->|Yes| SETNAME[Set OriginalName<br/>Rewrite for Resolution]
-    REWRITE -->|No| SHORTCUT[Short-circuit Pipeline<br/>qctx.Res = synthetic]
+    BUILDANS --> SHORTCUT[Short-circuit Pipeline<br/>qctx.Res = synthetic]
     BUILDRC --> SHORTCUT
-    SETNAME --> SHORTCUT
     classDef start fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     classDef proc fill:#fef3c7,stroke:#f59e0b,color:#78350f
     classDef match fill:#d1fae5,stroke:#10b981,color:#064e3b
     classDef nomatch fill:#e2e8f0,stroke:#64748b,color:#1e293b
     class Q start
-    class BYPASS,LOAD,MATCH,SCORE,TYPE,BUILDANS,BUILDRC,REWRITE,SETNAME proc
+    class BYPASS,LOAD,MATCH,SCORE,TYPE,BUILDANS,BUILDRC,SHORTCUT proc
     class SHORTCUT match
     class NOMATCH,NEXT nomatch
 ```

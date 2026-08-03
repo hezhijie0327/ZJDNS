@@ -9,7 +9,25 @@ import (
 	"strings"
 )
 
+// String encodes the stamp back to an sdns:// URI.
 func (s *DNSStamp) String() string {
+	// Length guards: wire fields are single-byte length-prefixed and VLP
+	// elements cap at 127 bytes — the previous byte(len(x)) truncation
+	// silently produced stamps that decode to garbage. Surface the limits
+	// instead of emitting corrupted output.
+	if len(s.Address) > 255 || len(s.ProviderName) > 255 || len(s.Path) > 255 || len(s.PublicKey) > 255 {
+		return "sdns://error:field-exceeds-255-bytes"
+	}
+	for _, h := range s.Hashes {
+		if len(h) > 127 {
+			return "sdns://error:hash-exceeds-127-bytes"
+		}
+	}
+	for _, b := range s.BootstrapIPs {
+		if len(b) > 127 {
+			return "sdns://error:bootstrap-ip-exceeds-127-bytes"
+		}
+	}
 	switch s.Proto {
 	case ProtoPlain:
 		return s.plainString()

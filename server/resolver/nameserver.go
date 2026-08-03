@@ -42,7 +42,6 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 	baseMsg := r.resolver.buildMsg(question, ecs, false, false)
 	baseMsg.UDPSize = pool.RecursiveUDPBufferSize
-	defer pool.DefaultMessage.Put(baseMsg)
 
 	for _, ns := range nameservers {
 		nsAddr := ns
@@ -187,6 +186,12 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		if err := g.Wait(); err != nil {
 			log.Debugf("RECURSION: NS query errgroup: %v", err)
 		}
+		// baseMsg is read by every worker (including those still queued
+		// behind SetLimit when the caller returned early on the first
+		// response) — returning it here, after g.Wait, guarantees no
+		// worker reads a pooled message that was already zeroed or
+		// reused by another query.
+		pool.DefaultMessage.Put(baseMsg)
 	}()
 
 	verdict := defense.VerdictClean

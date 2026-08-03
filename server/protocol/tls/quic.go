@@ -17,6 +17,7 @@ import (
 	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 	"github.com/quic-go/quic-go"
 	"golang.org/x/sync/errgroup"
 )
@@ -52,20 +53,26 @@ func (s *Server) startDOQServer() error {
 		if err != nil {
 			return fmt.Errorf("UDP listen on %s: %w", addr, err)
 		}
+		s.listenerMu.Lock()
 		s.doqConns = append(s.doqConns, conn)
+		s.listenerMu.Unlock()
 
 		transport := &quic.Transport{
 			Conn:                conn,
 			VerifySourceAddress: makeAddrValidator(addrCache),
 		}
+		s.listenerMu.Lock()
 		s.doqTransports = append(s.doqTransports, transport)
+		s.listenerMu.Unlock()
 
 		listener, err := transport.ListenEarly(quicTLSConfig, quicConfig)
 		if err != nil {
 			_ = conn.Close()
 			return fmt.Errorf("DoQ listen on %s: %w", addr, err)
 		}
+		s.listenerMu.Lock()
 		s.doqListeners = append(s.doqListeners, listener)
+		s.listenerMu.Unlock()
 
 		capturedDoQ := listener
 		s.serverGroup.Go(func() error {
@@ -145,8 +152,7 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 		}
 	}()
 
-	streamGroup, streamCtx := errgroup.WithContext(s.ctx)
-	_ = streamCtx
+	streamGroup := &errgroup.Group{}
 	streamGroup.SetLimit(config.DefaultMaxConcurrentStreams)
 
 	for {
@@ -242,10 +248,16 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		return
 	}
 
-	// RFC 9250 §4.5: 0-RTT MUST NOT carry non-replayable transactions.
-	// RFC 9250 §4.5: QUERY and NOTIFY are replayable in 0-RTT.
-	if conn.ConnectionState().Used0RTT && req.Opcode != dns.OpcodeQuery {
-		stream.CancelWrite(quic.StreamErrorCode(doq.QUICCodeProtocolError))
+	// RFC 9250 §4.5: QUERY and NOTIFY are replayable and MAY be carried in
+	// 0-RTT; other opcodes must not. For non-replayable transactions the
+	// server must either queue the query until the handshake completes or
+	// reply REFUSED with EDE "Too Early" — a stream reset is neither.
+	if conn.ConnectionState().Used0RTT && req.Opcode != dns.OpcodeQuery && req.Opcode != dns.OpcodeNotify {
+		refused := dnsutil.SetReply(&dns.Msg{}, req)
+		refused.Rcode = dns.RcodeRefused
+		if err := s.respondQUIC(stream, refused); err != nil {
+			log.Debugf("TLS: DoQ 0-RTT REFUSED send failed: %v", err)
+		}
 		pool.DefaultMessage.Put(req)
 		return
 	}
@@ -258,17 +270,21 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	default:
 	}
 	response := s.handler.ServeDNS(req, clientIP, true, config.ProtoQUIC)
-	// The caller owns req and returns it to the pool exactly once.
-	pool.DefaultMessage.Put(req)
 
 	if err := s.respondQUIC(stream, response); err != nil {
 		log.Debugf("TLS: DoQ response failed: %v", err)
 	}
-	// Identity guard: a handler may return the request message itself as the
-	// response — pooling the same pointer twice would let two goroutines
-	// race on it.
+	// Return req to the pool AFTER responding: respondQUIC packs the
+	// response, and pool.Put zeroes the message struct — an identity
+	// response (handler returned req itself) must be packed while intact.
+	if response == nil || response != req {
+		pool.DefaultMessage.Put(req)
+	}
+	// Identity guard: a handler may return the request message itself as
+	// the response — pooling the same pointer twice would let two
+	// goroutines race on it.
 	if response != nil && response != req {
-		defer pool.DefaultMessage.Put(response)
+		pool.DefaultMessage.Put(response)
 	}
 }
 

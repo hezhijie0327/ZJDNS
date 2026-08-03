@@ -123,6 +123,10 @@ func (c *Client) state(
 	cacheKey := stateCacheKey(addr, providerName, ephemeralKeys, preferPQ)
 
 	c.cacheMu.Lock()
+	if c.cache == nil {
+		c.cacheMu.Unlock()
+		return nil, errors.New("dnscrypt client closed")
+	}
 	state, ok := c.cache.Get(cacheKey)
 	c.cacheMu.Unlock()
 	if ok && time.Now().Before(state.expires) {

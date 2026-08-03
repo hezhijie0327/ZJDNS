@@ -83,18 +83,27 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			// RFC 6147 §5.5: with the CD bit set the client validates for
 			// itself — the synthesizer refuses (it would destroy the
 			// signature chain). Without CD, synthesis proceeds.
-			qr.Answer, qr.Authority, qr.Additional = m.synthesizer.Synthesize(
+			//
+			// Clone the QueryResult before mutating it: singleflight
+			// followers share one cloned result across their chains, and a
+			// concurrent follower's CacheStore reads qr.Answer/Validated
+			// while this goroutine rewrites them.
+			cloned := *qr
+			cloned.Answer, cloned.Authority, cloned.Additional = m.synthesizer.Synthesize(
 				qr.Answer, qr.Authority, qr.Additional,
 				aqr.Answer, aqr.Authority, aqr.Additional, qctx.Req.CheckingDisabled)
 			// RFC 6147 §5.5: the synthesized AAAA's DNSSEC status is that
 			// of the A lookup it derives from — set AD only when those
 			// records validated; never assert AD for unverified data.
-			qr.Validated = aqr.Validated
-			log.Debugf("DNS64: synthesized %d AAAA records for %s", len(qr.Answer), qname)
+			cloned.Validated = aqr.Validated
+			qctx.ResolutionResult = &cloned
+			log.Debugf("DNS64: synthesized %d AAAA records for %s", len(cloned.Answer), qname)
 		} else if aqr != nil && aqr.Err != nil {
 			// An upstream failure must not be masked as NODATA (and cached
-			// as such).
-			log.Warnf("DNS64: A lookup failed for %s: %v", qname, aqr.Err)
+			// as such). Debug: this fires on every AAAA query while the
+			// upstream is down — per-query errors are recorded by the
+			// resolver's own error paths.
+			log.Debugf("DNS64: A lookup failed for %s: %v", qname, aqr.Err)
 		}
 
 		return err

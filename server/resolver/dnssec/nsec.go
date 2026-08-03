@@ -3,6 +3,7 @@ package dnssec
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"zjdns/config"
 	"zjdns/internal/log"
@@ -25,7 +26,11 @@ func (c *CryptoValidator) verifyNSEC(authSigs []*dns.RRSIG, nsecs []*dns.NSEC, v
 		// DS for an insecure delegation — RFC 4035 §5.2), which is valid.
 		// Only filter when the NSEC is from an ancestor proving below-cut
 		// non-existence — i.e. the owner does not match the query name.
-		if isAncestorDelegation(nsec) && nsec.Header().Name != normalizedQname {
+		// Case-insensitive compare: NSEC owner names come from zone files
+		// that may store mixed case (legal per RFC 4343), while
+		// normalizedQname is lowercased — a byte compare would wrongly
+		// filter the ancestor delegation NSEC or fail the NODATA match.
+		if isAncestorDelegation(nsec) && !dns.EqualName(nsec.Header().Name, normalizedQname) {
 			continue
 		}
 		rrsigs := FindRRSIGs(authSigs, nsec.Header().Name, dns.TypeNSEC)
@@ -69,7 +74,7 @@ func matchesNSECDenial(nsec *dns.NSEC, normalizedQname string, qtype uint16, den
 		return isDomainInRange(normalizedQname, nsec.Header().Name, nsec.NextDomain)
 	case "NODATA":
 		owner := nsec.Header().Name
-		if owner == normalizedQname {
+		if dns.EqualName(owner, normalizedQname) {
 			// RFC 6840 §4.3: CNAME bit set means a CNAME exists
 			// at this name — NODATA is false.
 			if slices.Contains(nsec.TypeBitMap, dns.TypeCNAME) {
@@ -427,6 +432,15 @@ func hasOptOutInProof(nsec3s []*dns.NSEC3) bool {
 	return false
 }
 
+// nsecRRsetKey builds a canonical RRset identity for TTL capping. Mirror of
+// server/resolver/rrsetKey (same package layout would share it): RFC 3597
+// unknown types have no entry in dns.TypeToString and would otherwise
+// collapse distinct RRsets into a single "name/" key, and raw owner names
+// would not match RRSIGs that differ from the data record only in case.
+func nsecRRsetKey(name string, typ uint16) string {
+	return dnsutil.Canonical(name) + "/" + strconv.Itoa(int(typ))
+}
+
 // CapValidatedTTL applies the RFC 4035 §5.3.3 TTL cap to validated RRsets.
 // The TTL of each authenticated RRset MUST not exceed the minimum of:
 //  1. The RRset's TTL as received
@@ -443,7 +457,7 @@ func CapValidatedTTL(answer, authority, additional []dns.RR) {
 		rrsigMap := map[string][]*dns.RRSIG{}
 		for _, rr := range sections {
 			if sig, ok := rr.(*dns.RRSIG); ok {
-				k := sig.Header().Name + "/" + dns.TypeToString[sig.TypeCovered]
+				k := nsecRRsetKey(sig.Header().Name, sig.TypeCovered)
 				rrsigMap[k] = append(rrsigMap[k], sig)
 			}
 		}
@@ -452,7 +466,7 @@ func CapValidatedTTL(answer, authority, additional []dns.RR) {
 				continue
 			}
 			hdr := rr.Header()
-			k := hdr.Name + "/" + dns.TypeToString[dns.RRToType(rr)]
+			k := nsecRRsetKey(hdr.Name, dns.RRToType(rr))
 			sigs := rrsigMap[k]
 			if len(sigs) == 0 {
 				continue

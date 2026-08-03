@@ -68,7 +68,7 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				m.prober.Start(qname, qtype, entry.Answer, entry.Authority, entry.Additional, entry.Validated, nil)
 			}
 
-			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "hit", Rcode: dns.RcodeSuccess, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
+			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "hit", Rcode: entry.Rcode, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
 
 			// Prefetch if TTL is below threshold.
 			if m.closed != nil && !m.closed() && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) &&
@@ -115,14 +115,14 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 						}
 					}
 				}
-				m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
+				m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "stale", Rcode: entry.Rcode, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
 				return nil
 			}
 
 			// Default: try a quick foreground refresh, fall back to stale.
 			refreshed := m.closed != nil && !m.closed() && m.tryStartRefresh(qname, qtype, qclass, ecsOpt)
 			if !refreshed {
-				m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
+				m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "stale", Rcode: entry.Rcode, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
 				return nil
 			}
 
@@ -135,31 +135,36 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 }
 
 func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler.QueryContext, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, entry *cache.Entry) error {
+	// Without a refresh group (nil wiring combination) there is nothing to
+	// wait for — the stale response is already in qctx.Res; returning
+	// immediately avoids a full DefaultServeExpiredClientTimeout wait.
+	if m.refreshGroup == nil {
+		return nil
+	}
+
 	done := make(chan struct{})
 	var qr *resolver.QueryResult
 	var refreshFinished atomic.Bool
 
-	if m.refreshGroup != nil {
-		if !m.refreshGroup.TryGo(func() error {
-			defer zdnsutil.HandlePanic("Cache refresh: foreground refresh")
-			defer close(done)
-			defer func() {
-				if refreshFinished.CompareAndSwap(false, true) {
-					m.finishRefresh(qname, qtype, qclass, ecsOpt)
-				}
-			}()
-			// Bound the background refresh to prevent goroutine accumulation under
-			// pathological upstream latency.  refreshCtx already covers shutdown.
-			// Note: refreshCtx is from errgroup.WithContext() and is never nil.
-			refreshCtx, cancel := context.WithTimeout(m.refreshCtx, config.DefaultBackgroundTimeout)
-			defer cancel()
-			question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
-			qr = m.resolver.Query(refreshCtx, question, ecsOpt)
-			return nil
-		}) {
-			close(done)
-			m.finishRefresh(qname, qtype, qclass, ecsOpt)
-		}
+	if !m.refreshGroup.TryGo(func() error {
+		defer zdnsutil.HandlePanic("Cache refresh: foreground refresh")
+		defer close(done)
+		defer func() {
+			if refreshFinished.CompareAndSwap(false, true) {
+				m.finishRefresh(qname, qtype, qclass, ecsOpt)
+			}
+		}()
+		// Bound the background refresh to prevent goroutine accumulation under
+		// pathological upstream latency.  refreshCtx already covers shutdown.
+		// Note: refreshCtx is from errgroup.WithContext() and is never nil.
+		refreshCtx, cancel := context.WithTimeout(m.refreshCtx, config.DefaultBackgroundTimeout)
+		defer cancel()
+		question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
+		qr = m.resolver.Query(refreshCtx, question, ecsOpt)
+		return nil
+	}) {
+		close(done)
+		m.finishRefresh(qname, qtype, qclass, ecsOpt)
 	}
 
 	timer := time.NewTimer(config.DefaultServeExpiredClientTimeout)
@@ -203,11 +208,11 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "miss", ResponseTime: handler.ElapsedMS(qctx.StartTime), Rcode: int(qr.Rcode), Poisoned: qr.Poisoned, DNSSECStatus: dnssecStatus}) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
 		} else {
 			// Refresh failed — serve stale response.
-			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
+			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "stale", Rcode: entry.Rcode, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
 		}
 	case <-timer.C:
 		// Stale response stays in qctx.Res.  Background refresh continues.
-		m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
+		m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "stale", Rcode: entry.Rcode, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
 		if m.refreshGroup != nil {
 			_ = m.refreshGroup.TryGo(func() error {
 				defer zdnsutil.HandlePanic("Cache refresh: background update")

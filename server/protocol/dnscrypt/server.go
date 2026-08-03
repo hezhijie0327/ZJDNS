@@ -62,7 +62,6 @@ type Server struct {
 	prevTicketKeyID [dnscryptcrypto.TicketKeyIDSize]byte
 
 	// Rotation goroutine control.
-	rotateCh chan struct{} // closed when rotation goroutine should stop
 
 	// workerCap limits concurrent handler goroutines to prevent unbounded
 	// goroutine creation under high load.
@@ -214,7 +213,6 @@ func New(stateFile string, certificateCfg *config.DNSCryptCertificate, port, pro
 		wg:             &sync.WaitGroup{},
 		cancel:         cancel,
 		signingSK:      signingSK,
-		rotateCh:       make(chan struct{}),
 		workerCap:      make(chan struct{}, config.DefaultMaxConcurrentStreams),
 		sharedKeyCache: lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize),
 	}
@@ -310,7 +308,9 @@ func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 	return nil
 }
 
-// rotationLoop periodically rotates the resolver short-term keys.
+// rotationLoop periodically rotates the resolver short-term keys. Exit is
+// driven solely by s.ctx cancellation (the old rotateCh close signal was
+// redundant with it and double-closed on a Start→Shutdown→Start sequence).
 func (s *Server) rotationLoop() {
 	defer zdnsutil.HandlePanic("DNSCRYPT key rotation")
 	ticker := time.NewTicker(config.DefaultDNSCryptCertificateTTL)
@@ -321,16 +321,14 @@ func (s *Server) rotationLoop() {
 			return
 		case <-ticker.C:
 			s.rotateKeys()
-		case <-s.rotateCh:
-			return
 		}
 	}
 }
 
 // Shutdown gracefully stops the DNSCrypt server.  Connections are closed
-// and the context is cancelled to signal accept loops to exit.  s.wg is
-// read under s.mu via the getWG helper to avoid data races with serveTCP/
-// serveUDP which also access it.
+// and the context is cancelled to signal accept loops to exit.  wg.Add(1)
+// is called under s.mu in Start, so the s.wg pointer read here is
+// race-free — all additions precede the read.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	if !s.started {
@@ -338,8 +336,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return dnscryptcrypto.ErrServerNotStarted
 	}
 	s.started = false
-
-	close(s.rotateCh)
 
 	for _, c := range s.udpConns {
 		_ = c.Close()
@@ -377,9 +373,13 @@ func (s *Server) isStarted() bool {
 }
 
 // current returns the newest key pair (the one used for encrypting responses).
+// Returns nil when no key pair is installed (defensive: callers must check).
 func (s *Server) current() *dnscryptcrypto.CertPair {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if len(s.keys) == 0 {
+		return nil
+	}
 	return s.keys[0].pair
 }
 

@@ -40,6 +40,8 @@ func New(getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Dura
 }
 
 // Close shuts down all cached DoH-over-TLCP HTTP clients. Idempotent.
+// The LRU map is intentionally NOT nil'd: in-flight queries read it (with
+// nil guards at the call sites) and a nil write would race those reads.
 func (c *Client) Close() {
 	if c == nil {
 		return
@@ -49,7 +51,6 @@ func (c *Client) Close() {
 			client.CloseIdleConnections()
 			return true
 		})
-		c.httpClient = nil
 	}
 }
 

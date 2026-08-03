@@ -57,7 +57,9 @@ func (s *Server) startDTLSServer() error {
 			return err
 		}
 
+		s.listenerMu.Lock()
 		s.dtlsListeners = append(s.dtlsListeners, listener)
+		s.listenerMu.Unlock()
 		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("DTLS server")
 			s.handleDTLSConnections(listener)
@@ -132,6 +134,15 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 			if errors.Is(err, io.ErrShortBuffer) {
 				log.Debugf("TLS: DTLS record too large for buffer from %s", conn.RemoteAddr())
 				continue
+			}
+			// A read-deadline expiry means the peer went idle — close the
+			// connection instead of retrying forever (the deadline error
+			// is classified as temporary by IsTemporaryError, and without
+			// this check the loop re-armed the deadline and spun, holding
+			// an errgroup slot per zombie connection).
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				return
 			}
 			if !zdnsutil.IsTemporaryError(err) {
 				return

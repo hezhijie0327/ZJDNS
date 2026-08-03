@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"time"
 	"zjdns/config"
@@ -76,6 +77,9 @@ func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP boo
 	sharedKey := q.SharedKey
 	if sharedKey == [dnscryptcrypto.SharedKeySize]byte{} {
 		curr := s.current()
+		if curr == nil {
+			return nil, errors.New("dnscrypt: no active key pair")
+		}
 		var err error
 		sharedKey, err = dnscryptcrypto.ComputeSharedKey(dnscryptcrypto.XChacha20Poly1305, &curr.Classical.ResolverSk, &q.ClientPk)
 		if err != nil {
@@ -90,6 +94,9 @@ func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP boo
 func (s *Server) encryptPQ(packet []byte, q *dnscryptcrypto.EncryptedQuery, r *dnscryptcrypto.EncryptedResponse, maxWireLen int) ([]byte, error) {
 	var sharedKey [dnscryptcrypto.SharedKeySize]byte
 	curr := s.current()
+	if curr == nil {
+		return nil, errors.New("dnscrypt: no active key pair")
+	}
 
 	var err error
 	if len(q.PQCiphertext) > 0 {

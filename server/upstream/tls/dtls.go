@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -91,6 +92,25 @@ func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.U
 		}
 	}
 	defer zdnsutil.CloseWithLog(conn, "DTLS connection", "UPSTREAM")
+
+	// Run the handshake explicitly under the caller's context: pion's
+	// implicit handshake (triggered by the first write) uses
+	// context.Background and would hang far beyond the query budget on an
+	// unresponsive server.
+	if hc, ok := conn.(interface{ HandshakeContext(context.Context) error }); ok {
+		if err := hc.HandshakeContext(ctx); err != nil {
+			return nil, fmt.Errorf("dtls: handshake %s: %w", addr, err)
+		}
+	}
+
+	// pion's read deadline defaults to never expiring — restore ctx-bound
+	// deadlines so a lost datagram cannot hang the read (and its goroutine
+	// and socket) forever.
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stop()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
 
 	if err := msg.Pack(); err != nil {
 		return nil, fmt.Errorf("dtls: pack query: %w", err)

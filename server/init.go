@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -34,8 +33,7 @@ type cachePersister interface {
 // key-value LRU) to the persist Saver interface so it shares the unified
 // periodic + shutdown flush.
 type statsSaver struct {
-	c    *stats.Collector
-	file string
+	c *stats.Collector
 }
 
 func (s *statsSaver) Save() error { return s.c.SavePersist() }
@@ -51,7 +49,7 @@ func (s *Server) initPersistManager(cacheStore *cache.Cache, statsCollector *sta
 	s.persistManager.Register("cache", cacheStore)
 	s.persistManager.Register("cache-ptr", persist.SaverFunc(cacheStore.SavePtrIndex))
 	s.persistManager.Register("cache-latency", persist.SaverFunc(cacheStore.SaveLatency))
-	s.persistManager.Register("stats", &statsSaver{c: statsCollector, file: filepath.Join(persistDir, "stats.zst")})
+	s.persistManager.Register("stats", &statsSaver{c: statsCollector})
 	if s.dnscryptServer != nil {
 		s.persistManager.Register("dnscrypt", s.dnscryptServer)
 	}
@@ -98,7 +96,7 @@ func makeFlushFunc(op func() (int64, error), verb string) func() []string {
 			// Log the detailed error server-side; the TXT answer stays
 			// generic — FlushDB errors can expose persist-file internals
 			// to any client able to query these CHAOS names.
-			log.Errorf("SERVER: %s failed: %v", verb, err)
+			log.Warnf("SERVER: %s failed: %v", verb, err) // Warn, not Error: any client can trigger these CHAOS endpoints — Error is a log-DoS vector (dnscrypt.clear fails on every query while disabled)
 			return []string{"error=flush-failed"}
 		}
 		return []string{fmt.Sprintf("%s=%d", verb, n)}

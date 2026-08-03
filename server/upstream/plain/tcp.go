@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -76,6 +77,15 @@ func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string
 		return nil, err
 	}
 	defer func() { _ = conn.Close() }()
+	// socks5.DialContext clears the handshake deadline on success ("caller
+	// manages I/O timeouts") — restore ctx-bound deadlines here, or a
+	// stalled peer (no RST, no keepalive on the proxy path) hangs this
+	// goroutine and its fd forever.
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stop()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
 		_ = tcpConn.SetNoDelay(true) // disable Nagle for splitguard small-segment writes
 	}

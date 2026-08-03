@@ -175,31 +175,6 @@ func (h *HopGuard) Confident(serverIP string) bool {
 	return st.armed
 }
 
-// Expected returns the most frequent trusted TTL for the server (0 if not armed).
-func (h *HopGuard) Expected(serverIP string) uint8 {
-	if h == nil {
-		return 0
-	}
-	st, ok := h.states.Get(serverIP)
-	if !ok {
-		return 0
-	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if !st.armed {
-		return 0
-	}
-	var mode uint8
-	maxCount := 0
-	for ttl, count := range st.trusted {
-		if count > maxCount || (count == maxCount && ttl < mode) {
-			mode = ttl
-			maxCount = count
-		}
-	}
-	return mode
-}
-
 // modeTTL returns the histogram's most frequent TTL (0 if empty).
 func modeTTL(st *serverState) uint8 {
 	var mode uint8

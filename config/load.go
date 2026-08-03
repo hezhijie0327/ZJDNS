@@ -114,14 +114,11 @@ func resolveStamp(server *UpstreamServer, index int, category string) error {
 		)
 	}
 
-	// Address: for DoH, reconstruct the full URL from stamp fields.
-	switch s.Proto {
-	case zstamp.ProtoDOH:
+	// Address: for DoH, reconstruct the full URL from stamp fields; every
+	// other stamp carries its address verbatim.
+	if s.Proto == zstamp.ProtoDOH {
 		server.Address = s.BuildDoHURL()
-	case zstamp.ProtoPlain, zstamp.ProtoDNSCrypt, zstamp.ProtoDOT, zstamp.ProtoDOQ,
-		zstamp.ProtoODoHTarget, zstamp.ProtoDNSCryptRelay, zstamp.ProtoODoHRelay:
-		server.Address = s.Address
-	default:
+	} else {
 		server.Address = s.Address
 	}
 

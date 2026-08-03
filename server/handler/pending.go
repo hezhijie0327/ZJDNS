@@ -119,17 +119,21 @@ func (p *PendingRequests) Join(ctx context.Context, qname string, qtype, qclass 
 func (p *PendingRequests) Done(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool, result *resolver.QueryResult) {
 	key := BuildPendingKey(qname, qtype, qclass, ecsOpt, dnssecOK)
 
+	// CompareAndDelete: the call we complete must be the one we stored as
+	// leader. A Get+Delete sequence can race an LRU eviction — either the
+	// call was evicted (OnEvict already published the eviction error and
+	// closed done), or a newer leader's call under the same key was fetched
+	// and deleted instead, waking its followers with stale data and freeing
+	// the dedup slot early.
 	call, ok := p.sets.Get(key)
 	if !ok {
 		return
 	}
-	// An evicted call must not be overwritten: its followers already got the
-	// eviction error; a newer call under the same key would otherwise be
-	// completed with stale data from this leader.
-	if call.evicted.Load() {
+	if !p.sets.CompareAndDelete(key, call) {
+		// Evicted or replaced between Get and CAD: OnEvict (or the newer
+		// leader) owns this key now — nothing to complete.
 		return
 	}
-	p.sets.Delete(key)
 
 	// Clone records before sharing with followers to prevent concurrent
 	// modification of shared RR headers (e.g. zone rule domain rewrite

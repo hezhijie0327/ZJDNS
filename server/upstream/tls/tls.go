@@ -3,7 +3,9 @@ package tls
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"time"
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -81,6 +83,14 @@ func (c *Client) exchangeOverTLS(ctx context.Context, msg *dns.Msg, addr string,
 		return nil, err
 	}
 	defer func() { _ = tlsConn.Close() }()
+	// The dial deadline was consumed by connect (and cleared by the proxy
+	// path) — restore ctx-bound deadlines so a stalled peer cannot hang
+	// the exchange goroutine and its fd indefinitely.
+	stop := context.AfterFunc(ctx, func() { _ = tlsConn.SetDeadline(time.Now()) })
+	defer stop()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = tlsConn.SetDeadline(deadline)
+	}
 	if _, err := msg.WriteTo(tlsConn); err != nil {
 		return nil, err
 	}
@@ -94,5 +104,9 @@ func (c *Client) exchangeOverTLS(ctx context.Context, msg *dns.Msg, addr string,
 		return nil, err
 	}
 	response.Data = nil
+	if response.ID != msg.ID {
+		pool.DefaultMessage.Put(response)
+		return nil, fmt.Errorf("tls: response id mismatch: expected %d, got %d", msg.ID, response.ID)
+	}
 	return response, nil
 }

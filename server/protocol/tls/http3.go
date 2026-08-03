@@ -35,7 +35,9 @@ func (s *Server) startDOH3Server(port string) error {
 		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
 	}
 
+	s.listenerMu.Lock()
 	s.h3Server = &http3.Server{Handler: s}
+	s.listenerMu.Unlock()
 
 	log.Infof("TLS: DoH3 server started on %v", addrs)
 	for _, addr := range addrs {
@@ -48,20 +50,26 @@ func (s *Server) startDOH3Server(port string) error {
 		if err != nil {
 			return fmt.Errorf("UDP listen on %s: %w", addr, err)
 		}
+		s.listenerMu.Lock()
 		s.h3Conns = append(s.h3Conns, conn)
+		s.listenerMu.Unlock()
 
 		transport := &quic.Transport{
 			Conn:                conn,
 			VerifySourceAddress: makeAddrValidator(addrCache),
 		}
+		s.listenerMu.Lock()
 		s.h3Transports = append(s.h3Transports, transport)
+		s.listenerMu.Unlock()
 
 		listener, err := transport.ListenEarly(tlsConfig, quicConfig)
 		if err != nil {
 			_ = conn.Close()
 			return fmt.Errorf("DoH3 listen on %s: %w", addr, err)
 		}
+		s.listenerMu.Lock()
 		s.h3Listeners = append(s.h3Listeners, listener)
+		s.listenerMu.Unlock()
 
 		capturedH3 := listener
 		s.serverGroup.Go(func() error {

@@ -12,6 +12,12 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
+// maxDecompressedBytes caps decompressed output: a corrupt or tampered file
+// with a huge compression ratio must surface as a load error (backed up,
+// cold start) instead of an OOM at startup — Load runs before any version
+// check. Far above any legit persist file.
+const maxDecompressedBytes = 512 << 20 // 512 MiB
+
 // Save compresses data with zstd (fastest level) and atomically writes it to
 // path (temp + rename, so a crash never leaves a truncated file). The parent
 // directory must exist.
@@ -58,14 +64,22 @@ func compress(raw []byte) ([]byte, error) {
 	return enc.EncodeAll(raw, nil), nil
 }
 
-// decompress decompresses raw.
+// decompress decompresses raw. Output is capped at maxDecompressedBytes (see
+// above) so corrupt input cannot OOM the process at startup.
 func decompress(raw []byte) ([]byte, error) {
-	dec, err := zstd.NewReader(nil)
+	dec, err := zstd.NewReader(nil, zstd.WithDecoderMaxMemory(maxDecompressedBytes))
 	if err != nil {
 		return nil, err
 	}
 	defer dec.Close()
-	return dec.DecodeAll(raw, nil)
+	out, err := dec.DecodeAll(raw, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > maxDecompressedBytes {
+		return nil, fmt.Errorf("persist: decompressed size %d exceeds limit %d", len(out), maxDecompressedBytes)
+	}
+	return out, nil
 }
 
 // Backup renames path to path+".bak", preserving a previous-format or

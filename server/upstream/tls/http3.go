@@ -174,7 +174,15 @@ func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 						_ = pconn.Close()
 						return nil, fmt.Errorf("resolve %s: %w", host, err)
 					}
-					return quic.Dial(ctx, pconn, remoteAddr, tlsCfg, cpy)
+					conn, err := quic.Dial(ctx, pconn, remoteAddr, tlsCfg, cpy)
+					if err != nil {
+						// quic-go does not take over the PacketConn on a failed
+						// dial — close it or the UDP socket leaks per query
+						// (same pattern as the non-proxy DoQ path).
+						_ = pconn.Close()
+						return nil, err
+					}
+					return conn, nil
 				}
 				conn, err := quic.DialAddrEarly(ctx, host, tlsCfg, cpy)
 				if err == nil {

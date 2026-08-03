@@ -2,9 +2,11 @@ package tlcp
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -80,10 +82,26 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// RFC 8484 §4.2.1: POST with a wrong Content-Type → 415 (mirrors the
+	// TLS DoH handler; dnshttp.Request itself does not check it here).
+	if r.Method == http.MethodPost && r.Header.Get("Content-Type") != "" &&
+		!strings.HasPrefix(r.Header.Get("Content-Type"), dnshttp.MimeType) {
+		http.Error(w, http.StatusText(http.StatusUnsupportedMediaType), http.StatusUnsupportedMediaType)
+		return
+	}
+
 	// Validate GET request size before delegation (same as TLS DoH handler).
 	if r.Method == http.MethodGet {
 		dnsParam := r.URL.Query().Get("dns")
-		if dnsParam == "" || len(dnsParam) > config.DefaultDOHMaxRequestSize {
+		if dnsParam == "" {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+		// Compare the DECODED length: base64url inflates 4/3, so a raw
+		// comparison would 400 legitimate wire messages between ~49KB and
+		// the 65535 cap (tls/https.go decodes first for the same reason).
+		raw, err := base64.RawURLEncoding.DecodeString(dnsParam)
+		if err != nil || len(raw) > config.DefaultDOHMaxRequestSize {
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}

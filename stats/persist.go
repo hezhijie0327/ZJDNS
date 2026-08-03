@@ -23,6 +23,11 @@ const (
 
 	// countersKey is the single map key holding the counter snapshot.
 	countersKey = "counters"
+
+	// statsFixedCounters is the number of flat counters snapshot() writes
+	// before the latency buckets and totalMS — keep in sync with
+	// snapshot()'s field order.
+	statsFixedCounters = 27
 )
 
 func (statsCodec) Version() uint16 { return statsPersistVersion }
@@ -139,7 +144,7 @@ func (c *Collector) snapshot() []int64 {
 // merge adds a restored snapshot into the current counters (the collector is
 // fresh at startup, so this is effectively a restore).
 func (c *Collector) merge(snap []int64) error {
-	if len(snap) < 27+24+latBuckets+1 {
+	if len(snap) < statsFixedCounters+24+latBuckets+1 {
 		return io.ErrUnexpectedEOF
 	}
 	off := 0

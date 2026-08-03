@@ -343,7 +343,7 @@ func TestClassifyRoot_NonGlueAnswer(t *testing.T) {
 
 func TestClassifyTLD_SelfQuery(t *testing.T) {
 	d := newDetector()
-	v := d.classifyTLD("com", "com")
+	v := d.classifyTLD("com", "com", dns.TypeA)
 	if v != VerdictClean {
 		t.Fatalf("TLD querying itself should be clean, got %s", v)
 	}
@@ -351,9 +351,17 @@ func TestClassifyTLD_SelfQuery(t *testing.T) {
 
 func TestClassifyTLD_SubdomainAnswer(t *testing.T) {
 	d := newDetector()
-	v := d.classifyTLD("com", "www.example.com")
+	v := d.classifyTLD("com", "www.example.com", dns.TypeA)
 	if v != VerdictPoisoned {
 		t.Fatalf("TLD returning A for subdomain should be VerdictPoisoned, got %s", v)
+	}
+}
+
+func TestClassifyTLD_DelegationDSExempt(t *testing.T) {
+	d := newDetector()
+	v := d.classifyTLD("com", "example.com", dns.TypeDS)
+	if v != VerdictClean {
+		t.Fatalf("TLD returning DS for delegated subdomain should be clean, got %s", v)
 	}
 }
 

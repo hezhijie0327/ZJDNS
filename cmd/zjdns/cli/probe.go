@@ -179,7 +179,7 @@ func probePipeline(addr string) error {
 	domains := make([]string, probePipelineNumQueries)
 	for i := range probePipelineNumQueries {
 		var b [8]byte
-		_, _ = rand.Read(b[:])
+		_, _ = rand.Read(b[:]) // _ = error: CLI probe randomness — failure yields a fixed query name, still valid
 		domains[i] = fmt.Sprintf("www.%x.com.", b)
 	}
 
@@ -190,7 +190,7 @@ func probePipeline(addr string) error {
 
 	// Fire all queries without waiting for responses.
 	for i, d := range domains {
-		_ = conn.SetWriteDeadline(time.Now().Add(probeDefaultWriteTimeout))
+		_ = conn.SetWriteDeadline(time.Now().Add(probeDefaultWriteTimeout)) // _ = error: deadline advisory
 		q := newQuery(d, uint16(i))
 		if err := writeDNSMsg(conn, q); err != nil {
 			return fmt.Errorf("write query #%d: %w", i, err)
@@ -209,7 +209,7 @@ func probePipeline(addr string) error {
 	seen := make([]bool, probePipelineNumQueries)
 	start := time.Now()
 	for range domains {
-		_ = conn.SetReadDeadline(time.Now().Add(probePipelineReadTimeout))
+		_ = conn.SetReadDeadline(time.Now().Add(probePipelineReadTimeout)) // _ = error: deadline advisory
 		resp, err := readDNSMsg(conn)
 		if err != nil {
 			if received == 0 {
@@ -263,7 +263,7 @@ func probeConnReuse(addr string) error {
 	fmt.Printf("Probing %s for RFC 1035 connection reuse...\n\n", addr)
 
 	for i := range probeConnReuseNumQueries {
-		_ = conn.SetDeadline(time.Now().Add(probeDefaultReadTimeout))
+		_ = conn.SetDeadline(time.Now().Add(probeDefaultReadTimeout)) // _ = error: deadline advisory
 		q := newQuery("www.cloudflare.com.", uint16(i))
 		if err := writeDNSMsg(conn, q); err != nil {
 			return fmt.Errorf("write query #%d: %w", i, err)
@@ -289,7 +289,7 @@ func probeIdleTimeout(addr string) error {
 	}
 	defer func() { _ = conn.Close() }()
 
-	_ = conn.SetDeadline(time.Now().Add(probeDefaultReadTimeout))
+	_ = conn.SetDeadline(time.Now().Add(probeDefaultReadTimeout)) // _ = error: deadline advisory
 	q := newQuery("www.cloudflare.com.", 0)
 	if err := writeDNSMsg(conn, q); err != nil {
 		return fmt.Errorf("write query: %w", err)
@@ -303,7 +303,7 @@ func probeIdleTimeout(addr string) error {
 
 	start := time.Now()
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(probeIdleReadTimeout))
+		_ = conn.SetReadDeadline(time.Now().Add(probeIdleReadTimeout)) // _ = error: deadline advisory
 		_, err := readDNSMsg(conn)
 		if err != nil {
 			// A read deadline expiring while the server keeps the connection

@@ -180,12 +180,16 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 			if !strings.HasPrefix(server.Address, "sdns://") {
 				if protocol == ProtoHTTPS || protocol == ProtoHTTP3 ||
 					protocol == ProtoHTTPTLCP {
-					// URL form: require an absolute URL with a scheme and
-					// host — url.Parse alone accepts relative strings and
-					// empty hosts, deferring failure to runtime.
-					if u, err := url.Parse(server.Address); err != nil || u.Scheme == "" || u.Host == "" {
+					// URL form: require an absolute https URL with a scheme
+					// and host — url.Parse alone accepts relative strings,
+					// empty hosts and plain-http URLs, deferring failure (or
+					// a silent plaintext downgrade) to runtime.
+					if u, err := url.Parse(server.Address); err != nil || u.Scheme != "https" || u.Host == "" {
 						if _, _, hpErr := net.SplitHostPort(server.Address); hpErr != nil {
-							return fmt.Errorf("upstream server %d address invalid (must be an absolute https URL or host:port): %w", i, err)
+							if err != nil {
+								return fmt.Errorf("upstream server %d address invalid (must be an absolute https URL or host:port): %w", i, err)
+							}
+							return fmt.Errorf("upstream server %d address invalid (must be an absolute https URL or host:port): %w", i, hpErr)
 						}
 					}
 				} else if _, _, err := net.SplitHostPort(server.Address); err != nil {
@@ -235,6 +239,12 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 		}
 
 		for _, matchTag := range server.Match {
+			// "!" toggles negation — "!!foo" is ambiguous (zone parsing
+			// treats it as tag "!foo", which almost never matches) and is
+			// rejected here so both sides agree.
+			if strings.HasPrefix(matchTag, "!!") {
+				return fmt.Errorf("upstream server %d: match tag %q has multiple '!' prefixes", i, matchTag)
+			}
 			cleanTag := strings.TrimPrefix(matchTag, "!")
 			if !rulesetTags[cleanTag] {
 				return fmt.Errorf("upstream server %d: match tag '%s' not found", i, cleanTag)

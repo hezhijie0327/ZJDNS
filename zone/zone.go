@@ -35,8 +35,6 @@ type Result struct {
 	Authority  []dns.RR
 	Additional []dns.RR
 	CreatedAt  int64
-
-	cachable bool
 }
 
 // dynamicEntry holds the content generator for a dynamic zone rule together
@@ -62,6 +60,14 @@ type zoneRule struct {
 	additional []byte
 }
 
+// zoneKey is a composite map key for exact/wildcard lookups — avoids the
+// fmt.Sprintf allocation of the old "qname|qtype|qclass" string key.
+type zoneKey struct {
+	qname  string
+	qtype  uint16
+	qclass uint16
+}
+
 // Evaluator manages zone rules entirely in memory. All maps are WORM —
 // populated by LoadRules at startup, read concurrently by Evaluate.
 type Evaluator struct {
@@ -71,8 +77,8 @@ type Evaluator struct {
 	dynamics         map[string]*dynamicEntry // exact dynamic rules (normalized qname)
 	wildcardDynamics map[string]*dynamicEntry // wildcard dynamic rules (stripped name)
 	bypass           [][]matchTag             // global bypass rules
-	exact            map[string][]zoneRule    // "qname|qtype|qclass" → rules
-	wildcards        map[string][]zoneRule    // "suffix|qtype|qclass" → wildcard rules
+	exact            map[zoneKey][]zoneRule   // (qname, qtype, qclass) → rules
+	wildcards        map[zoneKey][]zoneRule   // (suffix, qtype, qclass) → wildcard rules
 }
 
 // ---------------------------------------------------------------------------
@@ -89,8 +95,8 @@ func New() *Evaluator {
 	return &Evaluator{
 		dynamics:         make(map[string]*dynamicEntry),
 		wildcardDynamics: make(map[string]*dynamicEntry),
-		exact:            make(map[string][]zoneRule),
-		wildcards:        make(map[string][]zoneRule),
+		exact:            make(map[zoneKey][]zoneRule),
+		wildcards:        make(map[zoneKey][]zoneRule),
 	}
 }
 
@@ -106,8 +112,8 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 	// Reset all maps.
 	e.dynamics = make(map[string]*dynamicEntry)
 	e.wildcardDynamics = make(map[string]*dynamicEntry)
-	e.exact = make(map[string][]zoneRule)
-	e.wildcards = make(map[string][]zoneRule)
+	e.exact = make(map[zoneKey][]zoneRule)
+	e.wildcards = make(map[zoneKey][]zoneRule)
 
 	var bypass [][]matchTag
 	var content []config.ZoneRule
@@ -218,7 +224,7 @@ func (e *Evaluator) loadInline(rule *config.ZoneRule) (int, error) {
 			count++
 		}
 	}
-	// Dynamic rules or rcode-only rules always get a sentinel (qtype=0, qclass=0).
+	// Dynamic rules generate TXT/CHAOS — store with their actual qtype/qclass.
 	if rule.DynamicContent != nil {
 		entry := zoneRule{
 			matchTags:  tags,
@@ -226,7 +232,7 @@ func (e *Evaluator) loadInline(rule *config.ZoneRule) (int, error) {
 			authority:  packRRs(rule.Name, rule.Authority),
 			additional: packRRs(rule.Name, rule.Additional),
 		}
-		e.store(isWildcard, exactKey(normalizedName, 0, 0), entry)
+		e.store(isWildcard, exactKey(normalizedName, dns.TypeTXT, dns.ClassCHAOS), entry)
 		count++
 	} else if rule.Rcode != dns.RcodeSuccess && len(groups) == 0 {
 		entry := zoneRule{
@@ -242,7 +248,7 @@ func (e *Evaluator) loadInline(rule *config.ZoneRule) (int, error) {
 	return count, nil
 }
 
-func (e *Evaluator) store(isWildcard bool, key string, entry zoneRule) { //nolint:gocritic // WORM map — value copy is correct
+func (e *Evaluator) store(isWildcard bool, key zoneKey, entry zoneRule) { //nolint:gocritic // WORM map — value copy is correct
 	if isWildcard {
 		e.wildcards[key] = append(e.wildcards[key], entry)
 	} else {
@@ -250,8 +256,8 @@ func (e *Evaluator) store(isWildcard bool, key string, entry zoneRule) { //nolin
 	}
 }
 
-func exactKey(qname string, qtype, qclass uint16) string {
-	return fmt.Sprintf("%s|%d|%d", qname, qtype, qclass)
+func exactKey(qname string, qtype, qclass uint16) zoneKey {
+	return zoneKey{qname: qname, qtype: qtype, qclass: qclass}
 }
 
 // ---------------------------------------------------------------------------
@@ -351,7 +357,6 @@ func (e *Evaluator) pickBest(rules []zoneRule, domain string, matchedTags map[st
 			Authority:  unpackRRs(rules[i].authority),
 			Additional: unpackRRs(rules[i].additional),
 			CreatedAt:  loadedAt,
-			cachable:   score == 0,
 		}
 	}
 }
@@ -389,6 +394,12 @@ func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicE
 	// not answer — fall through instead of serving content to the wrong
 	// client.
 	if score := matchScore(de.matchTags, matchedTags); score < 0 {
+		return Result{}, false
+	}
+
+	// Dynamic rules generate TXT/CHAOS records. Only answer the qtypes
+	// that can consume them — an A/INET query must not receive TXT/CHAOS.
+	if qtype != dns.TypeTXT && qtype != dns.TypeANY {
 		return Result{}, false
 	}
 
@@ -496,6 +507,11 @@ func parseMatchTags(raw []string) ([]matchTag, error) {
 		}
 		if tag == "" {
 			return nil, fmt.Errorf("invalid match tag %q", s)
+		}
+		// "!!foo" would mean negating the tag "!foo" — ambiguous; config
+		// validation rejects it identically (config/validate.go).
+		if strings.HasPrefix(tag, "!") {
+			return nil, fmt.Errorf("invalid match tag %q: multiple '!' prefixes", s)
 		}
 		tags = append(tags, matchTag{tag: tag, negate: negate})
 	}

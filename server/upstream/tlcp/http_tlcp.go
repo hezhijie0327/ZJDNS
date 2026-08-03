@@ -51,7 +51,11 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 	b.WriteByte('|')
 	b.WriteString(server.Proxy)
 	key := b.String()
-	httpClient, ok := c.httpClient.Get(key)
+	var httpClient *http.Client
+	var ok bool
+	if c.httpClient != nil { // Close() nils the map — a racing query must not panic
+		httpClient, ok = c.httpClient.Get(key)
+	}
 	if !ok {
 		tlcpCfg := c.tlcpClientConfig(server).Clone()
 		tlcpCfg.NextProtos = config.NextProtoDOH
@@ -81,7 +85,9 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 			},
 		}
 
-		c.httpClient.Set(key, httpClient)
+		if c.httpClient != nil {
+			c.httpClient.Set(key, httpClient)
+		}
 	}
 
 	return zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, httpClient, http.MethodGet)

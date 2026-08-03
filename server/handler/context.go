@@ -58,7 +58,6 @@ type QueryContext struct {
 
 	// ── Coordination ──
 
-	Dropped       bool   // true when ErrDrop was returned (no response will be sent)
 	OriginalName  string // original qname before zone rewrite (set by Zone)
 	RewrittenName string // rewritten qname after zone rewrite (set by Zone)
 	TCPKeepalive  uint16
@@ -68,17 +67,6 @@ type QueryContext struct {
 
 	Qname string // canonical question name (already FQDN)
 	Qtype uint16 // question type (A, AAAA, etc.)
-}
-
-// EffectiveName returns the name that should be used AFTER the zone rewrite:
-// RewrittenName when a rewrite happened, otherwise Qname. Consumers must use
-// this instead of Qname so rewritten queries use the correct cache keys,
-// logging names, and answers.
-func (c *QueryContext) EffectiveName() string {
-	if c.RewrittenName != "" {
-		return c.RewrittenName
-	}
-	return c.Qname
 }
 
 // ClientAddr returns the client IP, or a non-nil zero-length IP for

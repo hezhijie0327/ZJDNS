@@ -6,6 +6,7 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/handler"
+	"zjdns/stats"
 
 	"codeberg.org/miekg/dns"
 )
@@ -16,6 +17,7 @@ import (
 // the next handler.
 type PTR struct {
 	store cache.Store
+	stats *stats.Collector
 }
 
 // Wrap implements Wrapper.
@@ -56,6 +58,12 @@ func (m *PTR) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		qctx.Res = response
 		qctx.Responded = true
 		qctx.CacheServed = true
+
+		// CacheServed makes CacheStore skip stats — record the hit here so
+		// PTR-served queries stay visible in the request distribution.
+		if m.stats != nil {
+			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "ptr", Rcode: dns.RcodeSuccess, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
+		}
 
 		log.Debugf("PTR: reverse lookup %s -> %d records (from cache)", qname, len(records))
 		return nil

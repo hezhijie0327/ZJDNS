@@ -50,7 +50,6 @@ func (w *tcpResponseWriter) WriteMsg(_ context.Context, m *dns.Msg) error {
 func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 	defer zdnsutil.HandlePanic("DNSCrypt TCP server")
 
-	s.wg.Add(1)
 	defer s.wg.Done()
 
 	for s.isStarted() {
@@ -65,11 +64,19 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 			if !s.isStarted() {
 				return
 			}
-			if zdnsutil.IsTemporaryError(err) {
+			if !zdnsutil.IsTemporaryError(err) {
+				// Non-temporary accept errors (EMFILE etc.) are usually
+				// transient resource conditions — returning here would take
+				// the whole TCP listener down permanently with only a Debug
+				// line. Back off and keep serving, like the TLS listeners.
+				log.Warnf("DNSCRYPT: TCP accept error: %v — retrying", err)
+				time.Sleep(config.DefaultAcceptRetryDelay)
 				continue
 			}
-			log.Debugf("DNSCRYPT: TCP accept error: %v", err)
-			return
+			// Temporary error: back off too, or a sustained condition spins
+			// at 100% CPU (all other accept loops sleep on retry).
+			time.Sleep(config.DefaultAcceptRetryDelay)
+			continue
 		}
 
 		// Track the connection for graceful shutdown.

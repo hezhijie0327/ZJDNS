@@ -122,7 +122,7 @@ func probeUDP(ctx context.Context, ip net.IP, port int) error {
 	defer func() { _ = conn.Close() }() // _ = error: best-effort cleanup close
 
 	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline) // _ = error: deadline advisory, benign on closed conn // _ = error: deadline advisory, benign on closed conn
+		_ = conn.SetDeadline(deadline) // _ = error: deadline advisory, benign on closed conn
 	}
 
 	// Send a single-byte datagram — valid per RFC 768 §3.1 and

@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
@@ -61,12 +63,10 @@ func (s *Server) Shutdown(ctx context.Context) {
 func (s *Server) shutdownLocked(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	const shutdownTimeout = 10 * time.Second
 	for _, srv := range s.udpServers {
 		if srv != nil {
-			srv.Shutdown(ctx)
-			if ctx.Err() != nil {
-				log.Warnf("PLAIN: UDP drain interrupted: %v", ctx.Err())
-			}
+			s.shutdownOne(srv, shutdownTimeout, "UDP")
 		}
 	}
 	if len(s.udpServers) > 0 {
@@ -74,13 +74,30 @@ func (s *Server) shutdownLocked(ctx context.Context) {
 	}
 	for _, srv := range s.tcpServers {
 		if srv != nil {
-			srv.Shutdown(ctx)
-			if ctx.Err() != nil {
-				log.Warnf("PLAIN: TCP drain interrupted: %v", ctx.Err())
-			}
+			s.shutdownOne(srv, shutdownTimeout, "TCP")
 		}
 	}
 	if len(s.tcpServers) > 0 {
 		log.Infof("PLAIN: TCP server(s) shut down")
+	}
+}
+
+// shutdownOne calls dns.Server.Shutdown with a deadline because miekg's
+// Shutdown ignores its context argument and blocks on the server's internal
+// exited channel — which waits for all connection handlers to finish, which
+// can take arbitrarily long for slow upstream queries.
+func (s *Server) shutdownOne(srv *dns.Server, timeout time.Duration, label string) {
+	done := make(chan struct{})
+	go func() {
+		defer zdnsutil.HandlePanic("plain shutdown " + label)
+		srv.Shutdown(context.Background())
+		close(done)
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		log.Warnf("PLAIN: %s server shutdown timed out after %v", label, timeout)
 	}
 }

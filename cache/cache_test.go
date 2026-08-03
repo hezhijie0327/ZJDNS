@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 	"zjdns/config"
@@ -340,6 +341,62 @@ func BenchmarkStoreSetGet(b *testing.B) {
 		mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, dns.RcodeSuccess)
 		mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
 	}
+}
+
+// TestPTR_ConcurrentReadWrite exercises the PTR reverse index under concurrent
+// Set/Get/ReverseLookup to detect races. Run with -race.
+func TestPTR_ConcurrentReadWrite(t *testing.T) {
+	mc := New(0, "")
+	defer func() { _ = mc.Close() }()
+
+	// Pre-populate with some entries.
+	for i := range 10 {
+		name := fmt.Sprintf("host%d.example.com.", i)
+		ip := fmt.Sprintf("10.0.0.%d", i+1)
+		rr := &dns.A{Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP(ip)}}
+		mc.Set(name, dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, dns.RcodeSuccess)
+	}
+
+	var wg sync.WaitGroup
+	// Concurrent writers: add new entries.
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := range 100 {
+			name := fmt.Sprintf("new-a%d.example.com.", i)
+			ip := fmt.Sprintf("192.168.1.%d", i%255+1)
+			rr := &dns.A{Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP(ip)}}
+			mc.Set(name, dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, dns.RcodeSuccess)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := range 100 {
+			name := fmt.Sprintf("new-aaaa%d.example.com.", i)
+			ip := fmt.Sprintf("2001:db8::%d", i+1)
+			rr := &dns.AAAA{Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: 300}, AAAA: rdata.AAAA{Addr: netParseIP(ip)}}
+			mc.Set(name, dns.TypeAAAA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, dns.RcodeSuccess)
+		}
+	}()
+
+	// Concurrent readers: reverse lookups while writes are happening.
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for range 200 {
+			ips := mc.ReverseLookup("10.0.0.1")
+			_ = ips
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 200 {
+			ips := mc.ReverseLookup("192.168.1.1")
+			_ = ips
+		}
+	}()
+
+	wg.Wait()
 }
 
 func BenchmarkStoreParallel(b *testing.B) {

@@ -67,12 +67,20 @@ func generateSelfSignedSMCerts(domain string) (signCert, encCert tlcp.Certificat
 	}
 	// Modern clients verify hostnames/IPs against the SubjectAltName
 	// (RFC 6125) and ignore CN — certs without SANs fail every verification.
+	// Clamp the leaf validity to the CA's NotAfter: a leaf issued after the
+	// CA expires breaks the chain. With equal constants today the clamp is a
+	// no-op; it keeps the invariant if DefaultCACertValidity is ever lowered
+	// (mirrors server/protocol/tls/certs.go's leafNotAfter).
+	leafNotAfter := time.Now().Add(config.DefaultServerCertValidity)
+	if caNotAfter := time.Now().Add(config.DefaultCACertValidity); leafNotAfter.After(caNotAfter) {
+		leafNotAfter = caNotAfter
+	}
 	serverTemplate := func(keyUsage smx509.KeyUsage) *smx509.Certificate {
 		tmpl := &smx509.Certificate{
 			SerialNumber: new(big.Int),
 			Subject:      pkix.Name{CommonName: config.DefaultProjectName + " TLCP"},
 			NotBefore:    time.Now(),
-			NotAfter:     time.Now().Add(config.DefaultServerCertValidity),
+			NotAfter:     leafNotAfter,
 			KeyUsage:     keyUsage,
 			ExtKeyUsage:  []smx509.ExtKeyUsage{smx509.ExtKeyUsageServerAuth},
 		}

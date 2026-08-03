@@ -46,11 +46,23 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		// safe because the entry is only read after the Do completes within
 		// the same request goroutine -- the first request creates the entry
 		// synchronously and all subsequent requests find a fully-initialized one.
-		entryI, _ := s.tcpWriteMu.LoadOrStore(addr, &tcpWriteEntry{})
+		// Pre-increment refs on the candidate BEFORE publishing it: the
+		// writeMu sweep deletes entries with refs == 0, and a freshly
+		// LoadOrStored entry (lastAccess 0 < cutoff) would otherwise be
+		// deletable in the window before the Add below — the request then
+		// holds a writeMu detached from the map while the next request
+		// creates a second one, interleaving frames on the same TCP stream.
+		newEntry := &tcpWriteEntry{}
+		newEntry.refs.Add(1)
+		entryI, loaded := s.tcpWriteMu.LoadOrStore(addr, newEntry)
 		entry, ok := entryI.(*tcpWriteEntry)
 		if !ok {
+			newEntry.refs.Add(-1)
 			log.Warnf("SERVER: unexpected type in tcpWriteMu for %s: %T", addr, entryI)
 			return
+		}
+		if loaded {
+			entry.refs.Add(1)
 		}
 		entry.capacityOnce.Do(func() {
 			entry.capacity = make(chan struct{}, config.DefaultMaxPipe)
@@ -173,7 +185,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 
 	clientIP := net.ParseIP(dnsutil.RemoteIP(w))
 
-	response := s.handler.ServeDNS(req, clientIP, false, detectRequestProtocol(w))
+	response := s.handler.ServeDNS(req, clientIP, false, config.ProtoUDP)
 	if response != nil {
 		if err := packSafe(response); err != nil {
 			log.Debugf("SERVER: UDP pack error for %s: %v", w.RemoteAddr().String(), err)
@@ -205,21 +217,6 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		}
 		pool.DefaultMessage.Put(response)
 	}
-}
-
-func detectRequestProtocol(w dns.ResponseWriter) string {
-	addr := w.RemoteAddr()
-	if addr == nil {
-		return config.ProtoUDP
-	}
-	network := addr.Network()
-	if network != "" {
-		switch network[0] {
-		case 't', 'T':
-			return config.ProtoTCP
-		}
-	}
-	return config.ProtoUDP
 }
 
 // packSafe calls msg.Pack() and recovers from any panic, returning it as an
