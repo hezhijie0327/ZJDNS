@@ -114,8 +114,9 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	}()
 	statsCollector := stats.New()
 	s.stats = statsCollector
+	statsFile := ""
 	if persistDir != "" {
-		statsFile := filepath.Join(persistDir, "stats.zst")
+		statsFile = filepath.Join(persistDir, "stats.zst")
 		if err := statsCollector.LoadPersist(statsFile); err != nil {
 			log.Warnf("SERVER: stats persist load failed (starting empty): %v", err)
 		}
@@ -128,7 +129,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("EDNS handler init: %w", err)
 	}
 
-	rulesetEngine, err := s.initZoneAndRulesets(cfg, cacheStore, statsCollector, zoneEvaluator)
+	rulesetEngine, err := s.initZoneAndRulesets(cfg, cacheStore, statsCollector, statsFile, zoneEvaluator)
 	if err != nil {
 		cancel(err)
 		return nil, err
@@ -165,11 +166,22 @@ func (s *Server) initEDNS(cfg *config.ServerConfig) (*edns.Handler, error) {
 	return edns.NewHandler(cfg.Server.Features.ECS)
 }
 
+// resetDNSCryptState resets the DNSCrypt crypto state via the CHAOS
+// zjdns.dnscrypt.clear endpoint. Bound late: the DNSCrypt server is created
+// after zone wiring, so the closure dereferences s.dnscryptServer at query
+// time.
+func (s *Server) resetDNSCryptState() error {
+	if s.dnscryptServer == nil {
+		return errors.New("dnscrypt listener not enabled")
+	}
+	return s.dnscryptServer.ResetKeys()
+}
+
 // initZoneAndRulesets loads zone-file rules and CIDR/domain matching rulesets
 // from config.  Returns the ruleset engine (nil if none configured) and any
 // fatal error from loading.
-func (s *Server) initZoneAndRulesets(cfg *config.ServerConfig, cacheStore cache.Store, statsCollector *stats.Collector, zoneEvaluator *zone.Evaluator) (*ruleset.Engine, error) {
-	wireZoneDynamicContent(cacheStore, statsCollector, cfg.Zone)
+func (s *Server) initZoneAndRulesets(cfg *config.ServerConfig, cacheStore cachePersister, statsCollector *stats.Collector, statsFile string, zoneEvaluator *zone.Evaluator) (*ruleset.Engine, error) {
+	wireZoneDynamicContent(cacheStore, statsCollector, statsFile, s.resetDNSCryptState, cfg.Zone)
 
 	if len(cfg.Zone) > 0 {
 		if err := zoneEvaluator.LoadRules(cfg.Zone); err != nil {

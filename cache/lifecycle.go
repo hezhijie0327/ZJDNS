@@ -32,6 +32,21 @@ func (c *Cache) FlushDB(target string) (int64, error) {
 // Clear truncates cache entries.
 func (c *Cache) Clear() (int64, error) { return c.FlushDB("cache") }
 
+// ClearPtrIndex clears the PTR reverse index and persists the cleared state
+// immediately (CHAOS zjdns.ptr.clear). The index is derived data: entries
+// survive, so a restart re-derives the index from them.
+func (c *Cache) ClearPtrIndex() error {
+	c.ptrIndex.Clear()
+	return c.ptrIndex.Save()
+}
+
+// ClearLatency clears the latency map and persists the cleared state
+// immediately (CHAOS zjdns.latency.clear).
+func (c *Cache) ClearLatency() error {
+	c.latency.Clear()
+	return c.latency.Save()
+}
+
 // Save snapshots the cache to the persist file (periodic + shutdown, driven
 // by persist.Manager; the Keep filter skips expired entries).
 func (c *Cache) Save() error {

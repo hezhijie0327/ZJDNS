@@ -450,6 +450,61 @@ func (s *Server) rotateKeys() {
 	log.Debugf("DNSCRYPT: rotated resolver keys (serial=%d, active=%d)", newPair.Classical.Serial, len(s.keys))
 }
 
+// ResetKeys regenerates the DNSCrypt crypto state from a fresh random seed:
+// the deterministic seed chain is broken, a single new cert window replaces
+// all current windows, and ticket keys rotate. Persisted immediately (CHAOS
+// zjdns.dnscrypt.clear). The provider identity (signingSK) comes from config
+// and is unchanged — the sdns:// stamp stays valid, but clients must fetch
+// the new certificate to reconnect.
+func (s *Server) ResetKeys() error {
+	s.mu.Lock()
+	seed, err := newRandomSeed()
+	if err != nil {
+		s.mu.Unlock()
+		return fmt.Errorf("dnscrypt: reseed: %w", err)
+	}
+	rc := ResolverConfig{ProviderName: s.providerName}
+	signingPK, ok := s.signingSK.Public().(ed25519.PublicKey)
+	if !ok {
+		s.mu.Unlock()
+		return errors.New("dnscrypt: signing key is not Ed25519")
+	}
+	rc.PublicKey = dnscryptcrypto.HexEncodeKey(signingPK)
+	rc.PrivateKey = dnscryptcrypto.HexEncodeKey(s.signingSK)
+
+	now := dnscryptcrypto.NowUnix32()
+	pair, err := rc.generateNextPair(&seed, now)
+	if err != nil {
+		s.mu.Unlock()
+		return fmt.Errorf("dnscrypt: generate cert pair: %w", err)
+	}
+	entry := keyEntry{
+		pair:      pair,
+		createdAt: time.Now(),
+		cachedTXT: [2][]string{
+			buildCertTXTForCert(pair.Classical),
+			buildCertTXTForCert(pair.PQ),
+		},
+	}
+	s.sharedKeyCache.Clear()
+	s.sharedKeyCache = lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize)
+	s.prevTicketKey = s.ticketKey
+	s.prevTicketKeyID = s.ticketKeyID
+	if _, randErr := rand.Read(s.ticketKey[:]); randErr == nil {
+		s.ticketKeyID[3]++
+	}
+	s.seed = seed
+	s.keys = []keyEntry{entry}
+	s.mu.Unlock()
+
+	// Persist outside the lock to avoid blocking queries.
+	if err := s.Save(); err != nil {
+		return fmt.Errorf("dnscrypt: persist reset state: %w", err)
+	}
+	log.Infof("DNSCRYPT: crypto state reset (serial=%d)", pair.Classical.Serial)
+	return nil
+}
+
 // Save writes the identity + current windows to the state file. Called on
 // startup, rotation (rotation must survive a restart), and the server's
 // periodic persist ticker.

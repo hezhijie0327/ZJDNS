@@ -18,6 +18,18 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
+// cachePersister is the slice of the cache needed by the CHAOS clear
+// endpoints: flush the in-memory state, then persist the cleared state
+// immediately (see wireZoneDynamicContent).
+type cachePersister interface {
+	FlushDB(target string) (int64, error)
+	Save() error
+	SavePtrIndex() error
+	SaveLatency() error
+	ClearPtrIndex() error
+	ClearLatency() error
+}
+
 // statsSaver adapts the stats collector (fixed-layout counter snapshot, not a
 // key-value LRU) to the persist Saver interface so it shares the unified
 // periodic + shutdown flush.
@@ -94,20 +106,57 @@ func makeFlushFunc(op func() (int64, error), verb string) func() []string {
 }
 
 // wireZoneDynamicContent assigns dynamic content functions to zone rules that
-// reference .stats, .cache, and related CHAOS names.
-func wireZoneDynamicContent(store cache.Store, statsCollector *stats.Collector, rules []config.ZoneRule) {
+// reference .stats, .cache, and related CHAOS names. dnscryptReset is bound
+// late (the DNSCrypt server is created after zone wiring) and must be safe to
+// call once the server is running.
+func wireZoneDynamicContent(store cachePersister, statsCollector *stats.Collector, statsFile string, dnscryptReset func() error, rules []config.ZoneRule) {
 	for i := range rules {
 		switch rules[i].Name {
 		case config.DefaultProjectName + ".stats":
 			rules[i].DynamicContent = statsCollector.Stats
 		case config.DefaultProjectName + ".stats.clear":
-			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { statsCollector.Reset(); return int64(0), nil }, "reset")
+			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) {
+				statsCollector.Reset()
+				// Persist the reset immediately: otherwise a crash before the
+				// next periodic flush restores the cleared totals from stats.zst.
+				if statsFile != "" {
+					if err := statsCollector.SavePersist(statsFile); err != nil {
+						return int64(0), err
+					}
+				}
+				return int64(0), nil
+			}, "reset")
 		case config.DefaultProjectName + ".cache.clear":
 			// cache.clear only flushes the cache; it must not wipe query
 			// statistics as a side effect (use .stats.clear for that).
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) {
-				return store.FlushDB("cache")
+				n, err := store.FlushDB("cache")
+				if err != nil {
+					return n, err
+				}
+				// Persist the cleared state immediately (cache.zst, ptr.zst,
+				// latency.zst) — a crash before the next periodic flush would
+				// otherwise restore the cleared entries on restart.
+				if err := store.Save(); err != nil {
+					return n, err
+				}
+				if err := store.SavePtrIndex(); err != nil {
+					return n, err
+				}
+				return n, store.SaveLatency()
 			}, "flushed")
+		case config.DefaultProjectName + ".ptr.clear":
+			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) {
+				return 0, store.ClearPtrIndex()
+			}, "flushed")
+		case config.DefaultProjectName + ".latency.clear":
+			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) {
+				return 0, store.ClearLatency()
+			}, "flushed")
+		case config.DefaultProjectName + ".dnscrypt.clear":
+			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) {
+				return 0, dnscryptReset()
+			}, "rotated")
 		}
 	}
 }

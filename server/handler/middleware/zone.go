@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net"
+	"strings"
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/ttl"
@@ -24,10 +25,21 @@ type Zone struct {
 }
 
 // isDestructiveChaosName reports whether the qname is one of the CHAOS
-// control endpoints that mutate server state (cache flush / stats reset).
+// control endpoints that mutate server state (cache/ptr/latency flush,
+// stats reset, DNSCrypt key reset). Case-insensitive: zone-rule matching is
+// case-insensitive too, so a case-variant query (e.g. "zjdns.cache.clear")
+// would otherwise bypass the loopback gate below.
 func isDestructiveChaosName(qname string) bool {
-	c := dnsutil.Canonical(qname)
-	return c == config.DefaultProjectName+".cache.clear." || c == config.DefaultProjectName+".stats.clear."
+	c := strings.ToLower(dnsutil.Canonical(qname))
+	switch c {
+	case strings.ToLower(config.DefaultProjectName) + ".cache.clear.",
+		strings.ToLower(config.DefaultProjectName) + ".stats.clear.",
+		strings.ToLower(config.DefaultProjectName) + ".ptr.clear.",
+		strings.ToLower(config.DefaultProjectName) + ".latency.clear.",
+		strings.ToLower(config.DefaultProjectName) + ".dnscrypt.clear.":
+		return true
+	}
+	return false
 }
 
 // Wrap implements Wrapper.

@@ -1,11 +1,13 @@
 package dnscrypt
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/persist"
 
@@ -114,5 +116,50 @@ func TestStateFile_SaveEmptyPath_Noop(t *testing.T) {
 	sk, _, _ := dnscryptcrypto.GenerateEd25519Keypair()
 	if err := saveStateFile("", sk, []keyEntry{testKeyEntry(t, &seed)}); err != nil {
 		t.Fatalf("saveStateFile with empty path: %v", err)
+	}
+}
+
+func TestResetKeys(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "dnscrypt.zst")
+	pkBytes, skBytes, err := dnscryptcrypto.GenerateEd25519Keypair() //nolint:gocritic // (public, private) order
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.DNSCryptCertificate{
+		PrivateKey: dnscryptcrypto.HexEncodeKey(skBytes),
+		PublicKey:  dnscryptcrypto.HexEncodeKey(pkBytes),
+	}
+	s, err := New(stateFile, cfg, "12443", "2.dnscrypt-cert.example.com")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	oldResolverPk := s.current().Classical.ResolverPk
+	oldSK := append([]byte(nil), s.signingSK...)
+
+	if err := s.ResetKeys(); err != nil {
+		t.Fatalf("ResetKeys: %v", err)
+	}
+
+	// New cert window with fresh resolver keys (a fresh seed chain makes a
+	// different key pair — serial is now-based and can coincide within the
+	// same second, the key material cannot); identity unchanged.
+	if s.current().Classical.ResolverPk == oldResolverPk {
+		t.Error("resolver key unchanged after reset")
+	}
+	if !bytes.Equal(s.signingSK, oldSK) {
+		t.Error("signing identity changed after reset (must stay config-bound)")
+	}
+
+	// Persisted immediately: reloading the file yields the new window.
+	gotSK, windows, err := loadStateFile(stateFile)
+	if err != nil {
+		t.Fatalf("loadStateFile: %v", err)
+	}
+	if len(windows) != 1 || windows[0].Serial != s.current().Classical.Serial {
+		t.Errorf("persisted windows = %d (serial=%d), want 1 (serial=%d)",
+			len(windows), windows[0].Serial, s.current().Classical.Serial)
+	}
+	if !bytes.Equal(gotSK, oldSK) {
+		t.Error("persisted identity differs from config identity")
 	}
 }

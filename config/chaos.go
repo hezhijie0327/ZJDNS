@@ -11,9 +11,10 @@ import (
 // introspection queries: id.server, hostname.bind, version.server, version.bind,
 // and per-table cache/stats clearing endpoints.
 //
-// The .cache.clear / .stats.clear endpoints are destructive and are gated to
-// loopback clients in the Zone middleware — operators can add their own
-// rules for the same names, which take precedence (see hasZoneRule).
+// The .clear endpoints (cache/stats/ptr/latency/dnscrypt) are destructive
+// and are gated to loopback clients in the Zone middleware — operators can
+// add their own rules for the same names, which take precedence (see
+// hasZoneRule).
 func addChaosRecord(cfg *ServerConfig) {
 	version := DefaultVersion
 	if version == "" || version == "dev" {
@@ -54,6 +55,9 @@ func addChaosRecord(cfg *ServerConfig) {
 		DefaultProjectName + ".stats",
 		DefaultProjectName + ".stats.clear",
 		DefaultProjectName + ".cache.clear",
+		DefaultProjectName + ".ptr.clear",
+		DefaultProjectName + ".latency.clear",
+		DefaultProjectName + ".dnscrypt.clear",
 	} {
 		if hasZoneRule(cfg, name) {
 			continue

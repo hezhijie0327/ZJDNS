@@ -143,6 +143,66 @@ func TestPersist_PTRIndexRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPersist_ClearPtrIndex(t *testing.T) {
+	dir := t.TempDir()
+	ptrFile := filepath.Join(dir, "ptr.zst")
+
+	mc := New(0, "")
+	mc.SetPtrPersist(ptrFile)
+	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{aRR("www.example.com.", "192.0.2.55")}, nil, nil, false, dns.RcodeSuccess)
+	if err := mc.SavePtrIndex(); err != nil {
+		t.Fatalf("SavePtrIndex: %v", err)
+	}
+	if len(mc.ReverseLookup("192.0.2.55")) != 1 {
+		t.Fatal("index not populated before clear")
+	}
+
+	if err := mc.ClearPtrIndex(); err != nil {
+		t.Fatalf("ClearPtrIndex: %v", err)
+	}
+	if len(mc.ReverseLookup("192.0.2.55")) != 0 {
+		t.Error("index not cleared in memory")
+	}
+
+	// The cleared state must be persisted immediately: a fresh map loading
+	// the file (with no cache entries to derive from) stays empty.
+	mc2 := New(0, "")
+	mc2.SetPtrPersist(ptrFile)
+	defer func() { _ = mc2.Close() }()
+	if len(mc2.ReverseLookup("192.0.2.55")) != 0 {
+		t.Error("cleared ptr.zst not persisted (index restored on load)")
+	}
+}
+
+func TestPersist_ClearLatency(t *testing.T) {
+	dir := t.TempDir()
+	latFile := filepath.Join(dir, "latency.zst")
+
+	mc := New(0, "")
+	mc.SetLatencyPersist(latFile)
+	mc.UpdateLatency("192.0.2.1", 42)
+	if err := mc.SaveLatency(); err != nil {
+		t.Fatalf("SaveLatency: %v", err)
+	}
+	if _, ok := mc.LatencyLastProbe("192.0.2.1"); !ok {
+		t.Fatal("latency not recorded before clear")
+	}
+
+	if err := mc.ClearLatency(); err != nil {
+		t.Fatalf("ClearLatency: %v", err)
+	}
+	if _, ok := mc.LatencyLastProbe("192.0.2.1"); ok {
+		t.Error("latency not cleared in memory")
+	}
+
+	mc2 := New(0, "")
+	mc2.SetLatencyPersist(latFile)
+	defer func() { _ = mc2.Close() }()
+	if _, ok := mc2.LatencyLastProbe("192.0.2.1"); ok {
+		t.Error("cleared latency.zst not persisted (latency restored on load)")
+	}
+}
+
 // ── Latency ───────────────────────────────────────────────────────────────────
 
 func TestPersist_LatencyRoundTrip(t *testing.T) {
