@@ -108,6 +108,7 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 		store:            deps.Cache,
 		stats:            deps.Stats,
 		closed:           deps.Closed,
+		prober:           deps.Prober,
 		prefetchCooldown: deps.PrefetchCooldown,
 		pendingRefreshes: deps.PendingRefrs,
 		refreshGroup:     deps.RefreshGroup,

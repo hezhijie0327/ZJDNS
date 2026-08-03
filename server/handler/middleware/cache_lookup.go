@@ -27,6 +27,7 @@ type CacheLookup struct {
 	store            cache.Store
 	stats            *stats.Collector
 	closed           func() bool
+	prober           handler.LatencyProber
 	prefetchCooldown *handler.PrefetchCooldown
 	pendingRefreshes *pending.Group[handler.PendingKey]
 	refreshGroup     *errgroup.Group
@@ -57,6 +58,15 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			qctx.Res = m.buildResponse(qctx, entry, false)
 			qctx.Responded = true
 			qctx.CacheServed = true
+
+			// Probe cache hits too: entries loaded from the persist file at
+			// startup never pass through the miss path, so their IPs would
+			// stay unmeasured — and answers unsorted — forever if the latency
+			// map has no data. Start's built-in recency check makes this a
+			// no-op for IPs probed within the interval.
+			if m.prober != nil && (qtype == dns.TypeA || qtype == dns.TypeAAAA) && len(entry.Answer) > 1 {
+				m.prober.Start(qname, qtype, entry.Answer, entry.Authority, entry.Additional, entry.Validated, nil)
+			}
 
 			m.stats.Record(&stats.Request{Protocol: qctx.Protocol, Result: "hit", Rcode: dns.RcodeSuccess, ResponseTime: handler.ElapsedMS(qctx.StartTime)})
 
