@@ -155,6 +155,15 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 		return msg
 	}
 
+	// BADCOOKIE responses are short-circuited by the EDNS middleware before
+	// any stats-recording middleware; record them here so the badcookie
+	// result class is populated (RFC 7873 §5.2).
+	if qctx.Res != nil && qctx.Res.Rcode == dns.RcodeBadCookie {
+		h.cache.RecordRequest(&cache.RequestRecord{
+			Result: "badcookie", Protocol: protocol, Rcode: dns.RcodeBadCookie,
+		})
+	}
+
 	if qctx.Res != nil && log.IsDebug() {
 		qname := qctx.Qname
 		qtype := qctx.Qtype

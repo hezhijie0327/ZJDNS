@@ -26,6 +26,10 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		dnscryptProvider string
 		dnscryptAddr     string
 
+		// SQL
+		runSQL bool
+		sqlRW  bool
+
 		// DNS stamp
 		runDNSStamp    bool
 		dnsStampDecode bool
@@ -58,6 +62,10 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	fs.StringVar(&dnscryptProvider, "provider", "", "Provider name for DNSCrypt config")
 	fs.StringVar(&dnscryptAddr, "addr", "127.0.0.1:8443", "Server address for DNSCrypt stamp")
 
+	// SQL
+	fs.BoolVar(&runSQL, "sql", false, "Run SQL query against database")
+	fs.BoolVar(&sqlRW, "rw", false, "Enable read-write mode for --sql")
+
 	// DNS stamp
 	fs.BoolVar(&runDNSStamp, "dnsstamp", false, "Decode or encode an sdns:// DNS stamp")
 	fs.BoolVar(&dnsStampDecode, "decode", false, "Decode mode for --dnsstamp")
@@ -89,6 +97,8 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		fmt.Fprintf(os.Stderr, "  %s --generate-config --dnscrypt --provider <name> [--addr <addr>]\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --dnsstamp --decode <stamp>  # Decode an sdns:// stamp to upstream JSON\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --dnsstamp --encode --proto <type> --stamp-addr <addr> [--provider-name <name>] [--public-key <hex>] [--path <path>] [--props <n>]\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s --rw --sql <db> <query>        # Run read-write SQL (--rw MUST precede positional args)\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s --sql <db> <query>            # Run read-only SQL query\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --probe --pipeline    tcp://host:port  # Test RFC 7766 query pipelining\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --probe --conn-reuse  tcp://host:port  # Test RFC 1035 connection reuse\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --probe --idle-timeout tcp://host:port  # Measure server idle timeout\n", fs.Name())
@@ -233,6 +243,25 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		default:
 			fmt.Fprintf(os.Stderr, "Usage: %s --dnsstamp --decode <stamp> | --dnsstamp --encode [options]\n", fs.Name())
 			return "", true, 1
+		}
+		return "", true, 0
+	}
+
+	// --sql
+	if runSQL {
+		args := fs.Args()
+		if len(args) < 2 {
+			fmt.Fprintf(os.Stderr, "Usage: %s --sql <db> <query> [--rw]\n", fs.Name())
+			return "", true, 1
+		}
+		if sqlRW {
+			if err := RunSQLRW(args[0], args[1]); err != nil {
+				fmt.Fprintf(os.Stderr, "sql: %v\n", err)
+			}
+		} else {
+			if err := RunSQL(args[0], args[1]); err != nil {
+				fmt.Fprintf(os.Stderr, "sql: %v\n", err)
+			}
 		}
 		return "", true, 0
 	}
