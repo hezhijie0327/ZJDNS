@@ -96,11 +96,14 @@ func New(maxSizeBytes int64, file string) *Cache {
 	store := lrumap.New[entryKey, cacheEntry](64)
 	c := &Cache{
 		store:    store,
-		ptrIndex: lrumap.New[string, []*ptrRecord](config.DefaultPtrIndexCapacity),
+		ptrIndex: lrumap.New[string, []*ptrRecord](64),
 		latency:  lrumap.New[string, latencyEntry](config.DefaultLatencyCacheCapacity),
 	}
 	store.SetWeight(maxSizeBytes, func(e cacheEntry) int64 { return int64(len(e.value)) })
 	store.SetOnEvict(func(k entryKey, _ cacheEntry) { c.cleanupPtrIndex(k) })
+	// Byte-budget the PTR index: one IP can map to hundreds of names, so a
+	// count cap alone would not bound memory. Same mechanism as the cache.
+	c.ptrIndex.SetWeight(config.DefaultPtrIndexMaxBytes, ptrRecordsWeight)
 	if file != "" {
 		if n, err := store.EnablePersist(lrumap.PersistConfig[entryKey, cacheEntry]{
 			Path:  file,

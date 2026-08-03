@@ -97,6 +97,18 @@ func (c *Cache) cleanupPtrIndex(owner entryKey) {
 	}
 }
 
+// ptrRecordsWeight estimates the in-memory footprint of one IP's derived
+// records: fixed per-record overhead plus the name and owner-key strings.
+// Used as the lrumap weight function for byte-budgeted eviction.
+func ptrRecordsWeight(recs []*ptrRecord) int64 {
+	const perRecord = 48 // struct fields + string headers + slice pointers
+	var w int64
+	for _, r := range recs {
+		w += perRecord + int64(len(r.name)) + int64(len(r.ownerKey.qname)) + int64(len(r.ownerKey.ecsAddr))
+	}
+	return w
+}
+
 // ReverseLookup returns all cached domain names mapped to the given IP.
 func (c *Cache) ReverseLookup(ip string) []LookupResult {
 	if ip == "" {

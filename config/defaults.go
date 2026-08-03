@@ -51,10 +51,12 @@ const (
 	// 512 entries × ~16 bytes ≈ 8KB memory.
 	DefaultLatencyCacheCapacity = 512
 
-	// DefaultPtrIndexCapacity caps the PTR reverse index (one entry per
-	// distinct IP). A count-based backstop only — the index is cleaned by
-	// cache-entry eviction, so this rarely engages.
-	DefaultPtrIndexCapacity = 1 << 20
+	// DefaultPtrIndexMaxBytes caps the PTR reverse index by estimated value
+	// bytes (one entry per distinct IP; a single IP can carry many records).
+	// Weight-based, same mechanism as the cache's max_size_mb budget — a
+	// count cap alone would not bound memory when one IP maps to hundreds of
+	// names. The index is also cleaned by cache-entry eviction.
+	DefaultPtrIndexMaxBytes = 16 << 20
 
 	// DefaultPrefetchCooldownMaxEntries caps the PrefetchCooldown map size.
 	// When exceeded, the oldest half of entries are evicted to prevent

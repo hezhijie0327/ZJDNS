@@ -82,11 +82,12 @@ with an additive merge.
   probe gate (`LatencyLastProbe`) and the resolver's cross-name NS ordering
   (`LookupIPLatencies`). The probe itself re-sorts the answer and re-Sets it.
 - **Reverse lookup (PTR)**: `lrumap` `map[ip][]ptrRecord` derived from A/AAAA
-  records (update on Set, cleanup on eviction via OnEvict); persisted to
-  `ptr.zst`, derived from entries when the file is missing. Expired records
-  skipped on scan. Best-effort: `ptr.zst` and `cache.zst` are written in the
-  same persist round, so drift is bounded to one interval and costs hit-rate,
-  never correctness.
+  records (update on Set, cleanup on eviction via OnEvict); byte-budgeted via
+  `SetWeight` (16MB default — one IP can map to hundreds of names, so a count
+  cap would not bound memory); persisted to `ptr.zst`, derived from entries
+  when the file is missing. Expired records skipped on scan. Best-effort:
+  `ptr.zst` and `cache.zst` are written in the same persist round, so drift
+  is bounded to one interval and costs hit-rate, never correctness.
 - **Stats aggregation**: `stats.Collector` — flat atomic counters (no maps, lock-free `Record()`), latency histogram buckets, `Reset()` via `ZJDNS.stats.clear`. `stats.zst` persistence via the single-entry lrumap (`SetPersist` / no-arg `SavePersist`; periodic + shutdown snapshot, startup additive restore).
 - **Zone queries**: `Evaluator.Evaluate()` does in-memory exact-match lookup on `exact` map (O(1)), then wildcard suffix search on `wildcards` map (max 16 iterations). Pure WORM maps.
 - **Ruleset matching**: `Engine.Match()` does CIDR via binary radix trie (O(128)) and domain suffix via map lookup (O(1)). All in-memory, loaded from config at startup.

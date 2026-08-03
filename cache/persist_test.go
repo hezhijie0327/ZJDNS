@@ -1,11 +1,13 @@
 package cache
 
 import (
+	"fmt"
 	"net/netip"
 	"path/filepath"
 	"testing"
 	"zjdns/config"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/rdata"
@@ -266,5 +268,45 @@ func TestLRU_EvictCleansPTRIndex(t *testing.T) {
 	})
 	if total != mc.Len() {
 		t.Errorf("ptr records (%d) != cache entries (%d) — eviction leak", total, mc.Len())
+	}
+}
+
+func TestPtrIndex_WeightEviction(t *testing.T) {
+	// Byte budget of 300B with ~100B per record: the index must evict
+	// least-recently-used IPs to stay under budget (same mechanism as the
+	// cache's max_size_mb).
+	m := lrumap.New[string, []*ptrRecord](100)
+	m.SetWeight(300, ptrRecordsWeight)
+
+	for i := range 10 {
+		ip := fmt.Sprintf("192.0.2.%d", i+1)
+		rec := &ptrRecord{
+			name:      "host.example.com.",
+			ttl:       300,
+			ts:        1,
+			expiresAt: 1 << 60,
+			ownerKey:  entryKey{qname: "host.example.com.", qtype: dns.TypeA, qclass: 1},
+		}
+		m.Set(ip, []*ptrRecord{rec})
+	}
+	if w := m.TotalWeight(); w > 300 {
+		t.Errorf("TotalWeight = %d, exceeds 300 budget", w)
+	}
+	if m.Len() == 10 {
+		t.Error("no eviction happened under a 300B budget with 10 records")
+	}
+	if m.Len() < 1 {
+		t.Error("index should keep at least one entry")
+	}
+}
+
+func TestPtrRecordsWeight_GrowsWithRecords(t *testing.T) {
+	base := ptrRecordsWeight([]*ptrRecord{{name: "a.example.com.", ownerKey: entryKey{qname: "a.example.com."}}})
+	two := ptrRecordsWeight([]*ptrRecord{
+		{name: "a.example.com.", ownerKey: entryKey{qname: "a.example.com."}},
+		{name: "b.example.com.", ownerKey: entryKey{qname: "b.example.com."}},
+	})
+	if two <= base {
+		t.Errorf("weight of two records (%d) must exceed one (%d)", two, base)
 	}
 }
