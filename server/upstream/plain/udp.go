@@ -118,12 +118,13 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 		defer func() { clear(buf); socks5.ReadPool.Put(bufPtr) }()
 	} else {
 		var err error
-		conn, err = net.Dial("udp", server.Address)
+		udpConn, err := c.getUDPConn(server.Address)
 		if err != nil {
 			return nil, err
 		}
-		defer func() { _ = conn.Close() }()
-		if _, err := conn.Write(msg.Data); err != nil {
+		defer func() { c.putUDPConn(server.Address, udpConn) }()
+		conn = udpConn
+		if _, err := udpConn.Write(msg.Data); err != nil {
 			return nil, err
 		}
 		bufPtr, ok := spoofguardBufPool.Get().(*[]byte)
