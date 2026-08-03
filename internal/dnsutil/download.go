@@ -89,9 +89,14 @@ func DownloadFile(url, path string) error {
 		_ = tmp.Close()
 		return fmt.Errorf("download %s: %w", url, err)
 	}
-	if err := tmp.Chmod(0o644); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("chmod temp file: %w", err)
+	// Windows has no POSIX permission model: Chmod only toggles the read-only
+	// attribute and can fail on files opened by other processes (AV scanners).
+	// The permission check in ResolveDataFile already skips Windows.
+	if runtime.GOOS != "windows" {
+		if err := tmp.Chmod(0o644); err != nil {
+			_ = tmp.Close()
+			return fmt.Errorf("chmod temp file: %w", err)
+		}
 	}
 	// Sync before the rename: after a crash the final path must never hold
 	// a truncated/zero-length file that a later start would treat as valid
