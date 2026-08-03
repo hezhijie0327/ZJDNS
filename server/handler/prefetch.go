@@ -1,109 +1,64 @@
 package handler
 
 import (
-	"sort"
-	"sync"
 	"zjdns/config"
+	"zjdns/internal/lrumap"
 )
 
 // PrefetchCooldown tracks per-cache-key timestamps to rate-limit cache
-// prefetch attempts.  A key that was prefetched within the cooldown window
-// is skipped.
+// prefetch attempts. A key that was prefetched within the cooldown window
+// is skipped. Backed by a bounded lrumap — capacity eviction replaces the
+// old manual oldest-entry sweep.
 type PrefetchCooldown struct {
-	mu   sync.RWMutex
-	data map[string]int64
+	m *lrumap.Map[string, int64]
 }
 
 // NewPrefetchCooldown returns an initialised PrefetchCooldown.
 func NewPrefetchCooldown() *PrefetchCooldown {
-	return &PrefetchCooldown{
-		data: make(map[string]int64),
-	}
+	return &PrefetchCooldown{m: lrumap.New[string, int64](config.DefaultPrefetchCooldownMaxEntries)}
 }
 
 // ShouldStart reports whether a prefetch may start for the given key.
 // If allowed, the current timestamp is recorded and true is returned.
 // Subsequent calls with the same key within the cooldown window return false.
 //
-// Uses double-checked locking: the common case (key still in cooldown) only
-// acquires a read lock.  The write path falls back to an exclusive lock.
+// Expired entries are claimed exclusively via CompareAndDelete: only the
+// goroutine that observes a given value can replace it, so concurrent
+// starters cannot both pass. A missing key has a small Get→Set race window,
+// but the refresh singleflight (pendingRefreshes) deduplicates the actual
+// refresh work, so a double pass cannot double the work.
 func (pc *PrefetchCooldown) ShouldStart(key string, now, cooldownNanos int64) bool {
-	// The zero value (constructed without NewPrefetchCooldown) has a nil
-	// map: make it usable instead of panicking on the write path.
-	if pc.data == nil {
-		pc.data = make(map[string]int64)
-	}
-	// Fast path: read-only check covers the common case where a key is
-	// still within its cooldown window.
-	pc.mu.RLock()
-	last, exists := pc.data[key]
-	pc.mu.RUnlock()
-	if exists && now-last < cooldownNanos {
-		return false
-	}
-
-	// Slow path: may need to record a new timestamp.  Acquire the write
-	// lock and double-check — another goroutine may have recorded the
-	// same key between the RUnlock and Lock.
-	pc.mu.Lock()
-	last, exists = pc.data[key]
-	if exists && now-last < cooldownNanos {
-		pc.mu.Unlock()
-		return false
-	}
-	// Inline soft cap: even if the external Cleanup ticker is removed or
-	// delayed, the map cannot grow without bound.
-	if len(pc.data) >= config.DefaultPrefetchCooldownMaxEntries {
-		// Make room by dropping the oldest entry — a bounded map with
-		// occasional double-evictions beats unbounded growth.
-		var oldestKey string
-		var oldestTs int64
-		first := true
-		for k, v := range pc.data {
-			if first || v < oldestTs {
-				oldestKey, oldestTs, first = k, v, false
+	for {
+		last, ok := pc.m.Get(key)
+		if ok && now-last < cooldownNanos {
+			return false
+		}
+		if ok {
+			// Expired entry — claim it exclusively; failure means another
+			// goroutine already replaced it, so re-check.
+			if !pc.m.CompareAndDelete(key, last) {
+				continue
 			}
+			pc.m.Set(key, now)
+			return true
 		}
-		if oldestKey != "" {
-			delete(pc.data, oldestKey)
-		}
+		pc.m.Set(key, now)
+		return true
 	}
-	pc.data[key] = now
-	pc.mu.Unlock()
-	return true
 }
 
-// Cleanup removes entries that have aged past the cooldown window, and
-// evicts the oldest half when the map exceeds DefaultPrefetchCooldownMaxEntries
-// to prevent unbounded growth under sustained diverse-query load.
+// Cleanup removes entries that have aged past the cooldown window, freeing
+// their slots before LRU eviction would displace live keys. Capacity
+// management itself is handled by the lrumap.
 func (pc *PrefetchCooldown) Cleanup(now, cooldownNanos int64) {
-	pc.mu.Lock()
-	defer pc.mu.Unlock()
-
-	for k, v := range pc.data {
+	var stale []string
+	pc.m.Range(func(k string, v int64) bool {
 		if now-v > cooldownNanos {
-			delete(pc.data, k)
+			stale = append(stale, k)
 		}
-	}
-
-	maxEntries := config.DefaultPrefetchCooldownMaxEntries
-	if len(pc.data) > maxEntries {
-		// Sort by timestamp ascending; evict the oldest half. Entries still
-		// inside their cooldown are evicted only as a last resort — evicting
-		// a hot key mid-cooldown lets the same name re-pass ShouldStart and
-		// duplicate the very upstream refresh the cooldown prevents.
-		type entry struct {
-			key string
-			ts  int64
-		}
-		entries := make([]entry, 0, len(pc.data))
-		for k, v := range pc.data {
-			entries = append(entries, entry{k, v})
-		}
-		sort.Slice(entries, func(i, j int) bool { return entries[i].ts < entries[j].ts })
-		evict := len(entries) - maxEntries/2
-		for i := range evict {
-			delete(pc.data, entries[i].key)
-		}
+		return true
+	})
+	for _, k := range stale {
+		pc.m.Delete(k)
 	}
 }

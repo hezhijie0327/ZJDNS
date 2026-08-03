@@ -5,9 +5,9 @@ import (
 	"net"
 	"os"
 	"strings"
-	"sync"
 	"zjdns/config"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -18,16 +18,18 @@ import (
 const (
 	rootHintsFileName = "named.root"
 	rootHintsURL      = "https://www.internic.net/domain/named.root"
+
+	// rootHintsKey is the single entry holding the whole root table.
+	rootHintsKey = "hints"
 )
 
 var errNoRootHints = errors.New("no root servers found")
 
-// rootHints maps root server FQDNs to their addresses (ip:port).
-// Lazily populated from named.root on first access; empty until then.
-var (
-	rootHints   map[string][]string
-	rootHintsMu sync.RWMutex
-)
+// rootHints maps root server FQDNs to their addresses (ip:port), stored as a
+// single-entry lrumap (capacity 1 — LRU eviction can never displace the
+// table; the map just provides the shared concurrent container). Lazily
+// populated from named.root on first access; empty until then.
+var rootHints = lrumap.New[string, map[string][]string](1)
 
 // LoadRootHints eagerly loads root server hints from named.root. Only needed
 // for recursive resolution; upstream-only deployments can skip this call.
@@ -39,18 +41,11 @@ func LoadRootHints() {
 // access. A failed load is NOT permanently cached: sync.Once would leave the
 // resolver with zero root servers for the rest of the process lifetime, so a
 // failed attempt is retried on the next call. Returns an empty map on failure.
+// Concurrent misses both load the file (idempotent, harmless) and Set the
+// same table.
 func loadHints() map[string][]string {
-	rootHintsMu.RLock()
-	hints := rootHints
-	rootHintsMu.RUnlock()
-	if hints != nil {
+	if hints, ok := rootHints.Get(rootHintsKey); ok {
 		return hints
-	}
-
-	rootHintsMu.Lock()
-	defer rootHintsMu.Unlock()
-	if rootHints != nil { // double-checked: another goroutine may have loaded already
-		return rootHints
 	}
 
 	path := zdnsutil.ResolveDataFile(rootHintsFileName, rootHintsURL)
@@ -66,9 +61,9 @@ func loadHints() map[string][]string {
 		// resolution after one transient failure (e.g. startup offline).
 		return nil
 	}
-	rootHints = hints
+	rootHints.Set(rootHintsKey, hints)
 	log.Infof("RECURSION: loaded %d root server(s) from %s", len(hints), path)
-	return rootHints
+	return hints
 }
 
 // loadRootHintsFromFile parses a BIND-style named.root zone file and returns a
