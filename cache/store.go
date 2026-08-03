@@ -56,22 +56,9 @@ type Cache struct {
 	latency  *lrumap.Map[string, latencyEntry]
 }
 
-// ecsCandidate is a single ECS cache-key candidate used during fallback lookup.
-type ecsCandidate struct {
-	addr   string
-	prefix int
-}
-
 const (
 	defaultStaleMaxAge  = int64(config.DefaultStaleMaxAge)
 	maxLatencyLookupIPs = 64 // cap per-Get latency lookups to bound iteration overhead
-)
-
-// ECS fallback prefix boundaries — standard CIDR granularities most commonly
-// used by CDN and authoritative DNS operators (RFC 7871).
-var (
-	ipv4FallbackPrefixes = []int{24, 16, 8, 0}
-	ipv6FallbackPrefixes = []int{56, 48, 32, 0}
 )
 
 // New creates an in-memory cache. maxSizeBytes caps total stored value bytes
@@ -169,46 +156,43 @@ func (c *Cache) SaveLatency() error { return c.latency.Save() }
 // stale-serving and prefetch — the middleware decides).
 func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool) {
 	qname = dnsutil.Canonical(qname)
-	for _, cand := range ecsFallbackCandidates(ecs) {
-		key := entryKey{qname: qname, ecsAddr: cand.addr, ecsPrefix: uint16(cand.prefix), dnssecOK: dnssecOK, qtype: qtype, qclass: qclass} //nolint:gosec // G115: prefix ≤ 128 by CIDR semantics
-		e, ok := c.store.Get(key)
-		if !ok {
-			continue
-		}
-
-		msg := pool.DefaultMessage.Get()
-		msg.Data = e.value
-		if err := msg.Unpack(); err != nil {
-			pool.DefaultMessage.Put(msg)
-			log.Debugf("CACHE: unpack wire for %s (type=%d): %v", qname, qtype, err)
-			continue
-		}
-
-		// The pooled msg is zeroed on Put but its backing arrays survive —
-		// the returned Entry's RR slices stay valid (same contract as before).
-		entryTTL := minTTL(msg.Answer, msg.Ns, msg.Extra)
-		entry := &Entry{
-			Answer:     msg.Answer,
-			Authority:  msg.Ns,
-			Additional: msg.Extra,
-			Timestamp:  e.ts,
-			TTL:        entryTTL,
-			Validated:  e.validated,
-			Rcode:      int(msg.Rcode), //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
-		}
-		// Reorder A/AAAA records fastest-first by cached probe latency — the
-		// client-facing counterpart of the resolver's NS address ordering.
-		if (qtype == dns.TypeA || qtype == dns.TypeAAAA) && len(entry.Answer) > 1 {
-			if latencies := c.recordLatencyLookup(entry.Answer); latencies != nil {
-				sortAnswerByLatency(entry.Answer, latencies)
-			}
-		}
-		pool.DefaultMessage.Put(msg)
-
-		return entry, true, ttl.IsExpired(e.ts, entryTTL)
+	ecAddr, ecsPrefix := ecsCacheKey(ecs)
+	key := entryKey{qname: qname, ecsAddr: ecAddr, ecsPrefix: ecsPrefix, dnssecOK: dnssecOK, qtype: qtype, qclass: qclass} //nolint:gosec // G115: prefix ≤ 128 by CIDR semantics
+	e, ok := c.store.Get(key)
+	if !ok {
+		log.Debugf("CACHE: miss for %s (type=%d)", qname, qtype)
+		return nil, false, false
 	}
-	log.Debugf("CACHE: miss for %s (type=%d)", qname, qtype)
-	return nil, false, false
+
+	msg := pool.DefaultMessage.Get()
+	msg.Data = e.value
+	if err := msg.Unpack(); err != nil {
+		pool.DefaultMessage.Put(msg)
+		return nil, false, false
+	}
+
+	// The pooled msg is zeroed on Put but its backing arrays survive —
+	// the returned Entry's RR slices stay valid (same contract as before).
+	entryTTL := minTTL(msg.Answer, msg.Ns, msg.Extra)
+	entry := &Entry{
+		Answer:     msg.Answer,
+		Authority:  msg.Ns,
+		Additional: msg.Extra,
+		Timestamp:  e.ts,
+		TTL:        entryTTL,
+		Validated:  e.validated,
+		Rcode:      int(msg.Rcode), //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
+	}
+	// Reorder A/AAAA records fastest-first by cached probe latency — the
+	// client-facing counterpart of the resolver's NS address ordering.
+	if (qtype == dns.TypeA || qtype == dns.TypeAAAA) && len(entry.Answer) > 1 {
+		if latencies := c.recordLatencyLookup(entry.Answer); latencies != nil {
+			sortAnswerByLatency(entry.Answer, latencies)
+		}
+	}
+	pool.DefaultMessage.Put(msg)
+
+	return entry, true, ttl.IsExpired(e.ts, entryTTL)
 }
 
 // Set stores a DNS response in the cache. Wire format is raw DNS wire format
@@ -366,36 +350,15 @@ func maskIP(ip net.IP, prefixBits int) net.IP {
 	return result
 }
 
-// ecsFallbackCandidates generates ECS cache-key candidates from most specific
-// to least specific. The final candidate is always the no-ECS key to handle
-// scope=0 entries (RFC 7871 §7.3.1: when the authoritative response scope is
-// zero, the answer is cached globally without an ECS key).
-func ecsFallbackCandidates(ecs *config.ECSOption) []ecsCandidate {
+// ecsCacheKey returns the ECS cache-key components: address string and prefix.
+// Returns ("", 0) when ECS is nil (no client subnet).
+func ecsCacheKey(ecs *config.ECSOption) (addr string, prefix uint16) {
 	if ecs == nil {
-		// Include both address-family /0 fallbacks so that entries stored with
-		// an ECS key (from a prior ECS query) can be found by a non-ECS query.
-		return []ecsCandidate{{"", 0}, {"0.0.0.0", 0}, {"::", 0}}
+		return addr, prefix
 	}
-	var standardPrefixes []int
-	if ecs.Address.To4() != nil {
-		standardPrefixes = ipv4FallbackPrefixes
-	} else {
-		standardPrefixes = ipv6FallbackPrefixes
-	}
-	candidates := []ecsCandidate{
-		{ecs.Address.String(), int(ecs.SourcePrefix)},
-	}
-	for _, p := range standardPrefixes {
-		if p < int(ecs.SourcePrefix) {
-			masked := maskIP(ecs.Address, p)
-			candidates = append(candidates, ecsCandidate{masked.String(), p})
-		}
-	}
-	// Always include the no-ECS fallback: authoritatives with scope=0
-	// produce cache entries without an ECS key, and those must be
-	// reachable from ECS queries.
-	candidates = append(candidates, ecsCandidate{"", 0})
-	return candidates
+	addr = ecs.Address.String()
+	prefix = uint16(ecs.SourcePrefix)
+	return addr, prefix
 }
 
 // stripOPT removes EDNS OPT pseudo-records from an RR slice, returning a new

@@ -2,6 +2,7 @@ package cache
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
 	"path/filepath"
 	"sync"
@@ -115,7 +116,7 @@ func TestSet_Get_ECSScoping(t *testing.T) {
 	}
 }
 
-func TestGet_ECSFallback(t *testing.T) {
+func TestGet_ECSExactMatch(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
@@ -123,19 +124,21 @@ func TestGet_ECSFallback(t *testing.T) {
 	ecs16 := &config.ECSOption{Family: 1, SourcePrefix: 16, ScopePrefix: 0, Address: netParseIP("1.2.0.0").AsSlice()}
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs16, false, []dns.RR{rr}, nil, nil, false, dns.RcodeSuccess)
 
+	// Exact /16 match — must hit.
 	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs16, false)
 	if !found {
 		t.Error("should hit with exact /16")
 	}
 
+	// Different prefix — must miss (no fallback).
 	ecs24 := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("1.2.3.0").AsSlice()}
 	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs24, false)
-	if !found {
-		t.Error("should fallback from /24 to /16")
+	if found {
+		t.Error("should miss with /24 when only /16 stored (no fallback)")
 	}
 }
 
-func TestGet_ECSFallback_ExactPreferred(t *testing.T) {
+func TestGet_ECSExactPreferred(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
@@ -315,19 +318,18 @@ func TestMaskIP_IPv6(t *testing.T) {
 	}
 }
 
-func TestECSFallbackCandidates_Nil(t *testing.T) {
-	candidates := ecsFallbackCandidates(nil)
-	if len(candidates) != 3 {
-		t.Fatalf("nil ECS should return 3 candidates (no-ECS + IPv4 /0 + IPv6 /0): got %d: %+v", len(candidates), candidates)
+func TestECSCacheKey_Nil(t *testing.T) {
+	addr, prefix := ecsCacheKey(nil)
+	if addr != "" || prefix != 0 {
+		t.Fatalf("nil ECS should return empty key: got addr=%q prefix=%d", addr, prefix)
 	}
-	if candidates[0].addr != "" || candidates[0].prefix != 0 {
-		t.Errorf("first candidate should be no-ECS: %+v", candidates[0])
-	}
-	if candidates[1].addr != "0.0.0.0" || candidates[1].prefix != 0 {
-		t.Errorf("second candidate should be IPv4 /0: %+v", candidates[1])
-	}
-	if candidates[2].addr != "::" || candidates[2].prefix != 0 {
-		t.Errorf("third candidate should be IPv6 /0: %+v", candidates[2])
+}
+
+func TestECSCacheKey_WithECS(t *testing.T) {
+	ecs := &config.ECSOption{Address: net.ParseIP("1.2.3.4"), SourcePrefix: 24}
+	addr, prefix := ecsCacheKey(ecs)
+	if addr != "1.2.3.4" || prefix != 24 {
+		t.Fatalf("ECS should return exact key: got addr=%q prefix=%d", addr, prefix)
 	}
 }
 
