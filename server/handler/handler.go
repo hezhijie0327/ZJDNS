@@ -27,7 +27,6 @@ type Question = resolver.Question
 // Resolver is the interface for DNS query resolution.
 type Resolver interface {
 	Query(ctx context.Context, question Question, ecs *edns.ECSOption) *resolver.QueryResult
-	DNSSECEDECode() uint16
 	UpstreamServers() []*config.UpstreamServer
 }
 

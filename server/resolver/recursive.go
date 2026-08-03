@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -22,17 +21,18 @@ import (
 // builds a cryptographic chain of trust at each delegation step.
 //
 // Both root servers and per-nameserver addresses share the same latency-sorted
-// cache mechanism: per-type TypeA/TypeAAAA entries + ip_latency table.
-// sortAnswerByLatency reorders records by latency at Get() time.
+// cache mechanism: per-type TypeA/TypeAAAA entries + ip_latency table. The
+// client-facing A/AAAA answers are reordered fastest-first by the cache at
+// Get() time (cache.sortAnswerByLatency); the NS addresses below are ordered
+// by the resolver's own sortAddrsByLatency.
 type Recursive struct {
-	resolver          *Resolver
-	lastDNSSECEDECode atomic.Uint64 // EDE code from the most recent DNSSEC validation failure
-	cache             cache.Store
-	ctx               context.Context // lifecycle context for background probes
-	spoofguard        bool            // from protocol=recursive upstream
-	splitguard        bool            // from protocol=recursive upstream
-	poisonguard       bool            // from protocol=recursive upstream
-	hopguard          bool            // from protocol=recursive upstream
+	resolver    *Resolver
+	cache       cache.Store
+	ctx         context.Context // lifecycle context for background probes
+	spoofguard  bool            // from protocol=recursive upstream
+	splitguard  bool            // from protocol=recursive upstream
+	poisonguard bool            // from protocol=recursive upstream
+	hopguard    bool            // from protocol=recursive upstream
 }
 
 // CNAME handles CNAME record chasing during DNS resolution, following the
@@ -44,9 +44,18 @@ type CNAME struct {
 	resolver *Resolver
 }
 
-// DNSSECEDECode returns the last DNSSEC EDE code atomically.
-func (r *Recursive) DNSSECEDECode() uint16 {
-	return uint16(r.lastDNSSECEDECode.Load()) //nolint:gosec // G115: EDE code — protocol-bounded uint16
+// cnameAliasFollowed reports whether a CNAME's owner is the target of any
+// other CNAME in the answer (i.e. it is an intermediate hop of a chain being
+// followed, not a separate alias).
+func cnameAliasFollowed(c *dns.CNAME, answer []dns.RR, currentQuestion string) bool {
+	for _, r := range answer {
+		if other, ok := r.(*dns.CNAME); ok && other != c {
+			if strings.EqualFold(dnsutil.Fqdn(other.Target), dnsutil.Fqdn(c.Header().Name)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // dnssecChain tracks the cryptographic trust chain state during recursive
@@ -56,13 +65,6 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 	if depth > config.DefaultMaxRecursionDepth {
 		log.Debugf("RECURSION: depth exceeded (depth=%d, max=%d) for %s", depth, config.DefaultMaxRecursionDepth, question.Name)
 		return QueryResult{Cacheable: true, Err: fmt.Errorf("recursion depth exceeded: %d", depth)}
-	}
-
-	// Clear any stale DNSSEC EDE code from a previous CNAME hop or recursive
-	// call. Only the top-level resolve owns the shared atomic — inner calls
-	// (NS address resolution, TCP fallback) run concurrently and must not race.
-	if depth == 0 {
-		r.lastDNSSECEDECode.Store(0)
 	}
 
 	qname := dnsutil.Fqdn(question.Name)
@@ -89,15 +91,24 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 	// Initialize DNSSEC trust chain with root trust anchors (when available).
 	chain := &dnssecChain{}
-	if crypto := r.resolver.validator.Crypto; crypto != nil {
-		chain.parentDNSKEYs = crypto.RootKeys()
-	}
 
 	// Root-domain query (normalizedQname is empty for the root zone ".").
 	if normalizedQname == "." {
 		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
 		if verdict == defense.VerdictPoisoned {
 			poisonSeen = true
+			// A successful-but-poisoned UDP response for the root zone must
+			// restart over TCP like any other level — the main loop handles
+			// VerdictPoisoned regardless of err, this branch only handled
+			// the err != nil case and served/cached the poisoned answer.
+			if !forceTCP {
+				if response != nil {
+					pool.DefaultMessage.Put(response)
+				}
+				qr := r.resolve(ctx, question, ecs, depth, true)
+				qr.Poisoned = true
+				return qr
+			}
 		}
 		if err != nil {
 			if verdict == defense.VerdictPoisoned && !forceTCP {
@@ -110,9 +121,10 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		}
 		cryptoValidated := r.isValidWithDNSSEC(response, currentDomain, chain)
 		ecsResponse := r.resolver.edns.ParseFromDNS(response)
+		rcode := response.Rcode
 		answer, authority, additional := response.Answer, response.Ns, response.Extra
 		pool.DefaultMessage.Put(response)
-		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Validated: cryptoValidated, ECS: ecsResponse, Server: config.ProtoRecursive, Poisoned: poisonSeen}
+		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Rcode: rcode, Validated: cryptoValidated, ECS: ecsResponse, Server: config.ProtoRecursive, Poisoned: poisonSeen, DNSSECEDE: chain.lastEDECode}
 	}
 
 	for {
@@ -175,10 +187,11 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			continue
 		}
 
-		// RFC 9156 §2.3: when a minimised name query returns NXDOMAIN,
-		// the intermediate label does not correspond to a delegation
-		// point.  Expose the full QNAME immediately instead of looping
-		// through non-existent subzones.
+		// RFC 9156 §2.3: when a minimised name returns NXDOMAIN,
+		// the intermediate label is not a delegation point.
+		// Jump to the full QNAME to avoid querying every
+		// non-existent label individually (performance trade-off:
+		// §2.3 permits exposing multiple labels per iteration).
 		if qnameMinimise && !strings.EqualFold(queryQuestion.Name, qname) && response.Rcode == dns.RcodeNameError {
 			pool.DefaultMessage.Put(response)
 			minimiseSteps = config.DefaultQnameMinimiseCount
@@ -191,11 +204,32 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 		validated = r.validateNODATAWithNSEC(response, ctx, nameservers, currentDomain, chain, validated)
 
+		// An authoritative NODATA whose SOA owner is the minimised qname
+		// proves the qname is a zone apex — a parent server that also hosts
+		// the child zone answered from its child-zone copy instead of
+		// referring (RFC 1034 §4.3.2; e.g. CNNIC's cn/com.cn platform).
+		// Advance the walk through the zone cut below instead of skipping
+		// it — skipping breaks DNSSEC: the no-DS denial for names below the
+		// cut is signed by the skipped zone's DNSKEY, which the chain never
+		// verified.
+		apexCut := qnameMinimise && !strings.EqualFold(queryQuestion.Name, qname) &&
+			isApexSOANODATA(response, queryQuestion.Name)
+
 		bestMatch, bestNSRecords, cont, termRes := r.collectBestNSMatch(response, normalizedQname, queryQuestion.Name, qname, qnameMinimise, validated, ecsResponse)
 		if termRes != nil {
 			return *termRes
 		}
 		if cont {
+			if apexCut {
+				if nextNS, nextZone, ok := r.advanceApexZoneCut(ctx, queryQuestion.Name, nameservers, currentDomain, ecs, chain, depth, authoritativeForceTCP, qname); ok {
+					if dnsutil.Labels(dnsutil.Fqdn(nextZone)) == 1 {
+						tldServers = nextNS
+					}
+					nameservers = nextNS
+					currentDomain = nextZone
+					continue
+				}
+			}
 			continue
 		}
 		if termRes := r.checkLameDelegation(response, currentDomain, bestMatch, validated, ecsResponse); termRes != nil {
@@ -228,7 +262,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		if len(nsResult.addrs) == 0 {
 			nsSlice, extraSlice := response.Ns, response.Extra
 			pool.DefaultMessage.Put(response)
-			return QueryResult{Cacheable: true, Authority: nsSlice, Additional: extraSlice, Validated: validated, ECS: ecsResponse, Server: config.ProtoRecursive}
+			return QueryResult{Cacheable: true, Authority: nsSlice, Additional: extraSlice, Validated: validated, ECS: ecsResponse, Server: config.ProtoRecursive, DNSSECEDE: chain.lastEDECode}
 		}
 
 		r.cacheGlueRecords(nsResult.glue)
@@ -286,6 +320,8 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	var usedServer string
 	var poisonOccurred bool
 	allValidated := true
+	var finalRcode uint16
+	var allDNSSECEDE uint16
 
 	currentQuestion := question
 	var visitedCNAMEs [config.DefaultMaxCNAMEChain]string
@@ -322,6 +358,9 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 		if usedServer == "" {
 			usedServer = qr.Server
 		}
+		if qr.DNSSECEDE != 0 {
+			allDNSSECEDE = qr.DNSSECEDE
+		}
 		if qr.Poisoned {
 			poisonOccurred = true
 		}
@@ -331,9 +370,20 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 		if qr.ECS != nil {
 			finalECSResponse = qr.ECS
 		}
+		finalRcode = qr.Rcode
 
 		for _, rr := range qr.Answer {
 			h := rr.Header()
+			// Keep every CNAME that participates in the chain (owner is an
+			// alias being followed), not just the current owner — a
+			// synthesized multi-hop chain (CNAME1 → CNAME2 → A) would
+			// otherwise lose the intermediate CNAMEs.
+			if cname, ok := rr.(*dns.CNAME); ok {
+				if strings.EqualFold(h.Name, currentQuestion.Name) || cnameAliasFollowed(cname, qr.Answer, currentQuestion.Name) {
+					allAnswers = append(allAnswers, rr)
+				}
+				continue
+			}
 			if strings.EqualFold(h.Name, currentQuestion.Name) || dns.RRToType(rr) == question.Qtype {
 				allAnswers = append(allAnswers, rr)
 			}
@@ -369,5 +419,5 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	if chainExhausted {
 		log.Debugf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, dnsutil.Canonical(question.Name))
 	}
-	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Poisoned: poisonOccurred}
+	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Rcode: finalRcode, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Poisoned: poisonOccurred, DNSSECEDE: allDNSSECEDE}
 }

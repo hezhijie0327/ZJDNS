@@ -29,12 +29,18 @@ type rrsetKey struct {
 
 // Common DNSSEC-related errors.
 var (
-	ErrNoRRSIG        = errors.New("no RRSIG found for rrset")
-	ErrMissingRRSIG   = errors.New("answer RRset has no RRSIG")
-	ErrNoDNSKEY       = errors.New("no DNSKEY found for zone")
-	ErrNoDS           = errors.New("no DS found for delegation")
-	ErrDSMismatch     = errors.New("DS digest does not match DNSKEY")
-	ErrBogusSignature = errors.New("bogus DNSSEC signature")
+	ErrNoRRSIG              = errors.New("no RRSIG found for rrset")
+	ErrMissingRRSIG         = errors.New("answer RRset has no RRSIG")
+	ErrNoDNSKEY             = errors.New("no DNSKEY found for zone")
+	ErrNoDS                 = errors.New("no DS found for delegation")
+	ErrDSMismatch           = errors.New("DS digest does not match DNSKEY")
+	ErrBogusSignature       = errors.New("bogus DNSSEC signature")
+	ErrSignatureExpired     = errors.New("RRSIG signature has expired")
+	ErrSignatureNotYet      = errors.New("RRSIG signature is not yet valid")
+	ErrUnsupportedAlgorithm = errors.New("unsupported DNSKEY algorithm")
+	ErrUnsupportedDigest    = errors.New("unsupported DS digest type")
+	ErrNoZoneKeyBit         = errors.New("DNSKEY lacks the Zone Key flag")
+	ErrMissingNSEC          = errors.New("no valid NSEC/NSEC3 denial-of-existence proof")
 )
 
 // NewCryptoValidator creates a CryptoValidator for DNSSEC validation. The
@@ -61,6 +67,21 @@ func (c *CryptoValidator) LoadTrustAnchors() {
 	log.Infof("SECURITY: loaded %d root trust anchor(s) from %s", len(keys), path)
 }
 
+// ContainsRootKey reports whether any KSK in dnskeys matches a loaded trust
+// anchor. Required before trusting self-verified root DNSKEYs.
+func (c *CryptoValidator) ContainsRootKey(dnskeys []*dns.DNSKEY) bool {
+	for _, rk := range c.rootKeys {
+		for _, k := range dnskeys {
+			if k.Algorithm == rk.Algorithm &&
+				k.KeyTag() == rk.KeyTag() &&
+				k.PublicKey == rk.PublicKey {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // VerifyRRset verifies an RRSIG over an RRset using the given DNSKEY.
 // Returns nil on success, or an error describing the failure.
 func (c *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey *dns.DNSKEY) error {
@@ -76,17 +97,32 @@ func (c *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey *
 		return fmt.Errorf("%w: not a valid RRset (type/name/class mismatch)", ErrBogusSignature)
 	}
 
+	// RFC 4034 §3.1.1: the RRSIG signer name must be the DNSKEY's owner name.
+	// Explicit check so the invariant does not silently depend on the library.
+	if !dns.EqualName(dnsutil.Fqdn(rrsig.SignerName), dnsutil.Fqdn(dnskey.Header().Name)) {
+		return fmt.Errorf("%w: RRSIG signer %s does not match DNSKEY owner %s",
+			ErrBogusSignature, rrsig.SignerName, dnskey.Header().Name)
+	}
+
 	// Check the RRSIG validity period manually (RFC 4034 §3.1.5).
 	// miekg/dns RRSIG.Verify() also checks this, but the manual check
-	// provides a more descriptive error message with the inception/expiration times.
+	// provides distinct sentinel errors for EDE 7/8 mapping.
 	now := uint32(log.NowUnix()) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
-	if rrsig.Inception > now || rrsig.Expiration < now {
-		return fmt.Errorf("%w: RRSIG outside validity period (inception=%s, expiration=%s)",
-			ErrBogusSignature, time.Unix(int64(rrsig.Inception), 0).UTC(), time.Unix(int64(rrsig.Expiration), 0).UTC())
+	if rrsig.Expiration < now {
+		return fmt.Errorf("%w: RRSIG expired at %s", ErrSignatureExpired, time.Unix(int64(rrsig.Expiration), 0).UTC())
+	}
+	if rrsig.Inception > now {
+		return fmt.Errorf("%w: RRSIG not valid until %s", ErrSignatureNotYet, time.Unix(int64(rrsig.Inception), 0).UTC())
 	}
 
 	// Verify the cryptographic signature
 	if err := rrsig.Verify(dnskey, rrset, &dns.SignOption{}); err != nil {
+		if errors.Is(err, dns.ErrAlg) {
+			// EDE 1: the RRSIG uses an algorithm the library cannot verify
+			// (e.g. DSA, GOST, or an unknown algorithm) — report precisely
+			// instead of a generic bogus.
+			return fmt.Errorf("%w: algorithm %d", ErrUnsupportedAlgorithm, rrsig.Algorithm)
+		}
 		return fmt.Errorf("%w: %w", ErrBogusSignature, err)
 	}
 
@@ -103,26 +139,48 @@ func (c *CryptoValidator) VerifyDelegationDS(dsRecords []*dns.DS, childDNSKEYs [
 		return nil, ErrNoDNSKEY
 	}
 
+	var unsupportedDigest, noZoneKeyBit bool
 	for _, ds := range dsRecords {
 		for _, dnskey := range childDNSKEYs {
-			// Only KSK (SEP bit set) should match the DS
-			if dnskey.Flags&dns.FlagSEP == 0 {
-				continue
-			}
+			// The SEP bit is a deployment convention (RFC 4034 §2.1.2), not a
+			// validation requirement: RFC 4034/4035 do not require the key
+			// referenced by a DS to have SEP set. Try every key; a digest
+			// match is exact regardless of flags.
 			computedDS := dnskey.ToDS(ds.DigestType)
 			if computedDS == nil {
+				// ToDS returns nil for digest types it cannot compute
+				// (e.g. GOST) — remember for EDE 2 (Unsupported DS Digest
+				// Type) if no DS matches after the loop.
+				unsupportedDigest = true
 				continue
 			}
 			if computedDS.KeyTag == ds.KeyTag &&
 				computedDS.Algorithm == ds.Algorithm &&
 				computedDS.DigestType == ds.DigestType &&
 				computedDS.Digest == ds.Digest {
+				// RFC 4034 §2.1.1: the Zone Key flag MUST be set on keys
+				// used to sign zone data (EDE 11). Do not short-circuit —
+				// during key rollover the DS set may still carry a DS for a
+				// retired key whose Zone bit was cleared; keep scanning for
+				// a valid zone-key match.
+				if dnskey.Flags&dns.FlagZONE == 0 {
+					noZoneKeyBit = true
+					continue
+				}
 				log.Debugf("SECURITY: DS matched DNSKEY (key_tag=%d, alg=%s)", ds.KeyTag, dns.AlgorithmToString[ds.Algorithm])
 				return dnskey, nil
 			}
 		}
 	}
 
+	// A digest matched a key that cannot sign zone data — the most precise
+	// diagnosis; unsupported digest type next, generic mismatch last.
+	if noZoneKeyBit {
+		return nil, ErrNoZoneKeyBit
+	}
+	if unsupportedDigest {
+		return nil, ErrUnsupportedDigest
+	}
 	return nil, fmt.Errorf("%w: no DNSKEY matches the provided DS records", ErrDSMismatch)
 }
 
@@ -139,13 +197,11 @@ func (c *CryptoValidator) SelfVerifyDNSKEY(dnskeys []*dns.DNSKEY, dnskeyRRSIGs [
 		rrset[i] = k
 	}
 
-	// The KSK self-signs the DNSKEY RRset. Try verifying with each KSK.
+	// The zone key self-signs the DNSKEY RRset. Try verifying with each key;
+	// SEP is a convention, not a requirement (RFC 4034 §2.1.2).
 	var verified bool
 	for _, rrsig := range dnskeyRRSIGs {
 		for _, ksk := range dnskeys {
-			if ksk.Flags&dns.FlagSEP == 0 {
-				continue
-			}
 			if ksk.KeyTag() != rrsig.KeyTag {
 				continue
 			}
@@ -208,20 +264,39 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 	groups := groupRRset(answer)
 	allRRSIGs := CollectRRSIGs(answer, extra)
 
-	var anyValidated, anyRRSIGSeen bool
+	// RFC 6840 §4.1: the response is authenticated only if EVERY answer
+	// RRset validates; a single valid RRset does not authenticate the rest.
+	// First count signed RRsets: an unsigned RRset in an otherwise signed
+	// response fails the whole response. RRSIG records are the signatures
+	// themselves — they are never validated as an RRset.
+	signedCount := 0
+	for _, group := range groups {
+		if len(group) > 0 && dns.RRToType(group[0]) != dns.TypeRRSIG &&
+			len(FindRRSIGs(allRRSIGs, group[0].Header().Name, dns.RRToType(group[0]))) > 0 {
+			signedCount++
+		}
+	}
+	if signedCount == 0 {
+		return false, ErrMissingRRSIG
+	}
+
+	var anyValidated bool
 	for _, group := range groups {
 		if len(group) == 0 {
 			continue
 		}
 		header := group[0].Header()
+		if dns.RRToType(group[0]) == dns.TypeRRSIG {
+			continue // signature records are not validated as an RRset
+		}
 		sigs := FindRRSIGs(allRRSIGs, header.Name, dns.RRToType(group[0]))
 		if len(sigs) == 0 {
-			log.Debugf("SECURITY: no RRSIG for %s/%s", header.Name, dns.TypeToString[dns.RRToType(group[0])])
-			continue
+			log.Debugf("SECURITY: unsigned RRset %s/%s in signed response", header.Name, dns.TypeToString[dns.RRToType(group[0])])
+			return false, fmt.Errorf("%w: unsigned RRset %s/%s in signed response", ErrBogusSignature, header.Name, dns.TypeToString[dns.RRToType(group[0])])
 		}
-		anyRRSIGSeen = true
 
 		var groupValidated bool
+		var unsupportedAlgErr error
 		for _, sig := range sigs {
 			for _, key := range verifiedDNSKEYs {
 				if key.KeyTag() != sig.KeyTag {
@@ -232,6 +307,11 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 					groupValidated = true
 					log.Debugf("SECURITY: validated %s/%s with key_tag=%d", header.Name, dns.TypeToString[dns.RRToType(group[0])], key.KeyTag())
 					break
+				} else if errors.Is(err, ErrUnsupportedAlgorithm) {
+					// Remember ANY unsupported-algorithm failure — the
+					// classification must not depend on RRSIG iteration
+					// order when an RRset carries multiple signatures.
+					unsupportedAlgErr = err
 				}
 			}
 			if groupValidated {
@@ -269,18 +349,20 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 				log.Debugf("SECURITY: skipping %s/%s — RRSIG signer is not in verified zone", header.Name, dns.TypeToString[dns.RRToType(group[0])])
 				continue
 			}
+			// EDE 1: every attempted verification failed on an unsupported
+			// algorithm — report that rather than the generic bogus.
+			if unsupportedAlgErr != nil {
+				return false, unsupportedAlgErr
+			}
 			return false, fmt.Errorf("%w: no matching DNSKEY for RRSIG over %s/%s (key tags in RRSIGs do not match verified zone keys)",
 				ErrBogusSignature, header.Name, dns.TypeToString[dns.RRToType(group[0])])
 		}
 	}
 
-	if !anyValidated && len(answer) > 0 {
-		if !anyRRSIGSeen {
-			return false, ErrMissingRRSIG
-		}
+	if !anyValidated {
 		return false, fmt.Errorf("%w: no answer RRset could be cryptographically verified", ErrBogusSignature)
 	}
-	return anyValidated, nil
+	return true, nil
 }
 
 func groupRRset(rrs []dns.RR) map[rrsetKey][]dns.RR {

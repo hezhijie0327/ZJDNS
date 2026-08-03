@@ -3,6 +3,7 @@ package resolver
 import (
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"zjdns/cache"
 	"zjdns/config"
@@ -99,7 +100,75 @@ func (r *Recursive) getRootServers() []string {
 	if len(all) == 0 {
 		return allRootAddrs()
 	}
-	return all
+	// A transient failure of one root name (unparseable hint or a failed
+	// cache read) must not permanently shrink the root set: merge the
+	// remaining hints.
+	if len(all) < len(hints) {
+		seen := make(map[string]bool, len(all))
+		for _, a := range all {
+			seen[a] = true
+		}
+		for _, addrs := range hints {
+			for _, a := range addrs {
+				if !seen[a] {
+					all = append(all, a)
+					seen[a] = true
+				}
+			}
+		}
+	}
+	// Global latency sort across families and names: per-entry sorting put
+	// every IPv6 record after every IPv4 record regardless of measured
+	// latency, so the fastest servers were never actually queried first.
+	return r.sortAddrsByLatency(all)
+}
+
+// sortAddrsByLatency orders addresses by their cached probe latency (fastest
+// first), with unprobed addresses last. Latency is best-effort: any lookup
+// failure leaves the order unchanged.
+func (r *Recursive) sortAddrsByLatency(addrs []string) []string {
+	if len(addrs) <= 1 || r.cache == nil {
+		return addrs
+	}
+	lat := make(map[string]int64, len(addrs))
+	probed := make(map[string]bool, len(addrs))
+	for _, a := range addrs {
+		host, _, err := net.SplitHostPort(a)
+		if err != nil {
+			host = a
+		}
+		if ms, ok := r.cache.LatencyLastProbe(host); ok {
+			lat[host] = ms
+			probed[host] = true
+		}
+	}
+	sorted := slices.Clone(addrs)
+	slices.SortStableFunc(sorted, func(a, b string) int {
+		hostA, _, errA := net.SplitHostPort(a)
+		if errA != nil {
+			hostA = a
+		}
+		hostB, _, errB := net.SplitHostPort(b)
+		if errB != nil {
+			hostB = b
+		}
+		la, aOK := lat[hostA]
+		lb, bOK := lat[hostB]
+		switch {
+		case aOK != bOK:
+			if aOK {
+				return -1 // probed first
+			}
+			return 1
+		case aOK && la != lb:
+			if la < lb {
+				return -1
+			}
+			return 1
+		}
+		return 0
+	})
+	return sorted
 }
 
 // allRootAddrs returns every address from rootHints as a flat slice.

@@ -42,7 +42,6 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 	baseMsg := r.resolver.buildMsg(question, ecs, false, false)
 	baseMsg.UDPSize = pool.RecursiveUDPBufferSize
-	defer pool.DefaultMessage.Put(baseMsg)
 
 	for _, ns := range nameservers {
 		nsAddr := ns
@@ -68,9 +67,20 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			default:
 			}
 
-			msg := baseMsg.Copy()
-			// Copy() creates a non-pool allocation; let GC collect it.
-			// baseMsg (from pool) is Put below via defer at line 45.
+			msg := pool.DefaultMessage.Get()
+			defer pool.DefaultMessage.Put(msg)
+			if len(baseMsg.Question) > 0 {
+				msg.Question = append(msg.Question, baseMsg.Question[0])
+			}
+			msg.RecursionDesired = baseMsg.RecursionDesired
+			msg.CheckingDisabled = baseMsg.CheckingDisabled
+			msg.Security = baseMsg.Security
+			msg.UDPSize = baseMsg.UDPSize
+			// EDNS(0) options (ECS SUBNET, cookie, padding) live in Pseudo in
+			// this fork — without this copy the caller's explicit ECS never
+			// reached the authoritative servers (geo-aware resolution broke).
+			msg.Pseudo = append(msg.Pseudo, baseMsg.Pseudo...)
+			// ExecuteQuery reads msg via Pack()/Data — caller retains ownership.
 
 			subCtx, subCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
 			defer subCancel()
@@ -176,6 +186,12 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		if err := g.Wait(); err != nil {
 			log.Debugf("RECURSION: NS query errgroup: %v", err)
 		}
+		// baseMsg is read by every worker (including those still queued
+		// behind SetLimit when the caller returned early on the first
+		// response) — returning it here, after g.Wait, guarantees no
+		// worker reads a pooled message that was already zeroed or
+		// reused by another query.
+		pool.DefaultMessage.Put(baseMsg)
 	}()
 
 	verdict := defense.VerdictClean
@@ -191,6 +207,22 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		return resp, verdict, nil
 	case <-errgroupDone:
 	case <-ctx.Done():
+	}
+
+	// Drain a NOERROR result that arrived concurrently with errgroupDone or
+	// ctx cancellation: both select cases can be ready at once (Go picks
+	// uniformly), and dropping the buffered response here would fall through
+	// to the NXDOMAIN fallback with a wrong answer.
+	select {
+	case resp := <-resultChan:
+		if nx := nxdomainMsg.Load(); nx != nil {
+			pool.DefaultMessage.Put(nx)
+		}
+		if poisonRejected.Load() {
+			verdict = defense.VerdictPoisoned
+		}
+		return resp, verdict, nil
+	default:
 	}
 
 	// No NOERROR response — fall back to NXDOMAIN if one was collected.
@@ -270,12 +302,18 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			go func() {
 				defer zdnsutil.HandlePanic("Resolve NS A")
 				defer wg.Done()
+				if queryCtx.Err() != nil {
+					return
+				}
 				ansARecords, _ = r.resolveNSAddrType(queryCtx, nsName, dns.TypeA, depth+1, forceTCP, &nsAddrs, &addrMu) // addrs captured via nsAddrs pointer
 			}()
 
 			go func() {
 				defer zdnsutil.HandlePanic("Resolve NS AAAA")
 				defer wg.Done()
+				if queryCtx.Err() != nil {
+					return
+				}
 				ansAAAARecords, _ = r.resolveNSAddrType(queryCtx, nsName, dns.TypeAAAA, depth+1, forceTCP, &nsAddrs, &addrMu)
 			}()
 
@@ -318,9 +356,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 		})
 	}
 
-	if err := g.Wait(); err != nil {
-		log.Debugf("RECURSION: NS address resolution errgroup: %v", err)
-	}
+	_ = g.Wait()
 
 	// Fire background latency probes. Merge A+AAAA per NS name
 	// so each probe call gets both address families.

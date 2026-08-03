@@ -58,10 +58,13 @@ func minimiseQNAME(originalQname, currentZone string, labelsToAdd int) string {
 	return remaining[suffixOffset:] + fqZone
 }
 
-// labelsToAdd computes how many labels to add in this minimisation step.
-// Per RFC 9156 §2.3, the first MINIMISE_ONE_LAB steps add one label each
-// for maximum privacy; after minimisationCount steps, all remaining labels
-// are exposed at once to bound the total number of queries.
+// labelsToAdd computes the cumulative number of labels to expose from the
+// current zone at this minimisation step. Per RFC 9156 §2.3, the first
+// MINIMISE_ONE_LAB steps add one label each; after that, labels are added
+// proportionally; after minimisationCount steps, all remaining labels are
+// exposed at once. The returned value is always the TOTAL labels to expose,
+// not an increment — callers pass it directly to minimiseQNAME without
+// accumulating state.
 func labelsToAdd(originalQname, currentZone string, stepsTaken, minimisationCount, minimiseOneLabel int) int {
 	origLabels := dnsutil.Labels(dnsutil.Fqdn(originalQname))
 	zoneLabels := dnsutil.Labels(dnsutil.Fqdn(currentZone))
@@ -75,9 +78,22 @@ func labelsToAdd(originalQname, currentZone string, stepsTaken, minimisationCoun
 		return remainingLabels
 	}
 
-	// First MINIMISE_ONE_LAB steps: add one label at a time.
+	// First MINIMISE_ONE_LAB steps: add one label at a time.  The count is
+	// cumulative from the root while remainingLabels counts labels beyond
+	// the current zone, which has already advanced by zoneLabels labels
+	// (RFC 9156 §2.3 — each step exposes exactly one label beyond the
+	// closest known zone: cn. → com.cn. → apple.com.cn. → …).  Without the
+	// rebase, the step after "cn." would expose two labels at once
+	// ("apple.com.cn."), skipping "com.cn." entirely — an intermediate
+	// delegation is then never walked and its DNSKEY never verified,
+	// breaking DNSSEC when the parent server answers with child-zone
+	// NSEC3 proofs.
 	if stepsTaken < minimiseOneLabel {
-		return 1
+		exposed := max(stepsTaken+1-zoneLabels, 1)
+		if exposed > remainingLabels {
+			return remainingLabels
+		}
+		return exposed
 	}
 
 	// Proportional phase: distribute remaining labels over remaining steps.
@@ -91,22 +107,25 @@ func labelsToAdd(originalQname, currentZone string, stepsTaken, minimisationCoun
 		return remainingLabels
 	}
 
-	stepsInPhase := stepsTaken - minimiseOneLabel + 1 // 1-indexed
+	stepsInPhase := stepsTaken - minimiseOneLabel + 1 // 1-indexed within proportional phase
 	perStep := labelsLeft / remainingSteps
 	remainder := labelsLeft % remainingSteps
 
-	add := perStep
+	// Cumulative exposure: one-label base + proportional share so far.
+	cumPhase := perStep * stepsInPhase
+	// Distribute remainder across the LAST steps (largest steps get +1).
 	if stepsInPhase > remainingSteps-remainder {
-		add++
+		cumPhase += stepsInPhase - (remainingSteps - remainder)
 	}
-	if add < 1 {
-		add = 1
-	}
-	if add > labelsLeft {
-		add = labelsLeft
+	// Hold back one label so the full QNAME is only exposed once
+	// stepsTaken >= minimisationCount (the early-return branch) — the old
+	// cap exposed ALL remaining labels one step early, weakening the RFC
+	// 9156 §2.3 growth schedule.
+	if cumPhase >= labelsLeft {
+		cumPhase = labelsLeft - 1
 	}
 
-	return add
+	return minimiseOneLabel + cumPhase
 }
 
 // minimisationQtype returns the QTYPE to use for a minimised query.
@@ -117,7 +136,8 @@ func minimisationQtype(originalQtype uint16) uint16 {
 	switch originalQtype {
 	case dns.TypeDS, dns.TypeNSEC, dns.TypeNSEC3,
 		dns.TypeOPT, dns.TypeTSIG, dns.TypeTKEY,
-		dns.TypeANY, dns.TypeAXFR, dns.TypeIXFR:
+		dns.TypeANY, dns.TypeAXFR, dns.TypeIXFR,
+		dns.TypeMAILA, dns.TypeMAILB:
 		return originalQtype
 	default:
 		return dns.TypeA

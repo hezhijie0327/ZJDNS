@@ -72,8 +72,8 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	switch {
 	case validated:
 		dnssecStatus = config.DNSSECStatusSecure
-	case m.resolver != nil && m.resolver.DNSSECEDECode() != 0:
-		dnssecEDECode = m.resolver.DNSSECEDECode()
+	case qr.DNSSECEDE != 0:
+		dnssecEDECode = qr.DNSSECEDE
 		dnssecStatus = config.DNSSECStatusBogus
 	default:
 		dnssecStatus = config.DNSSECStatusInsecure
@@ -181,12 +181,10 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 
 	edeCode := dns.ExtendedErrorNetworkError
 	dnssecStatus := ""
-	if m.resolver != nil {
-		if code := m.resolver.DNSSECEDECode(); code != 0 {
-			edeCode = code
-			dnssecStatus = config.DNSSECStatusBogus
-			log.Debugf("SECURITY: using DNSSEC EDE %d from recursive resolver", edeCode)
-		}
+	if qr.DNSSECEDE != 0 {
+		edeCode = qr.DNSSECEDE
+		dnssecStatus = config.DNSSECStatusBogus
+		log.Debugf("SECURITY: using DNSSEC EDE %d from recursive resolver", edeCode)
 	}
 	if dnssecStatus == "" {
 		var dnsErr *resolver.DNSSECError

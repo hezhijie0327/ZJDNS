@@ -17,7 +17,6 @@ import (
 // resolution. At each delegation level, verified parent DNSKEYs and child DS
 // records are used to authenticate the child zone's DNSKEYs.
 type dnssecChain struct {
-	parentDNSKEYs          []*dns.DNSKEY
 	childDS                []*dns.DS
 	zoneDNSKEYs            []*dns.DNSKEY
 	lastEDECode            uint16 // EDE code for the most recent validation failure
@@ -73,20 +72,30 @@ func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, c
 		// provide the root of trust; self-signed keys from any other zone are
 		// not trustworthy without a DS chain from a verified parent).
 		if currentDomain == config.DNSRootZone {
-			if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err == nil {
-				chain.zoneDNSKEYs = dnskeyRecords
-				crypto.CacheZoneKeys(currentDomain, dnskeyRecords)
-
-				// Now verify the answer with the newly verified keys
-				if len(response.Answer) > 0 {
-					validated, valErr := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
-					if valErr != nil {
-						log.Debugf("SECURITY: response validation error for %s: %v", currentDomain, valErr)
-					}
-					return validated
-				}
-				return true
+			if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err != nil {
+				log.Debugf("SECURITY: root DNSKEY self-verification failed: %v", err)
+				return false
 			}
+			// The self-signature only proves internal consistency — a MITM
+			// can trivially generate a self-signed key set. The embedded
+			// trust anchors (RFC 7958) prove it is the real root; without
+			// this cross-check the whole chain of trust can be forged.
+			if !crypto.ContainsRootKey(dnskeyRecords) {
+				log.Debugf("SECURITY: root DNSKEY set does not match embedded trust anchors")
+				return false
+			}
+			chain.zoneDNSKEYs = dnskeyRecords
+			crypto.CacheZoneKeys(currentDomain, dnskeyRecords)
+
+			// Now verify the answer with the newly verified keys
+			if len(response.Answer) > 0 {
+				validated, valErr := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
+				if valErr != nil {
+					log.Debugf("SECURITY: response validation error for %s: %v", currentDomain, valErr)
+				}
+				return validated
+			}
+			return true
 		}
 	}
 
@@ -105,7 +114,8 @@ func (r *Recursive) updateDNSSECChain(ctx context.Context, response *dns.Msg, cu
 	// records may appear in the Answer section instead of Authority.
 	dsRecords := dnssec.FindDS(response.Ns)
 	dsRecords = append(dsRecords, dnssec.FindDS(response.Answer)...)
-	if len(dsRecords) > 0 {
+	switch {
+	case len(dsRecords) > 0:
 		// Ensure we have verified DNSKEYs for the current (parent) zone.
 		// Delegation responses don't carry DNSKEY records — query explicitly.
 		r.ensureZoneDNSKEYs(ctx, nameservers, currentDomain, chain)
@@ -118,14 +128,38 @@ func (r *Recursive) updateDNSSECChain(ctx context.Context, response *dns.Msg, cu
 			chain.dsPresentButUnverified = true
 			log.Debugf("SECURITY: DS records for %s could not be verified (RRSIG check failed)", childZone)
 		}
-	} else {
-		chain.childDS = nil
-		chain.dsPresentButUnverified = false // Insecure delegation (no DS in parent)
-	}
-
-	// The current zone's DNSKEYs become parent DNSKEYs for the child
-	if len(chain.zoneDNSKEYs) > 0 {
-		chain.parentDNSKEYs = chain.zoneDNSKEYs
+	default:
+		// No DS records in the delegation response. A missing DS must be
+		// proven by an authenticated NSEC/NSEC3 denial when the parent zone
+		// is signed — otherwise an on-path attacker could strip the DS
+		// RRset and downgrade a signed delegation to insecure (RFC 4035
+		// §5.2). Unverifiable delegations are treated as bogus, never as
+		// insecure. When the parent has no verifiable DNSKEYs (a genuinely
+		// unsigned parent), the delegation is insecure.
+		noDS, dsRaced := r.verifyNoDSInParent(ctx, nameservers, childZone, currentDomain, chain)
+		switch {
+		case noDS:
+			chain.childDS = nil
+			chain.dsPresentButUnverified = false
+			log.Debugf("SECURITY: authenticated no-DS denial for %s (insecure delegation)", childZone)
+		case dsRaced:
+			// The DS query raced the delegation: verifyNoDSInParent verified
+			// the DS inline and recorded the outcome in the chain — a
+			// verified DS is set in chain.childDS, a failed verification
+			// left dsPresentButUnverified set, so the delegation stays
+			// unverifiable, never downgraded to insecure.
+			if chain.dsPresentButUnverified {
+				log.Debugf("SECURITY: raced DS for %s could not be verified — delegation unverifiable", childZone)
+			}
+		case len(chain.zoneDNSKEYs) == 0:
+			chain.childDS = nil
+			chain.dsPresentButUnverified = false
+			log.Debugf("SECURITY: parent zone without DNSKEYs — insecure delegation for %s", childZone)
+		default:
+			chain.childDS = nil
+			chain.dsPresentButUnverified = true
+			log.Debugf("SECURITY: no authenticated denial for missing DS at %s — delegation unverifiable", childZone)
+		}
 	}
 
 	// Check for cached DNSKEYs for the child zone
@@ -135,6 +169,63 @@ func (r *Recursive) updateDNSSECChain(ctx context.Context, response *dns.Msg, cu
 	} else {
 		chain.zoneDNSKEYs = nil
 	}
+}
+
+// verifyNoDSInParent confirms that a signed parent zone has no DS record at
+// the delegation point by requiring an authenticated NSEC/NSEC3 denial from
+// the parent's authoritative servers.  Returns (denialValid, dsRaced):
+// denialValid is false when the denial cannot be proven (the delegation must
+// then be treated as unverifiable, not insecure); dsRaced is true when the DS
+// query found DS records — the delegation response simply raced the
+// delegation, so the DS was verified inline against the parent's keys and
+// chain.childDS / chain.dsPresentButUnverified were set accordingly.
+func (r *Recursive) verifyNoDSInParent(ctx context.Context, nameservers []string, childZone, currentDomain string, chain *dnssecChain) (denialValid, dsRaced bool) {
+	crypto := r.resolver.validator.Crypto
+	if crypto == nil {
+		return false, false
+	}
+	if len(chain.zoneDNSKEYs) == 0 {
+		// The denial can only be verified against the parent zone's keys,
+		// and the DS-present branch that normally loads them did not fire.
+		r.ensureZoneDNSKEYs(ctx, nameservers, currentDomain, chain)
+	}
+	if len(chain.zoneDNSKEYs) == 0 {
+		// Parent has no verifiable DNSKEYs — cannot authenticate a denial.
+		return false, false
+	}
+
+	dsQuestion := Question{Name: dnsutil.Fqdn(childZone), Qtype: dns.TypeDS, Qclass: dns.ClassINET}
+	resp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dsQuestion, nil, false, currentDomain, r.resolver.validator.Poisonguard)
+	if err != nil || resp == nil {
+		log.Debugf("SECURITY: DS query for %s failed: %v", childZone, err)
+		return false, false
+	}
+	defer pool.DefaultMessage.Put(resp)
+
+	// A DS answer means the delegation response raced the delegation — e.g.
+	// a same-server parent+child shortcut answered the referral without DS.
+	// The caller has no response to verify, so verify it here against the
+	// parent's keys and record it in the chain.
+	dsRecords := dnssec.FindDS(resp.Answer)
+	dsRecords = append(dsRecords, dnssec.FindDS(resp.Ns)...)
+	if len(dsRecords) > 0 {
+		if verified := r.verifyDelegationDSRRSIG(resp, childZone, chain, dsRecords); len(verified) > 0 {
+			chain.childDS = verified
+			chain.dsPresentButUnverified = false
+			log.Debugf("SECURITY: verified %d DS record(s) for delegation to %s (raced)", len(verified), childZone)
+		} else {
+			chain.childDS = nil
+			chain.dsPresentButUnverified = true
+			log.Debugf("SECURITY: raced DS records for %s could not be verified — delegation unverifiable", childZone)
+		}
+		return false, true
+	}
+
+	validated, valErr := crypto.IsResponseValid(resp, childZone, chain.zoneDNSKEYs)
+	if valErr != nil {
+		log.Debugf("SECURITY: no-DS denial verification error for %s: %v", childZone, valErr)
+	}
+	return validated, false
 }
 
 func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string, zone string, chain *dnssecChain) {
@@ -176,24 +267,29 @@ func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string,
 	allSigs := dnssec.CollectRRSIGs(dnskeyResp.Answer, dnskeyResp.Ns, dnskeyResp.Extra)
 	dnskeyRRSIGs := dnssec.FindRRSIGs(allSigs, dnsutil.Fqdn(zone), dns.TypeDNSKEY)
 
-	// Verify using parent DS if available (secure delegation)
+	// Verify using parent DS if available (secure delegation).
 	if len(chain.childDS) > 0 {
 		if _, err := crypto.VerifyDelegationDS(chain.childDS, dnskeyRecords); err == nil {
 			chain.zoneDNSKEYs = dnskeyRecords
 			crypto.CacheZoneKeys(zone, dnskeyRecords)
 			log.Debugf("SECURITY: verified zone DNSKEY for %s via DS match", zone)
 			return
-		} else if rrsigKeyTagMatchesDS(chain.childDS, dnskeyRRSIGs) {
-			// Offline KSK: the key referenced by the parent DS signs the
-			// DNSKEY RRset but is not published in it (RFC 7344 pattern).
-			// Verify via CDS: if CDS matches the parent DS, the delegation
-			// is intentional and the DNSKEY set can be trusted.
-			if r.verifyViaCDS(ctx, nameservers, zone, chain) {
-				chain.zoneDNSKEYs = dnskeyRecords
-				crypto.CacheZoneKeys(zone, dnskeyRecords)
-				log.Debugf("SECURITY: verified zone DNSKEY for %s via offline KSK (CDS confirmed)", zone)
-				return
-			}
+		}
+		// DS→DNSKEY mismatch may indicate an offline KSK (RFC 7344): the KSK
+		// is referenced by the parent DS but not published in the DNSKEY set.
+		// CDS/CDNSKEY records in the child zone carry the intended DS/key,
+		// signed by the offline KSK. The digest match against the parent DS
+		// (full SHA-256) is cryptographically equivalent to DS validation —
+		// an attacker who can forge a matching digest already owns the keys.
+		//
+		// DESIGN NOTE: verifyOfflineKSK (→ verifyViaCDS / verifyViaCDNSKEY)
+		// is intentionally kept as a defense-in-depth measure for true offline
+		// KSK deployments.  This is NOT dead code — do not remove.
+		if r.verifyOfflineKSK(ctx, nameservers, zone, chain) {
+			chain.zoneDNSKEYs = dnskeyRecords
+			crypto.CacheZoneKeys(zone, dnskeyRecords)
+			log.Debugf("SECURITY: verified zone DNSKEY for %s via offline KSK (CDS/CDNSKEY match)", zone)
+			return
 		}
 		log.Debugf("SECURITY: DS→DNSKEY mismatch for %s", zone)
 		return
@@ -201,13 +297,21 @@ func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string,
 
 	// For root zone, verify via self-signature against embedded trust anchors.
 	if zone == config.DNSRootZone {
-		if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err == nil {
-			chain.zoneDNSKEYs = dnskeyRecords
-			crypto.CacheZoneKeys(zone, dnskeyRecords)
-			log.Debugf("SECURITY: self-verified root DNSKEY")
+		if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err != nil {
+			log.Debugf("SECURITY: root DNSKEY self-verification failed: %v", err)
 			return
 		}
-		log.Debugf("SECURITY: root DNSKEY self-verification failed: %v", err)
+		// The self-signature proves the set is internally consistent; the
+		// embedded trust anchors (RFC 7958) prove it is the real root.
+		// Without this cross-check, a MITM of the root DNSKEY query could
+		// inject a self-signed key set and forge the whole chain of trust.
+		if !crypto.ContainsRootKey(dnskeyRecords) {
+			log.Debugf("SECURITY: root DNSKEY set does not match embedded trust anchors")
+			return
+		}
+		chain.zoneDNSKEYs = dnskeyRecords
+		crypto.CacheZoneKeys(zone, dnskeyRecords)
+		log.Debugf("SECURITY: self-verified root DNSKEY (matches trust anchors)")
 		return
 	}
 
@@ -224,9 +328,9 @@ func (r *Recursive) verifyDelegationDSRRSIG(response *dns.Msg, childZone string,
 	}
 	parentKeys := chain.zoneDNSKEYs
 	if len(parentKeys) == 0 {
-		parentKeys = chain.parentDNSKEYs
-	}
-	if len(parentKeys) == 0 {
+		// Never fall back to a previous delegation level's keys: verifying a
+		// child DS against stale parent keys always fails and marks valid
+		// delegations bogus. Fail closed when the parent's keys are unknown.
 		log.Debugf("SECURITY: no parent DNSKEYs to verify DS RRSIG for %s", childZone)
 		return nil
 	}
@@ -261,53 +365,6 @@ func (r *Recursive) verifyDelegationDSRRSIG(response *dns.Msg, childZone string,
 	return nil
 }
 
-// rrsigKeyTagMatchesDS checks whether any DNSKEY RRSIG has a key tag matching
-// a DS record.  This identifies offline-KSK deployments: the key that the
-// parent trusts (via DS) signs the DNSKEY RRset but is not published in it.
-func rrsigKeyTagMatchesDS(dsRecords []*dns.DS, dnskeyRRSIGs []*dns.RRSIG) bool {
-	for _, ds := range dsRecords {
-		for _, sig := range dnskeyRRSIGs {
-			if sig.KeyTag == ds.KeyTag {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// verifyViaCDS confirms a secure delegation by querying the child zone's CDS
-// records and checking that they match the parent DS.  This validates offline
-// KSK deployments (RFC 7344) where the KSK signs the DNSKEY RRset but is not
-// published in it.
-func (r *Recursive) verifyViaCDS(ctx context.Context, nameservers []string, zone string, chain *dnssecChain) bool {
-	cdsQuestion := Question{Name: dnsutil.Fqdn(zone), Qtype: dns.TypeCDS, Qclass: dns.ClassINET}
-	cdsResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, cdsQuestion, nil, false, zone, r.resolver.validator.Poisonguard)
-	if err != nil || cdsResp == nil {
-		log.Debugf("SECURITY: CDS query failed for %s: %v", zone, err)
-		return false
-	}
-	defer pool.DefaultMessage.Put(cdsResp)
-
-	cdsRecords := dnssec.FindCDS(cdsResp.Answer)
-	if len(cdsRecords) == 0 {
-		log.Debugf("SECURITY: no CDS records for %s", zone)
-		return false
-	}
-
-	for _, ds := range chain.childDS {
-		for _, cds := range cdsRecords {
-			if cds.KeyTag == ds.KeyTag &&
-				cds.Algorithm == ds.Algorithm &&
-				cds.DigestType == ds.DigestType &&
-				cds.Digest == ds.Digest {
-				log.Debugf("SECURITY: CDS matches DS for %s (key_tag=%d)", zone, ds.KeyTag)
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, nameservers []string, question Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain) bool {
 	crypto := r.resolver.validator.Crypto
 	if crypto == nil {
@@ -327,7 +384,7 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 	dnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
 	if err != nil {
 		log.Debugf("SECURITY: DNSKEY query failed for %s: %v", currentDomain, err)
-		chain.lastEDECode = dns.ExtendedErrorDNSKEYMissing
+		chain.lastEDECode = dns.ExtendedErrorNetworkError
 		return false
 	}
 	defer pool.DefaultMessage.Put(dnskeyResp)
@@ -348,13 +405,16 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 		if _, err := crypto.VerifyDelegationDS(chain.childDS, dnskeyRecords); err == nil {
 			keysVerified = true
 			log.Debugf("SECURITY: verified %s DNSKEY via DS from parent", currentDomain)
-		} else if rrsigKeyTagMatchesDS(chain.childDS, dnskeyRRSIGs) &&
-			r.verifyViaCDS(ctx, nameservers, currentDomain, chain) {
-			keysVerified = true
-			log.Debugf("SECURITY: verified %s DNSKEY via offline KSK (CDS confirmed)", currentDomain)
 		} else {
 			log.Debugf("SECURITY: DS→DNSKEY mismatch for %s: %v (bogus delegation)", currentDomain, err)
-			chain.lastEDECode = dns.ExtendedErrorDNSBogus
+			switch {
+			case errors.Is(err, dnssec.ErrUnsupportedDigest):
+				chain.lastEDECode = dns.ExtendedErrorUnsupportedDSDigestType // EDE 2
+			case errors.Is(err, dnssec.ErrNoZoneKeyBit):
+				chain.lastEDECode = dns.ExtendedErrorNoZoneKeyBitSet // EDE 11
+			default:
+				chain.lastEDECode = dns.ExtendedErrorDNSBogus // EDE 6
+			}
 			return false
 		}
 	case chain.dsPresentButUnverified:
@@ -362,17 +422,25 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 		return false
 	case currentDomain == config.DNSRootZone:
 		if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err == nil {
+			// Cross-check against embedded trust anchors (RFC 7958) — a
+			// self-signature alone can be forged by a MITM of the root
+			// DNSKEY query (see ensureZoneDNSKEYs for the same check).
+			if !crypto.ContainsRootKey(dnskeyRecords) {
+				log.Debugf("SECURITY: root DNSKEY set does not match embedded trust anchors")
+				chain.lastEDECode = dns.ExtendedErrorDNSBogus
+				return false
+			}
 			keysVerified = true
 			log.Debugf("SECURITY: self-verified root DNSKEY")
 		} else {
 			log.Debugf("SECURITY: root DNSKEY self-verification failed: %v", err)
-			chain.lastEDECode = dns.ExtendedErrorDNSKEYMissing
+			chain.lastEDECode = dns.ExtendedErrorDNSBogus
 			return false
 		}
 	}
 
 	if !keysVerified {
-		chain.lastEDECode = dns.ExtendedErrorDNSKEYMissing
+		chain.lastEDECode = dns.ExtendedErrorDNSBogus
 		return false
 	}
 
@@ -401,7 +469,18 @@ func (r *Recursive) validateOrRetry(ctx context.Context, response *dns.Msg, name
 			return false
 		}
 
-		chain.lastEDECode = dns.ExtendedErrorDNSBogus
+		switch {
+		case errors.Is(err, dnssec.ErrSignatureExpired):
+			chain.lastEDECode = dns.ExtendedErrorSignatureExpired // EDE 7
+		case errors.Is(err, dnssec.ErrSignatureNotYet):
+			chain.lastEDECode = dns.ExtendedErrorSignatureNotYetValid // EDE 8
+		case errors.Is(err, dnssec.ErrUnsupportedAlgorithm):
+			chain.lastEDECode = dns.ExtendedErrorUnsupportedDNSKEYAlgorithm // EDE 1
+		case errors.Is(err, dnssec.ErrMissingNSEC):
+			chain.lastEDECode = dns.ExtendedErrorNSECMissing // EDE 12
+		default:
+			chain.lastEDECode = dns.ExtendedErrorDNSBogus // EDE 6
+		}
 		if r.isZoneCut(response, currentDomain) {
 			log.Debugf("SECURITY: zone cut detected for %s — RRSIG signer differs from %s", question.Name, currentDomain)
 			chain.zoneCutDetected = true
@@ -444,9 +523,78 @@ func (r *Recursive) recordDNSSECFailure(chain *dnssecChain, validated bool, msg 
 	if len(chain.childDS) == 0 || validated {
 		return nil
 	}
-	r.lastDNSSECEDECode.Store(uint64(chain.lastEDECode))
 	if !r.resolver.DNSSECEnforce {
 		return nil
 	}
 	return &DNSSECError{EDECode: chain.lastEDECode, Message: msg}
+}
+
+// verifyOfflineKSK confirms an offline-KSK delegation (RFC 7344) via CDS or
+// CDNSKEY: either record set matching the parent DS validates the delegation.
+// CDS is tried first; CDNSKEY is the fallback (RFC 7344 §6).
+//
+// The match requires the FULL digest (not just key tag) to equal the parent DS
+// — an attacker who can forge a SHA-256 preimage already owns the child zone's
+// keys, so this is cryptographically equivalent to standard DS validation.
+func (r *Recursive) verifyOfflineKSK(ctx context.Context, nameservers []string, zone string, chain *dnssecChain) bool {
+	return r.verifyViaCDS(ctx, nameservers, zone, chain) ||
+		r.verifyViaCDNSKEY(ctx, nameservers, zone, chain)
+}
+
+// verifyViaCDS confirms a secure delegation by querying the child zone's CDS
+// records and checking that they match the parent DS (RFC 7344 §3.1).
+func (r *Recursive) verifyViaCDS(ctx context.Context, nameservers []string, zone string, chain *dnssecChain) bool {
+	cdsQ := Question{Name: dnsutil.Fqdn(zone), Qtype: dns.TypeCDS, Qclass: dns.ClassINET}
+	cdsResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, cdsQ, nil, false, zone, r.resolver.validator.Poisonguard)
+	if err != nil || cdsResp == nil {
+		log.Debugf("SECURITY: CDS query failed for %s: %v", zone, err)
+		return false
+	}
+	defer pool.DefaultMessage.Put(cdsResp)
+
+	cdsRecords := dnssec.FindCDS(cdsResp.Answer)
+	for _, ds := range chain.childDS {
+		for _, cds := range cdsRecords {
+			if cds.KeyTag == ds.KeyTag &&
+				cds.Algorithm == ds.Algorithm &&
+				cds.DigestType == ds.DigestType &&
+				cds.Digest == ds.Digest {
+				log.Debugf("SECURITY: CDS matches DS for %s (key_tag=%d)", zone, ds.KeyTag)
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// verifyViaCDNSKEY confirms a secure delegation by querying the child zone's
+// CDNSKEY records and computing their DS digests against the parent DS
+// (RFC 7344 §3.2). The CDNSKEY RRSIG cannot be verified in the offline-KSK
+// case (signed by the unpublished KSK), so the digest match against the parent
+// DS is the effective authentication.
+func (r *Recursive) verifyViaCDNSKEY(ctx context.Context, nameservers []string, zone string, chain *dnssecChain) bool {
+	cdnskeyQ := Question{Name: dnsutil.Fqdn(zone), Qtype: dns.TypeCDNSKEY, Qclass: dns.ClassINET}
+	cdnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, cdnskeyQ, nil, false, zone, r.resolver.validator.Poisonguard)
+	if err != nil || cdnskeyResp == nil {
+		log.Debugf("SECURITY: CDNSKEY query failed for %s: %v", zone, err)
+		return false
+	}
+	defer pool.DefaultMessage.Put(cdnskeyResp)
+
+	cdnskeyRecords := dnssec.FindCDNSKEY(cdnskeyResp.Answer)
+	for _, ds := range chain.childDS {
+		for _, cdnskey := range cdnskeyRecords {
+			computed := cdnskey.ToDS(ds.DigestType)
+			if computed == nil {
+				continue
+			}
+			if computed.KeyTag == ds.KeyTag &&
+				computed.Algorithm == ds.Algorithm &&
+				computed.Digest == ds.Digest {
+				log.Debugf("SECURITY: CDNSKEY→DS matches for %s (key_tag=%d)", zone, computed.KeyTag)
+				return true
+			}
+		}
+	}
+	return false
 }

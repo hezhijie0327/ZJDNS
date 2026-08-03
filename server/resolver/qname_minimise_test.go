@@ -93,12 +93,13 @@ func TestMinimiseQNAME_DeepDomain(t *testing.T) {
 // ── labelsToAdd ─────────────────────────────────────────────────────────────
 
 func TestLabelsToAdd_EarlySteps(t *testing.T) {
-	// First MINIMISE_ONE_LAB steps should each add 1 label
+	// First MINIMISE_ONE_LAB steps return cumulative exposure: 1, 2, 3, 4, ...
 	for s := range config.DefaultMinimiseOneLabel {
 		got := labelsToAdd("a.b.c.example.com.", ".", s,
 			config.DefaultQnameMinimiseCount, config.DefaultMinimiseOneLabel)
-		if got != 1 {
-			t.Errorf("labelsToAdd step %d: got %d, want 1", s, got)
+		want := s + 1 // cumulative: step 0 → 1 label, step 3 → 4 labels
+		if got != want {
+			t.Errorf("labelsToAdd step %d: got %d, want %d (cumulative)", s, got, want)
 		}
 	}
 }
@@ -129,6 +130,39 @@ func TestLabelsToAdd_WithCurrentDomain(t *testing.T) {
 		config.DefaultQnameMinimiseCount, config.DefaultMinimiseOneLabel)
 	if got != 1 {
 		t.Errorf("labelsToAdd from com: got %d, want 1", got)
+	}
+}
+
+func TestLabelsToAdd_FromCnZone(t *testing.T) {
+	// Regression: after the TLD step the zone has advanced to "cn.", so the
+	// next minimised name must be exactly one label beyond it ("com.cn."),
+	// not two ("apple.com.cn.").  Skipping "com.cn." broke DNSSEC for
+	// apple.com.cn: the cn servers answer with com.cn-zone NSEC3 proofs
+	// signed by com.cn's DNSKEY, which is never fetched when the
+	// intermediate delegation is never walked.
+	got := labelsToAdd("www.apple.com.cn.", "cn.", 1,
+		config.DefaultQnameMinimiseCount, config.DefaultMinimiseOneLabel)
+	if got != 1 {
+		t.Errorf("labelsToAdd(www.apple.com.cn., cn., 1) = %d, want 1", got)
+	}
+	if name := minimiseQNAME("www.apple.com.cn.", "cn.", got); name != "com.cn." {
+		t.Errorf("minimised name = %q, want %q", name, "com.cn.")
+	}
+}
+
+func TestMinimiseQNAME_Sequence_Apple(t *testing.T) {
+	// RFC 9156 §2.3 sequence for www.apple.com.cn: each step exposes
+	// exactly one more label beyond the current zone.
+	want := []string{"cn.", "com.cn.", "apple.com.cn.", "www.apple.com.cn."}
+	zone := "."
+	for s, w := range want {
+		add := labelsToAdd("www.apple.com.cn.", zone, s,
+			config.DefaultQnameMinimiseCount, config.DefaultMinimiseOneLabel)
+		name := minimiseQNAME("www.apple.com.cn.", zone, add)
+		if name != w {
+			t.Fatalf("step %d: name = %q, want %q", s, name, w)
+		}
+		zone = name
 	}
 }
 

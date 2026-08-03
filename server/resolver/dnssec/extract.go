@@ -2,7 +2,6 @@ package dnssec
 
 import (
 	"zjdns/cache"
-	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -11,13 +10,13 @@ import (
 // Record extraction helpers.
 
 // CollectRRSIGs collects all RRSIG records from multiple RR slices.
-func CollectRRSIGs(slices ...[]dns.RR) []*dns.RRSIG {
+func CollectRRSIGs(rrSets ...[]dns.RR) []*dns.RRSIG {
 	total := 0
-	for _, rrs := range slices {
+	for _, rrs := range rrSets {
 		total += len(rrs)
 	}
 	sigs := make([]*dns.RRSIG, 0, total)
-	for _, rrs := range slices {
+	for _, rrs := range rrSets {
 		for _, rr := range rrs {
 			if rrsig, ok := rr.(*dns.RRSIG); ok {
 				sigs = append(sigs, rrsig)
@@ -38,7 +37,10 @@ func FindRRSIGs(sigs []*dns.RRSIG, ownerName string, typeCovered uint16) []*dns.
 		if rrsig == nil {
 			continue
 		}
-		if rrsig.TypeCovered == typeCovered && rrsig.Header().Name == ownerName {
+		// DNS-aware name equality (RFC 4343): presentation-form strings that
+		// are identical per RFC 4034 §6.1 (escapes, trailing dot, case) must
+		// match; EqualFold would drop valid RRSIGs.
+		if rrsig.TypeCovered == typeCovered && dns.EqualName(rrsig.Header().Name, ownerName) {
 			result = append(result, rrsig)
 		}
 	}
@@ -74,6 +76,18 @@ func FindCDS(rrs []dns.RR) []*dns.CDS {
 	for _, rr := range rrs {
 		if cds, ok := rr.(*dns.CDS); ok {
 			records = append(records, cds)
+		}
+	}
+	return records
+}
+
+// FindCDNSKEY extracts CDNSKEY records from an RR slice (RFC 7344).
+// CDNSKEY embeds DNSKEY — same wire format but distinct RR type.
+func FindCDNSKEY(rrs []dns.RR) []*dns.CDNSKEY {
+	var records []*dns.CDNSKEY
+	for _, rr := range rrs {
+		if cdnskey, ok := rr.(*dns.CDNSKEY); ok {
+			records = append(records, cdnskey)
 		}
 	}
 	return records
@@ -132,8 +146,13 @@ func isDomainInRange(name, lower, upper string) bool {
 		return true
 	}
 
-	if loUp >= 0 {
+	if loUp > 0 {
 		return loName < 0 || naUp < 0
+	}
+	if loUp == 0 {
+		// RFC 4034 §4.1: Next Domain == owner — the NSEC covers the entire
+		// namespace except the owner name itself.
+		return loName != 0
 	}
 
 	return false
@@ -148,12 +167,9 @@ func (c *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 	}
 	zone = dnsutil.Canonical(zone)
 
-	ttl := config.DefaultDNSKeyCacheTTL
-	for _, k := range keys {
-		if k != nil && int(k.Header().TTL) > 0 && int(k.Header().TTL) < ttl {
-			ttl = int(k.Header().TTL)
-		}
-	}
+	// cache.Set derives the entry TTL from the RR TTLs itself (minTTL, capped
+	// at DefaultMaxCacheableTTL); the old ttl loop was dead code and the
+	// intended DefaultDNSKeyCacheTTL cap was never applied.
 	rrKeys := make([]dns.RR, 0, len(keys))
 	for _, k := range keys {
 		if k != nil {
@@ -179,7 +195,12 @@ func (c *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
 	return FindDNSKEYs(records)
 }
 
-// RootKeys returns the root trust anchor DNSKEYs.
+// RootKeys returns deep copies of the root trust anchor DNSKEYs. Callers must
+// not mutate the anchors — they are security-critical validation state.
 func (c *CryptoValidator) RootKeys() []*dns.DNSKEY {
-	return c.rootKeys
+	keys := make([]*dns.DNSKEY, len(c.rootKeys))
+	for i, k := range c.rootKeys {
+		keys[i] = k.Clone().(*dns.DNSKEY)
+	}
+	return keys
 }
