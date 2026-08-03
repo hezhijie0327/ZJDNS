@@ -10,10 +10,40 @@ import (
 	"strings"
 )
 
+// readVLP reads a Variable Length Prefixed sequence from bin at pos.
+// The high bit (0x80) of each length byte indicates another element follows.
+// Returns the decoded byte slices, the new position, and any error.
+func readVLP(bin []byte, pos, binLen int) (elements [][]byte, newPos int, err error) {
+	for {
+		if pos >= binLen {
+			return nil, pos, ErrTruncatedLength
+		}
+		vlen := int(bin[pos])
+		length := vlen & ^0x80 // clear continuation bit
+		if 1+length > binLen-pos {
+			return nil, pos, ErrTruncatedPayload
+		}
+		pos++
+		if length > 0 {
+			elem := make([]byte, length)
+			copy(elem, bin[pos:pos+length])
+			elements = append(elements, elem)
+		}
+		pos += length
+		if vlen&0x80 != 0x80 {
+			break
+		}
+	}
+	return elements, pos, nil
+}
+
 func (s *DNSStamp) parsePlainDNS(bin []byte) error {
 	binLen := len(bin)
 	pos := 9 // skip proto(1) + props(8)
 
+	if pos >= binLen {
+		return ErrTruncatedLength
+	}
 	length := int(bin[pos])
 	if 1+length > binLen-pos {
 		return errors.New("stamp: invalid plain DNS stamp")
@@ -58,6 +88,9 @@ func (s *DNSStamp) parseDNSCrypt(bin []byte) error {
 	pos := 9 // skip proto(1) + props(8)
 
 	// Address.
+	if pos >= binLen {
+		return ErrTruncatedLength
+	}
 	length := int(bin[pos])
 	// Uses >= (vs > for plain DNS) because DNSCrypt addresses may be
 	// zero-length in relay mode, but validation still requires at least
@@ -92,6 +125,9 @@ func (s *DNSStamp) parseDNSCrypt(bin []byte) error {
 	}
 
 	// Public key — MUST be exactly 32 bytes per §4.2.3.
+	if pos >= binLen {
+		return ErrTruncatedLength
+	}
 	length = int(bin[pos])
 	if length != 32 {
 		return errors.New("stamp: DNSCrypt public key must be exactly 32 bytes")
@@ -105,6 +141,9 @@ func (s *DNSStamp) parseDNSCrypt(bin []byte) error {
 	pos += length
 
 	// Provider name.
+	if pos >= binLen {
+		return ErrTruncatedLength
+	}
 	length = int(bin[pos])
 	if length >= binLen-pos {
 		return errors.New("stamp: invalid DNSCrypt stamp")
@@ -147,6 +186,9 @@ func (s *DNSStamp) parseSecure(bin []byte, name string, hasPath, skipAddr bool) 
 		pos = newPos
 	}
 
+	if pos >= binLen {
+		return ErrTruncatedLength
+	}
 	length := int(bin[pos])
 	if 1+length > binLen-pos {
 		return fmt.Errorf("stamp: invalid %s stamp", name)
@@ -156,6 +198,9 @@ func (s *DNSStamp) parseSecure(bin []byte, name string, hasPath, skipAddr bool) 
 	pos += length
 
 	if hasPath {
+		if pos >= binLen {
+			return ErrTruncatedLength
+		}
 		length = int(bin[pos])
 		if 1+length > binLen-pos {
 			return fmt.Errorf("stamp: invalid %s stamp", name)
@@ -192,6 +237,9 @@ func (s *DNSStamp) parseDNSCryptRelay(bin []byte) error {
 	binLen := len(bin)
 	pos := 1 // relay stamps have no properties — skip only proto byte
 
+	if pos >= binLen {
+		return ErrTruncatedLength
+	}
 	length := int(bin[pos])
 	if 1+length > binLen-pos {
 		return errors.New("stamp: invalid DNSCrypt relay stamp")

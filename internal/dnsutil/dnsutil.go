@@ -109,14 +109,18 @@ func NewPTRRecord(name, target string, ttl uint32, qclass uint16) dns.RR {
 
 // IsValidFilePath validates a file path for security and existence.
 func IsValidFilePath(path string) bool {
-	abs, err := filepath.Abs(filepath.Clean(path))
+	abs, err := filepath.Abs(path)
 	if err != nil {
 		return false
 	}
-	// Resolve symlinks before the prefix check to prevent symlink-based
-	// traversal attacks (e.g. /tmp/link -> /etc/passwd).
+	// Resolve symlinks BEFORE cleaning: a .. component traverses through the
+	// symlink target (e.g. /tmp/link -> /etc, then /tmp/link/../passwd), so
+	// resolving first prevents symlink-based traversal (e.g. /tmp/link ->
+	// /etc/passwd). Clean afterwards so the prefix check sees the real path.
 	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = resolved
+		abs = filepath.Clean(resolved)
+	} else {
+		abs = filepath.Clean(abs)
 	}
 
 	for _, prefix := range dangerousPrefixes {
@@ -157,9 +161,13 @@ func ExtractIP(rr any) net.IP {
 func ExtractIPString(rr dns.RR) (string, bool) {
 	switch r := rr.(type) {
 	case *dns.A:
-		return r.A.String(), true
+		if r.Addr.IsValid() {
+			return r.Addr.String(), true
+		}
 	case *dns.AAAA:
-		return r.AAAA.String(), true
+		if r.Addr.IsValid() {
+			return r.Addr.String(), true
+		}
 	}
 	return "", false
 }
@@ -214,8 +222,8 @@ func IsTemporaryError(err error) bool {
 	if err == nil {
 		return false
 	}
-	var ne net.Error
-	if errors.As(err, &ne) && ne.Timeout() {
+	ne, ok := errors.AsType[net.Error](err)
+	if ok && ne.Timeout() {
 		return true
 	}
 	// Some wrapped errors (e.g., from quic-go or io.Pipe) do not implement

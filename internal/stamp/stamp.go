@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -89,8 +90,10 @@ var (
 	ErrTrailingGarbage  = errors.New("stamp: garbage after end")
 )
 
-// parsePlainDNS parses a Plain DNS stamp payload (protocol 0x00).
-// Format: [addr_len:1][addr]
+// Parse decodes an sdns:// stamp. The payload layout depends on the protocol:
+// plain DNS is proto(1) ‖ props(8) ‖ LP(addr); DNSCrypt adds LP(pk) and
+// LP(provider); secure transports add a VLP hash list and (for DoH/ODoH) a
+// path; relays are proto(1) ‖ LP(addr).
 func Parse(stampStr string) (*DNSStamp, error) {
 	if !strings.HasPrefix(stampStr, stampPrefix) {
 		return nil, ErrNotAStamp
@@ -120,7 +123,10 @@ func Parse(stampStr string) (*DNSStamp, error) {
 		}
 	case ProtoDNSCrypt:
 		s = &DNSStamp{Proto: proto}
-		if len(bin) < 66 {
+		// proto(1) + props(8) + addrLen(1) + addr(1) + pkLen(1) + pk(32) +
+		// provLen(1) + prov(1) — 44 is the format minimum; per-field
+		// validation below rejects anything structurally invalid.
+		if len(bin) < 44 {
 			return nil, ErrTooShort
 		}
 		s.Props = ServerInformalProperties(binary.LittleEndian.Uint64(bin[1:9]))
@@ -165,7 +171,9 @@ func Parse(stampStr string) (*DNSStamp, error) {
 		}
 	case ProtoDNSCryptRelay:
 		s = &DNSStamp{Proto: proto}
-		if len(bin) < 9 {
+		// proto(1) + LP length byte(1) — the structural minimum; the LP
+		// payload bounds are validated by parseDNSCryptRelay.
+		if len(bin) < 2 {
 			return nil, ErrTooShort
 		}
 		if err := s.parseDNSCryptRelay(bin); err != nil {
@@ -188,8 +196,8 @@ func Parse(stampStr string) (*DNSStamp, error) {
 }
 
 // ProtoToConfig maps a stamp protocol ID to the corresponding config protocol
-// string. Returns "" for protocol types that have no direct config mapping
-// (relays, ODoH target).
+// string ("dnscrypt-relay" / "odoh-relay" / "odoh" for the relay and ODoH
+// target types).
 func ProtoToConfig(stampProto ProtoType) string {
 	switch stampProto {
 	case ProtoPlain:
@@ -219,10 +227,19 @@ func ProtoToConfig(stampProto ProtoType) string {
 func (s *DNSStamp) BuildDoHURL() string {
 	host, port, err := net.SplitHostPort(s.Address)
 	if err != nil {
-		return "https://" + s.Address + "/dns-query"
+		// No port present: use the whole address as the host (a bare IPv6
+		// literal gets bracketed by JoinHostPort) and default to 443.
+		host = s.Address
+		port = strconv.Itoa(DefaultHTTPSPort)
 	}
 	if s.ProviderName != "" {
+		// The provider name is the TLS SNI host — it must be the URL host,
+		// not the address.
 		host = s.ProviderName
+	} else {
+		// SplitHostPort already stripped brackets; a bare IPv6 fallback
+		// still carries them — strip before JoinHostPort re-brackets.
+		host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
 	}
 	path := s.Path
 	if path == "" {
@@ -233,5 +250,3 @@ func (s *DNSStamp) BuildDoHURL() string {
 	}
 	return "https://" + net.JoinHostPort(host, port) + path
 }
-
-// String encodes the stamp back to an sdns:// URI.

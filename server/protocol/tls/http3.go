@@ -8,6 +8,7 @@ import (
 	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/doq"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
 
@@ -34,7 +35,9 @@ func (s *Server) startDOH3Server(port string) error {
 		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
 	}
 
+	s.listenerMu.Lock()
 	s.h3Server = &http3.Server{Handler: s}
+	s.listenerMu.Unlock()
 
 	log.Infof("TLS: DoH3 server started on %v", addrs)
 	for _, addr := range addrs {
@@ -47,20 +50,26 @@ func (s *Server) startDOH3Server(port string) error {
 		if err != nil {
 			return fmt.Errorf("UDP listen on %s: %w", addr, err)
 		}
+		s.listenerMu.Lock()
 		s.h3Conns = append(s.h3Conns, conn)
+		s.listenerMu.Unlock()
 
 		transport := &quic.Transport{
 			Conn:                conn,
 			VerifySourceAddress: makeAddrValidator(addrCache),
 		}
+		s.listenerMu.Lock()
 		s.h3Transports = append(s.h3Transports, transport)
+		s.listenerMu.Unlock()
 
 		listener, err := transport.ListenEarly(tlsConfig, quicConfig)
 		if err != nil {
 			_ = conn.Close()
 			return fmt.Errorf("DoH3 listen on %s: %w", addr, err)
 		}
+		s.listenerMu.Lock()
 		s.h3Listeners = append(s.h3Listeners, listener)
+		s.listenerMu.Unlock()
 
 		capturedH3 := listener
 		s.serverGroup.Go(func() error {
@@ -83,8 +92,19 @@ func (s *Server) startDOH3Server(port string) error {
 					continue
 				}
 
+				// Admission cap: quic.Config only limits streams, not
+				// connections — a single client could otherwise open
+				// unbounded QUIC connections and exhaust goroutines.
+				select {
+				case s.quicConnSem <- struct{}{}:
+				default:
+					log.Debugf("TLS: DoH3 connection limit reached, rejecting %s", conn.RemoteAddr())
+					_ = conn.CloseWithError(doq.QUICCodeExcessiveLoad, "connection limit reached")
+					continue
+				}
 				s.serverGroup.Go(func() error {
 					defer zdnsutil.HandlePanic("DoH3 connection handler")
+					defer func() { <-s.quicConnSem }()
 					if err := s.h3Server.ServeQUICConn(conn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 						log.Debugf("TLS: DoH3 connection error: %v", err)
 					}

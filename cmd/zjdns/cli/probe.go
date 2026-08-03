@@ -25,8 +25,9 @@ const (
 	probeIdleReadTimeout     = 30 * time.Second
 	probePipelineNumQueries  = 5
 	probeConnReuseNumQueries = 3
-	defaultProbePort         = 53  // matches config.DefaultUDPPort
-	defaultProbeTLSPort      = 853 // matches config.DefaultTLSPort
+	probeDialTimeout         = 10 * time.Second // fail fast on blackholed targets
+	defaultProbePort         = 53               // matches config.DefaultUDPPort
+	defaultProbeTLSPort      = 853              // matches config.DefaultTLSPort
 )
 
 // runProbe dispatches to the requested probe type.
@@ -62,7 +63,8 @@ func dialProbeTarget(addr string) (net.Conn, error) {
 	switch protocol {
 	case "tcp":
 		host = tryAddPort(host, defaultProbePort)
-		return net.Dial("tcp", host)
+		d := net.Dialer{Timeout: probeDialTimeout}
+		return d.Dial("tcp", host)
 
 	case "tls":
 		host = tryAddPort(host, defaultProbeTLSPort)
@@ -140,6 +142,8 @@ func newQuery(name string, id uint16) *dns.Msg {
 	msg := &dns.Msg{}
 	msg.RecursionDesired = true
 	msg.ID = id
+	// Note: this fork's packQuestion derives the QTYPE from the concrete RR
+	// type (RRToType), so the *dns.A question packs as TYPE A correctly.
 	msg.Question = []dns.RR{
 		&dns.A{Hdr: dns.Header{Name: name, Class: dns.ClassINET}},
 	}
@@ -152,8 +156,8 @@ func isTimeoutOrEOF(err error) bool {
 	if err == nil {
 		return false
 	}
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
+	netErr, ok := errors.AsType[net.Error](err)
+	if ok && netErr.Timeout() {
 		return true
 	}
 	return errors.Is(err, io.EOF) || strings.Contains(err.Error(), "broken pipe")
@@ -175,15 +179,18 @@ func probePipeline(addr string) error {
 	domains := make([]string, probePipelineNumQueries)
 	for i := range probePipelineNumQueries {
 		var b [8]byte
-		_, _ = rand.Read(b[:])
+		_, _ = rand.Read(b[:]) // _ = error: CLI probe randomness — failure yields a fixed query name, still valid
 		domains[i] = fmt.Sprintf("www.%x.com.", b)
 	}
 
 	fmt.Printf("Probing %s for RFC 7766 query pipelining support...\n\n", addr)
 
+	// Monotonicity tracker for out-of-order detection.
+	lastID := uint16(0)
+
 	// Fire all queries without waiting for responses.
 	for i, d := range domains {
-		_ = conn.SetWriteDeadline(time.Now().Add(probeDefaultWriteTimeout))
+		_ = conn.SetWriteDeadline(time.Now().Add(probeDefaultWriteTimeout)) // _ = error: deadline advisory
 		q := newQuery(d, uint16(i))
 		if err := writeDNSMsg(conn, q); err != nil {
 			return fmt.Errorf("write query #%d: %w", i, err)
@@ -202,7 +209,7 @@ func probePipeline(addr string) error {
 	seen := make([]bool, probePipelineNumQueries)
 	start := time.Now()
 	for range domains {
-		_ = conn.SetReadDeadline(time.Now().Add(probePipelineReadTimeout))
+		_ = conn.SetReadDeadline(time.Now().Add(probePipelineReadTimeout)) // _ = error: deadline advisory
 		resp, err := readDNSMsg(conn)
 		if err != nil {
 			if received == 0 {
@@ -221,7 +228,18 @@ func probePipeline(addr string) error {
 		if resp.ID >= uint16(probePipelineNumQueries) || seen[resp.ID] {
 			ooo = true
 		}
-		seen[resp.ID] = true
+		// A server that permutes response order (unique IDs, any order) is
+		// only detectable via monotonicity: flag any later ID smaller than
+		// the highest seen so far.
+		if resp.ID < lastID {
+			ooo = true
+		}
+		if resp.ID > lastID {
+			lastID = resp.ID
+		}
+		if resp.ID < uint16(probePipelineNumQueries) {
+			seen[resp.ID] = true
+		}
 	}
 
 	fmt.Println()
@@ -245,7 +263,7 @@ func probeConnReuse(addr string) error {
 	fmt.Printf("Probing %s for RFC 1035 connection reuse...\n\n", addr)
 
 	for i := range probeConnReuseNumQueries {
-		_ = conn.SetDeadline(time.Now().Add(probeDefaultReadTimeout))
+		_ = conn.SetDeadline(time.Now().Add(probeDefaultReadTimeout)) // _ = error: deadline advisory
 		q := newQuery("www.cloudflare.com.", uint16(i))
 		if err := writeDNSMsg(conn, q); err != nil {
 			return fmt.Errorf("write query #%d: %w", i, err)
@@ -271,7 +289,7 @@ func probeIdleTimeout(addr string) error {
 	}
 	defer func() { _ = conn.Close() }()
 
-	_ = conn.SetDeadline(time.Now().Add(probeDefaultReadTimeout))
+	_ = conn.SetDeadline(time.Now().Add(probeDefaultReadTimeout)) // _ = error: deadline advisory
 	q := newQuery("www.cloudflare.com.", 0)
 	if err := writeDNSMsg(conn, q); err != nil {
 		return fmt.Errorf("write query: %w", err)
@@ -285,9 +303,17 @@ func probeIdleTimeout(addr string) error {
 
 	start := time.Now()
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(probeIdleReadTimeout))
+		_ = conn.SetReadDeadline(time.Now().Add(probeIdleReadTimeout)) // _ = error: deadline advisory
 		_, err := readDNSMsg(conn)
 		if err != nil {
+			// A read deadline expiring while the server keeps the connection
+			// alive is NOT a server-side close — keep waiting. Only an
+			// io.EOF/reset indicates the server actually closed.
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				fmt.Printf("  server still alive after %.1fs — waiting for close...\n", time.Since(start).Seconds())
+				continue
+			}
 			fmt.Printf("\nConnection closed by server after %.1fs\n", time.Since(start).Seconds())
 			return nil
 		}

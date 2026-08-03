@@ -90,9 +90,7 @@ func buildBenchServer(b *testing.B) *server.Server {
 			Protocol: config.ProtocolSettings{UDP: "15353", TCP: "15353", TLS: "853"},
 			Features: config.FeatureFlags{
 				DNSSECEnforce: false,
-				Cache: config.CacheSettings{
-					MaxEntries: config.DefaultMaxCacheEntries,
-				},
+				Cache:         config.CacheSettings{},
 			},
 		},
 		Zone: []config.ZoneRule{

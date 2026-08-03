@@ -31,13 +31,19 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 	}
 
 	if parsedURL.Port() == "" {
-		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultHTTPSPort)
+		// Hostname() strips IPv6 brackets — JoinHostPort on the raw Host
+		// would double-bracket literals like [[2001:db8::1]]:443.
+		parsedURL.Host = net.JoinHostPort(parsedURL.Hostname(), config.DefaultHTTPSPort)
 	}
 
 	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
 	tlsConfig := c.eTLSClientConfig(server)
 
-	client, isCached := c.dohTransports.Get(key)
+	var client *http.Client
+	var isCached bool
+	if c.dohTransports != nil { // Close() nils the map — a racing query must not panic
+		client, isCached = c.dohTransports.Get(key)
+	}
 	if !isCached {
 		client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
 	}
@@ -49,11 +55,12 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 
 	if isCached {
 		for i := 0; shouldRetryHTTP(err) && i < config.DefaultSecureTransportRetries; i++ {
-			if cached, ok := c.dohTransports.Get(key); ok && cached == client {
+			// Atomic compare-and-delete: another goroutine may have replaced
+			// the transport for this key — only evict if it is still ours.
+			if c.dohTransports != nil && c.dohTransports.CompareAndDelete(key, client) {
 				if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
 					ct.CloseIdleConnections()
 				}
-				c.dohTransports.Delete(key)
 			}
 
 			client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
@@ -64,12 +71,9 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 		}
 	}
 
-	if err != nil {
-		if cached, ok := c.dohTransports.Get(key); ok && cached == client {
-			if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
-				ct.CloseIdleConnections()
-			}
-			c.dohTransports.Delete(key)
+	if err != nil && c.dohTransports != nil && c.dohTransports.CompareAndDelete(key, client) {
+		if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
+			ct.CloseIdleConnections()
 		}
 	}
 
@@ -101,8 +105,8 @@ func transportKey(host, serverName string, skipVerify bool, proxyURL string) str
 // shouldRetryHTTP checks whether an HTTP/2 error warrants recreating the client
 // and retrying.
 func shouldRetryHTTP(err error) bool {
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
+	netErr, ok := errors.AsType[net.Error](err)
+	if ok && netErr.Timeout() {
 		return true
 	}
 	// Also retry on transient operation errors (connection reset, etc.).

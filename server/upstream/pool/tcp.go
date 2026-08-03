@@ -44,7 +44,6 @@ type Conn struct {
 	maxPipe   int32
 	closed    atomic.Bool
 	closeOnce sync.Once
-	done      chan struct{}
 
 	segmentSize int // 0 = no segmentation
 }
@@ -79,7 +78,6 @@ func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 		inflight: make(map[uint16]*pending),
 		capacity: make(chan struct{}, maxPipe),
 		maxPipe:  int32(maxPipe),
-		done:     make(chan struct{}),
 
 		segmentSize: 0,
 	}
@@ -187,6 +185,14 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 		}
 	}()
 
+	// Bound the write: a stalled peer with a full receive window blocks the
+	// write (and, behind writeMu, every queued query on this connection)
+	// until the readLoop's 60s idle timeout closes it. Set a write deadline
+	// from the query's ctx so the 9s timeout contract holds.
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = c.conn.SetWriteDeadline(deadline)
+		defer func() { _ = c.conn.SetWriteDeadline(time.Time{}) }()
+	}
 	c.writeMu.Lock()
 	_, writeErr := zdnsutil.WriteTCPMsgSegmented(c.conn, writeBuf, c.segmentSize)
 	c.writeMu.Unlock()
@@ -279,10 +285,24 @@ func (c *Conn) readLoop() {
 			}
 		}
 		if ok {
-			select {
-			case pq.resultCh <- resp:
-			default:
+			// Re-verify the pending is still registered and deliver UNDER
+			// the RLock: Exchange's deferred cleanup (ctx cancellation)
+			// deletes+drains under the write lock, so holding the RLock
+			// across the (non-blocking, buffered) send makes verify+deliver
+			// atomic — a late response can no longer land on a purged
+			// channel and leak a pooled *dns.Msg.
+			c.mu.RLock()
+			pq2, still := c.inflight[resp.ID]
+			if !still || pq2 != pq {
+				c.mu.RUnlock()
 				zpool.DefaultMessage.Put(resp)
+			} else {
+				select {
+				case pq.resultCh <- resp:
+				default:
+					zpool.DefaultMessage.Put(resp)
+				}
+				c.mu.RUnlock()
 			}
 		} else {
 			resp.Data = nil
@@ -294,7 +314,6 @@ func (c *Conn) readLoop() {
 func (c *Conn) close() {
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)
-		close(c.done)
 		_ = c.conn.Close()
 
 		c.mu.Lock()
@@ -304,7 +323,7 @@ func (c *Conn) close() {
 			default:
 			}
 		}
-		c.inflight = nil
+		c.inflight = make(map[uint16]*pending)
 		c.mu.Unlock()
 	})
 }
@@ -404,7 +423,7 @@ func (p *ConnPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc f
 // connection is replaced; if none are dead the connection is discarded.
 func (p *ConnPool) WarmUp(ctx context.Context, key, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) error {
 	p.mu.Lock()
-	if len(p.conns[key]) >= p.maxConns && p.dialing[key] >= p.maxConns {
+	if len(p.conns[key]) >= p.maxConns {
 		p.mu.Unlock()
 		return nil // pool already full, don't bother
 	}

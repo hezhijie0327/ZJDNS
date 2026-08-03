@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 	"zjdns/config"
 	"zjdns/edns"
@@ -47,15 +48,17 @@ type Config struct {
 
 // Server manages TLS-based secure DNS protocol listeners and their lifecycle.
 type Server struct {
-	cfg            *Config
-	handler        edns.DNSHandler
-	tlsConfig      *eTLS.Config   // TCP-based TLS (DoT, DoH) with KTLS
-	baseTLSConfig  *eTLS.Config   // base config for per-listener GetConfigForClient clones
-	quicTLSConfig  *stdtls.Config // QUIC-based protocols (DoQ, DoH3)
-	ctx            context.Context
-	cancel         context.CancelCauseFunc
-	serverGroup    *errgroup.Group
-	serverCtx      context.Context
+	cfg           *Config
+	handler       edns.DNSHandler
+	tlsConfig     *eTLS.Config   // TCP-based TLS (DoT, DoH) with KTLS
+	baseTLSConfig *eTLS.Config   // base config for per-listener GetConfigForClient clones
+	quicTLSConfig *stdtls.Config // QUIC-based protocols (DoQ, DoH3)
+	ctx           context.Context
+	cancel        context.CancelCauseFunc
+	serverGroup   *errgroup.Group
+	quicConnSem   chan struct{} // admission cap for concurrent QUIC connections (DoQ/DoH3)
+
+	listenerMu     sync.Mutex // protects all listener/conn slice fields below
 	dotListeners   []net.Listener
 	doqConns       []*net.UDPConn
 	doqTransports  []*quic.Transport
@@ -163,7 +166,7 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 	tlsConfig := baseConfig.Clone()
 
 	ctx, cancel := context.WithCancelCause(context.Background())
-	serverGroup, serverCtx := errgroup.WithContext(ctx)
+	serverGroup, _ := errgroup.WithContext(ctx)
 	serverGroup.SetLimit(config.DefaultServerGoroutineLimit)
 
 	s := &Server{
@@ -176,7 +179,7 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 		ctx:           ctx,
 		cancel:        cancel,
 		serverGroup:   serverGroup,
-		serverCtx:     serverCtx,
+		quicConnSem:   make(chan struct{}, config.DefaultServerGoroutineLimit),
 	}
 
 	s.displayCertificateInfo(&eCert)
@@ -270,11 +273,59 @@ func (s *Server) Start() error {
 			// cancellation of all other listeners that may have already
 			// started accepting connections, preventing partial startup.
 			s.cancel(fmt.Errorf("tls startup failed: %w", err))
+			// Close the listeners bound so far: their accept loops do not
+			// observe ctx, so without this the coordinator's g.Wait() never
+			// returns and Start (and the whole process) hangs on a partial
+			// startup failure.
+			s.closeListeners()
 			return err
 		}
 	}
 
 	return nil
+}
+
+// closeListeners closes all bound listeners and UDP sockets. Used by the
+// startup-error path in Start to unblock accept loops that do not observe
+// context cancellation.
+func (s *Server) closeListeners() {
+	s.listenerMu.Lock()
+	defer s.listenerMu.Unlock()
+	for _, l := range s.dotListeners {
+		if l != nil {
+			_ = l.Close()
+		}
+	}
+	for _, l := range s.doqListeners {
+		if l != nil {
+			_ = l.Close()
+		}
+	}
+	for _, c := range s.doqConns {
+		if c != nil {
+			_ = c.Close()
+		}
+	}
+	for _, l := range s.httpsListeners {
+		if l != nil {
+			_ = l.Close()
+		}
+	}
+	for _, l := range s.h3Listeners {
+		if l != nil {
+			_ = l.Close()
+		}
+	}
+	for _, c := range s.h3Conns {
+		if c != nil {
+			_ = c.Close()
+		}
+	}
+	for _, l := range s.dtlsListeners {
+		if l != nil {
+			_ = l.Close()
+		}
+	}
 }
 
 // Shutdown gracefully stops all secure DNS listeners and waits for server

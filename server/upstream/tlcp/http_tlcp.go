@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 
@@ -28,12 +30,32 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 	if err != nil {
 		return nil, fmt.Errorf("parse URL: %w", err)
 	}
+	// Reject scheme-less strings and plain http:// — the latter would send
+	// the DNS query over plaintext HTTP (DialTLSContext is never invoked).
+	if parsedURL.Scheme != "https" || parsedURL.Hostname() == "" {
+		return nil, fmt.Errorf("tlcp: upstream address %q must be an https URL with a host", server.Address)
+	}
 	if parsedURL.Port() == "" {
-		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultHTTPTLCPPort)
+		// Hostname() strips IPv6 brackets — JoinHostPort on the raw Host
+		// would double-bracket literals like [[2001:db8::1]]:9443.
+		parsedURL.Host = net.JoinHostPort(parsedURL.Hostname(), config.DefaultHTTPTLCPPort)
 	}
 
-	key := fmt.Sprintf("%s|%s|%t|%s", server.Address, server.ServerName, server.SkipTLSVerify, server.Proxy)
-	httpClient, ok := c.httpClient.Get(key)
+	var b strings.Builder
+	b.Grow(len(parsedURL.String()) + len(server.ServerName) + len(server.Proxy) + 20)
+	b.WriteString(parsedURL.String()) // normalized endpoint — default-port variants share one client
+	b.WriteByte('|')
+	b.WriteString(server.ServerName)
+	b.WriteByte('|')
+	b.WriteString(strconv.FormatBool(server.SkipTLSVerify))
+	b.WriteByte('|')
+	b.WriteString(server.Proxy)
+	key := b.String()
+	var httpClient *http.Client
+	var ok bool
+	if c.httpClient != nil { // Close() nils the map — a racing query must not panic
+		httpClient, ok = c.httpClient.Get(key)
+	}
 	if !ok {
 		tlcpCfg := c.tlcpClientConfig(server).Clone()
 		tlcpCfg.NextProtos = config.NextProtoDOH
@@ -55,9 +77,17 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 		httpClient = &http.Client{
 			Timeout:   c.timeout,
 			Transport: transport,
+			// Never follow redirects: a 3xx would re-send the full DNS query
+			// (dns= URL) to an arbitrary host — query leak + SSRF, and a
+			// redirect to http:// would bypass TLCP entirely.
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		}
 
-		c.httpClient.Set(key, httpClient)
+		if c.httpClient != nil {
+			c.httpClient.Set(key, httpClient)
+		}
 	}
 
 	return zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, httpClient, http.MethodGet)

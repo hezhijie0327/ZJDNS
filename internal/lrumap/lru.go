@@ -36,6 +36,14 @@ type Map[K comparable, V any] struct {
 	OnEvict func(K, V)
 }
 
+// SetOnEvict configures the eviction callback. The assignment is performed
+// under the map mutex so it cannot race a concurrent eviction read.
+func (m *Map[K, V]) SetOnEvict(fn func(K, V)) {
+	m.mu.Lock()
+	m.OnEvict = fn
+	m.mu.Unlock()
+}
+
 // New creates a Map with the given capacity. When the map reaches capacity,
 // the least recently used entry is evicted to make room for new entries.
 func New[K comparable, V any](capacity int) *Map[K, V] {
@@ -127,6 +135,24 @@ func (m *Map[K, V]) Delete(key K) {
 		m.len--
 	}
 	m.mu.Unlock()
+}
+
+// CompareAndDelete removes the entry for key only if it currently holds val.
+// It reports whether the entry was removed. Atomic Get→compare→Delete: a
+// concurrent Set installing a different value for the same key is preserved.
+// CompareAndDelete deletes the entry for key only if its current value
+// equals val (interface equality — V must be a comparable type; slice/map/
+// func values would panic here).
+func (m *Map[K, V]) CompareAndDelete(key K, val V) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e, ok := m.m[key]; ok && any(e.val) == any(val) {
+		m.remove(e)
+		delete(m.m, key)
+		m.len--
+		return true
+	}
+	return false
 }
 
 // Range calls fn for each entry in the map, from most recent to least recent.

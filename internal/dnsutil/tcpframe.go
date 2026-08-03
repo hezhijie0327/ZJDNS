@@ -5,18 +5,22 @@ import (
 	"io"
 	"math/rand/v2"
 	"net"
+	"slices"
+	"sync"
 
 	"codeberg.org/miekg/dns"
 )
 
-// errFrameTooLarge is returned when a TCP DNS frame exceeds dns.MaxMsgSize.
-var errFrameTooLarge = errors.New("dns: TCP frame exceeds maximum message size")
+// tcpReadBufPool reuses read buffers for TCP DNS frames up to MaxMsgSize.
+var tcpReadBufPool = sync.Pool{New: func() any { b := make([]byte, dns.MaxMsgSize); return &b }}
 
 // ReadTCPMsg reads a DNS message prefixed with a 2-byte big-endian length
 // from conn (RFC 1035 §4.2.2).  Shared by server and upstream TLCP/TLS stacks.
 //
 // The caller MUST set a read deadline on conn before calling this function
 // to prevent goroutine leaks on unresponsive peers. See SetReadDeadline.
+// A 2-byte length prefix bounds frames at 65535 = dns.MaxMsgSize, so an
+// oversized frame is impossible on the wire and needs no explicit check.
 func ReadTCPMsg(conn net.Conn) (*dns.Msg, error) {
 	if conn == nil {
 		return nil, errors.New("dns: nil connection")
@@ -26,10 +30,9 @@ func ReadTCPMsg(conn net.Conn) (*dns.Msg, error) {
 		return nil, err
 	}
 	length := int(prefix[0])<<8 | int(prefix[1])
-	if length > dns.MaxMsgSize {
-		return nil, &net.OpError{Op: "read", Net: "tcp", Err: errFrameTooLarge}
-	}
-	buf := make([]byte, length)
+	bufPtr := tcpReadBufPool.Get().(*[]byte)
+	defer tcpReadBufPool.Put(bufPtr)
+	buf := (*bufPtr)[:length]
 	if _, err := io.ReadFull(conn, buf); err != nil {
 		return nil, err
 	}
@@ -38,6 +41,7 @@ func ReadTCPMsg(conn net.Conn) (*dns.Msg, error) {
 	if err := msg.Unpack(); err != nil {
 		return nil, err
 	}
+	msg.Data = slices.Clone(msg.Data) // detach from pool buffer before deferred Put
 	return msg, nil
 }
 

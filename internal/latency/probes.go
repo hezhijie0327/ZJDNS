@@ -122,7 +122,7 @@ func probeUDP(ctx context.Context, ip net.IP, port int) error {
 	defer func() { _ = conn.Close() }() // _ = error: best-effort cleanup close
 
 	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline) // _ = error: deadline advisory, benign on closed conn // _ = error: deadline advisory, benign on closed conn
+		_ = conn.SetDeadline(deadline) // _ = error: deadline advisory, benign on closed conn
 	}
 
 	// Send a single-byte datagram — valid per RFC 768 §3.1 and
@@ -259,11 +259,13 @@ func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool, 
 		return err
 	}
 	req.Header.Set("User-Agent", "")
-	req.Host = ip.String()
+	// NOTE: req.Host is intentionally NOT overridden — the URL already
+	// carries the probe IP (bracketed for IPv6), and a bare IPv6 literal
+	// Host header would be invalid.
 
-	client := httpPool.get(port, useTLS, useHTTP3)
-	if client == nil {
-		return errHTTPPoolClosed
+	client, err := httpPool.get(port, useTLS, useHTTP3)
+	if err != nil {
+		return err
 	}
 	resp, err := client.Do(req)
 	if err != nil {

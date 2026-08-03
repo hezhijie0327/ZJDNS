@@ -26,17 +26,16 @@ type Dialer struct {
 	password  string
 	timeout   time.Duration // connection + negotiation timeout
 
-	mu         sync.RWMutex
-	udpConn    *net.UDPConn  // connected UDP socket to relay
-	relayAddr  *net.UDPAddr  // proxy's UDP relay address
-	ctrlConn   net.Conn      // TCP control connection for UDP ASSOCIATE
-	ctrlClosed chan struct{} // closed when ctrlConn dies
+	mu        sync.RWMutex
+	udpConn   *net.UDPConn // connected UDP socket to relay
+	relayAddr *net.UDPAddr // proxy's UDP relay address
+	ctrlConn  net.Conn     // TCP control connection for UDP ASSOCIATE
 
-	// The above fields (udpConn, relayAddr, ctrlConn, ctrlClosed) are
-	// only used by establishUDPRelay and the monitor goroutine. They are never
-	// set on the base Dialer returned by New() -- each ListenPacket/DialUDP call
-	// creates a fresh clone that populates them. Retained on the struct for
-	// clarity; consider extracting into a separate udpRelay type.
+	// The above fields (udpConn, relayAddr, ctrlConn) are only used by
+	// establishUDPRelay and the monitor goroutine. They are never set on the
+	// base Dialer returned by New() — each ListenPacket/DialUDP call creates
+	// a fresh clone that populates them.  Retained on the struct for clarity;
+	// consider extracting into a separate udpRelay type.
 }
 
 // ---------------------------------------------------------------------------
@@ -166,9 +165,8 @@ func New(proxyURL string, timeout time.Duration) (*Dialer, error) {
 	}
 
 	d := &Dialer{
-		proxyAddr:  net.JoinHostPort(host, port),
-		timeout:    timeout,
-		ctrlClosed: make(chan struct{}),
+		proxyAddr: net.JoinHostPort(host, port),
+		timeout:   timeout,
 	}
 	if u.User != nil {
 		d.username = u.User.Username()
@@ -273,7 +271,9 @@ func (d *Dialer) authUserPass(conn net.Conn) error {
 // parseDatagram parses a SOCKS5 UDP datagram from raw bytes.  Returns the
 // source address and any validation error (RSV, FRAG, truncation).
 func parseDatagram(b []byte) (*datagram, *net.UDPAddr, error) {
-	if len(b) < 10 {
+	// Only guarantee the ATYP byte is readable; per-ATYP bounds checks below
+	// handle truncation (a valid 1-byte domain datagram is only 8 bytes).
+	if len(b) < 4 {
 		return nil, nil, fmt.Errorf("datagram too short: %d bytes", len(b))
 	}
 	if b[0] != 0x00 || b[1] != 0x00 {
@@ -381,7 +381,10 @@ func buildSOCKS5Request(cmd byte, host string, port int) []byte {
 		return buf
 	}
 
-	// Domain name
+	// Domain name — reject oversized hosts instead of wrapping byte(len).
+	if len(host) > 255 {
+		return nil
+	}
 	buf := make([]byte, 7+len(host)) // 4 + 1 + len(host) + 2
 	buf[0], buf[1], buf[2] = socks5Version, cmd, 0x00
 	buf[3] = socks5ATYPDomain
@@ -395,8 +398,15 @@ func buildSOCKS5Request(cmd byte, host string, port int) []byte {
 func splitHostPort(addr string) (host string, port int, err error) {
 	h, p, err := net.SplitHostPort(addr)
 	if err != nil {
-		// Try adding default DNS port
+		// net.SplitHostPort failed — assume no port specified; use DNS default.
+		// Original error is intentionally discarded (best-effort heuristic).
 		h = addr
+		// net.SplitHostPort also fails for bracketed IPv6 without a port
+		// (e.g. "[::1]"); strip the brackets so the host stays a valid IP
+		// literal instead of being sent to the proxy as a bogus domain.
+		if len(h) > 1 && h[0] == '[' && h[len(h)-1] == ']' {
+			h = h[1 : len(h)-1]
+		}
 		p = config.DefaultUDPPort // DNS default; non-DNS proxy users should configure explicitly
 	}
 	port, err = strconv.Atoi(p)
@@ -406,10 +416,27 @@ func splitHostPort(addr string) (host string, port int, err error) {
 	return h, port, nil
 }
 
-// skipAddress reads and discards BND.ADDR + BND.PORT from a SOCKS5 response.
+// skipAddress reads and discards BND.ADDR + BND.PORT from a SOCKS5 response
+// without resolving a domain-typed address (a CONNECT reply's bind address is
+// never used).
 func skipAddress(conn net.Conn, atyp byte) error {
-	_, err := readAddress(conn, atyp)
-	return err
+	switch atyp {
+	case socks5ATYPIPv4:
+		_, err := io.CopyN(io.Discard, conn, 4+2)
+		return err
+	case socks5ATYPIPv6:
+		_, err := io.CopyN(io.Discard, conn, 16+2)
+		return err
+	case socks5ATYPDomain:
+		lenBuf := make([]byte, 1)
+		if _, err := io.ReadFull(conn, lenBuf); err != nil {
+			return err
+		}
+		_, err := io.CopyN(io.Discard, conn, int64(lenBuf[0])+2)
+		return err
+	default:
+		return fmt.Errorf("socks5: unsupported address type %#x", atyp)
+	}
 }
 
 // readAddress parses BND.ADDR + BND.PORT from a SOCKS5 response and returns
@@ -447,10 +474,18 @@ func readAddress(conn net.Conn, atyp byte) (*net.UDPAddr, error) {
 		host := string(rest[:domainLen])
 		port := int(binary.BigEndian.Uint16(rest[domainLen:]))
 		// Resolve the relay hostname to IP — SOCKS5 proxies usually return an
-		// IP, but some return a domain. Use the standard resolver.
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+		// IP, but some return a domain. Bound the lookup by the connection's
+		// deadline (set by the caller during negotiation) instead of a fixed
+		// timeout that ignores the caller's context.
+		lookupCtx := context.Background()
+		if c, ok := conn.(interface{ Deadline() (time.Time, error) }); ok {
+			if dl, err := c.Deadline(); err == nil && !dl.IsZero() {
+				var cancel context.CancelFunc
+				lookupCtx, cancel = context.WithDeadline(context.Background(), dl)
+				defer cancel()
+			}
+		}
+		ips, err := net.DefaultResolver.LookupIP(lookupCtx, "ip", host)
 		if err != nil || len(ips) == 0 {
 			return nil, fmt.Errorf("socks5: resolve relay host %q: %w", host, err)
 		}

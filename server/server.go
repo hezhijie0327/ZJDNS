@@ -242,7 +242,7 @@ func (s *Server) warmUpConnections(cfg *config.ServerConfig, queryClient *upstre
 	if len(cfg.Upstream) == 0 {
 		return
 	}
-	queryClient.WarmUpConnections(cfg.Upstream)
+	queryClient.WarmUpConnections(s.backgroundCtx, cfg.Upstream)
 }
 
 // initHandler builds the middleware chain and returns the assembled handler.

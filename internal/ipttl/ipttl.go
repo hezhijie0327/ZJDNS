@@ -6,6 +6,7 @@
 package ipttl
 
 import (
+	"errors"
 	"net"
 
 	"golang.org/x/net/ipv4"
@@ -18,8 +19,14 @@ type Capture struct {
 	pc6 *ipv6.PacketConn
 }
 
-// New enables TTL (IPv4) or HopLimit (IPv6) capture on conn. Returns nil if
-// the platform does not support the required socket option.
+// ErrNoControlMessage is returned when a read produced no TTL/HopLimit
+// control message — the TTL would be silently wrong (0).
+var ErrNoControlMessage = errors.New("ipttl: no IP TTL control message received")
+
+// New enables TTL (IPv4) or HopLimit (IPv6) capture on conn, choosing the
+// family from the socket's bound address. For a dual-stack wildcard socket
+// (::) IPv4 capture is attempted first and falls back to IPv6. Returns nil
+// if the platform does not support the required socket option.
 func New(conn *net.UDPConn) *Capture {
 	if conn == nil {
 		return nil
@@ -34,28 +41,43 @@ func New(conn *net.UDPConn) *Capture {
 		if err := c.pc4.SetControlMessage(ipv4.FlagTTL, true); err != nil {
 			return nil
 		}
-	} else {
-		c.pc6 = ipv6.NewPacketConn(conn)
-		if err := c.pc6.SetControlMessage(ipv6.FlagHopLimit, true); err != nil {
-			return nil
+		return c
+	}
+	if addr.IP.IsUnspecified() {
+		// Dual-stack wildcard: try IPv4 first; fall back to IPv6 if the
+		// socket rejects the IPv4 control-message option.
+		c.pc4 = ipv4.NewPacketConn(conn)
+		if err := c.pc4.SetControlMessage(ipv4.FlagTTL, true); err == nil {
+			return c
 		}
+		c.pc4 = nil
+	}
+	c.pc6 = ipv6.NewPacketConn(conn)
+	if err := c.pc6.SetControlMessage(ipv6.FlagHopLimit, true); err != nil {
+		return nil
 	}
 	return c
 }
 
 // ReadFrom reads a datagram and extracts the IP TTL (IPv4) or HopLimit (IPv6).
+// A missing control message is an explicit error — reporting TTL 0 would
+// poison the hopguard fingerprint.
 func (c *Capture) ReadFrom(buf []byte) (n int, ttl uint8, err error) {
 	if c.pc4 != nil {
 		var cm *ipv4.ControlMessage
 		n, cm, _, err = c.pc4.ReadFrom(buf)
 		if cm != nil {
 			ttl = uint8(cm.TTL) //nolint:gosec // TTL is always 0-255
+		} else if err == nil {
+			err = ErrNoControlMessage
 		}
 	} else {
 		var cm *ipv6.ControlMessage
 		n, cm, _, err = c.pc6.ReadFrom(buf)
 		if cm != nil {
 			ttl = uint8(cm.HopLimit) //nolint:gosec // HopLimit is always 0-255
+		} else if err == nil {
+			err = ErrNoControlMessage
 		}
 	}
 	return n, ttl, err

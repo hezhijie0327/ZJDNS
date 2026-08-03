@@ -9,7 +9,25 @@ import (
 	"strings"
 )
 
+// String encodes the stamp back to an sdns:// URI.
 func (s *DNSStamp) String() string {
+	// Length guards: wire fields are single-byte length-prefixed and VLP
+	// elements cap at 127 bytes — the previous byte(len(x)) truncation
+	// silently produced stamps that decode to garbage. Surface the limits
+	// instead of emitting corrupted output.
+	if len(s.Address) > 255 || len(s.ProviderName) > 255 || len(s.Path) > 255 || len(s.PublicKey) > 255 {
+		return "sdns://error:field-exceeds-255-bytes"
+	}
+	for _, h := range s.Hashes {
+		if len(h) > 127 {
+			return "sdns://error:hash-exceeds-127-bytes"
+		}
+	}
+	for _, b := range s.BootstrapIPs {
+		if len(b) > 127 {
+			return "sdns://error:bootstrap-ip-exceeds-127-bytes"
+		}
+	}
 	switch s.Proto {
 	case ProtoPlain:
 		return s.plainString()
@@ -116,6 +134,11 @@ func encodeAddrAndHostname(addr, hostname string, defaultPort int) (encodedAddr,
 			if _, hostPort := splitOptionalPort(hostname); hostPort == "" {
 				hostname = hostname + ":" + port
 			}
+		} else {
+			// Move the port onto the hostname instead of discarding it:
+			// an empty hostname with a non-default port would otherwise
+			// encode the stamp with the protocol's default port.
+			hostname = addr + ":" + port
 		}
 	}
 	return addr, stripDefaultPort(hostname, defaultPort)
@@ -138,6 +161,12 @@ func appendHashes(bin []byte, hashes [][]byte) []byte {
 }
 
 func appendBootstrapIPs(bin []byte, bootstrapIPs []string) []byte {
+	if len(bootstrapIPs) == 0 {
+		// Per the stamp spec the VLP field is always present: an empty list
+		// is encoded as a single 0x00 terminator (mirroring appendHashes).
+		// Conforming decoders error on end-of-data without it.
+		return append(bin, 0x00)
+	}
 	last := len(bootstrapIPs) - 1
 	for i, bootstrapIP := range bootstrapIPs {
 		vlen := len(bootstrapIP)
@@ -148,33 +177,6 @@ func appendBootstrapIPs(bin []byte, bootstrapIPs []string) []byte {
 		bin = append(bin, []byte(bootstrapIP)...)
 	}
 	return bin
-}
-
-// readVLP reads a Variable Length Prefixed sequence from bin at pos.
-// The high bit (0x80) of each length byte indicates another element follows.
-// Returns the decoded byte slices, the new position, and any error.
-func readVLP(bin []byte, pos, binLen int) (elements [][]byte, newPos int, err error) {
-	for {
-		if pos >= binLen {
-			return nil, pos, ErrTruncatedLength
-		}
-		vlen := int(bin[pos])
-		length := vlen & ^0x80 // clear continuation bit
-		if 1+length > binLen-pos {
-			return nil, pos, ErrTruncatedPayload
-		}
-		pos++
-		if length > 0 {
-			elem := make([]byte, length)
-			copy(elem, bin[pos:pos+length])
-			elements = append(elements, elem)
-		}
-		pos += length
-		if vlen&0x80 != 0x80 {
-			break
-		}
-	}
-	return elements, pos, nil
 }
 
 func validatePort(port string) error {
@@ -188,7 +190,12 @@ func validatePort(port string) error {
 func validateAddrAndHostname(addr, hostname string) error {
 	if addr != "" {
 		// Strip optional port suffix before bracket/IP validation.
-		ip, _ := splitOptionalPort(addr)
+		ip, port := splitOptionalPort(addr)
+		if port != "" {
+			if err := validatePort(port); err != nil {
+				return err
+			}
+		}
 		if ip != "" {
 			if strings.HasPrefix(ip, "[") && strings.HasSuffix(ip, "]") {
 				ip = ip[1 : len(ip)-1]
@@ -226,5 +233,15 @@ func splitOptionalPort(s string) (host, port string) {
 	if colIndex < bracketIndex || colIndex < 0 {
 		return s, ""
 	}
-	return s[:colIndex], s[colIndex+1:]
+	// A bare IPv6 address has multiple colons and no brackets: do not treat
+	// the last colon as a host:port separator (::1 would parse as host ":").
+	if bracketIndex < 0 && strings.Count(s, ":") > 1 {
+		return s, ""
+	}
+	host = s[:colIndex]
+	// Restore trailing bracket stripped by the colon split for IPv6 addresses.
+	if bracketIndex >= 0 && host != "" && host[0] == '[' && host[len(host)-1] != ']' {
+		host += "]"
+	}
+	return host, s[colIndex+1:]
 }

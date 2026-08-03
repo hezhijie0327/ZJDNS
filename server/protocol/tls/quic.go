@@ -11,11 +11,13 @@ import (
 	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/doq"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
 	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 	"github.com/quic-go/quic-go"
 	"golang.org/x/sync/errgroup"
 )
@@ -51,20 +53,26 @@ func (s *Server) startDOQServer() error {
 		if err != nil {
 			return fmt.Errorf("UDP listen on %s: %w", addr, err)
 		}
+		s.listenerMu.Lock()
 		s.doqConns = append(s.doqConns, conn)
+		s.listenerMu.Unlock()
 
 		transport := &quic.Transport{
 			Conn:                conn,
 			VerifySourceAddress: makeAddrValidator(addrCache),
 		}
+		s.listenerMu.Lock()
 		s.doqTransports = append(s.doqTransports, transport)
+		s.listenerMu.Unlock()
 
 		listener, err := transport.ListenEarly(quicTLSConfig, quicConfig)
 		if err != nil {
 			_ = conn.Close()
 			return fmt.Errorf("DoQ listen on %s: %w", addr, err)
 		}
+		s.listenerMu.Lock()
 		s.doqListeners = append(s.doqListeners, listener)
+		s.listenerMu.Unlock()
 
 		capturedDoQ := listener
 		s.serverGroup.Go(func() error {
@@ -103,8 +111,17 @@ func (s *Server) handleDOQConnections(doqListener *quic.EarlyListener) {
 			conn.RemoteAddr(), tls.CipherSuiteName(conn.ConnectionState().TLS.CipherSuite),
 			conn.ConnectionState().TLS.DidResume, conn.ConnectionState().Used0RTT)
 
+		// Admission cap: quic.Config only limits streams, not connections.
+		select {
+		case s.quicConnSem <- struct{}{}:
+		default:
+			log.Debugf("TLS: DoQ connection limit reached, rejecting %s", conn.RemoteAddr())
+			_ = conn.CloseWithError(doq.QUICCodeExcessiveLoad, "connection limit reached")
+			continue
+		}
 		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("DoQ connection handler")
+			defer func() { <-s.quicConnSem }()
 			s.handleDOQConnection(conn)
 			return nil
 		})
@@ -121,7 +138,7 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultBackgroundTimeout)
 		defer cancel()
-		_ = conn.CloseWithError(pool.QUICCodeNoError, "")
+		_ = conn.CloseWithError(doq.QUICCodeNoError, "")
 
 		done := make(chan struct{})
 		stop := context.AfterFunc(conn.Context(), func() {
@@ -135,7 +152,7 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 		}
 	}()
 
-	streamGroup, _ := errgroup.WithContext(s.ctx)
+	streamGroup := &errgroup.Group{}
 	streamGroup.SetLimit(config.DefaultMaxConcurrentStreams)
 
 	for {
@@ -169,6 +186,9 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 }
 
 func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
+	if stream == nil {
+		return
+	}
 	defer zdnsutil.HandlePanic("DoQ stream handler")
 	buf := pool.DefaultBuffer.Get()
 	defer pool.DefaultBuffer.Put(buf)
@@ -184,16 +204,19 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	_ = stream.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 	_, err := io.ReadFull(stream, buf[:zdnsutil.DNSFramePrefixLen])
 	if err != nil {
+		if err == io.ErrUnexpectedEOF {
+			log.Debugf("SERVER: DoQ protocol error: truncated STREAM FIN from %s", conn.RemoteAddr())
+		}
 		return
 	}
 
 	msgLen := binary.BigEndian.Uint16(buf[:zdnsutil.DNSFramePrefixLen])
 	switch {
 	case msgLen == 0:
-		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "zero-length DNS message")
+		_ = conn.CloseWithError(doq.QUICCodeProtocolError, "zero-length DNS message")
 		return
 	case msgLen > dns.MaxMsgSize:
-		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "message too large")
+		_ = conn.CloseWithError(doq.QUICCodeProtocolError, "message too large")
 		return
 	}
 
@@ -213,45 +236,62 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	req := pool.DefaultMessage.Get()
 	req.Data = body
 	if err := req.Unpack(); err != nil {
-		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "invalid DNS message")
+		_ = conn.CloseWithError(doq.QUICCodeProtocolError, "invalid DNS message")
 		pool.DefaultMessage.Put(req)
 		return
 	}
 
 	// RFC 9250 §4.3.3: non-zero Message ID is a protocol error.
 	if req.ID != 0 {
-		_ = conn.CloseWithError(pool.QUICCodeProtocolError, "non-zero DNS message ID")
+		_ = conn.CloseWithError(doq.QUICCodeProtocolError, "non-zero DNS message ID")
 		pool.DefaultMessage.Put(req)
 		return
 	}
 
-	// RFC 9250 §4.5: 0-RTT MUST NOT carry non-replayable transactions.
-	// Only standard QUERY opcodes are safe for 0-RTT replay.
-	if conn.ConnectionState().Used0RTT && req.Opcode != dns.OpcodeQuery {
-		stream.CancelWrite(quic.StreamErrorCode(pool.QUICCodeProtocolError))
+	// RFC 9250 §4.5: QUERY and NOTIFY are replayable and MAY be carried in
+	// 0-RTT; other opcodes must not. For non-replayable transactions the
+	// server must either queue the query until the handshake completes or
+	// reply REFUSED with EDE "Too Early" — a stream reset is neither.
+	if conn.ConnectionState().Used0RTT && req.Opcode != dns.OpcodeQuery && req.Opcode != dns.OpcodeNotify {
+		refused := dnsutil.SetReply(&dns.Msg{}, req)
+		refused.Rcode = dns.RcodeRefused
+		if err := s.respondQUIC(stream, refused); err != nil {
+			log.Debugf("TLS: DoQ 0-RTT REFUSED send failed: %v", err)
+		}
 		pool.DefaultMessage.Put(req)
 		return
 	}
 
 	clientIP := zdnsutil.ClientIPFromAddr(conn.RemoteAddr())
+	// RFC 9250 §4.3.1: abort on client STOP_SENDING / RESET_STREAM.
+	select {
+	case <-conn.Context().Done():
+		return
+	default:
+	}
 	response := s.handler.ServeDNS(req, clientIP, true, config.ProtoQUIC)
-	// req is transferred to ServeDNS — response holds the result.
-	// Both req and response are returned to the pool below and in
-	// the caller; req must not be double-Put.
-	pool.DefaultMessage.Put(req)
 
 	if err := s.respondQUIC(stream, response); err != nil {
 		log.Debugf("TLS: DoQ response failed: %v", err)
 	}
-	if response != nil {
-		defer pool.DefaultMessage.Put(response)
+	// Return req to the pool AFTER responding: respondQUIC packs the
+	// response, and pool.Put zeroes the message struct — an identity
+	// response (handler returned req itself) must be packed while intact.
+	if response == nil || response != req {
+		pool.DefaultMessage.Put(req)
+	}
+	// Identity guard: a handler may return the request message itself as
+	// the response — pooling the same pointer twice would let two
+	// goroutines race on it.
+	if response != nil && response != req {
+		pool.DefaultMessage.Put(response)
 	}
 }
 
 func (s *Server) respondQUIC(stream *quic.Stream, response *dns.Msg) error {
 	if response == nil {
 		// RFC 9250 §4.3.2: signal transaction error via RESET_STREAM.
-		stream.CancelWrite(quic.StreamErrorCode(pool.QUICCodeInternalError))
+		stream.CancelWrite(quic.StreamErrorCode(doq.QUICCodeInternalError))
 		return errors.New("response is nil")
 	}
 
@@ -269,7 +309,11 @@ func (s *Server) respondQUIC(stream *quic.Stream, response *dns.Msg) error {
 		writeBuf = make([]byte, zdnsutil.DNSFramePrefixLen+len(respBuf))
 	}
 
-	binary.BigEndian.PutUint16(writeBuf[:zdnsutil.DNSFramePrefixLen], uint16(len(respBuf))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
+	// RFC 9250 §4.3.2: oversized response → DOQ_INTERNAL_ERROR
+	if len(respBuf) > 65535 {
+		return fmt.Errorf("response too large for DoQ: %d bytes (max 65535)", len(respBuf))
+	}
+	binary.BigEndian.PutUint16(writeBuf[:zdnsutil.DNSFramePrefixLen], uint16(len(respBuf))) //nolint:gosec // G115: bounds checked above
 	copy(writeBuf[zdnsutil.DNSFramePrefixLen:], respBuf)
 
 	n, err := stream.Write(writeBuf[:zdnsutil.DNSFramePrefixLen+len(respBuf)])

@@ -31,14 +31,16 @@ func (s *Server) startDOTServer() error {
 			return fmt.Errorf("TCP listen on %s: %w", addr, err)
 		}
 
-		rawListener := &debugListener{Listener: &zdnsutil.TCPKeepAliveListener{Listener: listener}, name: "DoT"}
+		rawListener := &debugListener{Listener: &zdnsutil.TCPKeepAliveListener{Listener: listener, KeepAlivePeriod: config.DefaultTCPKeepAlivePeriod}, name: "DoT"}
 
 		dotTLSConfig := s.tlsConfig.Clone()
 		dotTLSConfig.NextProtos = config.NextProtoDOT
 		dotTLSConfig.GetConfigForClient = s.getConfigForClient(config.NextProtoDOT)
 
 		dotListener := eTLS.NewListener(rawListener, dotTLSConfig)
+		s.listenerMu.Lock()
 		s.dotListeners = append(s.dotListeners, dotListener)
+		s.listenerMu.Unlock()
 
 		capturedDot := dotListener
 		s.serverGroup.Go(func() error {
@@ -70,6 +72,13 @@ func (s *Server) handleDOTConnections(dotListener net.Listener) {
 		}
 
 		log.Debugf("TLS: DoT TCP accepted from %s, TLS handshake pending", conn.RemoteAddr())
+
+		// Bound the pre-handshake phase: a flood of idle TCP connections
+		// that never complete the TLS handshake would otherwise hold a
+		// shared errgroup slot for the full DefaultTCPPoolIdleTimeout,
+		// starving the other TLS-family listeners. The handler clears the
+		// deadline once the handshake completes.
+		_ = conn.SetDeadline(time.Now().Add(config.DefaultTLSHandshakeTimeout))
 
 		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("DoT connection handler")
@@ -159,11 +168,11 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		}
 
 		// The first ReadFull triggers the TLS handshake (lazy handshake in
-		// crypto/tls). After a successful handshake, kTLS may be negotiated.
-		// Use a long read deadline for idle-connection detection; the
-		// per-message I/O is bounded by TCP keep-alive (DefaultTCPKeepAlivePeriod)
-		// and client-side query timeouts.
-		_ = tlsConn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
+		// crypto/tls). Use the HANDSHAKE timeout for that first read — the
+		// 60s idle deadline set here would otherwise override the 10s
+		// pre-handshake deadline above and let a flood of never-handshaking
+		// connections hold errgroup slots six times longer than designed.
+		_ = tlsConn.SetReadDeadline(time.Now().Add(config.DefaultTLSHandshakeTimeout))
 
 		_, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
@@ -173,6 +182,10 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			}
 			return
 		}
+
+		// The first read succeeded — the TLS handshake is complete. Switch
+		// to the long idle deadline for the rest of the connection.
+		_ = tlsConn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 
 		msgLength := binary.BigEndian.Uint16(lengthBuf)
 		if msgLength == 0 || msgLength > dns.MaxMsgSize {
@@ -263,7 +276,16 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 				writeBuf = make([]byte, zdnsutil.DNSFramePrefixLen+len(respBuf))
 				pool.DefaultBuffer.Put(poolBuf)
 			}
-			binary.BigEndian.PutUint16(writeBuf[:zdnsutil.DNSFramePrefixLen], uint16(len(respBuf))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
+			if len(respBuf) > dns.MaxMsgSize {
+				// A 16-bit length prefix cannot represent this response; a
+				// wrapped length would desync the whole TCP stream. Drop it.
+				log.Debugf("TLS: dropping DoT response of %d bytes (exceeds 16-bit frame)", len(respBuf))
+				if poolBufOK {
+					pool.DefaultBuffer.Put(writeBuf)
+				}
+				return
+			}
+			binary.BigEndian.PutUint16(writeBuf[:zdnsutil.DNSFramePrefixLen], uint16(len(respBuf))) //nolint:gosec // G115: bounded by the MaxMsgSize check above
 			copy(writeBuf[zdnsutil.DNSFramePrefixLen:], respBuf)
 
 			select {

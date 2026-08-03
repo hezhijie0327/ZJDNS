@@ -27,9 +27,18 @@ func RunDNSStampDecode(stampStr string) error {
 	switch s.Proto {
 	case zstamp.ProtoDOH:
 		entry.Address = s.BuildDoHURL()
-	case zstamp.ProtoODoHTarget:
-		// ODoH target has no address — provider name + path only.
-		entry.ServerName = s.ProviderName
+		// The validator's protocol table spells DoH "https", not "doh" —
+		// ProtoToConfig's raw mapping would emit an entry that fails
+		// validation on reload.
+		entry.Protocol = config.ProtoHTTPS
+	case zstamp.ProtoODoHTarget, zstamp.ProtoDNSCryptRelay, zstamp.ProtoODoHRelay:
+		// These stamps have no ZJDNS upstream representation (no valid
+		// protocol in the validator's table), so the decoded entry could
+		// never be loaded back — fail loudly instead of emitting an
+		// unusable JSON entry.
+		return fmt.Errorf("%s stamps cannot be represented as a %s upstream", protoLabel(s.Proto), config.DefaultProjectName)
+	case zstamp.ProtoPlain, zstamp.ProtoDNSCrypt, zstamp.ProtoDOT, zstamp.ProtoDOQ:
+		entry.Address = s.Address
 	default:
 		entry.Address = s.Address
 	}
@@ -64,6 +73,11 @@ func RunDNSStampEncode(protoStr, addr, providerName, publicKeyHex, path string, 
 	if addr == "" && proto != zstamp.ProtoODoHTarget {
 		return fmt.Errorf("--stamp-addr is required for protocol %q", protoStr)
 	}
+	if addr != "" && proto == zstamp.ProtoODoHTarget {
+		// An ODoH target stamp carries no address — silently accepting one
+		// would drop it and print a stamp different from the request.
+		return errors.New("--stamp-addr is not valid for odoh-target (it has no address)")
+	}
 
 	s := &zstamp.DNSStamp{
 		Proto:        proto,
@@ -84,8 +98,8 @@ func RunDNSStampEncode(protoStr, addr, providerName, publicKeyHex, path string, 
 		s.PublicKey = pk
 	}
 
-	// Ensure path starts with / for DoH/ODoH protocols.
-	if !strings.HasPrefix(path, "/") && (proto == zstamp.ProtoDOH || proto == zstamp.ProtoODoHTarget) {
+	// Ensure path starts with / for DoH/ODoH protocols (target and relay).
+	if !strings.HasPrefix(path, "/") && (proto == zstamp.ProtoDOH || proto == zstamp.ProtoODoHTarget || proto == zstamp.ProtoODoHRelay) {
 		path = "/" + path
 		s.Path = path
 	}
@@ -99,6 +113,29 @@ func RunDNSStampEncode(protoStr, addr, providerName, publicKeyHex, path string, 
 
 	fmt.Println(s.String())
 	return nil
+}
+
+// protoLabel returns a human-readable protocol name for error messages.
+func protoLabel(p zstamp.ProtoType) string {
+	switch p {
+	case zstamp.ProtoPlain:
+		return "plain"
+	case zstamp.ProtoDNSCrypt:
+		return "dnscrypt"
+	case zstamp.ProtoDOH:
+		return "doh"
+	case zstamp.ProtoDOT:
+		return "dot"
+	case zstamp.ProtoDOQ:
+		return "doq"
+	case zstamp.ProtoODoHTarget:
+		return "odoh-target"
+	case zstamp.ProtoDNSCryptRelay:
+		return "dnscrypt-relay"
+	case zstamp.ProtoODoHRelay:
+		return "odoh-relay"
+	}
+	return "stamp"
 }
 
 func parseProto(s string) (zstamp.ProtoType, error) {

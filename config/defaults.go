@@ -88,6 +88,7 @@ const (
 	DefaultQUICClientIdleTimeout = 60 * time.Second  // client QUIC idle (must exceed KeepAlive)
 	DefaultQUICServerIdleTimeout = 30 * time.Second  // server QUIC idle (RFC 9000 default)
 	DefaultTCPPoolIdleTimeout    = 60 * time.Second  // TCP/DoT pool connection idle
+	DefaultTLSHandshakeTimeout   = 10 * time.Second  // pre-handshake bound for DoT (an idle-connect flood must not hold shared errgroup slots)
 	DefaultTCPKeepAlivePeriod    = 30 * time.Second  // TCP keep-alive probe interval
 	DefaultTCPIdleTimeout        = 120 * time.Second // RFC 7766 §6.2.3: plain TCP server idle timeout
 

@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"sync"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
@@ -30,10 +29,15 @@ type http3Transport struct {
 
 // RoundTrip implements the [http.RoundTripper] interface for *http3Transport.
 func (h *http3Transport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
+	// Guard only the closed flag, not the network I/O: holding the RLock for
+	// the whole RoundTrip would block Close (write lock) until every in-flight
+	// request completes, stalling transport eviction and shutdown on one
+	// stalled request. quic-go is concurrency-safe for in-flight requests.
 	h.mu.RLock()
-	defer h.mu.RUnlock()
+	closed := h.closed
+	h.mu.RUnlock()
 
-	if h.closed {
+	if closed {
 		return nil, net.ErrClosed
 	}
 
@@ -69,55 +73,62 @@ func (c *Client) ExecuteHTTP3(ctx context.Context, msg *dns.Msg, server *config.
 	}
 
 	if parsedURL.Port() == "" {
-		parsedURL.Host = net.JoinHostPort(parsedURL.Host, config.DefaultHTTP3Port)
+		// Hostname() strips IPv6 brackets — JoinHostPort on the raw Host
+		// would double-bracket literals like [[2001:db8::1]]:443.
+		parsedURL.Host = net.JoinHostPort(parsedURL.Hostname(), config.DefaultHTTP3Port)
 	}
 
 	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
 
-	client, isCached := c.doh3Transports.Get(key)
+	var client *http.Client
+	var isCached bool
+	if c.doh3Transports != nil { // Close() nils the map — a racing query must not panic
+		client, isCached = c.doh3Transports.Get(key)
+	}
 	if !isCached {
 		client = c.createDOH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
 	}
 
-	// NOTE: The first request gets no retry because the initial
-	// connection establishment serves as an implicit retry; cached clients
-	// do retry. Consider retrying on first failure as well for consistency.
+	// All failures are retried below when isQUICRetryable — including the
+	// first request: 0-RTT rejection (token store stale across transport
+	// generations) can strike a freshly created client too, and only the
+	// retry resets it.
 	resp, err := zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, client, http3.MethodGet0RTT)
 	if err == nil {
 		return resp, nil
 	}
 
-	if isCached {
-		for range config.DefaultSecureTransportRetries {
-			if !isQUICRetryable(err) {
-				break
-			}
-
-			if errors.Is(err, quic.Err0RTTRejected) {
-				c.resetQUICConfig("doh3:" + key)
-			}
-
-			if cached, ok := c.doh3Transports.Get(key); ok && cached == client {
-				if t, ok := client.Transport.(*http3Transport); ok {
-					_ = t.Close()
-				}
-				c.doh3Transports.Delete(key)
-			}
-
-			client = c.createDOH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
-			resp, err = zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, client, http3.MethodGet0RTT)
-			if err == nil {
-				return resp, nil
-			}
+	for range config.DefaultSecureTransportRetries {
+		if !isQUICRetryable(err) {
+			break
 		}
-	}
 
-	if err != nil {
-		if cached, ok := c.doh3Transports.Get(key); ok && cached == client {
+		// 0-RTT rejection must reset the stale token store regardless of
+		// whether the client came from cache — the token store and TLS
+		// session cache are shared across transport generations.
+		if errors.Is(err, quic.Err0RTTRejected) {
+			c.resetQUICConfig("doh3:" + key)
+		}
+
+		if c.doh3Transports != nil && c.doh3Transports.CompareAndDelete(key, client) {
 			if t, ok := client.Transport.(*http3Transport); ok {
 				_ = t.Close()
 			}
-			c.doh3Transports.Delete(key)
+		}
+
+		client = c.createDOH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
+		resp, err = zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, client, http3.MethodGet0RTT)
+		if err == nil {
+			return resp, nil
+		}
+	}
+
+	// Evict only on QUIC/connection-level failures. Caller-side cancellation,
+	// deadline expiry, and HTTP-level errors (e.g. non-200) do not mean the
+	// transport is broken — tearing it down would hurt concurrent requests.
+	if err != nil && isQUICRetryable(err) && c.doh3Transports != nil && c.doh3Transports.CompareAndDelete(key, client) {
+		if t, ok := client.Transport.(*http3Transport); ok {
+			_ = t.Close()
 		}
 	}
 
@@ -146,6 +157,9 @@ func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 	transport := &http3Transport{
 		baseTransport: &http3.Transport{
 			Dial: func(ctx context.Context, _ string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+				// cfg is the caller-provided quic.Config; we override it with quicCfg below
+				// (except Tracer, which is forwarded).  This is intentional — the transport
+				// owns the QUIC configuration and only delegates tracing to the caller.
 				cpy := quicCfg.Clone()
 				if cfg != nil {
 					cpy.Tracer = cfg.Tracer
@@ -160,7 +174,15 @@ func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 						_ = pconn.Close()
 						return nil, fmt.Errorf("resolve %s: %w", host, err)
 					}
-					return quic.Dial(ctx, pconn, remoteAddr, tlsCfg, cpy)
+					conn, err := quic.Dial(ctx, pconn, remoteAddr, tlsCfg, cpy)
+					if err != nil {
+						// quic-go does not take over the PacketConn on a failed
+						// dial — close it or the UDP socket leaks per query
+						// (same pattern as the non-proxy DoQ path).
+						_ = pconn.Close()
+						return nil, err
+					}
+					return conn, nil
 				}
 				conn, err := quic.DialAddrEarly(ctx, host, tlsCfg, cpy)
 				if err == nil {
@@ -224,9 +246,9 @@ func isQUICRetryable(err error) bool {
 		return true
 	}
 
-	if errors.Is(err, os.ErrDeadlineExceeded) {
-		return true
-	}
-
+	// NOTE: os.ErrDeadlineExceeded (which errors.Is also matches for
+	// context.DeadlineExceeded) is deliberately NOT retryable: a caller-side
+	// timeout does not indicate a broken transport, and retrying against an
+	// already-expired context only delays the failure.
 	return false
 }

@@ -63,6 +63,12 @@ func (d *Detector) detect(forceIPv6 bool) net.IP {
 	}
 	defer func() { _ = resp.Body.Close() }() // _ = error: body close after read, best-effort
 
+	// Any non-2xx is a failed detection — the body may be an error page
+	// whose contents must not be interpreted as an IP.
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil
@@ -73,6 +79,12 @@ func (d *Detector) detect(forceIPv6 bool) net.IP {
 	}
 	ip := net.ParseIP(matches[1])
 	if ip == nil {
+		return nil
+	}
+	// Reject non-public addresses: a broken/malicious endpoint must not
+	// hand us a private, loopback, link-local, or unspecified address that
+	// would then be used as the server's public identity.
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() {
 		return nil
 	}
 	if forceIPv6 && ip.To4() != nil {

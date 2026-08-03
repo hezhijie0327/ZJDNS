@@ -3,7 +3,9 @@ package tlcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -63,6 +65,24 @@ func (c *Client) exchangeOverTLCP(ctx context.Context, msg *dns.Msg, addr string
 		return nil, err
 	}
 	defer func() { _ = tlcpConn.Close() }()
+	// Restore ctx-bound deadlines: ReadTCPMsg's contract requires the
+	// caller to set a read deadline ("caller MUST set ... to prevent
+	// goroutine leaks on unresponsive peers") and the proxy path clears
+	// the dial deadline.
+	stop := context.AfterFunc(ctx, func() { _ = tlcpConn.SetDeadline(time.Now()) })
+	defer stop()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = tlcpConn.SetDeadline(deadline)
+	}
+	// RFC 7858 §4.1: only proceed when "dot" was negotiated — a server that
+	// silently ignores ALPN (negotiates none, or an unexpected protocol)
+	// would otherwise proceed without the DoT guarantee. Checked on the DoT
+	// path only (dialTLCPConn also serves DoH-over-TLCP with a "h2" ALPN).
+	if tc, ok := tlcpConn.(*tlcp.Conn); ok {
+		if got := tc.ConnectionState().NegotiatedProtocol; got != config.NextProtoDOT[0] {
+			return nil, fmt.Errorf("tlcp: server %s negotiated ALPN %q, expected %q", addr, got, config.NextProtoDOT[0])
+		}
+	}
 	if err := zdnsutil.WriteTCPMsg(tlcpConn, msg); err != nil {
 		return nil, err
 	}

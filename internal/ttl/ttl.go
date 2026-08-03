@@ -1,39 +1,37 @@
 // Package ttl provides stateless TTL calculation functions for DNS cache
-// entries and zone responses. All functions are zero-allocation and
-// operate on scalar values.
+// entries and zone responses. Scalar helpers are zero-allocation;
+// DeductElapsedCyclical allocates (it deep-copies each RR).
 package ttl
 
 import (
-	"time"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
 )
 
 // NowUnix returns the current Unix timestamp. Override in tests for
-// deterministic results.  This is an exported var so that test packages
-// can inject a fixed time — production code should use log.NowUnix() instead.
-var NowUnix = func() int64 { return time.Now().Unix() }
+// deterministic results.  This is an exported var so that test packages can
+// swap it without touching the hot path.
+var NowUnix = log.NowUnix //nolint:gocritic // variable allows test override
 
 // IsExpired reports whether the TTL has elapsed relative to timestamp.
 func IsExpired(timestamp int64, ttlSeconds int) bool {
 	return NowUnix()-timestamp > int64(ttlSeconds)
 }
 
-// RemainingTTL returns the remaining TTL if fresh, or a cyclical stale TTL
-// when expired. Each staleTTL-second window, the TTL decrements from
-// staleTTL→1, then resets for the next window.
+// RemainingTTL returns the remaining TTL if fresh, or a constant stale TTL
+// when expired (RFC 8767 §4 RECOMMENDED: 30s prevents thundering-herd
+// re-queries during outages). At the exact expiry instant (remaining == 0)
+// the entry is still fresh and 0 is returned, consistent with IsExpired.
 func RemainingTTL(timestamp int64, ttlSeconds int, staleTTL uint32) uint32 {
 	remaining := int64(ttlSeconds) - (NowUnix() - timestamp)
-	if remaining > 0 {
+	if remaining >= 0 {
 		return uint32(remaining) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
 	}
-	// Cyclical stale countdown: staleTTL - (timeSinceExpiry % staleTTL).
-	timeSinceExpiry := -remaining
 	if staleTTL == 0 {
-		return 1
+		return 30
 	}
-	cycleRemaining := max(int64(staleTTL)-(timeSinceExpiry%int64(staleTTL)), 1)
-	return uint32(cycleRemaining) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+	return staleTTL
 }
 
 // CanServeExpired reports whether the expired entry is within the maxAge
@@ -71,9 +69,10 @@ func Elapsed(timestamp int64) int64 {
 }
 
 // DeductElapsedCyclical returns a new slice with each RR's TTL reduced by
-// elapsed modulo its original TTL, producing a cyclical countdown that wraps
-// back to origTTL when elapsed reaches a multiple of origTTL. Each RR is
-// deep-copied and cycles independently.
+// elapsed, decreasing monotonically and clamping at 0 — an expired record
+// must never be re-served with a full TTL (the old modular wrap reset it to
+// origTTL at exact multiples, keeping expired zone data valid indefinitely).
+// Each RR is deep-copied and adjusted independently.
 func DeductElapsedCyclical(rrs []dns.RR, elapsed int64) []dns.RR {
 	if len(rrs) == 0 {
 		return nil
@@ -89,7 +88,8 @@ func DeductElapsedCyclical(rrs []dns.RR, elapsed int64) []dns.RR {
 			result = append(result, copied)
 			continue
 		}
-		copied.Header().TTL = uint32(origTTL - (elapsed % origTTL)) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+		remaining := max(origTTL-elapsed, 0)
+		copied.Header().TTL = uint32(remaining) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
 		result = append(result, copied)
 	}
 	return result

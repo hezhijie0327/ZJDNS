@@ -58,6 +58,9 @@ func (d *Dialer) connect(conn net.Conn, targetAddr string) error {
 		return err
 	}
 	req := buildSOCKS5Request(socks5CmdConnect, host, port)
+	if req == nil {
+		return fmt.Errorf("socks5: target host too long: %d bytes", len(host))
+	}
 	if _, err := conn.Write(req); err != nil {
 		return fmt.Errorf("socks5: send CONNECT: %w", err)
 	}

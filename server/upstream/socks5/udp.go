@@ -69,16 +69,37 @@ func (d *Dialer) ListenPacket(ctx context.Context) (net.PacketConn, error) {
 	if err := fresh.establishUDPRelay(ctx); err != nil {
 		return nil, err
 	}
+	// The monitor goroutine can tear down the relay (udpConn=nil) if the
+	// proxy closes the TCP control connection — capture under the lock.
+	fresh.mu.RLock()
+	conn := fresh.udpConn
+	fresh.mu.RUnlock()
+	if conn == nil {
+		return nil, errors.New("socks5: UDP relay torn down before use")
+	}
 	return &socks5PacketConn{
-		conn: fresh.udpConn,
+		conn: conn,
 		done: func() { _ = fresh.Close() },
 	}, nil
 }
 
 func (d *Dialer) establishUDPRelay(ctx context.Context) error {
 	deadline, hasDeadline := ctx.Deadline()
+	if !hasDeadline && d.timeout > 0 {
+		// No context deadline — fall back to the Dialer's own timeout so a
+		// stalled proxy cannot block the dial/negotiation forever. The
+		// derived deadline bounds the WHOLE negotiation (TCP dial +
+		// handshake + UDP relay dial), not just the first dial.
+		deadline = time.Now().Add(d.timeout)
+		hasDeadline = true
+	}
+	if hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
 
-	dialer := net.Dialer{}
+	dialer := net.Dialer{Timeout: d.timeout}
 	if hasDeadline {
 		dialer.Timeout = time.Until(deadline)
 	}
@@ -137,6 +158,10 @@ func (d *Dialer) establishUDPRelay(ctx context.Context) error {
 	if relay.IP == nil || relay.IP.IsUnspecified() {
 		if ip := net.ParseIP(proxyHost); ip != nil {
 			relay.IP = ip
+		} else if ips, err := net.DefaultResolver.LookupIP(ctx, "ip", proxyHost); err == nil && len(ips) > 0 {
+			// Hostname-configured proxy: resolve before falling back, otherwise
+			// the relay would target 0.0.0.0 (localhost) instead of the proxy.
+			relay.IP = ips[0]
 		}
 	}
 	if relay.Port == 0 {
@@ -147,7 +172,9 @@ func (d *Dialer) establishUDPRelay(ctx context.Context) error {
 
 	// Use a connected UDP socket to the relay (same approach as mosdns-x).
 	// A connected socket allows us to use Read/Write directly and the OS
-	// filters out stray datagrams.
+	// filters out stray datagrams. Note: dialer.Timeout was computed before
+	// the TCP dial + handshake, so it is stale — DialContext falls back to
+	// the caller's ctx deadline, keeping the total negotiation bounded.
 	rawConn, err := dialer.DialContext(ctx, "udp", relay.String())
 	if err != nil {
 		_ = ctrlConn.Close()
@@ -163,36 +190,18 @@ func (d *Dialer) establishUDPRelay(ctx context.Context) error {
 	// Clear deadline on the control connection — it must stay alive but idle.
 	_ = ctrlConn.SetDeadline(time.Time{})
 
-	ctrlClosed := make(chan struct{})
 	d.ctrlConn = ctrlConn
-	d.ctrlClosed = ctrlClosed
 	d.udpConn = udpConn
 	d.relayAddr = relay
 
-	// NOTE: The double-goroutine pattern handles the case where ctrlConn.Read
-	// blocks indefinitely. Combining into one goroutine would require
-	// additional synchronization. Simpler to keep as-is. on
-	// ctrlConn.Read and ctrlClosed would avoid the nested goroutine.
-	// Monitor the control connection. The goroutine exits when ctrlConn
-	// is closed by cleanupLocked (Close/proxy-side) or when the closed signal
-	// fires. Using a select prevents the goroutine from leaking when the Dialer
-	// is garbage-collected without an explicit Close call.
+	// Monitor the control connection.  When the proxy closes the TCP connection
+	// or cleanupLocked calls Close(), Read returns and the goroutine cleans up.
+	// A single goroutine suffices because cleanupLocked already closes ctrlConn,
+	// which unblocks this Read — no need for a separate signal channel.
 	go func() {
 		defer zdnsutil.HandlePanic("SOCKS5 UDP relay")
-		done := make(chan struct{})
-		go func() {
-			defer zdnsutil.HandlePanic("SOCKS5 UDP relay")
-			var buf [1]byte
-			_, _ = ctrlConn.Read(buf[:])
-			defer close(done)
-		}()
-		select {
-		case <-done:
-		// NOTE(M19): ctrlConn may be closed twice (monitor goroutine + cleanupLocked).
-		// Go stdlib tolerates multiple Close() calls, but alternative Conn implementations may not.
-		case <-ctrlClosed:
-			_ = ctrlConn.Close() // unblock the read goroutine
-		}
+		var buf [1]byte
+		_, _ = ctrlConn.Read(buf[:])
 		d.mu.Lock()
 		if d.ctrlConn == ctrlConn {
 			d.cleanupLocked()
@@ -207,8 +216,6 @@ func (d *Dialer) cleanupLocked() {
 	if d.ctrlConn != nil {
 		_ = d.ctrlConn.Close()
 		d.ctrlConn = nil
-		close(d.ctrlClosed)
-		d.ctrlClosed = make(chan struct{})
 	}
 	if d.udpConn != nil {
 		_ = d.udpConn.Close()
@@ -231,13 +238,21 @@ func (d *Dialer) DialUDP(ctx context.Context, targetAddr string) (net.Conn, erro
 	if err := fresh.establishUDPRelay(ctx); err != nil {
 		return nil, err
 	}
+	// The monitor goroutine can tear down the relay (udpConn=nil) if the
+	// proxy closes the TCP control connection — capture under the lock.
+	fresh.mu.RLock()
+	conn := fresh.udpConn
+	fresh.mu.RUnlock()
+	if conn == nil {
+		return nil, errors.New("socks5: UDP relay torn down before use")
+	}
 	udpAddr, err := net.ResolveUDPAddr("udp", targetAddr)
 	if err != nil {
 		_ = fresh.Close()
 		return nil, fmt.Errorf("socks5: resolve target %s: %w", targetAddr, err)
 	}
 	return &socks5UDPConn{
-		conn: fresh.udpConn,
+		conn: conn,
 		addr: udpAddr,
 		done: func() { _ = fresh.Close() },
 	}, nil
@@ -261,9 +276,9 @@ func (c *socks5PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 	if err != nil {
 		return 0, nil, fmt.Errorf("socks5: parse UDP datagram: %w", err)
 	}
-	if len(p) < len(dg.data) {
-		return 0, nil, io.ErrShortBuffer
-	}
+	// The datagram is already consumed from the socket; copy the prefix that
+	// fits (net.UDPConn truncation semantics) rather than dropping it — a
+	// caller retrying with a larger buffer would block on the NEXT datagram.
 	n = copy(p, dg.data)
 	return n, srcAddr, nil
 }
@@ -307,7 +322,12 @@ func (c *socks5PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	return nw - headerLen, nil
 }
 
-func (c *socks5PacketConn) Close() error { c.done(); return nil }
+func (c *socks5PacketConn) Close() error {
+	if c.done != nil {
+		c.done()
+	}
+	return nil
+}
 
 func (c *socks5PacketConn) LocalAddr() net.Addr {
 	return c.conn.LocalAddr()
@@ -341,9 +361,8 @@ func (c *socks5UDPConn) Read(p []byte) (n int, err error) {
 	if err != nil {
 		return 0, fmt.Errorf("socks5: parse datagram: %w", err)
 	}
-	if len(p) < len(dg.data) {
-		return 0, io.ErrShortBuffer
-	}
+	// Copy the prefix that fits (net.UDPConn truncation semantics); the
+	// datagram is already consumed and cannot be retried.
 	return copy(p, dg.data), nil
 }
 

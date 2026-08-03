@@ -39,6 +39,12 @@ func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
 		return eTLS.Certificate{}, fmt.Errorf("generate server serial number: %w", err)
 	}
 
+	// Evaluate now once: separate time.Now() calls per template would make
+	// the CA's NotAfter always slightly earlier than the leaf's even with
+	// equal validity durations.
+	now := time.Now()
+	caNotAfter := now.Add(config.DefaultCACertValidity)
+
 	caTemplate := x509.Certificate{
 		SerialNumber: caSerialNumber,
 		Subject: pkix.Name{
@@ -46,8 +52,8 @@ func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
 			Organization: []string{config.DefaultProjectName},
 			Country:      []string{"CN"},
 		},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(config.DefaultCACertValidity),
+		NotBefore:             now,
+		NotAfter:              caNotAfter,
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCRLSign | x509.KeyUsageCertSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
@@ -59,11 +65,16 @@ func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
 		Subject: pkix.Name{
 			CommonName: domain,
 		},
-		NotBefore:   time.Now(),
-		NotAfter:    time.Now().Add(config.DefaultServerCertValidity),
+		NotBefore: now,
+		// The leaf must never outlive its signer: clamp to the CA's expiry
+		// even if DefaultServerCertValidity ever exceeds
+		// DefaultCACertValidity — an untrusted chain before the advertised
+		// leaf expiry would be worse than an early rotation.
+		NotAfter:    leafNotAfter(now, caNotAfter),
 		KeyUsage:    x509.KeyUsageDigitalSignature, // ECDSA — KeyEncipherment is RSA-only
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
+
 	if ip := net.ParseIP(domain); ip != nil {
 		serverTemplate.IPAddresses = []net.IP{ip}
 	} else {
@@ -91,4 +102,14 @@ func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
 	}
 
 	return cert, nil
+}
+
+// leafNotAfter returns the leaf certificate's expiry: the configured server
+// validity clamped to the CA's expiry so the leaf never outlives its signer.
+func leafNotAfter(now, caNotAfter time.Time) time.Time {
+	leaf := now.Add(config.DefaultServerCertValidity)
+	if caNotAfter.Before(leaf) {
+		return caNotAfter
+	}
+	return leaf
 }

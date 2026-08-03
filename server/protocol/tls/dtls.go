@@ -57,7 +57,9 @@ func (s *Server) startDTLSServer() error {
 			return err
 		}
 
+		s.listenerMu.Lock()
 		s.dtlsListeners = append(s.dtlsListeners, listener)
+		s.listenerMu.Unlock()
 		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("DTLS server")
 			s.handleDTLSConnections(listener)

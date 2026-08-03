@@ -1,10 +1,12 @@
 package tls
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
@@ -40,14 +42,16 @@ func (s *Server) startDOHServer(port string) error {
 			return fmt.Errorf("TCP listen on %s: %w", addr, err)
 		}
 
-		rawListener := &debugListener{Listener: &zdnsutil.TCPKeepAliveListener{Listener: listener}, name: "DoH"}
+		rawListener := &debugListener{Listener: &zdnsutil.TCPKeepAliveListener{Listener: listener, KeepAlivePeriod: config.DefaultTCPKeepAlivePeriod}, name: "DoH"}
 
 		tlsConfig := s.tlsConfig.Clone()
 		tlsConfig.NextProtos = config.NextProtoDOH
 		tlsConfig.GetConfigForClient = s.getConfigForClient(config.NextProtoDOH)
 
 		httpsListener := eTLS.NewListener(rawListener, tlsConfig)
+		s.listenerMu.Lock()
 		s.httpsListeners = append(s.httpsListeners, httpsListener)
+		s.listenerMu.Unlock()
 
 		// eHTTP server with native eTLS-aware HTTP/2 — the bundled h2
 		// detects eTLS connections from the listener automatically.
@@ -59,7 +63,9 @@ func (s *Server) startDOHServer(port string) error {
 			WriteTimeout:      config.DefaultHTTPServerWriteTimeout,
 			IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
 		}
+		s.listenerMu.Lock()
 		s.dohServers = append(s.dohServers, dohSrv)
+		s.listenerMu.Unlock()
 
 		capturedSrv := dohSrv
 		capturedListener := httpsListener
@@ -132,9 +138,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) parseDOHRequest(r *http.Request, w http.ResponseWriter) (msg *dns.Msg, statusCode int) {
 	// Validate GET request size before delegating to the library parser.
+	// The limit bounds the raw DNS wire message (RFC 8484 §4.1/§4.2.1), so
+	// the base64url parameter must be DECODED first — base64 expands ~4/3,
+	// and comparing the encoded length would reject valid messages between
+	// ~49KB and 64KB that the POST path accepts.
 	if r.Method == http.MethodGet {
 		dnsParam := r.URL.Query().Get("dns")
-		if dnsParam == "" || len(dnsParam) > config.DefaultDOHMaxRequestSize {
+		if dnsParam == "" {
+			return nil, http.StatusBadRequest
+		}
+		if decoded, err := base64.RawURLEncoding.DecodeString(dnsParam); err != nil {
+			return nil, http.StatusBadRequest
+		} else if len(decoded) > config.DefaultDOHMaxRequestSize {
 			return nil, http.StatusBadRequest
 		}
 	}
@@ -146,7 +161,7 @@ func (s *Server) parseDOHRequest(r *http.Request, w http.ResponseWriter) (msg *d
 	if err != nil {
 		// RFC 8484 §4.2.1: POST with wrong Content-Type → 415.
 		if r.Method == http.MethodPost && r.Header.Get("Content-Type") != "" &&
-			r.Header.Get("Content-Type") != dnshttp.MimeType {
+			!strings.HasPrefix(r.Header.Get("Content-Type"), dnshttp.MimeType) {
 			return nil, http.StatusUnsupportedMediaType
 		}
 		return nil, http.StatusBadRequest
@@ -168,10 +183,32 @@ func (s *Server) respondDOH(w http.ResponseWriter, response *dns.Msg) error {
 	bytes := response.Data
 
 	w.Header().Set("Content-Type", dnshttp.MimeType)
-	w.Header().Set("Cache-Control", "max-age=0")
+	// RFC 8484 §5.1: Cache-Control max-age SHOULD equal the smallest TTL
+	// in the Answer section, or 0 for negative/zero-TTL responses.
+	w.Header().Set("Cache-Control", dohCacheControl(response))
 	n, err := w.Write(bytes) //nolint:gosec // G705: DNS wire format, not user-facing HTML
 	if n != len(bytes) {
-		return fmt.Errorf("short write: %d/%d bytes", n, len(bytes))
+		return fmt.Errorf("short write: %d/%d bytes: %w", n, len(bytes), err)
 	}
 	return err
+}
+
+// dohCacheControl computes the Cache-Control max-age from the smallest
+// TTL in the Answer section, per RFC 8484 §5.1 RECOMMENDED.
+func dohCacheControl(response *dns.Msg) string {
+	if response == nil {
+		return "max-age=0"
+	}
+	minTTL := -1
+	for _, rr := range response.Answer {
+		if rr != nil {
+			if t := int(rr.Header().TTL); t > 0 && (minTTL < 0 || t < minTTL) {
+				minTTL = t
+			}
+		}
+	}
+	if minTTL <= 0 {
+		return "max-age=0"
+	}
+	return "max-age=" + strconv.Itoa(minTTL)
 }
