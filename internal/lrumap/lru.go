@@ -89,6 +89,10 @@ type entryPair[K comparable, V any] struct {
 	val V
 }
 
+// defaultPrealloc bounds the initial hash-map allocation: entries beyond it
+// are allocated on demand as the map grows.
+const defaultPrealloc = 1024
+
 // ErrVersionMismatch reports that a persist file uses a codec version other
 // than the current one. The file has been backed up to path+".bak" and the
 // map starts cold — a format upgrade never silently destroys the old data.
@@ -125,6 +129,11 @@ func (m *Map[K, V]) TotalWeight() int64 {
 
 // New creates a Map with the given capacity. When the map reaches capacity,
 // the least recently used entry is evicted to make room for new entries.
+//
+// The backing hash map is preallocated to a bounded size, NOT to the full
+// capacity: capacity is the LRU eviction ceiling, and preallocating to it
+// would pay for that ceiling up front (a 1M-entry ceiling would preallocate
+// ~96MB for a mostly-empty map). The map grows on demand instead.
 func New[K comparable, V any](capacity int) *Map[K, V] {
 	if capacity <= 0 {
 		capacity = 64
@@ -134,7 +143,7 @@ func New[K comparable, V any](capacity int) *Map[K, V] {
 	head.next = tail
 	tail.prev = head
 	return &Map[K, V]{
-		m:    make(map[K]*lruEntry[K, V], capacity),
+		m:    make(map[K]*lruEntry[K, V], min(capacity, defaultPrealloc)),
 		head: head,
 		tail: tail,
 		cap:  capacity,
