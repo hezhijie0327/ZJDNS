@@ -35,14 +35,16 @@ func ptrIndexWeight(keys []entryKey) int64 {
 // (updatePtrIndex), on eviction (OnEvict → cleanupPtrIndex), and rebuilt
 // from cache entries at startup when ptr.zst is missing.
 
-// updatePtrIndex records the entry's IPs in the reverse index. Re-Setting
-// the same entry replaces its old mappings (cleanup first), so repeated
-// probes do not grow the index.
-func (c *Cache) updatePtrIndex(owner entryKey, ips []string) {
+// updatePtrIndex records the entry's IPs in the reverse index. oldIPs holds
+// the previous entry's IP set (from a Get before the Set), enabling targeted
+// cleanup instead of a full PTR-index Range scan. When oldIPs is unknown
+// (startup/persist restore), pass nil to fall back to a full scan.
+func (c *Cache) updatePtrIndex(owner entryKey, ips, oldIPs []string) {
+	// Targeted cleanup from the previous entry's known IPs.
+	c.cleanupPtrIndex(owner, oldIPs)
 	if len(ips) == 0 {
 		return
 	}
-	c.cleanupPtrIndex(owner, nil) // full scan: the previous entry's IP set is unknown here
 	for _, ip := range ips {
 		old, ok := c.ptrIndex.Get(ip)
 		if !ok {

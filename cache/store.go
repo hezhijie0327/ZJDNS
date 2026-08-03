@@ -259,8 +259,13 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	// OnEvict callback can then remove the owner from exactly these PTR
 	// mappings instead of scanning the whole index under the store lock.
 	ips := extractIPs(answer, authority, additional)
+	// Retrieve the previous entry IPs for targeted PTR cleanup.
+	var oldIPs []string
+	if old, ok := c.store.Get(key); ok {
+		oldIPs = old.ips
+	}
 	c.store.Set(key, cacheEntry{value: wire, ts: now, expiresAt: expiresAt, validated: validated, ips: ips})
-	c.updatePtrIndex(key, ips)
+	c.updatePtrIndex(key, ips, oldIPs)
 	return true
 }
 
