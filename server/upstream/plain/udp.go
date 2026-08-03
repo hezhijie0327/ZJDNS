@@ -235,7 +235,7 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 		// and the TTL is trusted, ambiguous EDNS responses can be
 		// fast-accepted without waiting for a second candidate.
 		ttlConfident := hg != nil && hg.Confident(server.Address)
-		if resp := sg.processPacket(buf[:n], n, msg.UDPSize, server.Address, ttlConfident, ttl); resp != nil {
+		if resp := sg.processPacket(buf[:n], n, msg.UDPSize, server.Address, ttlConfident, ttl, server.Spoofguard); resp != nil {
 			if hg != nil {
 				hg.Feed(server.Address, sg.pickBestTTL())
 			}
@@ -315,7 +315,7 @@ func (s *spoofguardState) copyData(raw []byte, n int) []byte {
 
 // processPacket applies EDNS-gate and fast-return checks to a single raw packet.
 // Returns a response to return immediately, or nil to continue the loop.
-func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, addr string, ttlConfident bool, ttl uint8) *dns.Msg {
+func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, addr string, ttlConfident bool, ttl uint8, spoofguardEnabled bool) *dns.Msg {
 	s.lastRecv = time.Now()
 
 	// Fast signals from raw header — check first, before EDNS gate.
@@ -361,7 +361,23 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 	// only when they contain a CNAME or multiple answers — patterns that
 	// GFW does not replicate.  Single-answer non-EDNS (GFW signature) is
 	// still rejected.
+	//
+	// When spoofguard is disabled (HopGuard-only mode), skip the EDNS gate
+	// entirely — HopGuard's TTL validation is the sole filter. The response
+	// has already passed HopGuard validation before entering processPacket.
 	if rcode == dns.RcodeSuccess && !hasEDNS && queryUDPSize > 0 {
+		if !spoofguardEnabled {
+			resp := pool.DefaultMessage.Get()
+			resp.Data = s.copyData(raw, n)
+			if err := resp.Unpack(); err != nil {
+				pool.DefaultMessage.Put(resp)
+				return nil
+			}
+			resp.Data = nil
+			s.last = resp
+			s.lastTTL = ttl
+			return resp
+		}
 		resp := pool.DefaultMessage.Get()
 		resp.Data = s.copyData(raw, n)
 		if err := resp.Unpack(); err != nil {
@@ -401,6 +417,23 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 	// Ambiguous EDNS-bearing — when TTL is confident, fast-accept
 	// instead of collecting. GFW can't simultaneously forge the correct
 	// TTL and valid EDNS content; the two signals are orthogonal.
+	//
+	// When spoofguard is disabled, the response has already passed
+	// HopGuard TTL validation — return it directly without candidate
+	// collection.
+	if !spoofguardEnabled {
+		resp := pool.DefaultMessage.Get()
+		resp.Data = s.copyData(raw, n)
+		if err := resp.Unpack(); err != nil {
+			pool.DefaultMessage.Put(resp)
+			return nil
+		}
+		resp.Data = nil
+		s.last = resp
+		s.lastTTL = ttl
+		return resp
+	}
+
 	resp := pool.DefaultMessage.Get()
 	resp.Data = s.copyData(raw, n)
 	if err := resp.Unpack(); err != nil {

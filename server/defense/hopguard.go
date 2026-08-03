@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
 )
@@ -31,11 +32,12 @@ type HopGuard struct {
 // The mutex protects all fields; Validate is called concurrently from
 // multiple goroutines sharing the same Client-level HopGuard instance.
 type serverState struct {
-	mu        sync.Mutex
-	histogram map[uint8]int // TTL → occurrence count
-	trusted   map[uint8]int // trusted TTLs → count snapshot
-	samples   int           // total responses observed
-	armed     bool          // true once minimum samples reached
+	mu          sync.Mutex
+	histogram   map[uint8]int // TTL → occurrence count
+	trusted     map[uint8]int // trusted TTLs → count snapshot
+	samples     int           // total responses observed
+	armed       bool          // true once minimum samples reached
+	lastRebuild time.Time     // time-based rebuild fallback
 }
 
 const (
@@ -43,8 +45,9 @@ const (
 	// international upstreams — stable single-path connections exhibit ≤±1 variation.
 	// Anycast PoPs or load-balanced servers that rewrite TTL may need a wider window;
 	// make this configurable per-upstream if false rejections occur in practice.
-	hopGuardCacheCapacity = 256 // LRU cache capacity for server states
-	hopGuardMinSamples    = 32  // samples needed before arming
+	hopGuardCacheCapacity   = 256             // LRU cache capacity for server states
+	hopGuardMinSamples      = 32              // samples needed before arming
+	hopGuardRebuildInterval = 5 * time.Minute // time-based rebuild fallback
 )
 
 // NewHopGuard creates a HopGuard with LRU cache.
@@ -62,6 +65,8 @@ func NewHopGuard() *HopGuard {
 // Enforcement phase: TTL must be within ±fluctuation of any trusted baseline.
 func (h *HopGuard) Validate(serverIP string, observed uint8) bool {
 	if h == nil || observed == 0 {
+		// TTL=0 is invalid at the network layer; passing here avoids
+		// rejecting responses due to a locally-misconfigured client.
 		return true
 	}
 
@@ -100,8 +105,9 @@ func (h *HopGuard) Feed(serverIP string, observed uint8) {
 	st, ok := h.states.Get(serverIP)
 	if !ok {
 		st = &serverState{
-			histogram: make(map[uint8]int, 16),
-			trusted:   make(map[uint8]int, 4),
+			histogram:   make(map[uint8]int, 16),
+			trusted:     make(map[uint8]int, 4),
+			lastRebuild: time.Now(),
 		}
 		actual, loaded := h.states.LoadOrStore(serverIP, st)
 		if loaded {
@@ -116,9 +122,22 @@ func (h *HopGuard) Feed(serverIP string, observed uint8) {
 	if st.armed {
 		st.histogram[observed]++
 		st.samples++
+		// Time-based decay: on low-traffic upstreams the sample-based
+		// rebuild never fires, so a routing change (anycast reroute, PoP
+		// shift) leaves the stale baseline in force indefinitely.
+		if time.Since(st.lastRebuild) > hopGuardRebuildInterval {
+			st.lastRebuild = time.Now()
+			rebuildTrusted(st)
+		}
 		if st.samples%hopGuardMinSamples == 0 {
 			rebuildTrusted(st)
-			log.Debugf("UPSTREAM: hopguard rebuild (%d trusted, threshold=%d) for %s", len(st.trusted), trustThreshold(st), serverIP)
+			if len(st.trusted) == 0 {
+				st.armed = false
+				st.samples = 0
+				log.Debugf("UPSTREAM: hopguard disarmed — all TTLs decayed, re-entering learning for %s", serverIP)
+			} else {
+				log.Debugf("UPSTREAM: hopguard rebuild (%d trusted, threshold=%d) for %s", len(st.trusted), trustThreshold(st), serverIP)
+			}
 		}
 		return
 	}
@@ -141,7 +160,8 @@ func (h *HopGuard) Feed(serverIP string, observed uint8) {
 }
 
 // Confident reports whether hopguard is fully armed for serverIP — the TTL
-// baseline is trusted and can be used for rejection decisions.
+// baseline is trusted and can be used for rejection decisions.  A nil receiver
+// (no HopGuard configured) always returns true — all TTLs are trusted.
 func (h *HopGuard) Confident(serverIP string) bool {
 	if h == nil {
 		return true
@@ -155,23 +175,11 @@ func (h *HopGuard) Confident(serverIP string) bool {
 	return st.armed
 }
 
-// Expected returns the most frequent trusted TTL for the server (0 if not armed).
-func (h *HopGuard) Expected(serverIP string) uint8 {
-	if h == nil {
-		return 0
-	}
-	st, ok := h.states.Get(serverIP)
-	if !ok {
-		return 0
-	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if !st.armed {
-		return 0
-	}
+// modeTTL returns the histogram's most frequent TTL (0 if empty).
+func modeTTL(st *serverState) uint8 {
 	var mode uint8
 	maxCount := 0
-	for ttl, count := range st.trusted {
+	for ttl, count := range st.histogram {
 		if count > maxCount || (count == maxCount && ttl < mode) {
 			mode = ttl
 			maxCount = count
@@ -252,11 +260,18 @@ func rebuildTrusted(st *serverState) {
 			st.histogram[ttl] = newCount
 		}
 	}
-	// Recompute threshold from the decayed histogram.
+	// Recompute threshold from the decayed histogram. Only the MODE itself
+	// is promoted: an attacker that consistently repeats one injected TTL
+	// value could otherwise reach count >= mode/4 after decay and enter the
+	// trusted set, weakening hopguard's discrimination.
 	threshold := trustThreshold(st)
+	mode := modeTTL(st)
 	clear(st.trusted)
+	if mode > 0 {
+		st.trusted[mode] = st.histogram[mode]
+	}
 	for ttl, count := range st.histogram {
-		if count >= threshold {
+		if ttl != mode && count >= threshold && count >= st.histogram[mode]/2 {
 			st.trusted[ttl] = count
 		}
 	}
