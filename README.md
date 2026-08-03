@@ -77,7 +77,7 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 - **TLS 隐私 Profile**：[RFC 8310](docs/rfc/rfc8310.txt) Strict/Opportunistic 模式可配
 
 ### 缓存与数据库
-基于 SQLite WAL + mmap 的统一数据库（[八表设计](docs/ARCHITECTURE.md#db-schema)），zstd 压缩存储，缓存命中 ~0.5ms。A/AAAA 记录按延迟探测排序。异步统计写入（non-blocking channel + 后台 goroutine）。懒惰过期 + 条数上限淘汰。
+基于 SQLite WAL + mmap 的统一数据库（[九表设计](docs/ARCHITECTURE.md#db-schema)），zstd 压缩存储，缓存命中 ~0.5ms。A/AAAA 记录按延迟探测排序。异步统计写入（non-blocking channel + 后台 goroutine）。懒惰过期 + 条数上限淘汰。
 
 ### 规则集
 统一的 IP + 域名标签匹配引擎，上游可按标签分流、Zone 可按标签过滤：

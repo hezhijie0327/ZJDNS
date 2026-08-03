@@ -136,7 +136,7 @@ go test -bench=. -short -benchtime=500ms ./...                 # stable numbers
 go test -bench=BenchmarkServerProcessQuery -benchtime=3s ./cmd/zjdns  # integration QPS
 ```
 
-**99 benchmarks** across 14 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
+**103 benchmarks** across 21 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
 
 ```bash
 # Update baseline

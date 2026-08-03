@@ -4,7 +4,7 @@ Detailed technical reference for ZJDNS. For working guidelines, see [CLAUDE.md](
 
 ## DB Schema
 
-The unified database (`database/`) contains eight SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
+The unified database (`database/`) contains nine SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
 
 ```sql
 -- DNS response cache. Uniqueness: (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok).
@@ -91,6 +91,14 @@ CREATE TABLE zone_entries (
     match_tags TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (is_wildcard, qname, qtype, qclass, match_tags)
 ) WITHOUT ROWID;
+
+-- DNSCrypt state (singleton): Ed25519 identity (96B) + serialized cert
+-- windows. Persisted so a restart resumes the same windows (v3.7.17).
+CREATE TABLE dnscrypt_state (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    identity BLOB NOT NULL,
+    windows  BLOB NOT NULL
+);
 ```
 
 ### Key Patterns
@@ -159,11 +167,12 @@ Full implementation with PQC support. Two crypto constructions: XWingPQ (default
 ### Server (`server/protocol/dnscrypt/`)
 
 - UDP+TCP listeners on independent port (default 8443)
-- Ed25519 identity key (auto-generated or from config); resolver encryption keys (X25519/X-Wing) always auto-generated
+- Ed25519 identity key required in config (`certificate.dnscrypt.public_key`/`private_key`, like TLS); resolver encryption keys (X25519/X-Wing) always auto-generated
 - `keys []keyEntry` holds current + previous certs for rotation overlap
-- `rotateKeys()` generates fresh resolver keys every 24h, signed with fixed Ed25519 identity
+- `rotateKeys()` generates fresh resolver keys every 24h, signed with fixed Ed25519 identity; ticket keys rotate alongside (RFC §11.7)
 - `decrypt()` tries keys newest-first; `decryptPQResumed()` validates tickets against all active certs
-- Restart-safe: new keys on startup, old tickets naturally invalidated
+- Persistence: identity + cert windows stored in the `dnscrypt_state` SQLite table — a restart resumes the exact same windows (client-cached certs stay valid); config key change drops the persisted state and mints fresh windows
+- CHAOS `zjdns.dnscrypt.clear` (loopback-only) regenerates all windows immediately (ResetKeys)
 - Config generator: `GenerateDNSCryptConfig()` in `generate.go` → called from `cmd/zjdns/cli/generate.go`
 
 ### Client (`server/upstream/dnscrypt/`)
