@@ -94,7 +94,10 @@ func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) (sorted []ne
 	}
 	// Register BEFORE starting workers; Close() waits on this group only
 	// after setting closed, and the mutex makes Add/Wait mutually exclusive
-	// so a concurrent Close cannot race a zero-count Add.
+	// so a concurrent Close cannot race a zero-count Add. probeWg is
+	// lifecycle-only: waiting for THIS call's workers uses callWg below,
+	// because ProbeIPsLatency calls run concurrently (one per probe key)
+	// and a shared WaitGroup's Wait must never overlap another call's Add.
 	p.probeMu.Lock()
 	if p.closed {
 		p.probeMu.Unlock()
@@ -103,11 +106,15 @@ func (p *Prober) ProbeIPsLatency(ctx context.Context, ips []net.IP) (sorted []ne
 	p.probeWg.Add(workers)
 	p.probeMu.Unlock()
 
+	var callWg sync.WaitGroup
+	callWg.Add(workers)
+
 	jobs := make(chan int)
 	for range workers {
 		go func() {
 			defer zdnsutil.HandlePanic("latency probe worker")
 			defer p.probeWg.Done()
+			defer callWg.Done()
 			for idx := range jobs {
 				// The semaphore is SHARED across all ProbeIPsLatency calls:
 				// concurrent probes of different NS sets stay within the
@@ -137,7 +144,7 @@ sendJobs:
 		}
 	}
 	close(jobs)
-	p.probeWg.Wait()
+	callWg.Wait()
 
 	changed := false
 	latencyMS = make(map[string]int, n)

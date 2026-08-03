@@ -3,7 +3,10 @@ package latency
 import (
 	"context"
 	"net"
+	"runtime"
+	"sync"
 	"testing"
+	"time"
 	"zjdns/config"
 )
 
@@ -92,5 +95,53 @@ func TestNormalizeProbeProtocol(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("normalizeProbeProtocol(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestProbeIPsLatency_ConcurrentCalls(t *testing.T) {
+	// Regression: concurrent ProbeIPsLatency calls (one per probe key) on a
+	// shared Prober used to panic with "WaitGroup is reused before previous
+	// Wait has returned" — the shared WaitGroup's Wait overlapped another
+	// call's Add. Waits are now per-call; the shared group is lifecycle-only.
+	p := New([]config.LatencyProbeStep{{Protocol: "ping", Timeout: 50}}, context.Background())
+	defer p.Close()
+	ips := []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("8.8.8.8")}
+
+	var wg sync.WaitGroup
+	for range 24 {
+		wg.Go(func() {
+			_, _ = p.ProbeIPsLatency(context.Background(), ips)
+		})
+	}
+	wg.Wait()
+}
+
+func TestProbeIPsLatency_TimeoutNoLeak(t *testing.T) {
+	// Every probe times out (unreachable TEST-NET IP, 10ms step timeout).
+	// Goroutines and heap objects must return to baseline — verifies the
+	// timeout paths release sockets, contexts, and workers.
+	p := New([]config.LatencyProbeStep{{Protocol: "tcp", Port: 443, Timeout: 10}}, context.Background())
+	defer p.Close()
+	unreachable := []net.IP{net.ParseIP("192.0.2.1")}
+
+	runtime.GC()
+	var m0 runtime.MemStats
+	runtime.ReadMemStats(&m0)
+	g0 := runtime.NumGoroutine()
+
+	for range 300 {
+		_, _ = p.ProbeIPsLatency(context.Background(), unreachable)
+	}
+	time.Sleep(200 * time.Millisecond) // workers exit
+	runtime.GC()
+	var m1 runtime.MemStats
+	runtime.ReadMemStats(&m1)
+	g1 := runtime.NumGoroutine()
+
+	if g1 > g0+5 {
+		t.Errorf("goroutine leak: %d → %d", g0, g1)
+	}
+	if m1.HeapObjects > m0.HeapObjects+5000 {
+		t.Errorf("heap object leak: %d → %d", m0.HeapObjects, m1.HeapObjects)
 	}
 }
