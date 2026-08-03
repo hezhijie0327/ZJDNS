@@ -26,7 +26,9 @@ type latencyCodec struct{}
 const cachePersistVersion = 2
 
 const (
-	ptrPersistVersion     = 1
+	// ptrPersistVersion v2: the index stores ip → entryKeys only (record
+	// data is derived from entries at query time); v1 stored full records.
+	ptrPersistVersion     = 2
 	latencyPersistVersion = 1
 )
 
@@ -130,62 +132,37 @@ func (ptrCodec) EncodeKey(ip string) []byte { return []byte(ip) }
 
 func (ptrCodec) DecodeKey(b []byte) (string, error) { return string(b), nil }
 
-// EncodeValue serializes one IP's derived records. Per record:
-// name + ttl + ts + expiresAt + ownerKey (entryKey encoding).
-func (ptrCodec) EncodeValue(recs []*ptrRecord) []byte {
+// EncodeValue serializes one IP's owning entry keys. No record data is
+// stored — name/TTL/expiry are derived from the entries at query time.
+func (ptrCodec) EncodeValue(keys []entryKey) []byte {
 	var buf bytes.Buffer
-	writeU16(&buf, uint16(len(recs))) //nolint:gosec // G115: records per IP are bounded (< 64K)
-	for _, r := range recs {
-		writeBytes(&buf, []byte(r.name))
-		writeU32(&buf, uint32(r.ttl))       //nolint:gosec // G115: DNS TTL — protocol-bounded
-		writeU64(&buf, uint64(r.ts))        //nolint:gosec // G115: unix timestamp — protocol-bounded
-		writeU64(&buf, uint64(r.expiresAt)) //nolint:gosec // G115: unix timestamp — protocol-bounded int64
-		writeBytes(&buf, encodeEntryKey(r.ownerKey))
+	writeU16(&buf, uint16(len(keys))) //nolint:gosec // G115: keys per IP are bounded (< 64K)
+	for _, k := range keys {
+		writeBytes(&buf, encodeEntryKey(k))
 	}
 	return buf.Bytes()
 }
 
-// DecodeValue parses the layout produced by EncodeValue. Records that
-// expired while on disk are dropped; an entry with no live records left is
-// skipped (include=false).
-func (ptrCodec) DecodeValue(b []byte) ([]*ptrRecord, bool, error) {
-	now := log.NowUnix()
+// DecodeValue parses the layout produced by EncodeValue.
+func (ptrCodec) DecodeValue(b []byte) (keys []entryKey, include bool, err error) {
 	if len(b) < 2 {
 		return nil, false, io.ErrUnexpectedEOF
 	}
 	count := int(binary.BigEndian.Uint16(b[:2])) //nolint:gosec // G115: protocol-bounded uint16
 	off := 2
-	recs := make([]*ptrRecord, 0, count)
+	keys = make([]entryKey, 0, count)
 	for range count {
 		var raw []byte
-		var err error
-		r := &ptrRecord{}
 		if raw, off, err = takeBytes(b, off); err != nil {
 			return nil, false, err
 		}
-		r.name = string(raw)
-		if off+20 > len(b) {
-			return nil, false, io.ErrUnexpectedEOF
-		}
-		r.ttl = int32(binary.BigEndian.Uint32(b[off:]))          //nolint:gosec // G115: DNS TTL — protocol-bounded
-		r.ts = int64(binary.BigEndian.Uint64(b[off+4:]))         //nolint:gosec // G115: unix timestamp — protocol-bounded
-		r.expiresAt = int64(binary.BigEndian.Uint64(b[off+12:])) //nolint:gosec // G115: unix timestamp — protocol-bounded
-		off += 20
-		if raw, off, err = takeBytes(b, off); err != nil {
+		var k entryKey
+		if k, err = decodeEntryKey(raw); err != nil {
 			return nil, false, err
 		}
-		if r.ownerKey, err = decodeEntryKey(raw); err != nil {
-			return nil, false, err
-		}
-		if r.expiresAt > 0 && r.expiresAt < now {
-			continue
-		}
-		recs = append(recs, r)
+		keys = append(keys, k)
 	}
-	if len(recs) == 0 {
-		return nil, false, nil // all records expired while on disk
-	}
-	return recs, true, nil
+	return keys, true, nil
 }
 
 // ── Latency codec ─────────────────────────────────────────────────────────
@@ -226,12 +203,6 @@ func (latencyCodec) DecodeValue(b []byte) (latencyEntry, bool, error) {
 func writeU16(buf *bytes.Buffer, v uint16) {
 	var b [2]byte
 	binary.BigEndian.PutUint16(b[:], v)
-	buf.Write(b[:])
-}
-
-func writeU32(buf *bytes.Buffer, v uint32) {
-	var b [4]byte
-	binary.BigEndian.PutUint32(b[:], v)
 	buf.Write(b[:])
 }
 

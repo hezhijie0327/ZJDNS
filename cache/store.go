@@ -42,26 +42,16 @@ type latencyEntry struct {
 	expiresAt int64 // unix timestamp after which the entry is considered stale
 }
 
-// ptrRecord is one reverse-lookup (PTR) record derived from a cache entry's
-// A/AAAA records. ownerKey links it to its source entry so eviction can
-// clean it up precisely.
-type ptrRecord struct {
-	name      string
-	ttl       int32
-	ts        int64
-	expiresAt int64
-	ownerKey  entryKey
-}
-
 // Cache is an in-memory DNS response cache: O(1) map lookup, LRU eviction by
 // total value bytes, and optional persist files. All three maps are
 // lrumap.Map instances with their own internal mutexes — the cache holds no
-// lock of its own. The PTR index (derived from entries, optionally persisted
-// to ptr.zst) and the latency map (optionally persisted to latency.zst) are
-// transient-friendly: a missing file falls back to derivation / cold start.
+// lock of its own. The PTR index (ip → owning entryKeys, optionally
+// persisted to ptr.zst) and the latency map (optionally persisted to
+// latency.zst) are transient-friendly: a missing file falls back to
+// derivation / cold start.
 type Cache struct {
 	store    *lrumap.Map[entryKey, cacheEntry]
-	ptrIndex *lrumap.Map[string, []*ptrRecord] // ip → derived reverse records
+	ptrIndex *lrumap.Map[string, []entryKey] // ip → entries containing that IP
 	latency  *lrumap.Map[string, latencyEntry]
 }
 
@@ -96,14 +86,14 @@ func New(maxSizeBytes int64, file string) *Cache {
 	store := lrumap.New[entryKey, cacheEntry](64)
 	c := &Cache{
 		store:    store,
-		ptrIndex: lrumap.New[string, []*ptrRecord](64),
+		ptrIndex: lrumap.New[string, []entryKey](64),
 		latency:  lrumap.New[string, latencyEntry](config.DefaultLatencyCacheCapacity),
 	}
 	store.SetWeight(maxSizeBytes, func(e cacheEntry) int64 { return int64(len(e.value)) })
 	store.SetOnEvict(func(k entryKey, _ cacheEntry) { c.cleanupPtrIndex(k) })
-	// Byte-budget the PTR index: one IP can map to hundreds of names, so a
+	// Byte-budget the PTR index: one IP can map to hundreds of entries, so a
 	// count cap alone would not bound memory. Same mechanism as the cache.
-	c.ptrIndex.SetWeight(config.DefaultPtrIndexMaxBytes, ptrRecordsWeight)
+	c.ptrIndex.SetWeight(config.DefaultPtrIndexMaxBytes, ptrIndexWeight)
 	if file != "" {
 		if n, err := store.EnablePersist(lrumap.PersistConfig[entryKey, cacheEntry]{
 			Path:  file,
@@ -128,23 +118,16 @@ func (c *Cache) SetPtrPersist(path string) {
 	if path == "" {
 		return
 	}
-	n, err := c.ptrIndex.EnablePersist(lrumap.PersistConfig[string, []*ptrRecord]{
+	// Entry keys carry no expiry — staleness is judged against the owning
+	// entry at query time, so no Keep filter is needed on save or load.
+	n, err := c.ptrIndex.EnablePersist(lrumap.PersistConfig[string, []entryKey]{
 		Path:  path,
 		Codec: ptrCodec{},
-		Keep: func(_ string, recs []*ptrRecord) bool {
-			now := log.NowUnix()
-			for _, r := range recs {
-				if r.expiresAt == 0 || r.expiresAt >= now {
-					return true
-				}
-			}
-			return false
-		},
 	})
 	if err != nil {
 		log.Warnf("CACHE: ptr persist load failed (deriving index from entries): %v", err)
 	} else if n > 0 {
-		log.Infof("CACHE: loaded %d ptr records from %s", n, path)
+		log.Infof("CACHE: loaded %d ptr mappings from %s", n, path)
 	}
 	if c.ptrIndex.Len() == 0 {
 		// Cold start, or the file was missing/corrupt/empty — derive the
@@ -272,7 +255,7 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	expiresAt := now + int64(entryTTL) + defaultStaleMaxAge
 	key := entryKey{qname: qname, ecsAddr: ecsAddr, ecsPrefix: uint16(ecsPrefix), dnssecOK: dnssecOK, qtype: qtype, qclass: qclass} //nolint:gosec // G115: prefix ≤ 128 by CIDR semantics
 	c.store.Set(key, cacheEntry{value: wire, ts: now, expiresAt: expiresAt, validated: validated})
-	c.updatePtrIndex(key, answer, authority, additional, now, expiresAt)
+	c.updatePtrIndex(key, answer, authority, additional)
 	return true
 }
 

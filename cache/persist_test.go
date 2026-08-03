@@ -121,24 +121,29 @@ func TestPersist_PTRIndexDerivedOnMissingFile(t *testing.T) {
 }
 
 func TestPersist_PTRIndexRoundTrip(t *testing.T) {
-	// ptr.zst persisted: the index loads directly, no derivation needed.
+	// Both files persisted: names/TTLs come from the entries (cache.zst),
+	// the mapping ip → entryKeys from ptr.zst.
 	dir := t.TempDir()
+	cacheFile := filepath.Join(dir, "cache.zst")
 	ptrFile := filepath.Join(dir, "ptr.zst")
 
-	mc := New(0, "")
+	mc := New(0, cacheFile)
 	mc.SetPtrPersist(ptrFile)
 	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{aRR("www.example.com.", "192.0.2.55")}, nil, nil, false, dns.RcodeSuccess)
+	if err := mc.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
 	if err := mc.SavePtrIndex(); err != nil {
 		t.Fatalf("SavePtrIndex: %v", err)
 	}
 
-	mc2 := New(0, "")
+	mc2 := New(0, cacheFile)
 	mc2.SetPtrPersist(ptrFile)
 	defer func() { _ = mc2.Close() }()
 
 	results := mc2.ReverseLookup("192.0.2.55")
 	if len(results) != 1 {
-		t.Fatalf("reverse lookup after ptr reload: %d results, want 1", len(results))
+		t.Fatalf("reverse lookup after reload: %d results, want 1", len(results))
 	}
 	if results[0].Name != "www.example.com." {
 		t.Errorf("name = %q, want www.example.com.", results[0].Name)
@@ -259,54 +264,48 @@ func TestLRU_EvictCleansPTRIndex(t *testing.T) {
 		mc.Set(name, dns.TypeA, dns.ClassINET, nil, false, []dns.RR{aRR(name, "192.0.2.1")}, nil, nil, false, dns.RcodeSuccess)
 	}
 
-	// Evicted entries must have left no PTR records behind: each surviving
-	// entry owns exactly one record (its A answer).
+	// Evicted entries must have left no reverse mappings behind: each
+	// surviving entry owns exactly one mapping (its A answer).
 	total := 0
-	mc.ptrIndex.Range(func(_ string, recs []*ptrRecord) bool {
-		total += len(recs)
+	mc.ptrIndex.Range(func(_ string, keys []entryKey) bool {
+		total += len(keys)
 		return true
 	})
 	if total != mc.Len() {
-		t.Errorf("ptr records (%d) != cache entries (%d) — eviction leak", total, mc.Len())
+		t.Errorf("ptr mappings (%d) != cache entries (%d) — eviction leak", total, mc.Len())
 	}
 }
 
 func TestPtrIndex_WeightEviction(t *testing.T) {
-	// Byte budget of 300B with ~100B per record: the index must evict
+	// Byte budget of 300B with ~60B per key: the index must evict
 	// least-recently-used IPs to stay under budget (same mechanism as the
 	// cache's max_size_mb).
-	m := lrumap.New[string, []*ptrRecord](100)
-	m.SetWeight(300, ptrRecordsWeight)
+	m := lrumap.New[string, []entryKey](100)
+	m.SetWeight(300, ptrIndexWeight)
 
 	for i := range 10 {
 		ip := fmt.Sprintf("192.0.2.%d", i+1)
-		rec := &ptrRecord{
-			name:      "host.example.com.",
-			ttl:       300,
-			ts:        1,
-			expiresAt: 1 << 60,
-			ownerKey:  entryKey{qname: "host.example.com.", qtype: dns.TypeA, qclass: 1},
-		}
-		m.Set(ip, []*ptrRecord{rec})
+		key := entryKey{qname: "host.example.com.", qtype: dns.TypeA, qclass: 1}
+		m.Set(ip, []entryKey{key})
 	}
 	if w := m.TotalWeight(); w > 300 {
 		t.Errorf("TotalWeight = %d, exceeds 300 budget", w)
 	}
 	if m.Len() == 10 {
-		t.Error("no eviction happened under a 300B budget with 10 records")
+		t.Error("no eviction happened under a 300B budget with 10 entries")
 	}
 	if m.Len() < 1 {
 		t.Error("index should keep at least one entry")
 	}
 }
 
-func TestPtrRecordsWeight_GrowsWithRecords(t *testing.T) {
-	base := ptrRecordsWeight([]*ptrRecord{{name: "a.example.com.", ownerKey: entryKey{qname: "a.example.com."}}})
-	two := ptrRecordsWeight([]*ptrRecord{
-		{name: "a.example.com.", ownerKey: entryKey{qname: "a.example.com."}},
-		{name: "b.example.com.", ownerKey: entryKey{qname: "b.example.com."}},
+func TestPtrIndexWeight_GrowsWithKeys(t *testing.T) {
+	base := ptrIndexWeight([]entryKey{{qname: "a.example.com."}})
+	two := ptrIndexWeight([]entryKey{
+		{qname: "a.example.com."},
+		{qname: "b.example.com."},
 	})
 	if two <= base {
-		t.Errorf("weight of two records (%d) must exceed one (%d)", two, base)
+		t.Errorf("weight of two keys (%d) must exceed one (%d)", two, base)
 	}
 }

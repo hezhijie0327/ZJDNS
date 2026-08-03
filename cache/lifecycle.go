@@ -4,11 +4,6 @@ import (
 	"fmt"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
-
-	zdnsutil "zjdns/internal/dnsutil"
-
-	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // FlushDB truncates a table: "cache" clears all cached responses and derived
@@ -72,42 +67,20 @@ func (c *Cache) rebuildPtrIndex() {
 			pool.DefaultMessage.Put(msg)
 			return true
 		}
-		c.ptrIndexFromWire(k, e.ts, e.expiresAt, msg.Answer, msg.Ns, msg.Extra)
+		c.ptrIndexFromWire(k, extractIPs(msg.Answer, msg.Ns, msg.Extra))
 		pool.DefaultMessage.Put(msg)
 		return true
 	})
 }
 
-// ptrIndexFromWire inserts PTR records for one loaded entry. Dedup by
-// (ip, name) within the entry, same as updatePtrIndex.
-func (c *Cache) ptrIndexFromWire(owner entryKey, ts, expiresAt int64, sections ...[]dns.RR) {
-	seen := make(map[string]bool)
-	for _, rrs := range sections {
-		for _, rr := range rrs {
-			if rr == nil || dns.RRToType(rr) == dns.TypeOPT {
-				continue
-			}
-			ip, ok := zdnsutil.ExtractIPString(rr)
-			if !ok {
-				continue
-			}
-			name := dnsutil.Canonical(rr.Header().Name)
-			if seen[ip+"\x00"+name] {
-				continue
-			}
-			seen[ip+"\x00"+name] = true
-			record := &ptrRecord{
-				name: name, ttl: int32(rr.Header().TTL), //nolint:gosec // G115: protocol-bounded value fits target type
-				ts:        ts,
-				expiresAt: expiresAt,
-				ownerKey:  owner,
-			}
-			old, ok := c.ptrIndex.Get(ip)
-			if !ok {
-				c.ptrIndex.Set(ip, []*ptrRecord{record})
-				continue
-			}
-			c.ptrIndex.Set(ip, append(old, record))
+// ptrIndexFromWire records one loaded entry's IPs in the reverse index.
+func (c *Cache) ptrIndexFromWire(owner entryKey, ips []string) {
+	for _, ip := range ips {
+		old, ok := c.ptrIndex.Get(ip)
+		if !ok {
+			c.ptrIndex.Set(ip, []entryKey{owner})
+			continue
 		}
+		c.ptrIndex.Set(ip, append(old, owner))
 	}
 }

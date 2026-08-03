@@ -3,6 +3,7 @@ package cache
 import (
 	"zjdns/config"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 	"zjdns/internal/ttl"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -11,123 +12,144 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
-// updatePtrIndex appends reverse-lookup records for a cache entry's A/AAAA
-// records. Re-Setting the same entry replaces its old records (no growth on
-// repeated probes). Deduplicates by (ip, name) — the same IP can appear
-// across multiple sections in a single response.
-func (c *Cache) updatePtrIndex(owner entryKey, answer, authority, additional []dns.RR, ts, expiresAt int64) {
-	type rec struct {
-		ip   string
-		name string
-		ttl  int32
+// ptrIndexWeight estimates the in-memory footprint of one IP's entry-key
+// mappings: fixed per-key overhead plus the qname/ecs strings. Used as the
+// lrumap weight function for byte-budgeted eviction.
+func ptrIndexWeight(keys []entryKey) int64 {
+	const perKey = 32 // struct fields + string headers
+	var w int64
+	for _, k := range keys {
+		w += perKey + int64(len(k.qname)) + int64(len(k.ecsAddr))
 	}
-	var recs []rec
+	return w
+}
+
+// The PTR reverse index stores only entryKeys — the mapping ip → entries
+// that contain that IP. All record data (name, TTL, expiry) is derived from
+// the entry itself at query time, so the index never duplicates the wire
+// data. Memory per mapping is ~40% smaller than storing full records.
+//
+// Invariant: an entryKey appears in the index iff the entry (or a
+// not-yet-evicted predecessor) contained that IP. Maintained on Set
+// (updatePtrIndex), on eviction (OnEvict → cleanupPtrIndex), and rebuilt
+// from cache entries at startup when ptr.zst is missing.
+
+// updatePtrIndex records the entry's IPs in the reverse index. Re-Setting
+// the same entry replaces its old mappings (cleanup first), so repeated
+// probes do not grow the index.
+func (c *Cache) updatePtrIndex(owner entryKey, answer, authority, additional []dns.RR) {
+	ips := extractIPs(answer, authority, additional)
+	if len(ips) == 0 {
+		return
+	}
+	c.cleanupPtrIndex(owner)
+	for _, ip := range ips {
+		old, ok := c.ptrIndex.Get(ip)
+		if !ok {
+			c.ptrIndex.Set(ip, []entryKey{owner})
+			continue
+		}
+		c.ptrIndex.Set(ip, append(old, owner))
+	}
+}
+
+// extractIPs returns the distinct IPs in the given RR sections (in
+// first-appearance order).
+func extractIPs(sections ...[]dns.RR) []string {
+	var ips []string
 	seen := make(map[string]bool)
-	for _, rrs := range [][]dns.RR{answer, authority, additional} {
+	for _, rrs := range sections {
 		for _, rr := range rrs {
 			if rr == nil || dns.RRToType(rr) == dns.TypeOPT {
 				continue
 			}
 			ip, ok := zdnsutil.ExtractIPString(rr)
-			if !ok {
+			if !ok || seen[ip] {
 				continue
 			}
-			// DNS names are case-insensitive (RFC 4343): canonicalise so
-			// case-variant records collapse into one row.
-			name := dnsutil.Canonical(rr.Header().Name)
-			key := ip + "\x00" + name
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			recs = append(recs, rec{ip: ip, name: name, ttl: int32(rr.Header().TTL)}) //nolint:gosec // G115: protocol-bounded value fits target type
+			seen[ip] = true
+			ips = append(ips, ip)
 		}
 	}
-	if len(recs) == 0 {
-		return
-	}
-
-	// Replace this owner's records across all IPs, then append the new ones.
-	c.cleanupPtrIndex(owner)
-	for _, r := range recs {
-		record := &ptrRecord{
-			name:      r.name,
-			ttl:       r.ttl,
-			ts:        ts,
-			expiresAt: expiresAt,
-			ownerKey:  owner,
-		}
-		old, ok := c.ptrIndex.Get(r.ip)
-		if !ok {
-			c.ptrIndex.Set(r.ip, []*ptrRecord{record})
-			continue
-		}
-		c.ptrIndex.Set(r.ip, append(old, record))
-	}
+	return ips
 }
 
-// cleanupPtrIndex removes all PTR records owned by the entry with the given
-// key, deleting now-empty IP entries. Runs from the store's OnEvict callback
-// (store lock held) — it must not touch the store itself.
+// cleanupPtrIndex removes all reverse mappings owned by the entry with the
+// given key, deleting now-empty IP entries. Runs from the store's OnEvict
+// callback (store lock held) — it must not touch the store itself.
 func (c *Cache) cleanupPtrIndex(owner entryKey) {
 	type change struct {
 		ip   string
-		recs []*ptrRecord
+		keys []entryKey
 	}
 	changes := make([]change, 0, 8)
-	c.ptrIndex.Range(func(ip string, recs []*ptrRecord) bool {
-		kept := recs[:0]
-		for _, r := range recs {
-			if r.ownerKey != owner {
-				kept = append(kept, r)
+	c.ptrIndex.Range(func(ip string, keys []entryKey) bool {
+		kept := keys[:0]
+		for _, k := range keys {
+			if k != owner {
+				kept = append(kept, k)
 			}
 		}
-		if len(kept) != len(recs) {
-			changes = append(changes, change{ip: ip, recs: kept})
+		if len(kept) != len(keys) {
+			changes = append(changes, change{ip: ip, keys: kept})
 		}
 		return true
 	})
 	// Range holds the map lock; apply outside it.
 	for _, ch := range changes {
-		if len(ch.recs) == 0 {
+		if len(ch.keys) == 0 {
 			c.ptrIndex.Delete(ch.ip)
 		} else {
-			c.ptrIndex.Set(ch.ip, ch.recs)
+			c.ptrIndex.Set(ch.ip, ch.keys)
 		}
 	}
 }
 
-// ptrRecordsWeight estimates the in-memory footprint of one IP's derived
-// records: fixed per-record overhead plus the name and owner-key strings.
-// Used as the lrumap weight function for byte-budgeted eviction.
-func ptrRecordsWeight(recs []*ptrRecord) int64 {
-	const perRecord = 48 // struct fields + string headers + slice pointers
-	var w int64
-	for _, r := range recs {
-		w += perRecord + int64(len(r.name)) + int64(len(r.ownerKey.qname)) + int64(len(r.ownerKey.ecsAddr))
-	}
-	return w
-}
-
 // ReverseLookup returns all cached domain names mapped to the given IP.
+// Names and TTLs are derived from the owning entries at query time — the
+// index itself holds only the ip → entryKey mappings.
 func (c *Cache) ReverseLookup(ip string) []LookupResult {
 	if ip == "" {
 		return nil //nolint:nilerr // key not found
 	}
-	recs, ok := c.ptrIndex.Get(ip)
+	keys, ok := c.ptrIndex.Get(ip)
 	if !ok {
 		return nil
 	}
 	now := log.NowUnix()
-	results := make([]LookupResult, 0, len(recs))
-	for _, r := range recs {
-		if r.expiresAt > 0 && r.expiresAt < now {
+	var results []LookupResult
+	for _, key := range keys {
+		e, ok := c.store.Get(key)
+		if !ok {
+			continue // entry evicted between index update and query — defensive
+		}
+		if e.expiresAt > 0 && e.expiresAt < now {
 			continue
 		}
-		results = append(results, LookupResult{
-			Name: r.name,
-			TTL:  ttl.RemainingTTL(r.ts, int(r.ttl), uint32(config.DefaultStaleTTL)),
-		})
+		msg := pool.DefaultMessage.Get()
+		msg.Data = e.value
+		if err := msg.Unpack(); err != nil {
+			pool.DefaultMessage.Put(msg)
+			continue
+		}
+		for _, rrs := range [][]dns.RR{msg.Answer, msg.Ns, msg.Extra} {
+			for _, rr := range rrs {
+				if rr == nil || dns.RRToType(rr) == dns.TypeOPT {
+					continue
+				}
+				ip2, ok := zdnsutil.ExtractIPString(rr)
+				if !ok || ip2 != ip {
+					continue
+				}
+				// DNS names are case-insensitive (RFC 4343): canonicalise so
+				// case-variant records collapse into one row.
+				results = append(results, LookupResult{
+					Name: dnsutil.Canonical(rr.Header().Name),
+					TTL:  ttl.RemainingTTL(e.ts, int(rr.Header().TTL), uint32(config.DefaultStaleTTL)),
+				})
+			}
+		}
+		pool.DefaultMessage.Put(msg)
 	}
 	return results
 }
