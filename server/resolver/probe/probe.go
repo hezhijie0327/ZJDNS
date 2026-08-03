@@ -1,5 +1,6 @@
-// Package probe provides A/AAAA latency probing and record reordering for
-// optimized client connectivity.
+// Package probe provides A/AAAA latency probing for optimized client
+// connectivity. It measures and records per-IP latencies; the reordering of
+// answers by those latencies happens at cache read time (cache.Get).
 package probe
 
 import (
@@ -25,8 +26,9 @@ type CacheSetter interface {
 	LatencyLastProbe(ip string) (int64, bool)
 }
 
-// Prober measures network latency to resolved IP addresses and reorders A/AAAA
-// records in the cache to prioritize faster endpoints.
+// Prober measures network latency to resolved IP addresses and records the
+// results (cache.UpdateLatency) — the cache reorders A/AAAA answers at Get
+// time to prioritize faster endpoints.
 type Prober struct {
 	cache   CacheSetter
 	bgGroup func(func() error)

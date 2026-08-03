@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
+	"zjdns/internal/persist"
 	"zjdns/server/defense"
 	"zjdns/server/resolver"
 	"zjdns/server/resolver/dnssec"
@@ -15,6 +17,33 @@ import (
 
 	"codeberg.org/miekg/dns"
 )
+
+// statsSaver adapts the stats collector (fixed-layout counter snapshot, not a
+// key-value LRU) to the persist Saver interface so it shares the unified
+// periodic + shutdown flush.
+type statsSaver struct {
+	c    *stats.Collector
+	file string
+}
+
+func (s *statsSaver) Save() error { return s.c.SavePersist(s.file) }
+
+// initPersistManager registers every subsystem with persistent state on the
+// unified persist manager. Subsystems whose file paths are empty (persistence
+// disabled) are simply not registered; the Manager no-ops when empty.
+func (s *Server) initPersistManager(cacheStore *cache.Cache, statsCollector *stats.Collector, persistDir string) {
+	s.persistManager = persist.NewManager()
+	if persistDir == "" {
+		return
+	}
+	s.persistManager.Register("cache", cacheStore)
+	s.persistManager.Register("cache-ptr", persist.SaverFunc(cacheStore.SavePtrIndex))
+	s.persistManager.Register("cache-latency", persist.SaverFunc(cacheStore.SaveLatency))
+	s.persistManager.Register("stats", &statsSaver{c: statsCollector, file: filepath.Join(persistDir, "stats.zst")})
+	if s.dnscryptServer != nil {
+		s.persistManager.Register("dnscrypt", s.dnscryptServer)
+	}
+}
 
 // initResolver creates the upstream query client and DNS resolver from the
 // given configuration.  The resolver is created before the handler so it can

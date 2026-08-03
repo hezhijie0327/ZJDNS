@@ -1,37 +1,49 @@
 # Architecture Reference
 
 Detailed technical reference for ZJDNS. For working guidelines, see [CLAUDE.md](../CLAUDE.md).
-For the storage-layer redesign rationale, see [DESIGN-STORAGE](design.md).
 
 ## Persistence Schema
 
-The cache is **in-memory first**: an O(1) map + embedded LRU list (eviction by
-total value bytes, `cache.max_size_mb`). Each subsystem persists its own
-small file — zstd-compressed typed binary, written atomically (temp + rename)
-via the shared `internal/persist` substrate. A subsystem's file is loaded at
-startup and dumped at shutdown / rotation; a corrupt file only invalidates
+The cache is **in-memory first**: an `lrumap.Map[entryKey, cacheEntry]` with
+weighted eviction (total value bytes, `cache.max_size_mb`). Persistence is an
+optional capability of the same map — `EnablePersist(path, codec, keep)`
+snapshots the LRU to a zstd-compressed file (least-recently-used first, so a
+restart restores the same relative recency) and loads it eagerly at startup.
+Each subsystem persists its own small file, written atomically (temp + rename)
+via the shared `internal/persist` substrate. A corrupt file only invalidates
 that subsystem (cache entries are disposable, the DNSCrypt identity is not).
+`internal/persist.Manager` owns all persist timing: registered subsystems
+(cache, stats, DNSCrypt) are written on `persist.interval_seconds` and once
+more at shutdown.
 
 | Data | Persisted? | File (under persist.dir) | Why |
 |------|-----------|--------------------------|-----|
 | Cache entries {qname, ecs, dnssec, qtype, qclass, wire, expiresAt, validated} | ✅ | `cache.zst` | Warm restart |
+| PTR reverse index | ✅ | `ptr.zst` | PTR queries served immediately after restart; missing/corrupt file falls back to deriving from cache entries |
+| IP latency | ✅ | `latency.zst` | NS ordering right after restart, no re-probe wait |
 | DNSCrypt {identity, windows} | ✅ | `dnscrypt.zst` | sdns:// stamps break if identity lost |
 | Query stats (all counters) | ✅ | `stats.zst` | Long-term totals across restarts |
-| PTR reverse index | ❌ | — | Derived — rebuilt from entries on load |
-| IP latency | ❌ | — | Transient; bounded LRU, re-probed |
-| Entry IDs | ❌ | — | No longer needed (no shared KV store) |
 
-### `cache/persist.go` — typed binary format (entries)
+### `cache/codec.go` — per-subsystem codec
 
-`PersistFile{Version, Entries}` with `Load(path)` / `Save(path)` — pure
-serialization, no KV operations. The cache owns its in-memory data.
+KV caches share one persistence mechanism: `lrumap.Map` + a `lrumap.Codec`
+that owns the per-field binary encoding. The map owns the file management —
+version header, framed key/value pairs, zstd, atomic write:
 
 ```
-[2B version=1][8B entry_count]
-per Entry: [2B qname_len][qname][1B has_ecs]
-           (if has_ecs) [2B ecs_addr_len][ecs_addr][2B ecs_prefix]
-           [1B dnssec][2B qtype][2B qclass][4B value_len][value][8B expires_at][1B validated]
+[2B codec_version][8B entry_count]
+per Entry: [4B key_len][key][4B val_len][val]
 ```
+
+The cache codec encodes `entryKey` (typed fields: qname, ecs, dnssec, qtype,
+qclass) and `cacheEntry` (wire value + expiresAt + validated). The PTR index
+(`ptr.zst`, ip → derived records incl. owner entryKey) and latency map
+(`latency.zst`, ip → {ms, expiresAt}) each have their own small codec. A
+`Keep` filter skips expired entries at Save; `DecodeValue` skips entries that
+expired while on disk. The PTR index is derived data: when `ptr.zst` is
+missing/corrupt/empty it is rebuilt from the loaded cache entries. Non-KV
+state (stats counters, DNSCrypt identity) keeps its fixed-layout format and
+registers with the Manager instead.
 
 ### DNSCrypt state file — typed binary format
 
@@ -45,34 +57,37 @@ per Entry: [2B qname_len][qname][1B has_ecs]
 per Window: [4B serial][4B not_before][4B not_after][32B resolver_sk][32B resolver_pk]
 ```
 
-Cache-key fields are typed (no byte-packed `e:` prefixes — the BadgerDB-era
-key encoding is gone). Numeric fields use binary BigEndian. Formats are
-version-gated but carry no magic — zstd framing identifies the file type,
-and version + length-prefixed structure checks reject foreign data.
-`internal/persist` provides the shared `Save`/`Load` (zstd + atomic write);
-each subsystem defines its own format on top.
+Numeric fields use binary BigEndian. Formats are version-gated but carry no
+magic — zstd framing identifies the file type, and version + length-prefixed
+structure checks reject foreign data.
 
 ### Key Patterns
 
 - **Cache hit path**: `Get()` does an O(1) `map[entryKey]` lookup per ECS
-  fallback candidate, unpacks the wire. Answers are pre-sorted by latency —
-  the probe writes the reordered answer back into the entry, so the hot path
-  does no sorting.
-- **Cache write path**: `Set()` packs wire format, `insert()` (LRU + size
-  budget), then updates the PTR index. Wire stored uncompressed in memory;
-  zstd happens once, at file write time.
+  fallback candidate, unpacks the wire. A/AAAA answers are reordered
+  fastest-first by cached probe latency (stable sort, unprobed records keep
+  their order) — the client-facing counterpart of the resolver's NS address
+  ordering. ~0.5µs per hit on a 4-record answer.
+- **Cache write path**: `Set()` packs wire format, `store.Set()` (lrumap
+  weight-evicted), then updates the PTR index. Wire stored uncompressed in
+  memory; zstd happens once, at file write time.
 - **TTL**: each entry carries `ts` + `expiresAt = ts + entryTTL + staleMaxAge`.
   Expired entries are returned for stale-serving/prefetch; physical removal
   happens on LRU eviction, Save/Load filtering, or Clear.
-- **LRU eviction**: `insert()` evicts least-recently-used entries until the
-  new value fits `maxSizeBytes`. Eviction cleans the evicted entry's PTR
-  records (ownerKey linkage).
+- **LRU eviction**: `store.Set()` (lrumap weight eviction) evicts
+  least-recently-used entries until the new value fits the byte budget.
+  Eviction cleans the evicted entry's PTR records via the OnEvict callback
+  (ownerKey linkage).
 - **Latency**: bounded `lrumap` (ip → {ms, expiresAt}), transient. Serves the
   probe gate (`LatencyLastProbe`) and the resolver's cross-name NS ordering
   (`LookupIPLatencies`). The probe itself re-sorts the answer and re-Sets it.
-- **Reverse lookup (PTR)**: in-memory `map[ip][]ptrRecord` derived from A/AAAA
-  records; rebuilt from entries on load. Expired records skipped on scan.
-- **Stats aggregation**: `stats.Collector` — flat atomic counters (no maps, lock-free `Record()`), latency histogram buckets, `Reset()` via `ZJDNS.stats.clear`. Optional `stats.zst` persistence (shutdown snapshot, startup additive restore).
+- **Reverse lookup (PTR)**: `lrumap` `map[ip][]ptrRecord` derived from A/AAAA
+  records (update on Set, cleanup on eviction via OnEvict); persisted to
+  `ptr.zst`, derived from entries when the file is missing. Expired records
+  skipped on scan. Best-effort: `ptr.zst` and `cache.zst` are written in the
+  same persist round, so drift is bounded to one interval and costs hit-rate,
+  never correctness.
+- **Stats aggregation**: `stats.Collector` — flat atomic counters (no maps, lock-free `Record()`), latency histogram buckets, `Reset()` via `ZJDNS.stats.clear`. Optional `stats.zst` persistence (periodic + shutdown snapshot, startup additive restore).
 - **Zone queries**: `Evaluator.Evaluate()` does in-memory exact-match lookup on `exact` map (O(1)), then wildcard suffix search on `wildcards` map (max 16 iterations). Pure WORM maps.
 - **Ruleset matching**: `Engine.Match()` does CIDR via binary radix trie (O(128)) and domain suffix via map lookup (O(1)). All in-memory, loaded from config at startup.
 - **DNSCrypt**: identity + windows live in memory; the server reads its own
@@ -105,10 +120,11 @@ Config JSON:
 
 ### Stats persistence
 
-`stats.Collector` snapshots all atomic counters to `stats.zst` at shutdown
-(`SavePersist`) and restores them at startup (`LoadPersist`, additive merge)
-— totals continue across restarts. Format: `[2B version]` + one BigEndian
-int64 per counter field.
+`stats.Collector` snapshots all atomic counters to `stats.zst` on the persist
+interval and at shutdown (driven by `internal/persist.Manager` via
+`SavePersist`) and restores them at startup (`LoadPersist`, additive merge) —
+totals continue across restarts. Format: `[2B version]` + one BigEndian int64
+per counter field.
 
 ## Defense Mechanisms
 

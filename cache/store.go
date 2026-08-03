@@ -3,7 +3,6 @@ package cache
 import (
 	"bytes"
 	"net"
-	"sync"
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
@@ -25,16 +24,14 @@ type entryKey struct {
 	qclass    uint16
 }
 
-// listEntry is one cached response, chained in LRU order. The embedded list
-// pointers follow the lrumap pattern (no container/list allocation).
-type listEntry struct {
-	key       entryKey
+// cacheEntry is the stored value for one cached response. The wire format
+// value stays uncompressed in memory; compression happens once, at persist
+// file write time.
+type cacheEntry struct {
 	value     []byte // DNS wire format
 	ts        int64  // unix seconds at write
 	expiresAt int64  // ts + entryTTL + staleMaxAge — hard removal deadline
 	validated bool
-	prev      *listEntry
-	next      *listEntry
 }
 
 // latencyEntry holds an IP latency measurement with its expiry time, so the
@@ -57,21 +54,15 @@ type ptrRecord struct {
 }
 
 // Cache is an in-memory DNS response cache: O(1) map lookup, LRU eviction by
-// total value bytes, and optional persist file (load at startup, dump at
-// shutdown / DNSCrypt rotation).
+// total value bytes, and optional persist files. All three maps are
+// lrumap.Map instances with their own internal mutexes — the cache holds no
+// lock of its own. The PTR index (derived from entries, optionally persisted
+// to ptr.zst) and the latency map (optionally persisted to latency.zst) are
+// transient-friendly: a missing file falls back to derivation / cold start.
 type Cache struct {
-	mu        sync.RWMutex
-	store     map[entryKey]*listEntry
-	head      *listEntry // sentinel: most-recent side
-	tail      *listEntry // sentinel: least-recent side
-	maxSize   int64      // max total value bytes
-	totalSize int64      // Σ len(value)
-	len       int
-
-	ptrIndex map[string][]*ptrRecord // ip → derived reverse records
+	store    *lrumap.Map[entryKey, cacheEntry]
+	ptrIndex *lrumap.Map[string, []*ptrRecord] // ip → derived reverse records
 	latency  *lrumap.Map[string, latencyEntry]
-
-	file string // persist file path; empty = no persistence
 }
 
 // ecsCandidate is a single ECS cache-key candidate used during fallback lookup.
@@ -93,27 +84,90 @@ var (
 )
 
 // New creates an in-memory cache. maxSizeBytes caps total stored value bytes
-// (0 = config default); file is the optional persist path, loaded eagerly.
+// (0 = config default); file is the optional cache persist path, loaded
+// eagerly. The PTR index and latency maps are optionally persisted via
+// SetPtrPersist / SetLatencyPersist (called right after New by the server).
 func New(maxSizeBytes int64, file string) *Cache {
 	if maxSizeBytes <= 0 {
 		maxSizeBytes = int64(config.DefaultCacheMaxSizeMB) << 20
 	}
-	head := &listEntry{}
-	tail := &listEntry{}
-	head.next = tail
-	tail.prev = head
+	// Count capacity is not enforced once weight eviction is configured — the
+	// value only pre-sizes the hash map.
+	store := lrumap.New[entryKey, cacheEntry](64)
 	c := &Cache{
-		store:    make(map[entryKey]*listEntry),
-		head:     head,
-		tail:     tail,
-		maxSize:  maxSizeBytes,
-		ptrIndex: make(map[string][]*ptrRecord),
+		store:    store,
+		ptrIndex: lrumap.New[string, []*ptrRecord](config.DefaultPtrIndexCapacity),
 		latency:  lrumap.New[string, latencyEntry](config.DefaultLatencyCacheCapacity),
-		file:     file,
 	}
-	c.loadFromDisk()
+	store.SetWeight(maxSizeBytes, func(e cacheEntry) int64 { return int64(len(e.value)) })
+	store.SetOnEvict(func(k entryKey, _ cacheEntry) { c.cleanupPtrIndex(k) })
+	if file != "" {
+		if err := store.EnablePersist(lrumap.PersistConfig[entryKey, cacheEntry]{
+			Path:  file,
+			Codec: cacheCodec{},
+			Keep: func(_ entryKey, e cacheEntry) bool {
+				return e.expiresAt == 0 || e.expiresAt >= log.NowUnix()
+			},
+		}); err != nil {
+			log.Warnf("CACHE: persist load failed (starting cold): %v", err)
+		}
+	}
 	return c
 }
+
+// SetPtrPersist attaches file persistence to the PTR index and eagerly loads
+// it. When the file is missing, corrupt, or empty, the index is derived from
+// the loaded cache entries instead. Must be called immediately after New,
+// before the cache serves queries.
+func (c *Cache) SetPtrPersist(path string) {
+	if path == "" {
+		return
+	}
+	if err := c.ptrIndex.EnablePersist(lrumap.PersistConfig[string, []*ptrRecord]{
+		Path:  path,
+		Codec: ptrCodec{},
+		Keep: func(_ string, recs []*ptrRecord) bool {
+			now := log.NowUnix()
+			for _, r := range recs {
+				if r.expiresAt == 0 || r.expiresAt >= now {
+					return true
+				}
+			}
+			return false
+		},
+	}); err != nil {
+		log.Warnf("CACHE: ptr persist load failed (deriving index from entries): %v", err)
+	}
+	if c.ptrIndex.Len() == 0 {
+		// Cold start, or the file was missing/corrupt/empty — derive the
+		// index from the entries that just loaded from cache.zst.
+		c.rebuildPtrIndex()
+	}
+}
+
+// SavePtrIndex persists the PTR index (registered on the persist manager).
+func (c *Cache) SavePtrIndex() error { return c.ptrIndex.Save() }
+
+// SetLatencyPersist attaches file persistence to the latency map and eagerly
+// loads it (expired measurements are dropped). Must be called immediately
+// after New, before the cache serves queries.
+func (c *Cache) SetLatencyPersist(path string) {
+	if path == "" {
+		return
+	}
+	if err := c.latency.EnablePersist(lrumap.PersistConfig[string, latencyEntry]{
+		Path:  path,
+		Codec: latencyCodec{},
+		Keep: func(_ string, v latencyEntry) bool {
+			return v.expiresAt == 0 || v.expiresAt >= log.NowUnix()
+		},
+	}); err != nil {
+		log.Warnf("CACHE: latency persist load failed (starting empty): %v", err)
+	}
+}
+
+// SaveLatency persists the latency map (registered on the persist manager).
+func (c *Cache) SaveLatency() error { return c.latency.Save() }
 
 // Get retrieves a cached DNS response. Returns the entry, whether it was
 // found, and whether it's expired (expired entries are still returned for
@@ -122,8 +176,8 @@ func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	qname = dnsutil.Canonical(qname)
 	for _, cand := range ecsFallbackCandidates(ecs) {
 		key := entryKey{qname: qname, ecsAddr: cand.addr, ecsPrefix: uint16(cand.prefix), dnssecOK: dnssecOK, qtype: qtype, qclass: qclass} //nolint:gosec // G115: prefix ≤ 128 by CIDR semantics
-		e := c.lookup(key)
-		if e == nil {
+		e, ok := c.store.Get(key)
+		if !ok {
 			continue
 		}
 
@@ -146,6 +200,13 @@ func (c *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 			TTL:        entryTTL,
 			Validated:  e.validated,
 			Rcode:      int(msg.Rcode), //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
+		}
+		// Reorder A/AAAA records fastest-first by cached probe latency — the
+		// client-facing counterpart of the resolver's NS address ordering.
+		if (qtype == dns.TypeA || qtype == dns.TypeAAAA) && len(entry.Answer) > 1 {
+			if latencies := c.recordLatencyLookup(entry.Answer); latencies != nil {
+				sortAnswerByLatency(entry.Answer, latencies)
+			}
 		}
 		pool.DefaultMessage.Put(msg)
 
@@ -199,7 +260,7 @@ func (c *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 
 	expiresAt := now + int64(entryTTL) + defaultStaleMaxAge
 	key := entryKey{qname: qname, ecsAddr: ecsAddr, ecsPrefix: uint16(ecsPrefix), dnssecOK: dnssecOK, qtype: qtype, qclass: qclass} //nolint:gosec // G115: prefix ≤ 128 by CIDR semantics
-	c.insert(key, wire, now, expiresAt, validated)
+	c.store.Set(key, cacheEntry{value: wire, ts: now, expiresAt: expiresAt, validated: validated})
 	c.updatePtrIndex(key, answer, authority, additional, now, expiresAt)
 	return true
 }
@@ -245,97 +306,12 @@ func (c *Cache) LatencyLastProbe(ip string) (int64, bool) {
 
 // Len returns the current number of cached entries.
 func (c *Cache) Len() int {
-	c.mu.RLock()
-	n := c.len
-	c.mu.RUnlock()
-	return n
+	return c.store.Len()
 }
 
 // SizeBytes returns the current total value size in bytes.
 func (c *Cache) SizeBytes() int64 {
-	c.mu.RLock()
-	n := c.totalSize
-	c.mu.RUnlock()
-	return n
-}
-
-// ── LRU map operations (internal) ───────────────────────────────────────
-
-// lookup returns the entry for key, bumping it to the front. Expired entries
-// are returned — expiry is judged by the caller (stale-serve/prefetch need
-// the entry itself); physical removal happens on eviction, Save/Load, Clear.
-func (c *Cache) lookup(key entryKey) *listEntry {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if e, ok := c.store[key]; ok {
-		c.moveToFront(e)
-		return e
-	}
-	return nil
-}
-
-// insert stores (or updates) an entry, evicting least-recently-used entries
-// until the size budget allows the new value.
-func (c *Cache) insert(key entryKey, value []byte, ts, expiresAt int64, validated bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	size := int64(len(value))
-
-	if e, ok := c.store[key]; ok {
-		c.totalSize += size - int64(len(e.value))
-		e.value = value
-		e.ts = ts
-		e.expiresAt = expiresAt
-		e.validated = validated
-		c.moveToFront(e)
-		return
-	}
-	for c.totalSize+size > c.maxSize && c.len > 0 {
-		c.evictLocked()
-	}
-	c.totalSize += size
-	e := &listEntry{key: key, value: value, ts: ts, expiresAt: expiresAt, validated: validated}
-	c.store[key] = e
-	c.pushFront(e)
-	c.len++
-}
-
-// evictLocked removes the least-recently-used entry (just before the tail
-// sentinel) and its derived PTR records. Must hold c.mu.
-func (c *Cache) evictLocked() {
-	if e := c.tail.prev; e != c.head {
-		c.remove(e)
-		delete(c.store, e.key)
-		c.totalSize -= int64(len(e.value))
-		c.len--
-		c.cleanupPtrIndexLocked(e.key)
-	}
-}
-
-func (c *Cache) moveToFront(e *listEntry) {
-	if e.prev == c.head {
-		return // already at front
-	}
-	e.prev.next = e.next
-	e.next.prev = e.prev
-	e.prev = c.head
-	e.next = c.head.next
-	c.head.next.prev = e
-	c.head.next = e
-}
-
-func (c *Cache) pushFront(e *listEntry) {
-	e.prev = c.head
-	e.next = c.head.next
-	c.head.next.prev = e
-	c.head.next = e
-}
-
-func (c *Cache) remove(e *listEntry) {
-	e.prev.next = e.next
-	e.next.prev = e.prev
-	e.prev = nil
-	e.next = nil
+	return c.store.TotalWeight()
 }
 
 // ── Set-path helpers (moved from the BadgerDB-era store) ────────────────

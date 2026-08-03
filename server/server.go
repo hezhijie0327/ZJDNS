@@ -19,6 +19,7 @@ import (
 	"zjdns/edns"
 	"zjdns/internal/dns64"
 	"zjdns/internal/log"
+	"zjdns/internal/persist"
 	"zjdns/ruleset"
 	"zjdns/server/defense"
 	"zjdns/server/handler"
@@ -45,11 +46,12 @@ import (
 // Server orchestrates the DNS server lifecycle: dependency wiring, protocol
 // listener startup/shutdown, and background task scheduling.
 type Server struct {
-	config      *config.ServerConfig
-	handler     *handler.Handler
-	queryClient *upstream.Client
-	stats       *stats.Collector
-	cacheStore  *cache.Cache
+	config         *config.ServerConfig
+	handler        *handler.Handler
+	queryClient    *upstream.Client
+	stats          *stats.Collector
+	cacheStore     *cache.Cache
+	persistManager *persist.Manager
 
 	tls             *tls.Server
 	tlcpServer      *servertlcp.Server
@@ -96,6 +98,12 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	cacheSettings := &cfg.Server.Features.Cache
 	maxSizeBytes := int64(cacheSettings.MaxSizeMB) << 20
 	cacheStore := cache.New(maxSizeBytes, cacheFile)
+	// PTR index and latency share the persist directory (own files, loaded
+	// eagerly; missing/corrupt files fall back to derivation / cold start).
+	if persistDir != "" {
+		cacheStore.SetPtrPersist(filepath.Join(persistDir, "ptr.zst"))
+		cacheStore.SetLatencyPersist(filepath.Join(persistDir, "latency.zst"))
+	}
 	s.cacheStore = cacheStore
 	// A later init failure must still release the persist file (open handles).
 	initOK := false
@@ -143,6 +151,8 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	s.initProtocolListeners(cfg, h, cacheStore)
 
 	s.initPprof(cfg)
+
+	s.initPersistManager(cacheStore, statsCollector, persistDir)
 
 	s.startBackgroundTasks()
 

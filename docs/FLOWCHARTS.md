@@ -30,11 +30,11 @@ graph TD
     INITDB --> INITMW[Build Middleware Chain<br/>9 Layers]
     INITMW --> INITHANDLER[Create Handler<br/>+ Resolver + Zone + Ruleset]
     INITHANDLER --> STARTPROTO[Start Protocol Listeners<br/>UDP TCP DoT DoH DoH3<br/>DoQ DTLS TLCP DTLCP<br/>DNSCrypt]
-    STARTPROTO --> BG[Start Background Tasks<br/>ECS Refresh · Cookie Rotate<br/>TCP WriteMu Sweep]
+    STARTPROTO --> BG[Start Background Tasks<br/>ECS Refresh · Cookie Rotate<br/>TCP WriteMu Sweep · Periodic Persist]
     BG --> RUNNING[Running<br/>accept queries]
     RUNNING --> SIG{Signal?}
     SIG -->|SIGINT/SIGTERM| SHUTDOWN[Mark Handler Closed<br/>Cancel Context<br/>Stop Protocol Listeners]
-    SHUTDOWN --> WAITBG[Wait Background Tasks<br/>Drain AsyncStatsWriter · Close DB]
+    SHUTDOWN --> WAITBG[Wait Background Tasks<br/>Final Persist Flush · Close Cache]
     WAITBG --> EXIT[Exit]
     classDef start fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     classDef proc fill:#fef3c7,stroke:#f59e0b,color:#78350f

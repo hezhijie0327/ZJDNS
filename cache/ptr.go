@@ -47,34 +47,52 @@ func (c *Cache) updatePtrIndex(owner entryKey, answer, authority, additional []d
 		return
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.cleanupPtrIndexLocked(owner)
+	// Replace this owner's records across all IPs, then append the new ones.
+	c.cleanupPtrIndex(owner)
 	for _, r := range recs {
-		c.ptrIndex[r.ip] = append(c.ptrIndex[r.ip], &ptrRecord{
+		record := &ptrRecord{
 			name:      r.name,
 			ttl:       r.ttl,
 			ts:        ts,
 			expiresAt: expiresAt,
 			ownerKey:  owner,
-		})
+		}
+		old, ok := c.ptrIndex.Get(r.ip)
+		if !ok {
+			c.ptrIndex.Set(r.ip, []*ptrRecord{record})
+			continue
+		}
+		c.ptrIndex.Set(r.ip, append(old, record))
 	}
 }
 
-// cleanupPtrIndexLocked removes all PTR records owned by the entry with the
-// given key. Must hold c.mu.
-func (c *Cache) cleanupPtrIndexLocked(owner entryKey) {
-	for ip, recs := range c.ptrIndex {
+// cleanupPtrIndex removes all PTR records owned by the entry with the given
+// key, deleting now-empty IP entries. Runs from the store's OnEvict callback
+// (store lock held) — it must not touch the store itself.
+func (c *Cache) cleanupPtrIndex(owner entryKey) {
+	type change struct {
+		ip   string
+		recs []*ptrRecord
+	}
+	changes := make([]change, 0, 8)
+	c.ptrIndex.Range(func(ip string, recs []*ptrRecord) bool {
 		kept := recs[:0]
 		for _, r := range recs {
 			if r.ownerKey != owner {
 				kept = append(kept, r)
 			}
 		}
-		if len(kept) == 0 {
-			delete(c.ptrIndex, ip)
+		if len(kept) != len(recs) {
+			changes = append(changes, change{ip: ip, recs: kept})
+		}
+		return true
+	})
+	// Range holds the map lock; apply outside it.
+	for _, ch := range changes {
+		if len(ch.recs) == 0 {
+			c.ptrIndex.Delete(ch.ip)
 		} else {
-			c.ptrIndex[ip] = kept
+			c.ptrIndex.Set(ch.ip, ch.recs)
 		}
 	}
 }
@@ -84,13 +102,11 @@ func (c *Cache) ReverseLookup(ip string) []LookupResult {
 	if ip == "" {
 		return nil //nolint:nilerr // key not found
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	now := log.NowUnix()
-	recs := c.ptrIndex[ip]
-	if len(recs) == 0 {
+	recs, ok := c.ptrIndex.Get(ip)
+	if !ok {
 		return nil
 	}
+	now := log.NowUnix()
 	results := make([]LookupResult, 0, len(recs))
 	for _, r := range recs {
 		if r.expiresAt > 0 && r.expiresAt < now {

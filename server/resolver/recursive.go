@@ -21,8 +21,10 @@ import (
 // builds a cryptographic chain of trust at each delegation step.
 //
 // Both root servers and per-nameserver addresses share the same latency-sorted
-// cache mechanism: per-type TypeA/TypeAAAA entries + ip_latency table.
-// sortAnswerByLatency reorders records by latency at Get() time.
+// cache mechanism: per-type TypeA/TypeAAAA entries + ip_latency table. The
+// client-facing A/AAAA answers are reordered fastest-first by the cache at
+// Get() time (cache.sortAnswerByLatency); the NS addresses below are ordered
+// by the resolver's own sortAddrsByLatency.
 type Recursive struct {
 	resolver    *Resolver
 	cache       cache.Store

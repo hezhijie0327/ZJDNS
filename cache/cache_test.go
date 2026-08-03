@@ -284,8 +284,8 @@ func TestDiskPersistence(t *testing.T) {
 	mc := New(0, dbFile)
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, dns.RcodeSuccess)
-	if err := mc.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+	if err := mc.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
 	}
 
 	mc2 := New(0, dbFile) // loads the persist file

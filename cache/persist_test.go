@@ -26,9 +26,8 @@ func TestPersist_RoundTrip(t *testing.T) {
 
 	mc := New(0, file)
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{aRR("example.com.", "192.0.2.1")}, nil, nil, false, dns.RcodeSuccess)
-
-	if err := mc.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+	if err := mc.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
 	}
 
 	mc2 := New(0, file)
@@ -50,23 +49,21 @@ func TestPersist_ExpiredFiltered(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "state.zst")
 
 	mc := New(0, file)
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{aRR("example.com.", "192.0.2.1")}, nil, nil, false, dns.RcodeSuccess)
-	// Force the entry past its hard removal deadline.
-	e := mc.lookup(entryKey{qname: "example.com.", qtype: dns.TypeA, qclass: dns.ClassINET})
-	if e == nil {
-		t.Fatal("entry not found before expiry tweak")
-	}
-	e.expiresAt = log.NowUnix() - 1
-	if err := mc.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+	// Insert an entry already past its hard removal deadline — Save's Keep
+	// filter must drop it (and reload would skip it even if it were written).
+	mc.store.Set(entryKey{qname: "example.com.", qtype: dns.TypeA, qclass: dns.ClassINET}, cacheEntry{
+		value:     []byte("wire"),
+		ts:        log.NowUnix() - 1<<20,
+		expiresAt: log.NowUnix() - 1,
+	})
+	if err := mc.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
 	}
 
-	f, err := Load(file)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if len(f.Entries) != 0 {
-		t.Errorf("expired entry persisted: %d entries", len(f.Entries))
+	mc2 := New(0, file)
+	defer func() { _ = mc2.Close() }()
+	if mc2.Len() != 0 {
+		t.Errorf("expired entry persisted: %d entries", mc2.Len())
 	}
 }
 
@@ -76,8 +73,8 @@ func TestPersist_ECSAndDNSSECScoping(t *testing.T) {
 	mc := New(0, file)
 	mc.Set("ecs.com.", dns.TypeA, dns.ClassINET, ecsOption("198.51.100.0", 24), true,
 		[]dns.RR{aRR("ecs.com.", "198.51.100.1")}, nil, nil, true, dns.RcodeSuccess)
-	if err := mc.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+	if err := mc.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
 	}
 
 	mc2 := New(0, file)
@@ -96,16 +93,20 @@ func TestPersist_ECSAndDNSSECScoping(t *testing.T) {
 
 // ── PTR index ─────────────────────────────────────────────────────────────────
 
-func TestPersist_PTRIndexRebuilt(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "state.zst")
+func TestPersist_PTRIndexDerivedOnMissingFile(t *testing.T) {
+	// Only cache.zst exists (no ptr.zst) — the index must be derived from
+	// the loaded entries.
+	dir := t.TempDir()
+	file := filepath.Join(dir, "state.zst")
 
 	mc := New(0, file)
 	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{aRR("www.example.com.", "192.0.2.55")}, nil, nil, false, dns.RcodeSuccess)
-	if err := mc.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+	if err := mc.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
 	}
 
 	mc2 := New(0, file)
+	mc2.SetPtrPersist(filepath.Join(dir, "ptr.zst")) // missing file → derive
 	defer func() { _ = mc2.Close() }()
 
 	results := mc2.ReverseLookup("192.0.2.55")
@@ -114,6 +115,56 @@ func TestPersist_PTRIndexRebuilt(t *testing.T) {
 	}
 	if results[0].Name != "www.example.com." {
 		t.Errorf("name = %q, want www.example.com.", results[0].Name)
+	}
+}
+
+func TestPersist_PTRIndexRoundTrip(t *testing.T) {
+	// ptr.zst persisted: the index loads directly, no derivation needed.
+	dir := t.TempDir()
+	ptrFile := filepath.Join(dir, "ptr.zst")
+
+	mc := New(0, "")
+	mc.SetPtrPersist(ptrFile)
+	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{aRR("www.example.com.", "192.0.2.55")}, nil, nil, false, dns.RcodeSuccess)
+	if err := mc.SavePtrIndex(); err != nil {
+		t.Fatalf("SavePtrIndex: %v", err)
+	}
+
+	mc2 := New(0, "")
+	mc2.SetPtrPersist(ptrFile)
+	defer func() { _ = mc2.Close() }()
+
+	results := mc2.ReverseLookup("192.0.2.55")
+	if len(results) != 1 {
+		t.Fatalf("reverse lookup after ptr reload: %d results, want 1", len(results))
+	}
+	if results[0].Name != "www.example.com." {
+		t.Errorf("name = %q, want www.example.com.", results[0].Name)
+	}
+}
+
+// ── Latency ───────────────────────────────────────────────────────────────────
+
+func TestPersist_LatencyRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	latFile := filepath.Join(dir, "latency.zst")
+
+	mc := New(0, "")
+	mc.SetLatencyPersist(latFile)
+	mc.UpdateLatency("192.0.2.1", 42)
+	if err := mc.SaveLatency(); err != nil {
+		t.Fatalf("SaveLatency: %v", err)
+	}
+
+	mc2 := New(0, "")
+	mc2.SetLatencyPersist(latFile)
+	defer func() { _ = mc2.Close() }()
+
+	if lat, ok := mc2.LatencyLastProbe("192.0.2.1"); !ok || lat <= 0 {
+		t.Errorf("LatencyLastProbe after reload = %d, %v; want > 0, true", lat, ok)
+	}
+	if got := mc2.LookupIPLatencies([]string{"192.0.2.1"})["192.0.2.1"]; got != 42 {
+		t.Errorf("LookupIPLatencies after reload = %d, want 42", got)
 	}
 }
 
@@ -148,12 +199,11 @@ func TestLRU_EvictCleansPTRIndex(t *testing.T) {
 
 	// Evicted entries must have left no PTR records behind: each surviving
 	// entry owns exactly one record (its A answer).
-	mc.mu.Lock()
 	total := 0
-	for _, recs := range mc.ptrIndex {
+	mc.ptrIndex.Range(func(_ string, recs []*ptrRecord) bool {
 		total += len(recs)
-	}
-	mc.mu.Unlock()
+		return true
+	})
 	if total != mc.Len() {
 		t.Errorf("ptr records (%d) != cache entries (%d) — eviction leak", total, mc.Len())
 	}

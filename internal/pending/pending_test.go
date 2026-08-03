@@ -10,8 +10,8 @@ func TestNewGroup(t *testing.T) {
 	if g == nil {
 		t.Fatal("NewGroup returned nil")
 	}
-	if g.sets == nil {
-		t.Fatal("NewGroup sets map is nil")
+	if g.m == nil {
+		t.Fatal("NewGroup backing map is nil")
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 	"zjdns/internal/log"
 )
@@ -48,12 +49,15 @@ func ResolveDataFile(name, url string) string {
 	// Refuse to load group/other-writable files — root data files contain
 	// cryptographic trust material; a writable file can be tampered with by
 	// any local user. Fail closed rather than loading potentially-modified
-	// trust material.
-	if info, err := os.Stat(path); err == nil {
-		if info.Mode().Perm()&otherWritePermMask != 0 {
-			log.Errorf("CONFIG: root data file %s has insecure permissions (%04o) — refusing to load trust material; run 'chmod 644 %s'",
-				path, info.Mode().Perm(), path)
-			return ""
+	// trust material. Windows has no POSIX permission model: Mode().Perm()
+	// is always 0666-ish there, so the check would reject every file — skip it.
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(path); err == nil {
+			if info.Mode().Perm()&otherWritePermMask != 0 {
+				log.Errorf("CONFIG: root data file %s has insecure permissions (%04o) — refusing to load trust material; run 'chmod 644 %s'",
+					path, info.Mode().Perm(), path)
+				return ""
+			}
 		}
 	}
 	return path

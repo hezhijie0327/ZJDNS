@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 	"zjdns/config"
@@ -23,32 +22,19 @@ func (s *Server) startBackgroundTasks() {
 	s.setupSignalHandling()
 }
 
-// startPeriodicPersist periodically dumps cache, stats, and DNSCrypt state
-// to disk, bounding crash loss to the configured interval (0 = disabled,
-// shutdown-only dump). DNSCrypt is included even though its state only
-// changes on rotation — the identity is the least disposable data there is.
+// startPeriodicPersist runs the unified persist manager: every registered
+// subsystem (cache, stats, DNSCrypt state) is dumped to disk on the
+// configured interval and once more at shutdown. The manager runs inside the
+// background errgroup so shutdown waits for the final flush before the cache
+// is cleared.
 func (s *Server) startPeriodicPersist() {
+	if s.persistManager == nil {
+		return
+	}
 	interval := time.Duration(s.config.Server.Features.Persist.IntervalSeconds) * time.Second
-	if interval <= 0 {
-		return
-	}
-	dir := s.config.Server.Features.Persist.Dir
-	if dir == "" {
-		return
-	}
-	statsFile := filepath.Join(dir, "stats.zst")
-	s.runBackgroundTicker("periodic persist", interval, func() {
-		if err := s.cacheStore.Save(); err != nil {
-			log.Warnf("CACHE: periodic persist failed: %v", err)
-		}
-		if err := s.stats.SavePersist(statsFile); err != nil {
-			log.Warnf("SERVER: stats periodic persist failed: %v", err)
-		}
-		if s.dnscryptServer != nil {
-			if err := s.dnscryptServer.Save(); err != nil {
-				log.Warnf("DNSCRYPT: periodic persist failed: %v", err)
-			}
-		}
+	s.backgroundGroup.Go(func() error {
+		defer zdnsutil.HandlePanic("periodic persist")
+		return s.persistManager.Run(s.backgroundCtx, interval)
 	})
 }
 
@@ -305,15 +291,6 @@ func (s *Server) shutdownServer() {
 
 	if cacheStore := s.handler.CacheStore(); cacheStore != nil {
 		zdnsutil.CloseWithLog(cacheStore, "Cache store", "SERVER")
-	}
-
-	// Persist query stats last — after all queries have drained.
-	if s.stats != nil {
-		if dir := s.config.Server.Features.Persist.Dir; dir != "" {
-			if err := s.stats.SavePersist(filepath.Join(dir, "stats.zst")); err != nil {
-				log.Warnf("SERVER: stats persist failed: %v", err)
-			}
-		}
 	}
 
 	if s.shutdown != nil {

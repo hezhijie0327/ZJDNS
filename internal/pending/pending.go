@@ -6,23 +6,22 @@
 // leader's result — they simply skip the work.  For wait-for-result semantics,
 // use server/handler.PendingRequests instead.
 //
-// The internal map is bounded at maxPending entries to prevent unbounded
+// The group is a thin wrapper over lrumap.Map (Set-if-absent via
+// LoadOrStore). The map is bounded at maxPending entries to prevent unbounded
 // memory growth from leaked keys (keys whose Done is never called due to
-// panics or logic errors).  When the map is full, Start returns true
-// (leader) to prevent starvation — dedup degrades gracefully under overload.
+// panics or logic errors): when the map is full, the least-recently-used key
+// is evicted. Start still returns true (leader) so dedup degrades gracefully
+// under overload rather than starving.
 package pending
 
-import "sync"
+import "zjdns/internal/lrumap"
 
 // Group deduplicates concurrent work by key.  Start registers a pending
 // operation; if an operation for the same key is already in flight, it
 // returns false.  Done removes the key, allowing future operations to
 // proceed.
-//
-// The zero value is not usable; use NewGroup to create a valid Group.
 type Group[K comparable] struct {
-	mu   sync.Mutex
-	sets map[K]struct{}
+	m *lrumap.Map[K, struct{}]
 }
 
 // maxPending is the hard cap on in-flight keys to prevent unbounded memory
@@ -32,51 +31,27 @@ const maxPending = 10000
 
 // NewGroup creates a Group ready for use.
 func NewGroup[K comparable]() *Group[K] {
-	return &Group[K]{
-		sets: make(map[K]struct{}),
-	}
+	return &Group[K]{m: lrumap.New[K, struct{}](maxPending)}
 }
 
 // Start registers an operation for key.  Returns true if the caller should
 // proceed (leader).  Returns false if an operation for this key is already in
 // flight; the caller should skip its work.
 //
-// When the internal map reaches maxPending entries, an arbitrary key is
-// evicted to make room — the map stays bounded while dedup keeps working
-// (leaked keys from panics or missing Done calls cannot grow memory, and a
-// full map does not silently disable dedup).
-//
-// The zero-value Group is lazily initialised on first use.
+// When the internal map reaches maxPending entries, the least-recently-used
+// key is evicted to make room — the map stays bounded while dedup keeps
+// working (leaked keys from panics or missing Done calls cannot grow memory,
+// and a full map does not silently disable dedup).
 //
 // Callers MUST use `defer g.Done(key)` immediately after Start(key) to
 // prevent key leakage if the goroutine panics.
 func (g *Group[K]) Start(key K) bool {
-	g.mu.Lock()
-	if g.sets == nil {
-		g.sets = make(map[K]struct{})
-	}
-	_, loaded := g.sets[key]
-	if loaded {
-		g.mu.Unlock()
-		return false
-	}
-	if len(g.sets) >= maxPending {
-		// Evict one entry (map iteration order is arbitrary — fine for a
-		// capacity backstop) so the new key is still deduplicated.
-		for k := range g.sets {
-			delete(g.sets, k)
-			break
-		}
-	}
-	g.sets[key] = struct{}{}
-	g.mu.Unlock()
-	return true
+	_, loaded := g.m.LoadOrStore(key, struct{}{})
+	return !loaded
 }
 
 // Done removes the pending key after the operation completes.  Safe to call
 // with a key that was never started (no-op).
 func (g *Group[K]) Done(key K) {
-	g.mu.Lock()
-	delete(g.sets, key)
-	g.mu.Unlock()
+	g.m.Delete(key)
 }

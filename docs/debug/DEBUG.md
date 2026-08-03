@@ -569,8 +569,9 @@ For interactive debugging, create `config.debug.json` (not committed):
     },
     "features": {
       "dnssec_enforce": true,
-      "cache": {
-        "db_path": "cache.db"
+      "persist": {
+        "dir": "/tmp/zjdns-persist",
+        "interval_seconds": 300
       },
       "latency_probe": [
         { "protocol": "ping", "timeout": 200 },
@@ -607,10 +608,13 @@ dig @127.0.0.1 -p 15353 zhijie-online.mail.protection.outlook.com A +short
 # QNAME minimisation CNAME corner case (RFC 9156 §2.3)
 dig @127.0.0.1 -p 15353 home.console.aliyun.com A
 
-# Stats + DB ops
+# Stats
 dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.stats.clear CH TXT +short
-./zjdns --kv cache.db q:
+dig @127.0.0.1 -p 15353 zjdns.cache.clear CH TXT +short
+
+# 缓存/延迟/PTR 持久化文件(在 persist.dir 下,按 interval_seconds 周期落盘)
+ls -la /tmp/zjdns-persist/
 ```
 
 ### TLCP (国密) Test
@@ -632,46 +636,3 @@ dig @127.0.0.1 -p 55454 www.baidu.com A +short
 dig @127.0.0.1 -p 55454 www.baidu.com A +short
 ```
 
-## BadgerDB Debug Queries
-
-日常排查用 `--kv` 浏览 BadgerDB，会自动解码显示各前缀内容。无前缀时列出所有表的统计：
-
-```bash
-# 统计概览
-./zjdns --kv cache.db
-
-# 浏览指定前缀（自动解码显示）
-./zjdns --kv cache.db e:    # 缓存条目
-./zjdns --kv cache.db q:    # 查询日志（含 qname/rcode/result）
-./zjdns --kv cache.db s:    # 每日统计
-./zjdns --kv cache.db l:    # IP 延迟数据
-./zjdns --kv cache.db z:    # 区域规则
-./zjdns --kv cache.db r:    # Ruleset 规则
-
-# 删除指定前缀下所有 key（需确认）
-./zjdns --kv cache.db e: --drop
-```
-
-### 排查 SERVFAIL 域名
-
-```bash
-# 列出所有查询日志，grep rcode=2 即 SERVFAIL
-./zjdns --kv cache.db q: | grep 'rcode=2'
-
-# 输出示例：
-# 2026-07-29 10:30:00 qname=nx-zzz.invalid.  qtype=1  result=miss  protocol=udp  rcode=2  server=223.5.5.5  2000ms
-```
-
-### 按 rcode 分布
-
-```bash
-# 统计各 rcode 出现次数
-./zjdns --kv cache.db q: | awk '{for(i=1;i<=NF;i++) if($i~/^rcode=/) print $i}' | sort | uniq -c | sort -rn
-```
-
-### 最近 SERVFAIL 详情
-
-```bash
-# 列出最近 SERVFAIL 查询的域名、上游服务器和耗时
-./zjdns --kv cache.db q: | grep 'rcode=2' | tail -20
-```
