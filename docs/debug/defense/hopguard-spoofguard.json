@@ -11,7 +11,8 @@
       "address": "8.8.8.8:53",
       "protocol": "udp",
       "hopguard": true,
-      "spoofguard": true
+      "spoofguard": true,
+      "no_cache": true
     }
   ]
 }

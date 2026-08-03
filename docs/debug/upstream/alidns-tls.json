@@ -1,8 +1,8 @@
 {
   "server": {
     "log_level": "debug",
-    "protocol": { "udp": "11553" },
-    "features": { "cache": { "max_entries": 0 } }
+    "protocol": { "udp": "11553", "tcp": "11553" },
+    "features": { "cache": {} }
   },
   "upstream": [
     {

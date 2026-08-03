@@ -3,14 +3,14 @@ module zjdns
 go 1.26.4
 
 require (
-	codeberg.org/miekg/dns v0.6.85-0.20260719080845-1db1230d9666
+	codeberg.org/miekg/dns v0.6.87
 	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033
-	github.com/cloudflare/circl v1.6.5-0.20260725174654-c55f49e67f75
-	github.com/emmansun/gmsm v0.44.0
-	github.com/klauspost/compress v1.19.2-0.20260721100123-117430d3b0e3
-	github.com/ncruces/go-sqlite3 v0.35.3-0.20260721171147-1c3fb78d91a3
-	github.com/pion/dtls/v3 v3.1.3-0.20260713182031-e1fb308f9f85
-	github.com/quic-go/quic-go v0.61.1-0.20260727032127-9bfbf4cd052b
+	github.com/cloudflare/circl v1.6.5-0.20260731205605-df9fbeabf921
+	github.com/emmansun/gmsm v0.44.1
+	github.com/klauspost/compress v1.19.2-0.20260730083710-69c9db420ae5
+	github.com/ncruces/go-sqlite3 v0.35.3-0.20260803005230-92f8a45999c2
+	github.com/pion/dtls/v3 v3.1.3-0.20260803131640-528115428569
+	github.com/quic-go/quic-go v0.61.1-0.20260803043222-2cfe6ee0b5ac
 	gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f
 	gitlab.com/go-extension/tls v0.0.0-20260715144009-d75c84d8b9d2
 	golang.org/x/crypto v0.54.0
@@ -24,7 +24,7 @@ require (
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488 // indirect
 	github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d // indirect
-	github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35303 // indirect
+	github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35304 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/transport/v4 v4.0.2 // indirect

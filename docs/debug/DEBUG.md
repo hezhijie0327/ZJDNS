@@ -23,9 +23,9 @@ docs/debug/
 │   └── client-dnscrypt-ephemeral.json     # client: DNSCrypt + ephemeral_keys + PQ → server
 ├── routedns/               # ZJDNS ↔ RouteDNS tests
 │   └── dtls-client.toml    # RouteDNS DTLS client → ZJDNS DTLS server
-│                            #   Prerequisite: generate cert with
-│                            #   openssl req -x509 -newkey ec ... -out /tmp/zjdns-certs/cert.pem
-│                            #   and configure ZJDNS to use the same cert
+│                            #   Prerequisite: generate cert with the openssl
+│                            #   command in the toml's header (SAN IP:127.0.0.1,
+│                            #   cert outside /tmp) and configure ZJDNS to use it
 ├── dnscrypt/               # ZJDNS ↔ DNSCrypt-proxy tests
 │   ├── zjdns-server.json          # ZJDNS DNSCrypt server (dual-cert: classical + PQ)
 │   ├── proxy-pq.toml                     # DNSCrypt-proxy client (pqdnscrypt=true, default)
@@ -104,14 +104,6 @@ go build -o dnsproxy .
 ZJDNS loopback and upstream tests use `self_signed: true` and
 `skip_tls_verify: true` — no external cert generation needed.
 
-### macOS Notes
-
-- **Do not use port 5353** — reserved by mDNSResponder.
-- **dig may time out on UDP** when the server binds to multiple IPs
-  (127.0.0.1, ::1, external). This is a macOS kernel UDP-loopback quirk,
-  not a ZJDNS bug. All loopback client configs now expose both UDP and TCP
-  on the same port — use `dig +tcp` as a reliable fallback. Linux is unaffected.
-
 ## Loopback Tests (ZJDNS ↔ ZJDNS)
 
 Start the server once (all protocols):
@@ -123,12 +115,14 @@ sleep 3
 
 ### Client Ports Reference
 
-| Client Config | Client Port | Protocol | Server Port |
-|---------------|:-----------:|----------|:-----------:|
+All forwarding clients accept queries on both **UDP and TCP** (same port).
+The "Protocol" column is the upstream forwarding protocol.
+
+| Client Config | Client Port | Upstream | Server Port |
 | `client-udp.json` | 10553 | UDP | 10533 |
 | `client-tcp.json` | 10653 | TCP | 10533 |
 | `client-tls.json` | 10753 | DoT | 10853 |
-| `client-https.json` | 10853 | DoH | 10443 |
+| `client-https.json` | 11853 | DoH | 10443 |
 | `client-http3.json` | 13953 | DoH3 | 10444 |
 | `client-quic.json` | 10953 | DoQ | 10784 |
 | `client-dtls.json` | 14953 | DTLS | 10434 |
@@ -139,18 +133,28 @@ sleep 3
 | `client-dnscrypt-classic.json` | 12445 | DNSCrypt (classical) | 12443 |
 | `client-dnscrypt-ephemeral.json` | 12445 | DNSCrypt + ephemeral_keys + PQ | 12443 |
 
+> [!NOTE]
+> Forwarding client configs set `tcp` to the same port as `udp`. Without it,
+> the default TCP port 53 (privileged) makes non-root startup fail with
+> "no available tcp addresses for port 53".
+
 ### Quick Tests
 
-```bash
-# Direct to server (TCP recommended on macOS — see Prerequisites)
-dig @127.0.0.1 -p 10533 www.baidu.com A +short +tcp
+**Test methodology**: The server listens on both UDP and TCP for 10533 — `dig`
+works with either.  Forwarding clients (`client-*.json`) also listen on both
+UDP and TCP (same port) and forward queries over the configured upstream
+protocol (TLS/QUIC/HTTPS/etc.).
 
-# Via forwarding clients — start one client, query it, kill it
-# Example: DTLS
-/tmp/zjdns -config docs/debug/loopback/client-dtls.json &
+```bash
+# Direct to server — UDP or TCP both work.
+dig @127.0.0.1 -p 10533 www.baidu.com A +short
+
+# Forwarding clients — UDP (dig default) or +tcp, same port.
+/tmp/zjdns -config docs/debug/loopback/client-tls.json &
 sleep 2
-dig @127.0.0.1 -p 14953 www.baidu.com A +short
-pkill -f "client-dtls"
+dig @127.0.0.1 -p 10753 www.baidu.com A +short          # UDP (default)
+dig @127.0.0.1 -p 10753 www.baidu.com A +short +tcp     # TCP
+pkill -f "client-tls"
 ```
 
 ## DNSSEC Test
@@ -172,21 +176,35 @@ dig @127.0.0.1 -p 12733 sigok.ippacket.stream A +short
 pkill -f "server-dnssec"
 ```
 
-### Offline KSK (CDS fallback)
+### Offline KSK (SEP relaxation + CDS fallback)
 
-部分域名（如 `jellyfin.org`）使用 offline KSK 部署：KSK 签名 DNSKEY RRset
-但不在其中发布，仅有 ZSK 在 DNSKEY set 中。验证器须通过 CDS (RFC 7344) 确认委托链。
+部分域名使用 offline KSK 部署：KSK 签名 DNSKEY RRset 但不在其中发布，
+仅有 ZSK 在 DNSKEY set 中。
+
+两种互补机制确保验证通过：
+
+1. **SEP-only DS matching**（`VerifyDelegationDS` / `SelfVerifyDNSKEY`）：
+   SEP 位是部署约定（RFC 4034 §2.1.2），不是验证要求。DS 摘要匹配任何
+   DNSKEY 即可，不要求 SEP 标志。这对 `jellyfin.org` 生效（DS 由 ZSK 算出，
+   SEP 放松后直接匹配）。
+
+2. **CDS/CDNSKEY fallback**（`verifyOfflineKSK` → `verifyViaCDS` / `verifyViaCDNSKEY`）：
+   当 DS 由完全不发布在 DNSKEY RRset 中的 KSK 算出时（真正的 offline KSK），
+   查询子域的 CDS/CDNSKEY 记录（RFC 7344），与父域 DS 做完整 SHA-256 摘要
+   匹配。此 fallback 是**有意保留的设计**——摘要匹配密码学上等价于标准 DS
+   验证，不是死代码，请勿移除。
 
 ```bash
 /tmp/zjdns -config docs/debug/loopback/server-dnssec.json &
 sleep 2
 
-# Offline KSK — must resolve via CDS fallback
-dig @127.0.0.1 -p 12733 repo.jellyfin.org A +short
-# Expected: valid A record (68.183.204.194), NOT SERVFAIL
-
+# Offline KSK — DNSSEC 链验证
 dig @127.0.0.1 -p 12733 jellyfin.org DNSKEY +short
-# Expected: single ZSK (flags=256), no KSK published — CDS fallback activates
+# Expected: single ZSK (flags=256), no KSK published
+#   → SEP relaxation: ZSK directly matches parent DS
+
+# A 记录查询可能因权威 NS 网络不可达而超时（jellyfin 使用 Gandi NS，
+# out-of-bailiwick 解析耗时较长），这是网络限制而非 DNSSEC 问题。
 
 pkill -f "server-dnssec"
 ```
@@ -265,9 +283,9 @@ pkill -f "hopguard-spoofguard"
 /tmp/zjdns -config docs/debug/defense/splitguard.json &
 sleep 2
 
-dig @127.0.0.1 -p 10533 www.google.com A +short +tcp
+dig @127.0.0.1 -p 10533 www.google.com A +short
 
-# TCP DNS 帧被拆成小段发送，DPI 首包看不到完整域名 → 绕过 RST
+# Splitguard 在服务器转发 TCP 时内部拆帧，与客户端用 UDP/TCP 无关
 
 pkill -f "splitguard"
 ```
@@ -323,11 +341,27 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
 
 ### Test
 
-Start ZJDNS with the fixed cert (requires a custom config that uses `cert_file`
-instead of `self_signed`), or use `self_signed` and extract the cert manually.
+ZJDNS must use the same certificate as RouteDNS.  The default `server.json`
+uses `self_signed: true` (ephemeral cert) — RouteDNS can't verify that.
+Create a config with `cert_file`/`key_file` pointing to the generated cert:
 
 ```bash
-/tmp/zjdns -config docs/debug/loopback/server.json &
+# Create a DTLS-only server config with the fixed certificate
+cat > /tmp/zjdns-dtls-server.json << 'CONF'
+{
+  "server": {
+    "log_level": "debug",
+    "protocol": { "udp": "10533", "tcp": "10533", "dtls": "10434" },
+    "certificate": {
+      "domain": "zjdns-test.local",
+      "tls": { "cert_file": "/tmp/zjdns-certs/cert.pem", "key_file": "/tmp/zjdns-certs/key.pem" }
+    }
+  },
+  "upstream": [{ "protocol": "recursive" }]
+}
+CONF
+
+/tmp/zjdns -config /tmp/zjdns-dtls-server.json &
 sleep 3
 /tmp/routedns/routedns docs/debug/routedns/dtls-client.toml &
 sleep 2
@@ -535,10 +569,7 @@ For interactive debugging, create `config.debug.json` (not committed):
     },
     "features": {
       "dnssec_enforce": true,
-      "cache": {
-        "max_entries": 10000,
-        "db_path": "cache.db"
-      },
+      "database": { "db_path": "/tmp/zjdns-persist/cache.db" },
       "latency_probe": [
         { "protocol": "ping", "timeout": 200 },
         { "protocol": "tcp", "port": 443, "timeout": 200 }
@@ -574,29 +605,13 @@ dig @127.0.0.1 -p 15353 zhijie-online.mail.protection.outlook.com A +short
 # QNAME minimisation CNAME corner case (RFC 9156 §2.3)
 dig @127.0.0.1 -p 15353 home.console.aliyun.com A
 
-# Stats + DB ops
+# Stats
 dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.db.clear.stats CH TXT +short
-./zjdns --sql cache.db "SELECT result, rcode, COUNT(*) FROM query_log GROUP BY result, rcode"
-```
+dig @127.0.0.1 -p 15353 zjdns.db.clear.cache CH TXT +short
 
-### TLCP (国密) Test
-
-```bash
-# External upstream (DNSPod, requires skip_tls_verify)
-./zjdns -config <(echo '{"server":{"protocol":{"udp":"53535"}},"upstream":[{"address":"https://sm2.doh.pub/dns-query","protocol":"doh-tlcp","server_name":"sm2.doh.pub","skip_tls_verify":true}]}') &
-
-# Self-hosted TLCP server (self-signed SM2 certs)
-./zjdns -config <(echo '{"server":{"protocol":{"tlcp":"8530","http_tlcp":{"port":"4430","endpoint":"/dns-query"}},"certificate":{"domain":"tlcp.local","tlcp":{"self_signed":true}},"features":{"cache":{"max_entries":0}}},"upstream":[{"protocol": "recursive"}]}') &
-
-# TLCP HTTPS loopback
-./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454"}},"upstream":[{"address":"https://127.0.0.1:4430/dns-query","protocol":"doh-tlcp","server_name":"ZJDNS TLCP","skip_tls_verify":true}]}') &
-dig @127.0.0.1 -p 55454 www.baidu.com A +short
-
-# DTLCP loopback (use [::1] on Windows)
-./zjdns -config <(echo '{"server":{"protocol":{"dtlcp":"8542"},"certificate":{"domain":"dtlcp.local","tlcp":{"self_signed":true}},"features":{"cache":{"max_entries":0}}},"upstream":[{"protocol": "recursive"}]}') &
-./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454"}},"upstream":[{"address":"127.0.0.1:8542","protocol":"dtlcp","server_name":"dtlcp.local","skip_tls_verify":true}]}') &
-dig @127.0.0.1 -p 55454 www.baidu.com A +short
+# 缓存/统计/DNSCrypt 证书窗口持久化在 SQLite (db_path)
+./zjdns --sql /tmp/zjdns-persist/cache.db "SELECT length(identity), length(windows) FROM dnscrypt_state"
 ```
 
 ## SQL Debug Queries
@@ -649,3 +664,23 @@ docker exec -it zjdns /zjdns --sql /data/cache.db "
     LIMIT 20
 "
 ```
+
+### TLCP (国密) Test
+
+```bash
+# External upstream (DNSPod, requires skip_tls_verify)
+./zjdns -config <(echo '{"server":{"protocol":{"udp":"53535"}},"upstream":[{"address":"https://sm2.doh.pub/dns-query","protocol":"doh-tlcp","server_name":"sm2.doh.pub","skip_tls_verify":true}]}') &
+
+# Self-hosted TLCP server (self-signed SM2 certs)
+./zjdns -config <(echo '{"server":{"protocol":{"tlcp":"8530","http_tlcp":{"port":"4430","endpoint":"/dns-query"}},"certificate":{"domain":"tlcp.local","tlcp":{"self_signed":true}}},"upstream":[{"protocol": "recursive"}]}') &
+
+# TLCP HTTPS loopback
+./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454"}},"upstream":[{"address":"https://127.0.0.1:4430/dns-query","protocol":"doh-tlcp","server_name":"ZJDNS TLCP","skip_tls_verify":true}]}') &
+dig @127.0.0.1 -p 55454 www.baidu.com A +short
+
+# DTLCP loopback (use [::1] on Windows)
+./zjdns -config <(echo '{"server":{"protocol":{"dtlcp":"8542"},"certificate":{"domain":"dtlcp.local","tlcp":{"self_signed":true}}},"upstream":[{"protocol": "recursive"}]}') &
+./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454"}},"upstream":[{"address":"127.0.0.1:8542","protocol":"dtlcp","server_name":"dtlcp.local","skip_tls_verify":true}]}') &
+dig @127.0.0.1 -p 55454 www.baidu.com A +short
+```
+

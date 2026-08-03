@@ -1,7 +1,7 @@
 {
   "server": {
     "log_level": "debug",
-    "protocol": { "udp": "13553" }
+    "protocol": { "udp": "13553", "tcp": "13553" }
   },
   "upstream": [
     {
