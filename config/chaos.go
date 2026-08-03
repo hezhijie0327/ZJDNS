@@ -37,17 +37,17 @@ func addChaosRecord(cfg *ServerConfig) {
 		})
 	}
 	// Query names embed DefaultProjectName for self-identification and operator
-	// discoverability (e.g. ZJDNS.stats, ZJDNS.db.clear). This is intentional —
+	// discoverability (e.g. ZJDNS.stats, ZJDNS.cache.clear). This is intentional —
 	// the project name identifies the server to clients that query these CHAOS records.
+	// The .clear endpoints are destructive and gated to loopback clients in the
+	// Zone middleware.
 	for _, name := range []string{
 		DefaultProjectName + ".stats",
-		DefaultProjectName + ".db.clear",
-		DefaultProjectName + ".db.clear.cache",
-		DefaultProjectName + ".db.clear.stats",
-		DefaultProjectName + ".db.clear.querylog",
-		DefaultProjectName + ".db.clear.latency",
-		DefaultProjectName + ".db.clear.zone",
-		DefaultProjectName + ".db.clear.ruleset",
+		DefaultProjectName + ".stats.clear",
+		DefaultProjectName + ".cache.clear",
+		DefaultProjectName + ".ptr.clear",
+		DefaultProjectName + ".latency.clear",
+		DefaultProjectName + ".dnscrypt.clear",
 	} {
 		cfg.Zone = append(cfg.Zone, ZoneRule{
 			Name:   name,

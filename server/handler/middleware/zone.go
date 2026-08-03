@@ -3,12 +3,15 @@ package middleware
 import (
 	"context"
 	"net"
+	"strings"
 	"zjdns/cache"
+	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/ttl"
 	"zjdns/server/handler"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // Zone evaluates zone rules against the incoming query.
@@ -19,6 +22,24 @@ type Zone struct {
 	evaluator  handler.ZoneEvaluator
 	tagMatcher func(qname string, ip net.IP) map[string]bool
 	cache      cache.Store
+}
+
+// isDestructiveChaosName reports whether the qname is one of the CHAOS
+// control endpoints that mutate server state (cache/ptr/latency flush,
+// stats reset, DNSCrypt key reset). Case-insensitive: zone-rule matching is
+// case-insensitive too, so a case-variant query (e.g. "zjdns.cache.clear")
+// would otherwise bypass the loopback gate below.
+func isDestructiveChaosName(qname string) bool {
+	c := strings.ToLower(dnsutil.Canonical(qname))
+	switch c {
+	case strings.ToLower(config.DefaultProjectName) + ".cache.clear.",
+		strings.ToLower(config.DefaultProjectName) + ".stats.clear.",
+		strings.ToLower(config.DefaultProjectName) + ".ptr.clear.",
+		strings.ToLower(config.DefaultProjectName) + ".latency.clear.",
+		strings.ToLower(config.DefaultProjectName) + ".dnscrypt.clear.":
+		return true
+	}
+	return false
 }
 
 // Wrap implements Wrapper.
@@ -39,6 +60,17 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		zoneResult := m.evaluator.Evaluate(qname, qtype, qclass, matchedTags)
 		if !zoneResult.Matched {
 			return next.ServeDNS(ctx, qctx)
+		}
+
+		// Destructive CHAOS endpoints (.cache.clear / .dnscrypt.clear) flush
+		// the cache and reset keys — any client that can reach a listener
+		// could otherwise trigger them remotely. Loopback-only.
+		if isDestructiveChaosName(qname) && (qctx.ClientIP == nil || !qctx.ClientIP.IsLoopback()) {
+			log.Warnf("SECURITY: denying destructive CHAOS query %s from non-loopback client %s", qname, qctx.ClientIP)
+			response := handler.BuildResponseMsg(qctx.Req)
+			response.Rcode = dns.RcodeRefused
+			qctx.Res = response
+			return nil
 		}
 
 		log.Debugf("ZONE: matched rule for %s -> domain=%s rcode=%d", qname, zoneResult.Domain, zoneResult.Rcode)

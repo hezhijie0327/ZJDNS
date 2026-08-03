@@ -434,7 +434,7 @@ func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicE
 	var contents []string
 	if len(de.configs) == 0 {
 		// No config records — invoke the dynamic function for every
-		// query (e.g. ZJDNS.db.clear.* rules that have no static
+		// query (e.g. ZJDNS.cache.clear rules that have no static
 		// answer records, only a DynamicContent function).
 		contents = de.fn()
 	} else {

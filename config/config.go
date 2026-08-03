@@ -131,7 +131,7 @@ type UpstreamServer struct {
 	ServerName     string   `json:"server_name,omitzero"`
 	SkipTLSVerify  bool     `json:"skip_tls_verify,omitzero"`
 	PrivacyProfile string   `json:"privacy_profile,omitzero"` // "strict" (RFC 8310 §6) or "opportunistic" (§5)
-	NoCache        bool     `json:"no_cache,omitzero"`
+	SkipCache      bool     `json:"skip_cache,omitzero"`
 	Match          []string `json:"match,omitzero"`
 	Proxy          string   `json:"proxy,omitzero"`
 	PublicKey      string   `json:"public_key,omitzero"`

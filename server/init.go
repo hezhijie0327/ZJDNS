@@ -59,26 +59,33 @@ func makeFlushFunc(op func() (int64, error), verb string) func() []string {
 }
 
 // wireZoneDynamicContent assigns dynamic content functions to zone rules that
-// reference .stats, .db.clear, and related CHAOS names.
-func wireZoneDynamicContent(store cache.Store, rules []config.ZoneRule) {
+// reference .stats, .*.clear, and related CHAOS names.
+// resetDNSCrypt is the DNSCrypt key-reset callback (nil when the DNSCrypt
+// server is not enabled); it is resolved lazily because the DNSCrypt server
+// is constructed after the zone rules are wired.
+func wireZoneDynamicContent(store cache.Store, rules []config.ZoneRule, resetDNSCrypt func() error) {
 	for i := range rules {
 		switch rules[i].Name {
 		case config.DefaultProjectName + ".stats":
 			rules[i].DynamicContent = store.Stats
-		case config.DefaultProjectName + ".db.clear":
-			rules[i].DynamicContent = makeFlushFunc(store.Clear, "flushed")
-		case config.DefaultProjectName + ".db.clear.cache":
+		case config.DefaultProjectName + ".cache.clear":
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("cache") }, "flushed")
-		case config.DefaultProjectName + ".db.clear.stats":
+		case config.DefaultProjectName + ".stats.clear":
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("stats") }, "reset")
-		case config.DefaultProjectName + ".db.clear.querylog":
-			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("querylog") }, "flushed")
-		case config.DefaultProjectName + ".db.clear.latency":
+		case config.DefaultProjectName + ".ptr.clear":
+			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("ptr") }, "flushed")
+		case config.DefaultProjectName + ".latency.clear":
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("latency") }, "flushed")
-		case config.DefaultProjectName + ".db.clear.zone":
-			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("zone") }, "flushed")
-		case config.DefaultProjectName + ".db.clear.ruleset":
-			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("ruleset") }, "flushed")
+		case config.DefaultProjectName + ".dnscrypt.clear":
+			rules[i].DynamicContent = func() []string {
+				if resetDNSCrypt == nil {
+					return []string{"error=dnscrypt not enabled"}
+				}
+				if err := resetDNSCrypt(); err != nil {
+					return []string{fmt.Sprintf("error=%v", err)}
+				}
+				return []string{"reset=1"}
+			}
 		}
 	}
 }

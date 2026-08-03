@@ -299,7 +299,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | Type | Package | Notes |
 |------|---------|-------|
 | `ServerConfig` | `config` | Top-level config; owns `ECSConfig`, `ProtocolSettings`, `CertificateSettings` |
-| `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `NoCache`, `Match`, `Proxy`, defense flags |
+| `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `SkipCache`, `Match`, `Proxy`, defense flags |
 | `ProtocolSettings` | `config` | Per-protocol port/endpoint: `UDP`, `TCP`, `TLS`, `QUIC`, `HTTPS`, `HTTP3`, `TLCP`, `DTLS`, `DTLCP`, `DNSCrypt` |
 | `DB` | `database` | Unified SQLite DB; WAL mode, 8 prepared stmts |
 | `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Stats/Close |

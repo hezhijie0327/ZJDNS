@@ -10,7 +10,7 @@
     {
       "address": "8.8.8.8:53",
       "protocol": "udp",
-      "hopguard": true, "no_cache": true
+      "hopguard": true, "skip_cache": true
     }
   ]
 }

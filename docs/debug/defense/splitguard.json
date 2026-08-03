@@ -10,7 +10,7 @@
     {
       "address": "8.8.8.8:53",
       "protocol": "tcp",
-      "splitguard": true, "no_cache": true
+      "splitguard": true, "skip_cache": true
     }
   ]
 }

@@ -201,6 +201,41 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, 
 	return s, nil
 }
 
+// ResetKeys regenerates the DNSCrypt crypto state from fresh random keys:
+// a single new cert window replaces all current windows and the state is
+// persisted immediately (CHAOS zjdns.dnscrypt.clear).  The provider identity
+// (signingSK) comes from config and is unchanged — the sdns:// stamp stays
+// valid, but clients must fetch the new certificate to reconnect.
+func (s *Server) ResetKeys() error {
+	rc := ResolverConfig{ProviderName: s.providerName}
+	rc.PublicKey = dnscryptcrypto.HexEncodeKey(s.signingSK.Public().(ed25519.PublicKey))
+	rc.PrivateKey = dnscryptcrypto.HexEncodeKey(s.signingSK)
+
+	sk, pk, err := dnscryptcrypto.GenerateRandomKeyPair()
+	if err != nil {
+		return fmt.Errorf("dnscrypt: generate resolver keys: %w", err)
+	}
+	rc.ResolverSk = dnscryptcrypto.HexEncodeKey(sk[:])
+	rc.ResolverPk = dnscryptcrypto.HexEncodeKey(pk[:])
+
+	now := dnscryptcrypto.NowUnix32()
+	pair, err := rc.NewCertPair(now, now, now+uint32(config.DefaultDNSCryptCertificateTTL/time.Second))
+	if err != nil {
+		return fmt.Errorf("dnscrypt: generate cert pair: %w", err)
+	}
+
+	s.mu.Lock()
+	s.sharedKeyCache = lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize)
+	s.keys = []keyEntry{{pair: pair, createdAt: time.Now()}}
+	s.mu.Unlock()
+
+	if err := s.Save(); err != nil {
+		return fmt.Errorf("dnscrypt: persist reset state: %w", err)
+	}
+	log.Infof("DNSCRYPT: keys reset (serial=%d)", pair.Classical.Serial)
+	return nil
+}
+
 // Save persists the current identity + windows via the StateStore.
 // No-op when no store is configured.  Safe to call concurrently with queries.
 func (s *Server) Save() error {

@@ -129,6 +129,8 @@ func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 		}
 	case "latency":
 		result, err = s.db.SQ.Exec(`DELETE FROM ip_latency`)
+	case "ptr":
+		result, err = s.db.SQ.Exec(`DELETE FROM ptr_map`)
 	case "zone":
 		result, err = s.db.SQ.Exec(`DELETE FROM zone_entries`)
 	case "ruleset":

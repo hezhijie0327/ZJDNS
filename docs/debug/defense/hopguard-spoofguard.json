@@ -12,7 +12,7 @@
       "protocol": "udp",
       "hopguard": true,
       "spoofguard": true,
-      "no_cache": true
+      "skip_cache": true
     }
   ]
 }

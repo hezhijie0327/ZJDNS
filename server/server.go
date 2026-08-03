@@ -152,7 +152,13 @@ func (s *Server) initEDNS(cfg *config.ServerConfig) (*edns.Handler, error) {
 // from config.  Returns the ruleset engine (nil if none configured) and any
 // fatal error from loading.
 func (s *Server) initZoneAndRulesets(cfg *config.ServerConfig, cacheStore cache.Store, zoneEvaluator *zone.Evaluator, db *database.DB) (*ruleset.Engine, error) {
-	wireZoneDynamicContent(cacheStore, cfg.Zone)
+	wireZoneDynamicContent(cacheStore, cfg.Zone, func() error {
+		// Resolved lazily: the DNSCrypt server is constructed after zone wiring.
+		if s.dnscryptServer == nil {
+			return errors.New("dnscrypt server not enabled")
+		}
+		return s.dnscryptServer.ResetKeys()
+	})
 
 	if len(cfg.Zone) > 0 {
 		if err := zoneEvaluator.LoadRules(cfg.Zone); err != nil {

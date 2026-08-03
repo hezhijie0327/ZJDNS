@@ -102,7 +102,7 @@ CREATE TABLE zone_entries (
 - **Eviction**: On `Set()` when count > maxEntries. Prefers past serve-stale, then oldest. `ON DELETE CASCADE` for ptr_map. Stale ip_latency + query_log rows pruned during eviction.
 - **NS latency cache**: NS/Root addresses as TypeA/TypeAAAA entries. Latency probed via `ProbeNSAddrs`, reordered by `sortAnswerByLatency` at `Get()` time.
 - **IP latency**: Per-IP keyed. `INSERT OR REPLACE` writes latency_ms + last_probe_time. All domains sharing a CDN IP reuse the same row.
-- **Dynamic queries**: `Store.Stats()` returns TXT records (overview, hits, errors, rcodes, poisoned, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.db.clear` / `zjdns.db.clear.{cache,stats,querylog,latency,zone,ruleset}`.
+- **Dynamic queries**: `Store.Stats()` returns TXT records (overview, hits, errors, rcodes, poisoned, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.cache.clear` / `zjdns.stats.clear` / `zjdns.ptr.clear` / `zjdns.latency.clear` / `zjdns.dnscrypt.clear` (loopback-only).
 
 
 ## Defense Mechanisms

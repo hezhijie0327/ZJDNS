@@ -607,8 +607,9 @@ dig @127.0.0.1 -p 15353 home.console.aliyun.com A
 
 # Stats
 dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
-dig @127.0.0.1 -p 15353 zjdns.db.clear.stats CH TXT +short
-dig @127.0.0.1 -p 15353 zjdns.db.clear.cache CH TXT +short
+dig @127.0.0.1 -p 15353 zjdns.stats.clear CH TXT +short
+dig @127.0.0.1 -p 15353 zjdns.cache.clear CH TXT +short
+dig @127.0.0.1 -p 15353 zjdns.dnscrypt.clear CH TXT +short
 
 # 缓存/统计/DNSCrypt 证书窗口持久化在 SQLite (db_path)
 ./zjdns --sql /tmp/zjdns-persist/cache.db "SELECT length(identity), length(windows) FROM dnscrypt_state"
