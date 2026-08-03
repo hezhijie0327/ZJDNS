@@ -5,6 +5,7 @@ package database
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync/atomic"
 
@@ -53,6 +54,10 @@ type DB struct {
 
 	// Latency prepared statements
 	StmtIPLatency *sql.Stmt
+
+	// DNSCrypt state prepared statements
+	StmtDNSCryptLoad *sql.Stmt
+	StmtDNSCryptSave *sql.Stmt
 }
 
 const dsnParams = "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000&_foreign_keys=ON&_txlock=immediate"
@@ -141,6 +146,7 @@ func (db *DB) Close() error {
 		db.StmtEntry, db.StmtQueryLog, db.StmtQueryStats,
 		db.StmtInsertLatency, db.StmtLastProbe,
 		db.StmtZoneExact, db.StmtZoneWildcard, db.StmtIPLatency,
+		db.StmtDNSCryptLoad, db.StmtDNSCryptSave,
 	} {
 		if stmt != nil {
 			_ = stmt.Close()
@@ -218,3 +224,23 @@ func (db *DB) Exec(query string, args ...any) (sql.Result, error) { return db.SQ
 
 // IsClosed reports whether the database has been closed.
 func (db *DB) IsClosed() bool { return atomic.LoadInt32(&db.closed) != 0 }
+
+// DNSCrypt state methods
+
+// LoadDNSCryptState returns the persisted DNSCrypt identity and cert windows
+// blobs, or (nil, nil) when no state has been saved yet.  Satisfies the
+// StateStore interface defined by server/protocol/dnscrypt.
+func (db *DB) LoadDNSCryptState() (identity, windows []byte, err error) {
+	err = db.StmtDNSCryptLoad.QueryRow().Scan(&identity, &windows)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, nil
+	}
+	return identity, windows, err
+}
+
+// SaveDNSCryptState upserts the singleton DNSCrypt state row.  Satisfies the
+// StateStore interface defined by server/protocol/dnscrypt.
+func (db *DB) SaveDNSCryptState(identity, windows []byte) error {
+	_, err := db.StmtDNSCryptSave.Exec(identity, windows)
+	return err
+}

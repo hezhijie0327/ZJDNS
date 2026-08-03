@@ -76,5 +76,20 @@ func (db *DB) prepareStatements() error {
 		return err
 	}
 
+	// DNSCrypt state statements.
+	db.StmtDNSCryptLoad, err = db.SQ.Prepare(
+		`SELECT identity, windows FROM dnscrypt_state WHERE id = 1`,
+	)
+	if err != nil {
+		return err
+	}
+	db.StmtDNSCryptSave, err = db.SQ.Prepare(
+		`INSERT INTO dnscrypt_state (id, identity, windows) VALUES (1, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET identity = excluded.identity, windows = excluded.windows`,
+	)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }

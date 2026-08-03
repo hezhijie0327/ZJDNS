@@ -47,7 +47,7 @@ func startTestDNSCryptServer(t *testing.T) (addr, stamp string) {
 	port := l.Addr().(*net.TCPAddr).Port
 	_ = l.Close()
 	cfg := &config.DNSCryptCertificate{PublicKey: rc.PublicKey, PrivateKey: rc.PrivateKey}
-	srv, err := serverdnscrypt.New(cfg, strconv.Itoa(port), rc.ProviderName)
+	srv, err := serverdnscrypt.New(cfg, strconv.Itoa(port), rc.ProviderName, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -400,7 +400,7 @@ func startTestDNSCryptServerWithHandler(t *testing.T, handler interface {
 	port := l.Addr().(*net.TCPAddr).Port
 	_ = l.Close()
 	cfg := &config.DNSCryptCertificate{PublicKey: rc.PublicKey, PrivateKey: rc.PrivateKey}
-	srv, err := serverdnscrypt.New(cfg, strconv.Itoa(port), rc.ProviderName)
+	srv, err := serverdnscrypt.New(cfg, strconv.Itoa(port), rc.ProviderName, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

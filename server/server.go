@@ -46,6 +46,7 @@ type Server struct {
 	config      *config.ServerConfig
 	handler     *handler.Handler
 	queryClient *upstream.Client
+	db          *database.DB
 
 	tls             *tls.Server
 	tlcpServer      *servertlcp.Server
@@ -88,6 +89,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		cancel(err)
 		return nil, fmt.Errorf("database init: %w", err)
 	}
+	s.db = db
 
 	cacheStore := cache.New(db)
 	zoneEvaluator := zone.New(db)
@@ -339,7 +341,7 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 
 	if cfg.Server.Protocol.DNSCrypt != "" {
 		providerName := cfg.Server.Certificate.DNSCrypt.ProviderName(cfg.Server.Certificate.Domain)
-		dnscryptSrv, err := serverdnscrypt.New(&cfg.Server.Certificate.DNSCrypt, cfg.Server.Protocol.DNSCrypt, providerName)
+		dnscryptSrv, err := serverdnscrypt.New(&cfg.Server.Certificate.DNSCrypt, cfg.Server.Protocol.DNSCrypt, providerName, s.db)
 		if err != nil {
 			return fmt.Errorf("DNSCrypt server init: %w", err)
 		}

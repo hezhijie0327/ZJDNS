@@ -175,6 +175,18 @@ func (db *DB) migrate() error {
 			match_tags TEXT NOT NULL DEFAULT '',
 			PRIMARY KEY (is_wildcard, qname, qtype, qclass, match_tags)
 		) WITHOUT ROWID;
+
+		-- ── DNSCrypt state ────────────────────────────────────────────────────
+		-- Singleton row holding the DNSCrypt provider state: the Ed25519
+		-- identity (96B: sk 64 + pk 32) and the serialized cert windows.
+		-- Persisting this makes a restart resume the same windows instead of
+		-- minting fresh resolver keys and invalidating client-cached certs.
+
+		CREATE TABLE IF NOT EXISTS dnscrypt_state (
+			id       INTEGER PRIMARY KEY CHECK (id = 1), -- singleton row
+			identity BLOB NOT NULL,                      -- 96B Ed25519 sk+pk
+			windows  BLOB NOT NULL                       -- serialized cert windows
+		);
 	`)
 	if err != nil {
 		return err

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	zstamp "zjdns/internal/stamp"
@@ -155,11 +154,9 @@ func (rc *ResolverConfig) NewPQCert(serial, notBefore, notAfter uint32) (cert *d
 
 // NewCertPair generates both classical and PQ certificates for a single key
 // window.  Both certs share the same Serial, NotBefore, and NotAfter.
-func (rc *ResolverConfig) NewCertPair() (*dnscryptcrypto.CertPair, error) {
-	serial := dnscryptcrypto.NowUnix32()
-	notBefore := serial
-	notAfter := serial + uint32(config.DefaultDNSCryptCertificateTTL/time.Second)
-
+// serial and timestamps are caller-provided so persisted windows can be
+// recreated exactly; the default window is now → now+DefaultDNSCryptCertificateTTL.
+func (rc *ResolverConfig) NewCertPair(serial, notBefore, notAfter uint32) (*dnscryptcrypto.CertPair, error) {
 	classical, err := rc.NewCert(serial, notBefore, notAfter)
 	if err != nil {
 		return nil, fmt.Errorf("classical cert: %w", err)
