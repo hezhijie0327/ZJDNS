@@ -313,8 +313,14 @@ func (s *SQLiteCache) Stats() []string {
 	// DNSSEC — percentages relative to the DNSSEC-validated subset.
 	if s := formatStatsLine(
 		statsMetric{"secure", secureCount, dnssecR}, statsMetric{"insecure", insecureCount, dnssecIR},
-		statsMetric{"bogus", bogusCount, dnssecBR}, statsMetric{"poisoned", poisoned, poisonedR},
+		statsMetric{"bogus", bogusCount, dnssecBR},
 	); s != "" {
+		out = append(out, s)
+	}
+
+	// Poisoned stands alone — it is orthogonal to DNSSEC status, so mixing
+	// it into the DNSSEC line would break that line's 100% invariant.
+	if s := formatStatsLine(statsMetric{"poisoned", poisoned, poisonedR}); s != "" {
 		out = append(out, s)
 	}
 
