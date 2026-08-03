@@ -89,6 +89,11 @@ type entryPair[K comparable, V any] struct {
 	val V
 }
 
+// ErrVersionMismatch reports that a persist file uses a codec version other
+// than the current one. The file has been backed up to path+".bak" and the
+// map starts cold — a format upgrade never silently destroys the old data.
+var ErrVersionMismatch = errors.New("lrumap: persist version mismatch (old file backed up)")
+
 // SetOnEvict configures the eviction callback. The assignment is performed
 // under the map mutex so it cannot race a concurrent eviction read.
 func (m *Map[K, V]) SetOnEvict(fn func(K, V)) {
@@ -399,19 +404,28 @@ func (m *Map[K, V]) load() error {
 	}
 	raw, err := persist.Load(path)
 	if err != nil {
+		// Corrupt file (zstd framing or decompression failed) — preserve it
+		// before the next Save would overwrite it.
+		if berr := persist.Backup(path); berr != nil {
+			return errors.Join(err, fmt.Errorf("lrumap: backup %s: %w", path, berr))
+		}
 		return err
 	}
 	if raw == nil {
 		return nil // cold start — no file yet
 	}
 	if len(raw) < 2+8 {
+		_ = persist.Backup(path) // truncated file — preserve it
 		return errors.New("lrumap: persist file too short")
 	}
 	off := 0
 	version := binary.BigEndian.Uint16(raw[off:])
 	off += 2
 	if version != codec.Version() {
-		return fmt.Errorf("lrumap: unsupported persist version %d (want %d)", version, codec.Version())
+		// Format upgrade — back the old file up instead of letting the next
+		// Save overwrite it: the old data stays recoverable.
+		_ = persist.Backup(path)
+		return ErrVersionMismatch
 	}
 	count := binary.BigEndian.Uint64(raw[off:])
 	off += 8

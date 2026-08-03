@@ -75,6 +75,7 @@ func (c *Collector) LoadPersist(path string) error {
 	}
 	raw, err := persist.Load(path)
 	if err != nil {
+		_ = persist.Backup(path) // corrupt snapshot — preserve it
 		return err
 	}
 	if raw == nil {
@@ -84,6 +85,8 @@ func (c *Collector) LoadPersist(path string) error {
 		return io.ErrUnexpectedEOF
 	}
 	if version := binary.BigEndian.Uint16(raw[:2]); version != persistVersion {
+		// Format upgrade — preserve the old snapshot before a fresh write.
+		_ = persist.Backup(path)
 		return fmt.Errorf("stats: unsupported persist version %d", version)
 	}
 	off := 2

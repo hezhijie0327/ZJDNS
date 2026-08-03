@@ -1,7 +1,9 @@
 package lrumap
 
 import (
+	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -201,7 +203,8 @@ func TestPersist_ColdStartMissingFile(t *testing.T) {
 }
 
 func TestPersist_VersionMismatch(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "test.zst")
+	dir := t.TempDir()
+	file := filepath.Join(dir, "test.zst")
 	m := New[string, int](10)
 	m.Set("a", 1)
 	if err := m.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
@@ -210,14 +213,58 @@ func TestPersist_VersionMismatch(t *testing.T) {
 	if err := m.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
+	orig, err := os.ReadFile(file) //nolint:gosec // G304: test fixture
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	m2 := New[string, int](10)
-	err := m2.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 2}})
-	if err == nil {
-		t.Fatal("EnablePersist with wrong version should error")
+	err = m2.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 2}})
+	if !errors.Is(err, ErrVersionMismatch) {
+		t.Fatalf("EnablePersist with wrong version: got %v, want ErrVersionMismatch", err)
 	}
 	if m2.Len() != 0 {
 		t.Errorf("Len = %d, want 0 (mismatched file skipped)", m2.Len())
+	}
+	// The old file must be backed up, not destroyed.
+	backup, err := os.ReadFile(file + ".bak") //nolint:gosec // G304: test fixture
+	if err != nil {
+		t.Fatalf("old file not backed up: %v", err)
+	}
+	if !bytes.Equal(backup, orig) {
+		t.Error("backup content differs from the original file")
+	}
+}
+
+func TestPersist_CorruptFileBackedUp(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "test.zst")
+	m := New[string, int](10)
+	m.Set("a", 1)
+	if err := m.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err != nil {
+		t.Fatalf("EnablePersist: %v", err)
+	}
+	if err := m.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	// Corrupt the file (truncate the compressed payload).
+	data, err := os.ReadFile(file) //nolint:gosec // G304: test fixture
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, data[:len(data)/2], 0o600); err != nil { //nolint:gosec // G703: test fixture
+		t.Fatal(err)
+	}
+
+	m2 := New[string, int](10)
+	if err := m2.EnablePersist(PersistConfig[string, int]{Path: file, Codec: stringCodec{version: 1}}); err == nil {
+		t.Fatal("EnablePersist on corrupt file should error")
+	}
+	if m2.Len() != 0 {
+		t.Errorf("Len = %d, want 0 (corrupt file skipped)", m2.Len())
+	}
+	if _, err := os.Stat(file + ".bak"); err != nil {
+		t.Errorf("corrupt file not backed up: %v", err)
 	}
 }
 

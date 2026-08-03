@@ -68,6 +68,22 @@ func decompress(raw []byte) ([]byte, error) {
 	return dec.DecodeAll(raw, nil)
 }
 
+// Backup renames path to path+".bak", preserving a previous-format or
+// corrupt persist file before it would be overwritten by a fresh write.
+// Missing source is a no-op. The previous .bak is replaced (only the most
+// recent backup survives).
+func Backup(path string) error {
+	backup := path + ".bak"
+	_ = os.Remove(backup) //nolint:gosec // G703: Windows rename fails when the target exists
+	if err := os.Rename(path, backup); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 // ── Atomic write ───────────────────────────────────────────────────────
 
 // atomicWrite writes data to path via a temp file in the same directory and

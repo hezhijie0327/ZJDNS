@@ -54,6 +54,7 @@ func loadStateFile(path string) (sk ed25519.PrivateKey, windows []windowRecord, 
 	}
 	raw, err := persist.Load(path)
 	if err != nil {
+		_ = persist.Backup(path) // corrupt state — preserve the identity
 		return nil, nil, err
 	}
 	if raw == nil {
@@ -61,6 +62,9 @@ func loadStateFile(path string) (sk ed25519.PrivateKey, windows []windowRecord, 
 	}
 	sk, windows, err = decodeState(raw)
 	if err != nil {
+		// Corrupt or unsupported-version state — preserve it (the identity is
+		// the least disposable data in the server) before a fresh write.
+		_ = persist.Backup(path)
 		return nil, nil, fmt.Errorf("dnscrypt: decode %s: %w", path, err)
 	}
 	return sk, windows, nil
