@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -13,6 +14,7 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"github.com/pion/dtls/v3"
+	"github.com/pion/dtls/v3/pkg/protocol"
 )
 
 // ExecuteDTLS performs a DNS-over-DTLS query (RFC 8094).  DNS messages are
@@ -42,15 +44,23 @@ func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.U
 	if c.dtlsSessions != nil {
 		dtlsOpts = append(dtlsOpts, dtls.WithSessionStore(c.dtlsSessions))
 	}
-	dtlsOpts = append(dtlsOpts, dtls.WithVerifyConnection(func(state *dtls.State) error {
-		zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
-			Role:       "UPSTREAM",
-			Direction:  "DTLS negotiated for",
-			RemoteAddr: addr,
-			Cipher:     dtls.CipherSuiteName(state.CipherSuiteID),
-		})
-		return nil
-	}))
+	dtlsOpts = append(dtlsOpts,
+		// DTLS 1.3 preferred, 1.2 fallback for older servers (RFC 9147 §4.2.2).
+		// NOTE: our own server is 1.3-only (see server/protocol/tls/dtls.go) —
+		// a dual-version [1.2,1.3] server would deadlock this client due to a
+		// pion bug (dual-stack handshake never completes). Revisit when pion
+		// ships the fix and the server widens its range.
+		dtls.WithMinVersion(protocol.Version1_2),
+		dtls.WithMaxVersion(protocol.Version1_3),
+		dtls.WithVerifyConnection(func(state *dtls.State) error {
+			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
+				Role:       "UPSTREAM",
+				Direction:  "DTLS negotiated for",
+				RemoteAddr: addr,
+				Cipher:     dtls.CipherSuiteName(state.CipherSuiteID),
+			})
+			return nil
+		}))
 
 	proxyDialer := c.getProxy(server)
 	var conn net.Conn
@@ -82,13 +92,35 @@ func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.U
 	}
 	defer zdnsutil.CloseWithLog(conn, "DTLS connection", "UPSTREAM")
 
+	// Run the handshake explicitly under the caller's context: pion's
+	// implicit handshake (triggered by the first write) uses
+	// context.Background and would hang far beyond the query budget on an
+	// unresponsive server.
+	if hc, ok := conn.(interface{ HandshakeContext(context.Context) error }); ok {
+		if err := hc.HandshakeContext(ctx); err != nil {
+			return nil, fmt.Errorf("dtls: handshake %s: %w", addr, err)
+		}
+	}
+
+	// pion's read deadline defaults to never expiring — restore ctx-bound
+	// deadlines so a lost datagram cannot hang the read (and its goroutine
+	// and socket) forever.
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stop()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+
 	if err := msg.Pack(); err != nil {
 		return nil, fmt.Errorf("dtls: pack query: %w", err)
 	}
 
 	queryLen := len(msg.Data)
+	if queryLen > 65535 {
+		return nil, fmt.Errorf("dtls: query too large (%d bytes)", queryLen)
+	}
 	req := make([]byte, 2+queryLen)
-	binary.BigEndian.PutUint16(req[:2], uint16(queryLen)) //nolint:gosec // G115: DNS query length < 65535 (UDP datagram limit)
+	binary.BigEndian.PutUint16(req[:2], uint16(queryLen)) //nolint:gosec // G115: DNS query length < 65535 (checked above)
 	copy(req[2:], msg.Data)
 	if _, err := conn.Write(req); err != nil {
 		return nil, fmt.Errorf("dtls: write query: %w", err)

@@ -85,6 +85,16 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 
 	// ECS for the response.
 	responseECS := qr.ECS
+	// RFC 7871 §7.3/§11.2: verify response ECS matches query — a mismatched
+	// family/prefix/address means the response is not for the queried subnet
+	// (spoofed or misrouted); serving it would poison the client's cache.
+	if ecsOpt != nil && responseECS != nil && !edns.VerifyECSResponse(ecsOpt, responseECS) {
+		log.Debugf("EDNS: ECS mismatch — returning SERVFAIL for spoofed response")
+		msg := handler.BuildResponseMsg(qctx.Req)
+		msg.Rcode = dns.RcodeServerFailure
+		qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorOther, ExtraText: "ECS response mismatch"}
+		return msg
+	}
 	if responseECS == nil && ecsOpt != nil {
 		responseECS = &edns.ECSOption{
 			Family:       ecsOpt.Family,

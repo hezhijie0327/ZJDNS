@@ -37,13 +37,32 @@ func (e *ECSOption) Normalize() {
 	if e == nil || e.Address == nil || e.SourcePrefix == 0 {
 		return
 	}
+	// Clamp an excessive prefix: net.CIDRMask returns nil for prefixes wider
+	// than the address (e.g. 33 on an IPv4), silently leaving host bits in
+	// the address and breaking the "identical cache keys per subnet" promise.
+	if e.SourcePrefix > 128 {
+		e.SourcePrefix = 128
+	}
 	bits := 128
 	if e.Address.To4() != nil {
 		bits = 32
+		if e.SourcePrefix > 32 {
+			e.SourcePrefix = 32
+		}
 	}
 	mask := net.CIDRMask(int(e.SourcePrefix), bits)
 	if mask != nil {
-		e.Address = e.Address.Mask(mask)
+		// net.ParseIP returns 16-byte IPv4 addresses (e.g. bare literals or
+		// auto-detected values) while the IPv4 mask is 4 bytes — Mask then
+		// yields nil and the address is silently left unmasked. Normalize
+		// IPv4 to its 4-byte form first.
+		ip4 := e.Address.To4()
+		if ip4 != nil {
+			e.Address = ip4
+		}
+		if masked := e.Address.Mask(mask); masked != nil {
+			e.Address = masked
+		}
 	}
 }
 
@@ -137,7 +156,7 @@ func (c ECSConfig) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		IPv4          string `json:"ipv4,omitzero"`
 		IPv6          string `json:"ipv6,omitzero"`
-		PreferIPv4    bool   `json:"prefer_ipv4,omitzero"`
+		PreferIPv4    bool   `json:"prefer_ipv4"`
 		AutoDetectURL string `json:"auto_detect_url,omitzero"`
 	}{
 		IPv4:          c.IPv4,
@@ -164,4 +183,25 @@ func validateECSConfigValue(value string) error {
 		return nil
 	}
 	return fmt.Errorf("invalid ECS subnet value: %s", value)
+}
+
+// IsValid reports whether the ECS option is well-formed per RFC 7871 §6.
+func (e *ECSOption) IsValid() bool {
+	if e == nil {
+		return true
+	}
+	if e.Family != 0 && e.Family != 1 && e.Family != 2 {
+		return false
+	}
+	if e.SourcePrefix > 32 && e.Family == 1 {
+		return false
+	}
+	if e.SourcePrefix > 128 && e.Family == 2 {
+		return false
+	}
+	if e.Family == 0 {
+		return e.SourcePrefix == 0 && len(e.Address) == 0
+	}
+	expectedLen := (int(e.SourcePrefix) + 7) / 8
+	return len(e.Address) >= expectedLen
 }

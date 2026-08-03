@@ -16,10 +16,8 @@ import (
 )
 
 // DNSHandler is the interface protocol listeners use to dispatch incoming
-// DNS queries.  Defined here (rather than in server/handler) to keep
-// protocol packages independent of the handler/resolver graph.  The
-// server/upstream/dnscrypt → server/protocol/dnscrypt edge has been removed
-// by extracting shared types into internal/dnscryptcrypto/.
+// DNS queries. Defined in the producer package (edns) to avoid import cycles;
+// consumers accept this via dependency injection.
 type DNSHandler interface {
 	ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg
 }
@@ -99,9 +97,24 @@ func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnectio
 	// Per RFC 6891 §6.2.5, the responder's UDPSize reflects its own maximum
 	// payload size; the transport layer (UDP datagram size) enforces the
 	// minimum of the two endpoints.
+	// RFC 9250 §4.6: UDPSize is ignored by DoQ — harmless to set for all transports.
 	msg.UDPSize = pool.UDPBufferSize
-	msg.Security = true
+	// RFC 3225 §3 / RFC 6891 §6.1.3: the response DO bit must mirror the
+	// query's DO bit — a responder must not set DO when the query had it
+	// clear (responses are built with isRequest=false here).
+	if isRequest {
+		msg.Security = true
+	}
 
+	if ecs != nil {
+		addr := addrToNetip(ecs.Address)
+		if !addr.IsValid() {
+			// RFC 7871 §6: never serialize an option whose netmask claims
+			// address bytes that are not present.
+			log.Debugf("EDNS: skipping ECS option with invalid address")
+			ecs = nil
+		}
+	}
 	if ecs != nil {
 		msg.Pseudo = append(msg.Pseudo, &dns.SUBNET{
 			Family:  ecs.Family,

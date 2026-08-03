@@ -223,3 +223,44 @@ func TestParseFromDNS_OnlyCookie(t *testing.T) {
 		t.Errorf("expected nil when only cookie is present, got %+v", parsed)
 	}
 }
+
+func TestVerifyECSResponse(t *testing.T) {
+	ip4 := net.ParseIP("1.2.3.0").To4()
+	ip6 := net.ParseIP("2001:db8::")
+
+	// Matching
+	q := &ECSOption{Family: 1, SourcePrefix: 24, Address: ip4}
+	r := &ECSOption{Family: 1, SourcePrefix: 24, Address: ip4}
+	if !VerifyECSResponse(q, r) {
+		t.Error("matching ECS should verify")
+	}
+	// Family mismatch
+	r2 := &ECSOption{Family: 2, SourcePrefix: 24}
+	if VerifyECSResponse(q, r2) {
+		t.Error("family mismatch should fail")
+	}
+	// Prefix mismatch
+	r3 := &ECSOption{Family: 1, SourcePrefix: 16, Address: ip4}
+	if VerifyECSResponse(q, r3) {
+		t.Error("prefix mismatch should fail")
+	}
+	// /0 — no address bits to compare
+	q0 := &ECSOption{Family: 1, SourcePrefix: 0, Address: nil}
+	r0 := &ECSOption{Family: 1, SourcePrefix: 0, Address: net.ParseIP("9.9.9.9")}
+	if !VerifyECSResponse(q0, r0) {
+		t.Error("/0 should always verify")
+	}
+	// IPv6 matching
+	q6 := &ECSOption{Family: 2, SourcePrefix: 56, Address: ip6}
+	r6 := &ECSOption{Family: 2, SourcePrefix: 56, Address: ip6}
+	if !VerifyECSResponse(q6, r6) {
+		t.Error("IPv6 matching should verify")
+	}
+	// Nil handling
+	if !VerifyECSResponse(nil, r) {
+		t.Error("nil query should verify")
+	}
+	if !VerifyECSResponse(q, nil) {
+		t.Error("nil response should verify")
+	}
+}

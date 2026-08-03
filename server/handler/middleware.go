@@ -50,7 +50,7 @@ type Wrapper interface {
 // defined in the consumer package per the project's interface discipline.
 type EDNSHandler interface {
 	ParseFromDNS(req *dns.Msg) *edns.ECSOption
-	ParseCookie(req *dns.Msg) *edns.CookieOption
+	ParseCookie(req *dns.Msg) (*edns.CookieOption, bool)
 	ECSForQType(qtype uint16) *edns.ECSOption
 	ApplyToMessage(msg *dns.Msg, ecs *edns.ECSOption, isSecure bool, cookieStr string, ede *dns.EDE, isRequest, wantsPadding bool, tcpKeepalive uint16)
 	GenerateServerCookie(clientIP net.IP, clientCookie []byte) []byte

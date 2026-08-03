@@ -140,7 +140,13 @@ func isECSOptionEqual(a, b *ECSOption) bool {
 func (h *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, error) {
 	subnet = strings.ToLower(strings.TrimSpace(subnet))
 	if subnet == config.ECSModeAuto {
-		return h.detectVia(forceIPv6, false), nil
+		ecs := h.detectVia(forceIPv6)
+		if ecs == nil {
+			// A broken/unreachable AutoDetectURL would otherwise leave the
+			// default ECS unset forever with no diagnostic.
+			return nil, errors.New("ECS auto-detection returned no address")
+		}
+		return ecs, nil
 	}
 	if _, ipNet, err := net.ParseCIDR(subnet); err == nil {
 		// Mask.Size() always succeeds for a successfully parsed CIDR.
@@ -180,17 +186,13 @@ func (h *Handler) parseECSConfig(subnet string, forceIPv6 bool) (*ECSOption, err
 	return ecs, nil
 }
 
-// detectVia resolves ECS options via IP detection. allowFallback is reserved
-// for future IPv4→IPv6 fallback support and is currently always false.
-func (h *Handler) detectVia(forceIPv6, allowFallback bool) *ECSOption {
+// detectVia resolves ECS options via IP detection.
+func (h *Handler) detectVia(forceIPv6 bool) *ECSOption {
 	var ip net.IP
 	if forceIPv6 {
 		ip = h.detector.IPv6()
 	} else {
 		ip = h.detector.IPv4()
-	}
-	if ip == nil && allowFallback && !forceIPv6 {
-		ip = h.detector.IPv6()
 	}
 	if ip == nil {
 		return nil
@@ -204,4 +206,48 @@ func (h *Handler) detectVia(forceIPv6, allowFallback bool) *ECSOption {
 	ecs := &ECSOption{Family: family, SourcePrefix: prefix, ScopePrefix: DefaultECSScope, Address: ip}
 	ecs.Normalize()
 	return ecs
+}
+
+// VerifyECSResponse checks that the response ECS matches the query ECS per
+// RFC 7871 §7.3. Returns false if FAMILY, SOURCE PREFIX-LENGTH, or ADDRESS
+// bits differ — the response MUST be dropped (§11.2).
+func VerifyECSResponse(query, response *ECSOption) bool {
+	if query == nil || response == nil {
+		return true // nothing to verify
+	}
+	if query.Family != response.Family {
+		return false
+	}
+	if query.SourcePrefix != response.SourcePrefix {
+		return false
+	}
+	if query.SourcePrefix == 0 {
+		return true // /0 prefix — no address bits to compare
+	}
+	// Compare only the significant bits of the address
+	addrLen := len(query.Address)
+	if addrLen != len(response.Address) {
+		return false
+	}
+	// A wire-supplied SourcePrefix larger than the address width would index
+	// past the slice end below; degrade to 'mismatch' instead of panicking.
+	if int(query.SourcePrefix) > len(query.Address)*8 || int(response.SourcePrefix) > len(response.Address)*8 {
+		return false
+	}
+	fullBytes := int(query.SourcePrefix) / 8
+	if fullBytes > 0 {
+		for i := range fullBytes {
+			if query.Address[i] != response.Address[i] {
+				return false
+			}
+		}
+	}
+	remainBits := int(query.SourcePrefix) % 8
+	if remainBits > 0 && fullBytes < addrLen {
+		mask := byte(0xFF << (8 - remainBits))
+		if query.Address[fullBytes]&mask != response.Address[fullBytes]&mask {
+			return false
+		}
+	}
+	return true
 }
