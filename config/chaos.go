@@ -9,12 +9,13 @@ import (
 
 // addChaosRecord generates CHAOS-class TXT zone rules for standard DNS
 // introspection queries: id.server, hostname.bind, version.server, version.bind,
-// and per-table cache/stats clearing endpoints.
+// and per-table clearing endpoints.
 //
-// The .clear endpoints (cache/stats/ptr/latency/dnscrypt) are destructive
-// and are gated to loopback clients in the Zone middleware — operators can
-// add their own rules for the same names, which take precedence (see
-// hasZoneRule).
+// The .clear endpoints (cache/stats/ptr/latency/querylog/dnscrypt) are
+// destructive and are gated to loopback clients in the Zone middleware —
+// operators can add their own rules for the same names, which take
+// precedence (see hasZoneRule). ruleset/zone rules are config-driven and
+// rebuilt on restart, so they deliberately have no clear endpoint.
 func addChaosRecord(cfg *ServerConfig) {
 	version := DefaultVersion
 	if version == "" || version == "dev" {
@@ -57,6 +58,7 @@ func addChaosRecord(cfg *ServerConfig) {
 		DefaultProjectName + ".cache.clear",
 		DefaultProjectName + ".ptr.clear",
 		DefaultProjectName + ".latency.clear",
+		DefaultProjectName + ".querylog.clear",
 		DefaultProjectName + ".dnscrypt.clear",
 	} {
 		if hasZoneRule(cfg, name) {

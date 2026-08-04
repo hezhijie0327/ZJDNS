@@ -3,13 +3,13 @@ module zjdns
 go 1.26.4
 
 require (
-	codeberg.org/miekg/dns v0.6.87
+	codeberg.org/miekg/dns v0.6.88-0.20260803180153-0ef1e91da335
 	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033
-	github.com/cloudflare/circl v1.6.5-0.20260731205605-df9fbeabf921
+	github.com/cloudflare/circl v1.6.5-0.20260803222022-e850bcdcbb14
 	github.com/emmansun/gmsm v0.44.1
 	github.com/klauspost/compress v1.19.2-0.20260730083710-69c9db420ae5
-	github.com/ncruces/go-sqlite3 v0.35.3-0.20260803005230-92f8a45999c2
-	github.com/pion/dtls/v3 v3.1.3-0.20260803131640-528115428569
+	github.com/ncruces/go-sqlite3 v0.35.3
+	github.com/pion/dtls/v3 v3.1.3-0.20260804011941-9183f4a40ea8
 	github.com/quic-go/quic-go v0.61.1-0.20260803043222-2cfe6ee0b5ac
 	gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f
 	gitlab.com/go-extension/tls v0.0.0-20260715144009-d75c84d8b9d2
@@ -27,7 +27,7 @@ require (
 	github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35304 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/pion/logging v0.2.4 // indirect
-	github.com/pion/transport/v4 v4.0.2 // indirect
+	github.com/pion/transport/v4 v4.1.0 // indirect
 	github.com/pmorjan/kmod v1.1.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect

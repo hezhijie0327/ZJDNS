@@ -36,6 +36,7 @@ func isDestructiveChaosName(qname string) bool {
 		strings.ToLower(config.DefaultProjectName) + ".stats.clear.",
 		strings.ToLower(config.DefaultProjectName) + ".ptr.clear.",
 		strings.ToLower(config.DefaultProjectName) + ".latency.clear.",
+		strings.ToLower(config.DefaultProjectName) + ".querylog.clear.",
 		strings.ToLower(config.DefaultProjectName) + ".dnscrypt.clear.":
 		return true
 	}

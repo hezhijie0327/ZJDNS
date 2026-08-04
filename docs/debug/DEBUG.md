@@ -60,11 +60,12 @@ go build -o /tmp/zjdns ./cmd/zjdns
 ```
 
 > [!NOTE]
-> **Windows (Git Bash)**：`pkill` 不可用，用 `taskkill //F //IM zjdns.exe`（或
-> 记录 PID 后 `taskkill //F //PID <pid>`）；配置里的 `/tmp/...` 路径是 Unix
-> 风格，Windows 下改用 `C:/Users/<user>/AppData/Local/Temp/...`（Go 程序按
-> Windows 路径解析，`/tmp` 会解析失败）；`openssl -subj` 需前缀
-> `MSYS_NO_PATHCONV=1` 防止路径被改写。
+> **Windows (Git Bash)**: `pkill` is unavailable — use `taskkill //F //IM zjdns.exe` (or
+> record the PID and `taskkill //F //PID <pid>`). Config paths like `/tmp/...` are
+> Unix-style; on Windows use `C:/Users/<user>/AppData/Local/Temp/...` (Go
+> binaries resolve `/tmp` as a Windows path and will fail to find the file).
+> Prefix `openssl -subj` with `MSYS_NO_PATHCONV=1` to prevent Git Bash from
+> rewriting the path.
 
 ### DNSCrypt-proxy (external)
 
@@ -167,7 +168,7 @@ pkill -f "client-tls"
 
 ## DNSSEC Test
 
-验证 DNSSEC 强制验证（bogus → SERVFAIL，valid → NOERROR）：
+Verifies DNSSEC enforcement (bogus → SERVFAIL, valid → NOERROR):
 
 ```bash
 /tmp/zjdns -config docs/debug/loopback/server-dnssec.json &
@@ -186,40 +187,43 @@ pkill -f "server-dnssec"
 
 ### Offline KSK (SEP relaxation + CDS fallback)
 
-部分域名使用 offline KSK 部署：KSK 签名 DNSKEY RRset 但不在其中发布，
-仅有 ZSK 在 DNSKEY set 中。
+Some domains deploy with an offline KSK: the KSK signs the DNSKEY RRset but
+is never published in it — only the ZSK appears in the DNSKEY set.
 
-两种互补机制确保验证通过：
+Two complementary mechanisms make validation succeed:
 
-1. **SEP-only DS matching**（`VerifyDelegationDS` / `SelfVerifyDNSKEY`）：
-   SEP 位是部署约定（RFC 4034 §2.1.2），不是验证要求。DS 摘要匹配任何
-   DNSKEY 即可，不要求 SEP 标志。这对 `jellyfin.org` 生效（DS 由 ZSK 算出，
-   SEP 放松后直接匹配）。
+1. **SEP-only DS matching** (`VerifyDelegationDS` / `SelfVerifyDNSKEY`):
+   the SEP bit is a deployment convention (RFC 4034 §2.1.2), not a validation
+   requirement. A DS digest matching any DNSKEY suffices; the SEP flag is not
+   required. This works for `jellyfin.org` (its DS is computed from the ZSK,
+   so the SEP relaxation matches directly).
 
-2. **CDS/CDNSKEY fallback**（`verifyOfflineKSK` → `verifyViaCDS` / `verifyViaCDNSKEY`）：
-   当 DS 由完全不发布在 DNSKEY RRset 中的 KSK 算出时（真正的 offline KSK），
-   查询子域的 CDS/CDNSKEY 记录（RFC 7344），与父域 DS 做完整 SHA-256 摘要
-   匹配。此 fallback 是**有意保留的设计**——摘要匹配密码学上等价于标准 DS
-   验证，不是死代码，请勿移除。
+2. **CDS/CDNSKEY fallback** (`verifyOfflineKSK` → `verifyViaCDS` / `verifyViaCDNSKEY`):
+   when the DS is computed from a KSK that is never published in the DNSKEY
+   RRset (a true offline KSK), the CDS/CDNSKEY records of the child zone are
+   queried (RFC 7344) and matched against the parent DS by full SHA-256
+   digest. This fallback is **intentionally kept** — digest matching is
+   cryptographically equivalent to standard DS validation; do not remove it.
 
 ```bash
 /tmp/zjdns -config docs/debug/loopback/server-dnssec.json &
 sleep 2
 
-# Offline KSK — DNSSEC 链验证
+# Offline KSK — DNSSEC chain validation
 dig @127.0.0.1 -p 12733 jellyfin.org DNSKEY +short
 # Expected: single ZSK (flags=256), no KSK published
 #   → SEP relaxation: ZSK directly matches parent DS
 
-# A 记录查询可能因权威 NS 网络不可达而超时（jellyfin 使用 Gandi NS，
-# out-of-bailiwick 解析耗时较长），这是网络限制而非 DNSSEC 问题。
+# A-record lookups may time out when the authoritative NS is unreachable
+# (jellyfin uses Gandi NS; out-of-bailiwick resolution takes longer) — a
+# network limitation, not a DNSSEC issue.
 
 pkill -f "server-dnssec"
 ```
 
 ## Defense Tests
 
-防御机制分为 forwarding 和 recursive 两类场景，独立测试：
+Defense mechanisms are split into forwarding and recursive scenarios, tested independently:
 
 ### Spoofguard (forwarding UDP EDNS OPT gate)
 
@@ -229,8 +233,9 @@ sleep 2
 
 dig @127.0.0.1 -p 10533 www.google.com A +short
 
-# EDNS-gate + richness: 查询带 EDNS，非 EDNS 响应直接丢弃，EDNS 响应间选 richest
-# 预期日志: "UPSTREAM: UDP spoofguard rejected non-EDNS response" → "UPSTREAM: UDP spoofguard EDNS candidate"
+# EDNS-gate + richness: the query carries EDNS, non-EDNS responses are
+# dropped, and the richest EDNS response wins.
+# Expected log: "UPSTREAM: UDP spoofguard rejected non-EDNS response" → "UPSTREAM: UDP spoofguard EDNS candidate"
 
 pkill -f "spoofguard"
 ```
@@ -259,7 +264,7 @@ pkill -f "spoofguard-socks5"
 pkill -f "socks5"
 ```
 
-### HopGuard (forwarding UDP IP TTL 检测)
+### HopGuard (forwarding UDP IP TTL detection)
 
 ```bash
 /tmp/zjdns -config docs/debug/defense/hopguard.json &
@@ -267,15 +272,18 @@ sleep 2
 
 dig @127.0.0.1 -p 10533 www.google.com A +short
 
-# IP 层 TTL 指纹：首个响应记录基线 TTL，后续响应 TTL 偏离 ±2 → 丢弃
-# 与 GFW 注入点的 TTL 不同（靠近用户 vs 真实服务器远端）
-# 预期日志: "UPSTREAM: hopguard TTL/HopLimit capture not available on" (Linux 正常启用, Windows 降级提示)
-#   → TTL 不匹配时: 静默丢弃 (continue, 不输出 WARN)
+# IP-layer TTL fingerprint: the first response records a baseline TTL;
+# later responses deviating by more than ±2 are dropped.
+# GFW injection points sit closer to the user than the real server, so their
+# TTL differs.
+# Expected log: "UPSTREAM: hopguard TTL/HopLimit capture not available on"
+# (enabled on Linux; degraded notice on Windows)
+#   → on TTL mismatch: silently dropped (continue, no WARN)
 
 pkill -f "hopguard"
 ```
 
-### HopGuard + Spoofguard (IP TTL + DNS 内容双层过滤)
+### HopGuard + Spoofguard (IP TTL + DNS content, two layers)
 
 ```bash
 /tmp/zjdns -config docs/debug/defense/hopguard-spoofguard.json &
@@ -283,14 +291,15 @@ sleep 2
 
 dig @127.0.0.1 -p 10533 www.google.com A +short
 
-# TTL 检查作为前置过滤器，先于 spoofguard 内容分析
-# TTL 不匹配 → 直接丢弃; TTL 匹配 → 进入 spoofguard EDNS 门控
-# 两个信号正交: IP 层 (路由拓扑) + DNS 层 (报文格式)
+# TTL check acts as a pre-filter ahead of spoofguard content analysis.
+# TTL mismatch → dropped; TTL match → spoofguard EDNS gate.
+# The two signals are orthogonal: IP layer (routing topology) + DNS layer
+# (packet format)
 
 pkill -f "hopguard-spoofguard"
 ```
 
-### Splitguard (forwarding TCP 分段)
+### Splitguard (forwarding TCP segmentation)
 
 ```bash
 /tmp/zjdns -config docs/debug/defense/splitguard.json &
@@ -298,12 +307,13 @@ sleep 2
 
 dig @127.0.0.1 -p 10533 www.google.com A +short
 
-# Splitguard 在服务器转发 TCP 时内部拆帧，与客户端用 UDP/TCP 无关
+# Splitguard segments frames internally when the server forwards over TCP;
+# independent of the client using UDP or TCP
 
 pkill -f "splitguard"
 ```
 
-### Poisonguard (recursive 越权检测)
+### Poisonguard (recursive out-of-zone detection)
 
 ```bash
 /tmp/zjdns -config docs/debug/defense/poisonguard.json &
@@ -311,14 +321,15 @@ sleep 2
 
 dig @127.0.0.1 -p 10533 www.google.com A +short
 
-# 递归每跳验证响应内容，检测 root/TLD 服务器越权返回 A/AAAA
-# 劫持时触发 TCP 回退
-# 预期日志: "poison detected" / "tcp=true"
+# Every recursion hop validates response content, detecting root/TLD servers
+# answering A/AAAA outside their authority.
+# Hijacking triggers a TCP fallback.
+# Expected log: "poison detected" / "tcp=true"
 
 pkill -f "poisonguard"
 ```
 
-### Recursive Defense (recursive 四层全开)
+### Recursive Defense (recursive, all four layers)
 
 ```bash
 /tmp/zjdns -config docs/debug/defense/recursive-defense.json &
@@ -326,10 +337,10 @@ sleep 2
 
 dig @127.0.0.1 -p 10533 www.google.com A +short
 
-# hopguard: 每跳 UDP IP TTL 指纹验证
-# spoofguard: 每跳 UDP EDNS OPT 门控
-# poisonguard: 内容检测 + 劫持触发 TCP 回退
-# splitguard: TCP 回退时分段抗 RST
+# hopguard: per-hop UDP IP TTL fingerprint validation
+# spoofguard: per-hop UDP EDNS OPT gate
+# poisonguard: content detection + hijack-triggered TCP fallback
+# splitguard: segmentation on the TCP fallback to resist RST
 
 pkill -f "recursive-defense"
 ```
@@ -496,7 +507,7 @@ dig @127.0.0.1 -p 13653 www.baidu.com A +short
 pkill -f "alidns-http3"
 ```
 
-## TLCP / DTLCP (国密) Tests
+## TLCP / DTLCP (GuoMi / ShangMi) Tests
 
 The main loopback server (`server.json`) has TLCP + DTLCP enabled alongside all
 other protocols. No separate server config needed.
@@ -697,7 +708,7 @@ docker exec -it zjdns /zjdns --sql /data/cache.db "
 "
 ```
 
-### TLCP (国密) Test
+### TLCP (Guomi / Shangmi) Test
 
 ```bash
 # External upstream (DNSPod, requires skip_tls_verify)
@@ -715,4 +726,3 @@ dig @127.0.0.1 -p 55454 www.baidu.com A +short
 ./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454"}},"upstream":[{"address":"127.0.0.1:8542","protocol":"dtlcp","server_name":"dtlcp.local","skip_tls_verify":true}]}') &
 dig @127.0.0.1 -p 55454 www.baidu.com A +short
 ```
-

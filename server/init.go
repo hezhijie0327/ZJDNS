@@ -76,6 +76,8 @@ func wireZoneDynamicContent(store cache.Store, rules []config.ZoneRule, resetDNS
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("ptr") }, "flushed")
 		case config.DefaultProjectName + ".latency.clear":
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("latency") }, "flushed")
+		case config.DefaultProjectName + ".querylog.clear":
+			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("querylog") }, "flushed")
 		case config.DefaultProjectName + ".dnscrypt.clear":
 			rules[i].DynamicContent = func() []string {
 				if resetDNSCrypt == nil {
