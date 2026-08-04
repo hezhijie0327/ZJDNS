@@ -432,14 +432,12 @@ func TestRecordRequest_Hit(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}}
-	entryID := mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
 	// Cache hit via UDP
 	mc.RecordRequest(&RequestRecord{
 		Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
-		ECS: nil, DNSSECOK: false,
 		Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess,
-		EntryID: entryID,
 	})
 
 	var protocol string
@@ -463,14 +461,12 @@ func TestRecordRequest_Stale(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}}
-	entryID := mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
 	// Stale serve via TCP
 	mc.RecordRequest(&RequestRecord{
 		Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
-		ECS: nil, DNSSECOK: false,
 		Protocol: "tcp", Result: "stale", Rcode: dns.RcodeSuccess,
-		EntryID: entryID,
 	})
 
 	var protocol, result string
@@ -493,11 +489,11 @@ func TestRecordRequest_MultipleResults(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}}
-	entryID := mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false)
 
-	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess, EntryID: entryID})
-	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess, EntryID: entryID})
-	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "https", Result: "hit", Rcode: dns.RcodeSuccess, EntryID: entryID})
+	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "https", Result: "hit", Rcode: dns.RcodeSuccess})
 
 	var udpHits, dohHits int64
 	err := mc.db.SQ.QueryRow(
@@ -698,7 +694,6 @@ func TestRecordRequest_Error(t *testing.T) {
 
 	mc.RecordRequest(&RequestRecord{
 		Qname: "error.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
-		ECS: nil, DNSSECOK: false,
 		Protocol: "udp", Result: "error", Rcode: dns.RcodeServerFailure,
 		Server: "1.2.3.4:53 (UDP)", ResponseTime: 500,
 	})
@@ -780,7 +775,6 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		nil, nil, nil, false)
 	mc.RecordRequest(&RequestRecord{
 		Qname: "error.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
-		ECS: nil, DNSSECOK: false,
 		Protocol: "tcp", Result: "error", Rcode: dns.RcodeServerFailure,
 		Server: "192.0.2.1:53 (TCP)", Poisoned: true, DNSSECStatus: "bogus",
 	})
@@ -1104,8 +1098,8 @@ func TestE2E_CompressionEfficacy(t *testing.T) {
 
 	// Verify hit counters
 	var total, udp, tcp int64
-	mc.RecordRequest(&RequestRecord{Qname: "host-00.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, ECS: nil, DNSSECOK: false, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(&RequestRecord{Qname: "host-01.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, ECS: nil, DNSSECOK: false, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "host-00.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&RequestRecord{Qname: "host-01.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
 
 	err = mc.db.SQ.QueryRow(`SELECT COUNT(*), COALESCE(SUM(CASE WHEN protocol='udp' THEN query_count ELSE 0 END),0), COALESCE(SUM(CASE WHEN protocol='tcp' THEN query_count ELSE 0 END),0) FROM query_stats WHERE result='hit'`).Scan(&total, &udp, &tcp)
 	if err != nil {
@@ -1127,4 +1121,46 @@ func netParseIP(s string) netip.Addr {
 		return netip.Addr{}
 	}
 	return addr
+}
+
+// TestSetReplacesExistingKeyWithoutCounterInflation verifies the H7 fix:
+// refreshing an existing key (INSERT OR REPLACE) must not increment the
+// entry counter — otherwise the counter drifts above the real row count and
+// evictIfNeeded deletes valid entries prematurely.
+func TestSetReplacesExistingKeyWithoutCounterInflation(t *testing.T) {
+	dir := t.TempDir()
+	db, err := database.Open(filepath.Join(dir, "h7.db"), 500, database.Options{MMapSizeMB: 4, CacheSizeMB: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mc := &SQLiteCache{db: db}
+	defer func() { _ = mc.Close() }()
+
+	a1 := &dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("93.184.216.34")}}
+	for i := 0; i < 3; i++ {
+		mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false,
+			[]dns.RR{a1}, nil, nil, true)
+	}
+	mc.Set("other.example.com.", dns.TypeA, dns.ClassINET, nil, false,
+		[]dns.RR{a1}, nil, nil, true)
+
+	if got := db.EntryCount(); got != 2 {
+		t.Errorf("EntryCount = %d after 3 refreshes of one key + 1 new key, want 2", got)
+	}
+	var rows int
+	if err := db.SQ.QueryRow("SELECT COUNT(*) FROM entries").Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if got := db.EntryCount(); got != int64(rows) {
+		t.Errorf("EntryCount = %d, SELECT COUNT(*) = %d — counter drifted from row count", got, rows)
+	}
+}
+
+// TestStmtIPLatencyPlaceholderCount guards the rdata_ip IN-clause placeholder
+// count in database.StmtIPLatency against cache.maxLatencyLookupIPs — a
+// mismatch silently drops or truncates batch lookup IPs.
+func TestStmtIPLatencyPlaceholderCount(t *testing.T) {
+	if got, want := database.IPLatencyPlaceholders, maxLatencyLookupIPs; got != want {
+		t.Errorf("database.IPLatencyPlaceholders = %d, want %d (cache.maxLatencyLookupIPs)", got, want)
+	}
 }

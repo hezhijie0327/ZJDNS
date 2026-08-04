@@ -208,14 +208,6 @@ func (r *Resolver) ConfigureServers(servers []config.UpstreamServer) {
 	r.upstream.store(active)
 }
 
-// Recursive returns the built-in recursive resolver, or nil if not initialized.
-func (r *Resolver) Recursive() *Recursive {
-	if r == nil {
-		return nil
-	}
-	return r.recursive
-}
-
 // UpstreamServers returns the current list of primary upstream servers.
 func (r *Resolver) UpstreamServers() []*config.UpstreamServer {
 	return r.upstream.list()
@@ -252,10 +244,9 @@ func ShuffleSlice[T any](slice []T) {
 }
 
 // concurrencyLimit returns an adaptive concurrency limit based on the number of
-// servers to query simultaneously. The limit must be monotonic: adding a
-// server must never REDUCE the fan-out (the raw tier formulas drop from 8 to 7
-// at 12→13 servers and 10 to 8 at 20→21), so each tier is floored at the
-// previous tier's value.
+// servers to query simultaneously. The limit is monotonic: each tier formula
+// is floored at the previous tier's value, so adding a server never reduces
+// the fan-out (e.g. 12 and 13 servers both yield 8; 20 and 21 both yield 10).
 func concurrencyLimit(serverCount int) int {
 	if serverCount <= 0 {
 		return 1

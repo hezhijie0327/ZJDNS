@@ -60,6 +60,11 @@ var (
 	ipv6FallbackPrefixes = []int{56, 48, 32, 0}
 )
 
+// ecsCandidatesPool reuses the per-lookup fallback candidate slice (at most
+// 5 entries) on the cache.Get hot path. Stored as *[]ecsCandidate to avoid
+// interface boxing (SA6002).
+var ecsCandidatesPool = sync.Pool{New: func() any { c := make([]ecsCandidate, 0, 5); return &c }}
+
 // New creates a cache backed by the given database. The caller is responsible
 // for opening the database via database.Open() before calling New.
 // New creates a SQLite-backed DNS cache.  Panics if db is nil (caller must
@@ -103,7 +108,9 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	var validated int
 	var msgWire []byte
 	found := false
-	for _, c := range ecsFallbackCandidates(ecs) {
+	candidates := ecsFallbackCandidates(ecs)
+	defer releaseECSCandidates(candidates)
+	for _, c := range candidates {
 		err := s.db.StmtEntry.QueryRow(
 			qname, int(qtype), int(qclass), c.addr, c.prefix, dnssecInt,
 		).Scan(&id, &ts, &entryTTL, &validated, &msgWire)
@@ -280,6 +287,9 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 			latencies[ip] = lat
 		}
 	}
+	if err := rows.Err(); err != nil {
+		log.Warnf("CACHE: latency rows iteration failed: %v", err)
+	}
 	return latencies
 }
 
@@ -302,26 +312,32 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	qname = dnsutil.Canonical(qname)
 	dnssecInt := database.BoolToInt(dnssecOK)
 
-	// Strip EDNS OPT pseudo-record from additional before caching,
-	// since padding and other EDNS options have no semantic value and
-	// waste storage space (up to 468 bytes per encrypted response).
-	additional = stripOPT(cloneRRs(additional))
+	// Strip EDNS OPT pseudo-record from additional before caching
+	// (padding and other EDNS options have no semantic value and waste
+	// storage space, up to 468 bytes per encrypted response). The
+	// single-pass clone+filter below avoids the double deep copy of the
+	// previous stripOPT(zdnsutil.CloneRRs(x)) then zdnsutil.CloneRRs(x).
+	additional = cloneRRsNoOPT(additional)
 
 	// Clone records to prevent downstream mutations (e.g. restoreDomain
 	// rewriting rr.Header().Name) from corrupting the cache.
-	answer = cloneRRs(answer)
-	authority = cloneRRs(authority)
-	additional = cloneRRs(additional)
+	answer = zdnsutil.CloneRRs(answer)
+	authority = zdnsutil.CloneRRs(authority)
 
 	// Pack wire format and compress.
 	msg := pool.DefaultMessage.Get()
 	msg.Answer = answer
 	msg.Ns = authority
 	msg.Extra = additional
-	var msgWire []byte
-	if err := msg.Pack(); err == nil {
-		msgWire = zdnsutil.Compress(msg.Data)
+	if err := msg.Pack(); err != nil {
+		// Uncacheable response (e.g. oversized): skip the insert entirely —
+		// a NULL msg_wire row can never be served (Get treats it as a miss)
+		// yet occupies a slot and would inflate the entry counter.
+		log.Debugf("CACHE: skipping cache write for %s (type=%d): pack failed: %v", qname, qtype, err)
+		pool.DefaultMessage.Put(msg)
+		return 0
 	}
+	msgWire := zdnsutil.Compress(msg.Data)
 	pool.DefaultMessage.Put(msg)
 
 	// ── Transaction ──────────────────────────────────────────────────────
@@ -332,31 +348,43 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	if txErr == nil {
 		defer func() { _ = tx.Rollback() }()
 
-		if txErr = tx.QueryRow(
-			`INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok,
-				timestamp, ttl, expires_at, validated, msg_wire)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			 RETURNING id`,
+		// Distinguish a fresh insert from a REPLACE of an existing row:
+		// REPLACE deletes and reinserts, leaving the row count unchanged, so
+		// only new rows may increment the entry counter. (Previously the
+		// counter was incremented unconditionally, drifting above the real
+		// row count on every refresh of an expired-but-present key and
+		// evicting valid entries prematurely.) Both statements are prepared
+		// in database/stmts.go — QueryRow on raw SQL would prepare per call.
+		var exists bool
+		txErr = tx.Stmt(s.db.StmtEntryExists).QueryRow(
 			qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
-			now, entryTTL, now+int64(entryTTL), database.BoolToInt(validated),
-			msgWire,
-		).Scan(&entryID); txErr == nil {
+		).Scan(&exists)
 
-			// Populate ptr_map for reverse (PTR) lookups — best-effort:
-			// a failure here must not abort the transaction, because the
-			// cached entry is more valuable than reverse-lookup data.
-			allRRs := make([]dns.RR, 0, len(answer)+len(authority)+len(additional))
-			allRRs = append(allRRs, answer...)
-			allRRs = append(allRRs, authority...)
-			allRRs = append(allRRs, additional...)
-			if err := insertPtrMap(tx, entryID, allRRs); err != nil {
-				log.Warnf("CACHE: insert ptr_map failed (non-fatal): %v", err)
-			}
+		if txErr == nil {
+			if txErr = tx.Stmt(s.db.StmtEntryInsert).QueryRow(
+				qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
+				now, entryTTL, now+int64(entryTTL), database.BoolToInt(validated),
+				msgWire,
+			).Scan(&entryID); txErr == nil {
 
-			if txErr = tx.Commit(); txErr == nil {
-				s.db.AddEntryCount(1)
-			} else {
-				log.Warnf("CACHE: commit tx failed: %v", txErr)
+				// Populate ptr_map for reverse (PTR) lookups — best-effort:
+				// a failure here must not abort the transaction, because the
+				// cached entry is more valuable than reverse-lookup data.
+				allRRs := make([]dns.RR, 0, len(answer)+len(authority)+len(additional))
+				allRRs = append(allRRs, answer...)
+				allRRs = append(allRRs, authority...)
+				allRRs = append(allRRs, additional...)
+				if err := insertPtrMap(tx, entryID, allRRs); err != nil {
+					log.Warnf("CACHE: insert ptr_map failed (non-fatal): %v", err)
+				}
+
+				if txErr = tx.Commit(); txErr == nil {
+					if !exists {
+						s.db.AddEntryCount(1)
+					}
+				} else {
+					log.Warnf("CACHE: commit tx failed: %v", txErr)
+				}
 			}
 		}
 		if txErr != nil {
@@ -382,9 +410,9 @@ func (s *SQLiteCache) evictIfNeeded() {
 		return
 	}
 
-	// Fast path: the atomic counter is accurate for new-key inserts (the common
-	// case). Skip the DB COUNT(*) when comfortably below limit. INSERT OR REPLACE
-	// drift (replacing an existing row) is rare and self-correcting.
+	// Fast path: the atomic counter is accurate — Set() only increments it for
+	// fresh inserts, so it tracks the real row count. Skip the DB COUNT(*) when
+	// comfortably below limit.
 	count := s.db.EntryCount()
 	maxEntries := int64(s.db.MaxEntries())
 	if count < maxEntries*9/10 {
@@ -573,20 +601,20 @@ func maskIP(ip net.IP, prefixBits int) net.IP {
 }
 
 // ecsFallbackCandidates generates ECS cache-key candidates from most specific
-// to least specific. nil ECS returns only the zero-value candidate (no fallback).
-// IPv4 falls back through /24, /16, /8, /0; IPv6 through /56, /48, /32, /0.
+// to least specific, on a pooled slice (every returned slice is pool-owned —
+// never a shared static, so a concurrent Get can safely reuse the backing
+// array after release). nil ECS returns only the zero-value candidate (no
+// fallback). IPv4 falls back through /24, /16, /8, /0; IPv6 through /56,
+// /48, /32, /0.
 func ecsFallbackCandidates(ecs *config.ECSOption) []ecsCandidate {
+	candidates := (*ecsCandidatesPool.Get().(*[]ecsCandidate))[:0]
 	if ecs == nil {
-		return []ecsCandidate{{"", 0}}
+		return append(candidates, ecsCandidate{"", 0})
 	}
-	var standardPrefixes []int
-	if ecs.Address.To4() != nil {
-		standardPrefixes = ipv4FallbackPrefixes
-	} else {
+	candidates = append(candidates, ecsCandidate{ecs.Address.String(), int(ecs.SourcePrefix)})
+	standardPrefixes := ipv4FallbackPrefixes
+	if ecs.Address.To4() == nil {
 		standardPrefixes = ipv6FallbackPrefixes
-	}
-	candidates := []ecsCandidate{
-		{ecs.Address.String(), int(ecs.SourcePrefix)},
 	}
 	for _, p := range standardPrefixes {
 		if p < int(ecs.SourcePrefix) {
@@ -597,16 +625,37 @@ func ecsFallbackCandidates(ecs *config.ECSOption) []ecsCandidate {
 	return candidates
 }
 
-// stripOPT removes EDNS OPT pseudo-records (TypeOPT) from an RR slice in-place.
+// releaseECSCandidates returns a pooled candidate slice to the pool.
+func releaseECSCandidates(candidates []ecsCandidate) {
+	// Pool entries are capped at 5 elements; anything larger (never in
+	// practice) is dropped rather than grown in place.
+	if cap(candidates) <= 5 {
+		ecsCandidatesPool.Put(&candidates)
+	}
+}
+
+// cloneRRsNoOPT returns a deep copy of rrs excluding OPT pseudo-records.
 // These carry transport-layer padding which has no semantic value but can
-// occupy up to 468 bytes per encrypted response.
-func stripOPT(rrs []dns.RR) []dns.RR {
+// occupy up to 468 bytes per encrypted response. The input slice belongs to
+// the caller, so filtering must not modify it in place (the previous stripOPT
+// required a pre-clone that doubled the deep copy on the cache write path).
+func cloneRRsNoOPT(rrs []dns.RR) []dns.RR {
 	n := 0
 	for _, rr := range rrs {
 		if dns.RRToType(rr) != dns.TypeOPT {
-			rrs[n] = rr
 			n++
 		}
 	}
-	return rrs[:n]
+	if n == 0 {
+		return nil
+	}
+	out := make([]dns.RR, n)
+	j := 0
+	for _, rr := range rrs {
+		if dns.RRToType(rr) != dns.TypeOPT {
+			out[j] = rr.Clone()
+			j++
+		}
+	}
+	return out
 }

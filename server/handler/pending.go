@@ -6,6 +6,7 @@ import (
 	"time"
 	"zjdns/config"
 	"zjdns/edns"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
 	"zjdns/internal/pending"
@@ -137,25 +138,10 @@ func cloneQueryResult(qr *resolver.QueryResult) *resolver.QueryResult {
 		return nil
 	}
 	cloned := *qr
-	cloned.Answer = cloneRRs(qr.Answer)
-	cloned.Authority = cloneRRs(qr.Authority)
-	cloned.Additional = cloneRRs(qr.Additional)
+	cloned.Answer = zdnsutil.CloneRRs(qr.Answer)
+	cloned.Authority = zdnsutil.CloneRRs(qr.Authority)
+	cloned.Additional = zdnsutil.CloneRRs(qr.Additional)
 	return &cloned
-}
-
-// cloneRRs returns a deep copy of a slice of RRs. Each RR is cloned via
-// its Clone method, which copies the header and record data.
-func cloneRRs(rrs []dns.RR) []dns.RR {
-	if len(rrs) == 0 {
-		return nil
-	}
-	out := make([]dns.RR, len(rrs))
-	for i, rr := range rrs {
-		if rr != nil {
-			out[i] = rr.Clone()
-		}
-	}
-	return out
 }
 
 // --- Unexported helpers ---

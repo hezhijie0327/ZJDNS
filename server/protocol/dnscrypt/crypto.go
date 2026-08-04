@@ -3,7 +3,6 @@ package dnscrypt
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"time"
@@ -14,6 +13,10 @@ import (
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
 )
+
+// tcpMaxPaddingBudget is the worst-case TCP padding overhead of PadResponse:
+// up to 256 bytes (§5.4.5, 1+sha256[0]) plus 64-byte alignment.
+const tcpMaxPaddingBudget = 256 + 64
 
 func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP bool) (encrypted []byte, err error) {
 	r := &dnscryptcrypto.EncryptedResponse{
@@ -46,7 +49,7 @@ func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP boo
 		// plaintext.  Reserve worst-case padding budget to stay under the 4096 cap.
 		paddingBudget := 0
 		if !isUDP {
-			paddingBudget = 256 + 64
+			paddingBudget = tcpMaxPaddingBudget
 		}
 		for {
 			minOverhead := dnscryptcrypto.MinResponseOverhead(q.ESVersion)
@@ -282,8 +285,8 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *dnscryptcrypto
 	var matchedPair *dnscryptcrypto.CertPair
 	for _, k := range keysSnapshot {
 		if ticketInfo.ClientMagic == k.pair.PQ.ClientMagic &&
-			binary.BigEndian.Uint32(ticketPlain[dnscryptcrypto.TicketPlaintextSerialOff:dnscryptcrypto.TicketPlaintextSerialOff+dnscryptcrypto.TicketPlaintextSerialLen]) == k.pair.Classical.Serial &&
-			binary.BigEndian.Uint32(ticketPlain[dnscryptcrypto.TicketPlaintextTSEndOff:dnscryptcrypto.TicketPlaintextTSEndOff+dnscryptcrypto.TicketPlaintextTSEndLen]) == k.pair.Classical.NotAfter &&
+			ticketInfo.Serial == k.pair.Classical.Serial &&
+			ticketInfo.TSEnd == k.pair.Classical.NotAfter &&
 			bytes.Equal(ticketInfo.ProfileExtHash[:], peHash[:]) {
 			matchedPair = k.pair
 			break

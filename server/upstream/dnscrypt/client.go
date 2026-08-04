@@ -33,6 +33,13 @@ type Client struct {
 // the RFC §5.4.2 TCP fallback are always reachable.
 const maxTCRetries = 7
 
+// respBufPool reuses the per-query UDP response buffer. Decrypt copies the
+// payload out (XchachaOpen allocates fresh), so the buffer is safe to return
+// after Decrypt. Stored as *[]byte to avoid interface boxing (SA6002).
+var respBufPool = sync.Pool{
+	New: func() any { b := make([]byte, dnscryptcrypto.MaxDNSUDPPacketSize); return &b },
+}
+
 // New creates a Client for DNSCrypt DNS queries.
 func New(getProxy func(*config.UpstreamServer) *socks5.Dialer) *Client {
 	return &Client{
@@ -147,7 +154,10 @@ func (c *Client) executeOnce(
 		if err != nil {
 			return nil, false, fmt.Errorf("writing dnscrypt query: %w", err)
 		}
-		respBuf := make([]byte, config.DefaultDNSCryptUDPSize)
+		// Decrypt copies the payload out (XchachaOpen allocates fresh), so
+		// the pooled buffer is safe to return via defer once Decrypt ran.
+		respBuf := *respBufPool.Get().(*[]byte)
+		defer respBufPool.Put(&respBuf)
 		n, udpErr := conn.Read(respBuf)
 		if udpErr != nil {
 			c.deleteState(stampAddr, providerName)

@@ -272,6 +272,14 @@ func (db *DB) runMigrations() error {
 
 	// Always sync version to current app version.
 	if applied != Version {
+		if Version == "0.0.0" {
+			// Caller did not wire database.Version (e.g. the --sql
+			// diagnostic tool). Never overwrite a real stored version
+			// with the unset sentinel — that would permanently mask
+			// the upgrade state (H8).
+			log.Debugf("DB: database.Version unset — leaving stored version %q unchanged", applied)
+			return nil
+		}
 		if _, err := db.SQ.Exec(
 			`INSERT OR REPLACE INTO version (rowid, version) VALUES (1, ?)`,
 			Version,

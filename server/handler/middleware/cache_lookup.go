@@ -10,6 +10,7 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pending"
+	"zjdns/internal/pool"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
 
@@ -48,43 +49,51 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return next.ServeDNS(ctx, qctx)
 		}
 
-		qctx.CacheEntry = entry
 		qctx.CacheHit = true
 
 		// Fresh hit — serve immediately.
 		if !isExpired {
-			qctx.Res = m.buildResponse(qctx, entry, false)
+			qctx.Res = buildCacheResponse(qctx, entry, false)
 			qctx.CacheServed = true
 
-			m.store.RecordRequest(&cache.RequestRecord{
-				Qname: qname, Qtype: qtype, Qclass: qclass,
-				ECS: ecsOpt, DNSSECOK: dnssecOK,
-				Protocol: qctx.Protocol, Result: "hit", Rcode: dns.RcodeSuccess,
-				EntryID: entry.ID,
-			})
+			rec := cache.AcquireRequestRecord()
+			rec.Qname = qname
+			rec.Qtype = qtype
+			rec.Qclass = qclass
+			rec.Protocol = qctx.Protocol
+			rec.Result = "hit"
+			rec.Rcode = dns.RcodeSuccess
+			m.store.RecordRequest(rec)
+			cache.ReleaseRequestRecord(rec)
 
-			// Prefetch if TTL is below threshold.
+			// Prefetch if TTL is below threshold. TryGo, not Go: the call
+			// sits on the per-query path, and Go blocks when the refresh
+			// concurrency limit is saturated — prefetch is best-effort and
+			// must not delay the response.
 			if m.closed != nil && !m.closed() && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) &&
 				m.prefetchCooldown != nil && m.prefetchCooldown.ShouldStart(qname, log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds()) &&
 				m.tryStartRefresh(qname, qtype, qclass, ecsOpt) {
 				if m.refreshGroup != nil {
-					m.refreshGroup.Go(func() error {
+					if !m.refreshGroup.TryGo(func() error {
 						defer zdnsutil.HandlePanic("Cache refresh: prefetch fresh-hit")
 						defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
 						_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt) // error logged inside
 						return nil                                            // prevent errgroup context cancellation cascade
-					})
+					}) {
+						// Refresh concurrency saturated — undo the in-flight
+						// gate so a later refresh can start.
+						m.finishRefresh(qname, qtype, qclass, ecsOpt)
+					}
 				}
 			}
 			return nil
 		}
 
 		// Expired.
-		qctx.CacheIsStale = true
 
 		// Can serve stale.
 		if entry.CanServeExpired(config.DefaultStaleMaxAge) {
-			qctx.Res = m.buildResponse(qctx, entry, true)
+			qctx.Res = buildCacheResponse(qctx, entry, true)
 			qctx.CacheServed = true
 
 			// Handle stale serving strategies.
@@ -92,32 +101,40 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				// PreferStale: return stale immediately, refresh in background.
 				if m.tryStartRefresh(qname, qtype, qclass, ecsOpt) {
 					if m.refreshGroup != nil {
-						m.refreshGroup.Go(func() error {
+						if !m.refreshGroup.TryGo(func() error {
 							defer zdnsutil.HandlePanic("Cache refresh: stale prefetch")
 							defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
 							_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt) // error logged inside
 							return nil                                            // prevent errgroup context cancellation cascade
-						})
+						}) {
+							m.finishRefresh(qname, qtype, qclass, ecsOpt) // slot saturated
+						}
 					}
 				}
-				m.store.RecordRequest(&cache.RequestRecord{
-					Qname: qname, Qtype: qtype, Qclass: qclass,
-					ECS: ecsOpt, DNSSECOK: dnssecOK,
-					Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
-					EntryID: entry.ID,
-				})
+				rec := cache.AcquireRequestRecord()
+				rec.Qname = qname
+				rec.Qtype = qtype
+				rec.Qclass = qclass
+				rec.Protocol = qctx.Protocol
+				rec.Result = "stale"
+				rec.Rcode = dns.RcodeSuccess
+				m.store.RecordRequest(rec)
+				cache.ReleaseRequestRecord(rec)
 				return nil
 			}
 
 			// Default: try a quick foreground refresh, fall back to stale.
 			refreshed := m.closed != nil && !m.closed() && m.tryStartRefresh(qname, qtype, qclass, ecsOpt)
 			if !refreshed {
-				m.store.RecordRequest(&cache.RequestRecord{
-					Qname: qname, Qtype: qtype, Qclass: qclass,
-					ECS: ecsOpt, DNSSECOK: dnssecOK,
-					Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
-					EntryID: entry.ID,
-				})
+				rec := cache.AcquireRequestRecord()
+				rec.Qname = qname
+				rec.Qtype = qtype
+				rec.Qclass = qclass
+				rec.Protocol = qctx.Protocol
+				rec.Result = "stale"
+				rec.Rcode = dns.RcodeSuccess
+				m.store.RecordRequest(rec)
+				cache.ReleaseRequestRecord(rec)
 				return nil
 			}
 
@@ -134,8 +151,13 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 	var qr *resolver.QueryResult
 	var refreshFinished atomic.Bool
 
+	// TryGo, not Go: this call sits on the per-query path, and Go blocks
+	// when the refresh concurrency limit is saturated — the client would
+	// wait for a refresh slot instead of getting the stale response. On
+	// saturation the done channel stays open and the timer path below
+	// serves stale immediately.
 	if m.refreshGroup != nil {
-		m.refreshGroup.Go(func() error {
+		if !m.refreshGroup.TryGo(func() error {
 			defer zdnsutil.HandlePanic("Cache refresh: foreground refresh")
 			defer close(done)
 			defer func() {
@@ -154,7 +176,9 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
 			qr = m.resolver.Query(refreshCtx, question, ecsOpt)
 			return nil
-		})
+		}) {
+			m.finishRefresh(qname, qtype, qclass, ecsOpt) // slot saturated
+		}
 	}
 
 	timer := time.NewTimer(config.DefaultServeExpiredClientTimeout)
@@ -164,7 +188,14 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 	case <-done:
 		if qr != nil && qr.Err == nil {
 			// Refresh completed — rebuild response with fresh data.
-			// qctx.Res already has stale response; replace with fresh.
+			// qctx.Res already has the stale pooled response; return it to
+			// the pool before replacing it, and clear the stale-answer EDE
+			// (RFC 8914 code 16) — the served response is fresh now, and
+			// carrying the stale EDE would mislead the client.
+			if stale := qctx.Res; stale != nil {
+				pool.DefaultMessage.Put(stale)
+			}
+			qctx.EDE = nil
 			msg := handler.BuildResponseMsg(qctx.Req)
 			dnssecOK := qctx.ClientRequestedDNSSEC
 			msg.Answer = cache.ProcessRecords(qr.Answer, 0, false, dnssecOK)
@@ -175,53 +206,79 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			}
 			qctx.Res = msg
 			qctx.CacheServed = false
-			m.store.RecordRequest(&cache.RequestRecord{
-				Qname: qctx.Qname, Qtype: qctx.Qtype, Qclass: qctx.Req.Question[0].Header().Class,
-				ECS: ecsOpt, DNSSECOK: qctx.ClientRequestedDNSSEC,
-				Protocol: qctx.Protocol, Result: "miss", Rcode: dns.RcodeSuccess,
-			})
+			rec := cache.AcquireRequestRecord()
+			rec.Qname = qctx.Qname
+			rec.Qtype = qctx.Qtype
+			rec.Qclass = qctx.Req.Question[0].Header().Class
+			rec.Protocol = qctx.Protocol
+			rec.Result = "miss"
+			rec.Rcode = dns.RcodeSuccess
+			m.store.RecordRequest(rec)
+			cache.ReleaseRequestRecord(rec)
 		} else {
 			// Refresh failed — serve stale response.
-			m.store.RecordRequest(&cache.RequestRecord{
-				Qname: qname, Qtype: qtype, Qclass: qclass,
-				ECS: ecsOpt, DNSSECOK: qctx.ClientRequestedDNSSEC,
-				Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
-				EntryID: entry.ID,
-			})
+			rec := cache.AcquireRequestRecord()
+			rec.Qname = qname
+			rec.Qtype = qtype
+			rec.Qclass = qclass
+			rec.Protocol = qctx.Protocol
+			rec.Result = "stale"
+			rec.Rcode = dns.RcodeSuccess
+			m.store.RecordRequest(rec)
+			cache.ReleaseRequestRecord(rec)
 		}
 	case <-timer.C:
 		// Stale response stays in qctx.Res.  Background refresh continues.
-		m.store.RecordRequest(&cache.RequestRecord{
-			Qname: qname, Qtype: qtype, Qclass: qclass,
-			ECS: ecsOpt, DNSSECOK: qctx.ClientRequestedDNSSEC,
-			Protocol: qctx.Protocol, Result: "stale", Rcode: dns.RcodeSuccess,
-			EntryID: entry.ID,
-		})
+		rec := cache.AcquireRequestRecord()
+		rec.Qname = qname
+		rec.Qtype = qtype
+		rec.Qclass = qclass
+		rec.Protocol = qctx.Protocol
+		rec.Result = "stale"
+		rec.Rcode = dns.RcodeSuccess
+		m.store.RecordRequest(rec)
+		cache.ReleaseRequestRecord(rec)
+		// TryGo, not Go: this call sits on the per-query path and Go blocks
+		// while the refresh limit is saturated. The foreground refresh
+		// (started above) already released its gate via refreshFinished, so
+		// a failed TryGo only drops the opportunistic cache write — the next
+		// query re-refreshes.
 		if m.refreshGroup != nil {
-			m.refreshGroup.Go(func() error {
+			if !m.refreshGroup.TryGo(func() error {
 				defer zdnsutil.HandlePanic("Cache refresh: background update")
 				defer func() {
 					if refreshFinished.CompareAndSwap(false, true) {
 						m.finishRefresh(qname, qtype, qclass, ecsOpt)
 					}
 				}()
+				// Defensive nil guard mirroring the foreground path below
+				// (refreshCtx is wired by the server, nil only in tests).
+				rc := m.refreshCtx
+				if rc == nil {
+					rc = context.Background()
+				}
 				select {
 				case <-done:
 					if qr != nil && qr.Err == nil && qr.Cacheable {
 						m.store.Set(qname, qtype, qclass, ecsOpt, false, // dnssecOK — background refresh does not need DNSSEC
 							qr.Answer, qr.Authority, qr.Additional, qr.Validated)
 					}
-				case <-m.refreshCtx.Done():
+				case <-rc.Done():
 				}
 				return nil
-			})
+			}) {
+				log.Debugf("CACHE: refresh slot saturated — cache update skipped for %s (type=%d)", qname, qtype)
+			}
 		}
 	}
 
 	return nil
 }
 
-func (m *CacheLookup) buildResponse(qctx *handler.QueryContext, entry *cache.Entry, isExpired bool) *dns.Msg {
+// buildCacheResponse builds a response from a cached entry, marking the
+// stale-answer EDE (RFC 8914 code 16) when serving expired data. Shared by
+// CacheLookup and CacheStore.
+func buildCacheResponse(qctx *handler.QueryContext, entry *cache.Entry, isExpired bool) *dns.Msg {
 	msg := handler.BuildCacheEntryResponse(qctx.Req, entry, qctx.ClientRequestedDNSSEC, isExpired)
 	if isExpired {
 		qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorStaleAnswer, ExtraText: ""}

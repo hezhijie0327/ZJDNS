@@ -51,7 +51,7 @@ const (
 	DefaultMaxCacheableTTL = 7 * 86400 // RFC 8767 §4: SHOULD cap at 604800 seconds (7 days)
 
 	DefaultPrefetchThresholdPercent  = 10
-	DefaultServeExpiredClientTimeout = 600 * time.Millisecond // RFC 8767 §5.2: short wait before serving stale
+	DefaultServeExpiredClientTimeout = 600 * time.Millisecond // short client wait before serving stale (RFC 8767 stale-answer-ttl concept)
 	DefaultPrefetchThrottleInterval  = 3 * time.Second
 
 	// DefaultPrefetchCooldownMaxEntries caps the PrefetchCooldown map size.
@@ -65,8 +65,9 @@ const (
 // =============================================================================
 
 const (
-	// RFC 8767 §4.2: timeout SHOULD default to less than 10 seconds.
-	DefaultDNSQueryTimeout = 9 * time.Second // single DNS query / dial / per-message I/O
+	// Single DNS query / dial / per-message I/O budget. Engineering default
+	// (RFC 8767 defines no query timeout).
+	DefaultDNSQueryTimeout = 9 * time.Second
 
 	// DefaultPoisonProbeTimeout bounds the TLD hijack probe query.
 	// The probe detects GFW-injected A/AAAA records at the delegation
@@ -275,6 +276,8 @@ const (
 	ProtoHTTPTLCP = "http-tlcp" // DoH over TLCP (matches config protocol.http_tlcp)
 	ProtoDTLS     = "dtls"      // DNS-over-DTLS (RFC 8094, matches config protocol.dtls)
 	ProtoDTLCP    = "dtlcp"     // DNS-over-DTLCP (GM/T 0128-2023)
+
+	ProtoSOCKS5 = "socks5" // SOCKS5 proxy URL scheme (RFC 1928)
 )
 
 // =============================================================================
@@ -284,7 +287,6 @@ const (
 const (
 	DefaultDNSCryptCertificateTTL      = 24 * time.Hour
 	DefaultDNSCryptSharedKeyCacheSize  = 2048 // max cached shared keys per server
-	DefaultDNSCryptUDPSize             = 4096
 	DefaultDNSCryptCertificateCacheTTL = 1 * time.Hour
 	DefaultDNSCryptReadTimeout         = 2 * time.Second
 	DefaultDNSCryptWriteTimeout        = 10 * time.Second // DNSCrypt TCP response write

@@ -153,12 +153,10 @@ func (m *Map[K, V]) Clear() {
 	m.len = 0
 }
 
-// CompareAndDelete removes the entry for key only if it currently holds val.
-// It reports whether the entry was removed. Atomic Get→compare→Delete: a
-// concurrent Set installing a different value for the same key is preserved.
-// CompareAndDelete deletes the entry for key only if its current value
-// equals val (interface equality — V must be a comparable type; slice/map/
-// func values would panic here).
+// CompareAndDelete removes the entry for key only if it currently holds val
+// (interface equality — V must be a comparable type; slice/map/func values
+// would panic here). It reports whether the entry was removed; a concurrent
+// Set installing a different value for the same key is preserved.
 func (m *Map[K, V]) CompareAndDelete(key K, val V) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()

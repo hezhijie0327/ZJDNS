@@ -223,26 +223,22 @@ func isQUICRetryable(err error) bool {
 		return true
 	}
 
-	var qAppErr *quic.ApplicationError
-	if errors.As(err, &qAppErr) {
+	if qAppErr, ok := errors.AsType[*quic.ApplicationError](err); ok {
 		if qAppErr.ErrorCode == 0 ||
 			qAppErr.ErrorCode == quic.ApplicationErrorCode(http3.ErrCodeNoError) {
 			return true
 		}
 	}
 
-	var qIdleErr *quic.IdleTimeoutError
-	if errors.As(err, &qIdleErr) {
+	if _, ok := errors.AsType[*quic.IdleTimeoutError](err); ok {
 		return true
 	}
 
-	var resetErr *quic.StatelessResetError
-	if errors.As(err, &resetErr) {
+	if _, ok := errors.AsType[*quic.StatelessResetError](err); ok {
 		return true
 	}
 
-	var qTransportError *quic.TransportError
-	if errors.As(err, &qTransportError) && qTransportError.ErrorCode == quic.NoError {
+	if qTransportError, ok := errors.AsType[*quic.TransportError](err); ok && qTransportError.ErrorCode == quic.NoError {
 		return true
 	}
 

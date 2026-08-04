@@ -87,11 +87,15 @@ func (s *Server) handleDTLSConnections(listener net.Listener) {
 			case <-s.ctx.Done():
 				return
 			default:
+				// Back off like every other accept loop (tls.go, quic.go,
+				// tlcp.go, dnscrypt): a sustained temporary failure (EMFILE,
+				// ENOBUFS) would otherwise spin this loop at 100% CPU.
 				if zdnsutil.IsTemporaryError(err) {
 					log.Debugf("TLS: DTLS accept temporary error: %v", err)
-					continue
+				} else {
+					log.Warnf("TLS: DTLS accept error: %v", err)
 				}
-				log.Warnf("TLS: DTLS accept error: %v", err)
+				time.Sleep(config.DefaultAcceptRetryDelay)
 				continue
 			}
 		}

@@ -43,6 +43,8 @@ type DB struct {
 
 	// Cache prepared statements
 	StmtEntry         *sql.Stmt
+	StmtEntryExists   *sql.Stmt
+	StmtEntryInsert   *sql.Stmt
 	StmtQueryLog      *sql.Stmt
 	StmtQueryStats    *sql.Stmt
 	StmtInsertLatency *sql.Stmt
@@ -51,6 +53,9 @@ type DB struct {
 	// Zone prepared statements
 	StmtZoneExact    *sql.Stmt
 	StmtZoneWildcard *sql.Stmt
+
+	// Ruleset prepared statements
+	StmtRulesetDomain *sql.Stmt
 
 	// Latency prepared statements
 	StmtIPLatency *sql.Stmt
@@ -198,6 +203,11 @@ func (db *DB) SetEntryCount(n int64) { db.entryCount.Store(n) }
 
 // BeginTx starts a new SQL transaction.
 func (db *DB) BeginTx() (*sql.Tx, error) { return db.SQ.Begin() }
+
+// RulesetDomainStmt returns the prepared ruleset domain lookup statement.
+// Satisfies ruleset.RuleSetStorage: the per-query Match() hot path must not
+// prepare a statement on every call.
+func (db *DB) RulesetDomainStmt() *sql.Stmt { return db.StmtRulesetDomain }
 
 // MaxEntries returns the maximum cache entries before eviction.
 func (db *DB) MaxEntries() int { return db.maxEntries }

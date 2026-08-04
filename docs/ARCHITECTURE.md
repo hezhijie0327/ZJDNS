@@ -7,6 +7,9 @@ Detailed technical reference for ZJDNS. For working guidelines, see [CLAUDE.md](
 The unified database (`database/`) contains nine SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
 
 ```sql
+-- Project version (singleton row). Set at build time via database.Version.
+CREATE TABLE version (version TEXT NOT NULL);
+
 -- DNS response cache. Uniqueness: (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok).
 CREATE TABLE entries (
     qname      TEXT NOT NULL,
@@ -78,6 +81,15 @@ CREATE TABLE ip_latency (
 ) WITHOUT ROWID;
 CREATE INDEX idx_ip_latency_probe ON ip_latency(last_probe_time);
 
+-- Ruleset entries loaded from config. PK (type, tag, value) enables a prefix
+-- seek for WHERE type='domain' AND tag=?. IP entries are CIDR strings.
+CREATE TABLE ruleset_entries (
+    tag   TEXT NOT NULL,
+    type  TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (type, tag, value)
+) WITHOUT ROWID;
+
 -- Zone entries (same DB file, shared zstd compression).
 CREATE TABLE zone_entries (
     is_wildcard INTEGER NOT NULL DEFAULT 0,
@@ -121,7 +133,7 @@ DNS pollution attacks. Each is enabled via `UpstreamServer` flags.
 | Mechanism | Layer | Algorithm |
 |-----------|-------|-----------|
 | **Hopguard** | UDP upstream | IP TTL fingerprint: auto-learn baseline, reject responses with TTL outside ±2 range |
-| **Spoofguard** | UDP upstream | Multi-read loop: reject `AR=0+NOERROR+EDNS`; accept `AN>=2`/`NS>0`/`AD=1`; collect ambiguous (≤500ms) → pick richest |
+| **Spoofguard** | UDP upstream | Multi-read loop: reject `AR=0+NOERROR` without EDNS (bare A/AAAA, GFW signature); accept `AN>=2`/`NS>0`/`AD=1`; collect ambiguous (≤500ms) → pick richest |
 | **Poisonguard** | Recursive | Zone-authority cross-validation on resolved answers |
 | **Splitguard** | TCP upstream | Random [1,N] payload segmentation with jitter |
 
@@ -195,12 +207,12 @@ Full implementation with PQC support. Two crypto constructions: XWingPQ (default
 
 - **Classical (124B)**: `CertMagic(4) + ESVersion(2) + Minor(2) + Sig(64) + ResolverPk(32) + ClientMagic(8) + Serial(4) + TS-start(4) + TS-end(4)`
 - **PQ (1320B)**: Same header + `PqPublicKey(1216) + ClientMagic(8) + Serial(4) + TS-start(4) + TS-end(4) + Extensions(12)`
-- ClientMagic for PQ = SHA-256(PqPublicKey)[:8]
+- ClientMagic for PQ = bytes 72–79 of the X-Wing public key (official encrypted-dns-server derivation, `generate.go NewPQCert`)
 - PqCertContext = HKDF("DNSCrypt-PQ-v1" + es-version + minor + pq-public-key + client-magic + serial + ts-start + ts-end + extensions)
 
 ### Ticket Resumption
 
-Server issues tickets sealed with XChacha20-Poly1305 under `ticketKey` (SHA-256 of Ed25519 signing key). Ticket plaintext: `PQESVersion(2) + ClientMagic(8) + ResumeSecret(32) + Expiry(8)`. Client derives per-query keys via `pqResumedSharedKey(resumeSecret, clientMagic, clientNonce/2, ticket)`.
+Server issues tickets sealed with XChacha20-Poly1305 under `ticketKey` (SHA-256 of Ed25519 signing key). Ticket plaintext (86B, `TicketPlaintext*` offsets in `internal/dnscryptcrypto/certificate.go`): `ResumeSecret(off 0, 32) + ESVersion(off 32, 2) + ClientMagic(off 34, 8) + Serial(off 42, 4) + TS-end(off 46, 4) + Expiry(off 50, 4) + ProfileExtHash=SHA-256(profile-ext)(off 54, 32)`. Client derives per-query keys via `pqResumedSharedKey(resumeSecret, clientMagic, clientNonce/2, ticket)`.
 
 ## DTLCP (GM/T 0128-2023)
 

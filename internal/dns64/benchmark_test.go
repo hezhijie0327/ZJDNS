@@ -17,15 +17,6 @@ func BenchmarkSynthesizer_MapAddr(b *testing.B) {
 	}
 }
 
-func BenchmarkSynthesizer_ExtractIPv4(b *testing.B) {
-	s, _ := New("64:ff9b::/96")
-	ip6 := s.MapAddr(netip.MustParseAddr("192.0.2.1"))
-	b.ResetTimer()
-	for b.Loop() {
-		_, _ = s.ExtractIPv4(ip6)
-	}
-}
-
 func BenchmarkSynthesizer_IsSynthesized(b *testing.B) {
 	s, _ := New("64:ff9b::/96")
 	ip6 := s.MapAddr(netip.MustParseAddr("192.0.2.1"))

@@ -101,7 +101,7 @@ graph TD
     CACHE -->|Fresh| SERVE[Serve from Cache]
     CACHE -->|Stale| STALE[Serve Stale + Refresh]
     CACHE -->|Miss| ROOT[Root Hints → TLD → Auth]
-    ROOT --> QMIN[QNAME Minimisation<br/>RFC 9156 · max 16 steps]
+    ROOT --> QMIN[QNAME Minimisation<br/>RFC 9156 §2.3 · max 10 iterations]
     QMIN --> NS[Query NS Records]
     NS --> ADDR[Resolve NS Addresses<br/>Latency-Sorted]
     ADDR --> PROBE[Concurrent Query<br/>First-NOERROR Wins]

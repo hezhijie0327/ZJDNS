@@ -96,6 +96,9 @@ func (c *Conn) SetSegmentation(segSize int) {
 	c.writeMu.Unlock()
 }
 
+// Exchange sends a DNS message over the pipelined connection and waits for
+// its matching response, keyed by the query ID. The connection is shared:
+// concurrent Exchanges on the same Conn are multiplexed (RFC 7766 §7).
 func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	if msg == nil {
 		return nil, errors.New("client: nil query message")
@@ -136,6 +139,15 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	binary.BigEndian.PutUint16(writeBuf[:zdnsutil.DNSFramePrefixLen], uint16(len(msgData))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
 	copy(writeBuf[zdnsutil.DNSFramePrefixLen:], msgData)
 
+	// Safety assertion checked before taking the lock: writeBuf was sized as
+	// DNSFramePrefixLen+len(msgData) and any valid DNS message after Pack()
+	// has at least 12 bytes (the DNS header), so this is never reached in
+	// practice. It must not return while holding c.mu — that would deadlock
+	// every subsequent Exchange on this connection.
+	if len(writeBuf) < zdnsutil.DNSFramePrefixLen+2 {
+		return nil, fmt.Errorf("client: writeBuf too small for trackingID update: %d bytes", len(writeBuf))
+	}
+
 	resultCh := make(chan *dns.Msg, 1)
 	c.mu.Lock()
 	if c.closed.Load() {
@@ -151,12 +163,6 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 		trackingID = uint16(c.nextID.Add(1) & dnsIDMask)
 	}
 	if trackingID != origTrackingID {
-		// Safety assertion: writeBuf was sized as DNSFramePrefixLen+len(msgData)
-		// and any valid DNS message after Pack() has at least 12 bytes (the DNS
-		// header), so this condition is never reached in practice.
-		if len(writeBuf) < zdnsutil.DNSFramePrefixLen+2 {
-			return nil, fmt.Errorf("client: writeBuf too small for trackingID update: %d bytes", len(writeBuf))
-		}
 		binary.BigEndian.PutUint16(writeBuf[zdnsutil.DNSFramePrefixLen:zdnsutil.DNSFramePrefixLen+2], trackingID)
 	}
 	c.inflight[trackingID] = &pending{resultCh: resultCh}
@@ -339,7 +345,8 @@ func (c *Conn) IsDead() bool {
 	return c.closed.Load()
 }
 
-// NewPool creates a Pool with the specified connection and in-flight limits.
+// NewConnPool creates a ConnPool with the specified connection and
+// in-flight limits (RFC 7766 pipelining).
 func NewConnPool(maxConns, maxPipe int) *ConnPool {
 	if maxConns <= 0 {
 		maxConns = config.DefaultMaxConns

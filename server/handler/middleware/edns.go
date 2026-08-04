@@ -6,6 +6,7 @@ import (
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 	"zjdns/server/handler"
 
 	"codeberg.org/miekg/dns"
@@ -34,6 +35,22 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			log.Debugf("EDNS: full unpack failed: %v", err)
 			msg := handler.BuildResponseMsg(req)
 			msg.Rcode = dns.RcodeFormatError
+			qctx.Res = msg
+			return nil
+		}
+
+		// RFC 6891 §6.1.3 MUST: a request carrying an unsupported EDNS
+		// version is answered with RCODE=BADVERS and an OPT that carries the
+		// version this responder supports (0). Unpack folds the OPT version
+		// into req.Version. The PADDING option is a zero-byte carrier: it
+		// forces OPT generation at pack time, where Rcode=16 (extended
+		// rcode) and UDPSize are folded into the OPT.
+		if req.Version != 0 {
+			log.Debugf("EDNS: unsupported EDNS version %d from %s, returning BADVERS", req.Version, qctx.ClientIP)
+			msg := handler.BuildResponseMsg(req)
+			msg.Rcode = dns.RcodeBadVers
+			msg.UDPSize = pool.UDPBufferSize
+			msg.Pseudo = append(msg.Pseudo, &dns.PADDING{})
 			qctx.Res = msg
 			return nil
 		}
@@ -81,11 +98,24 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 
 		cookieOpt := qctx.CookieOpt
 
-		// RFC 7873: Server cookie length != 16 bytes → BADCOOKIE.
-		if cookieOpt != nil && len(cookieOpt.ServerCookie) > 0 && len(cookieOpt.ServerCookie) != edns.DefaultCookieServerLen {
-			log.Debugf("EDNS: bad server cookie length %d (expected %d) from %s, returning BADCOOKIE", len(cookieOpt.ServerCookie), edns.DefaultCookieServerLen, qctx.ClientIP)
-			qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt, qctx.ECSOpt)
-			return nil
+		// RFC 7873 §5.2.2: valid COOKIE option lengths are 8 and 16-40.
+		// Lengths 9-15 and >40 are malformed → FORMERR. Within 16-40, a
+		// server cookie ≠ 16 bytes is an invalid server cookie → BADCOOKIE
+		// (§5.2.4).
+		if cookieOpt != nil && len(cookieOpt.ServerCookie) > 0 {
+			total := edns.DefaultCookieClientLen + len(cookieOpt.ServerCookie)
+			if total < edns.DefaultCookieServerLen || total > edns.MaxCookieLen {
+				log.Debugf("EDNS: malformed cookie option length %d from %s, returning FORMERR", total, qctx.ClientIP)
+				msg := handler.BuildResponseMsg(req)
+				msg.Rcode = dns.RcodeFormatError
+				qctx.Res = msg
+				return nil
+			}
+			if len(cookieOpt.ServerCookie) != edns.DefaultCookieServerLen {
+				log.Debugf("EDNS: bad server cookie length %d (expected %d) from %s, returning BADCOOKIE", len(cookieOpt.ServerCookie), edns.DefaultCookieServerLen, qctx.ClientIP)
+				qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt, qctx.ECSOpt)
+				return nil
+			}
 		}
 
 		// RFC 7873: Full server cookie (16 bytes) → cryptographic validation.
@@ -114,7 +144,15 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 func (m *EDNS) buildBadCookieResponse(req *dns.Msg, clientIP net.IP, cookieOpt *edns.CookieOption, ecsOpt *edns.ECSOption) *dns.Msg {
 	msg := handler.BuildResponseMsg(req)
 	msg.Rcode = dns.RcodeBadCookie
-	if cookieOpt == nil || len(cookieOpt.ClientCookie) != edns.DefaultCookieClientLen {
+	if cookieOpt == nil {
+		// RFC 7873 §5.3: nothing to echo — FORMERR. Kept separate from the
+		// length check: logging len(cookieOpt.ClientCookie) on the nil path
+		// would dereference a nil pointer.
+		log.Debugf("EDNS: missing client cookie from %s, returning FORMERR", clientIP)
+		msg.Rcode = dns.RcodeFormatError
+		return msg
+	}
+	if len(cookieOpt.ClientCookie) != edns.DefaultCookieClientLen {
 		// RFC 7873 §5.3: the echoed client cookie must be exactly 8 octets.
 		log.Debugf("EDNS: bad cookie length %d from %s, returning FORMERR", len(cookieOpt.ClientCookie), clientIP)
 		msg.Rcode = dns.RcodeFormatError

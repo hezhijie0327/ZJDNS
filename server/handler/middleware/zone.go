@@ -81,7 +81,6 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		})
 
 		qctx.ZoneMatched = true
-		qctx.ZoneResult = &zoneResult
 
 		// Non-success rcode → build error response.
 		if zoneResult.Rcode != dns.RcodeSuccess {

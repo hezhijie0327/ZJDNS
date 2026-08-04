@@ -257,10 +257,12 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		if sqlRW {
 			if err := RunSQLRW(args[0], args[1]); err != nil {
 				fmt.Fprintf(os.Stderr, "sql: %v\n", err)
+				return "", true, 1
 			}
 		} else {
 			if err := RunSQL(args[0], args[1]); err != nil {
 				fmt.Fprintf(os.Stderr, "sql: %v\n", err)
+				return "", true, 1
 			}
 		}
 		return "", true, 0

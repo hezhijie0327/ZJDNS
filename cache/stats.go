@@ -17,14 +17,6 @@ import (
 
 // RecordRequest logs a request outcome asynchronously. The record is queued
 // into a background writer goroutine that upserts into query_stats (per-day
-// aggregated counters) and, for non-hit results, inserts a row into query_log
-// for the audit trail.  Hits are only in query_stats.
-//
-// When the async writer's channel is full the record is silently dropped —
-// stats are best-effort and must never block the query hot path.
-//
-// When the async writer is nil (e.g. in tests), RecordRequest falls back to
-// synchronous writes so callers can observe results immediately.
 // statsMetric is a single (name, count, percentage) entry for the stats TXT
 // output.  Zero-count entries are omitted by formatStatsLine.
 type statsMetric struct {
@@ -33,6 +25,15 @@ type statsMetric struct {
 	pct   float64
 }
 
+// RecordRequest upserts the request into query_stats (per-day aggregated
+// counters) and, for non-hit results, inserts a row into query_log for the
+// audit trail.  Hits are only in query_stats.
+//
+// When the async writer's channel is full the record is silently dropped —
+// stats are best-effort and must never block the query hot path.
+//
+// When the async writer is nil (e.g. in tests), RecordRequest falls back to
+// synchronous writes so callers can observe results immediately.
 func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 	if r == nil {
 		return
@@ -103,10 +104,13 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 			continue
 		}
 		results = append(results, LookupResult{
-			Name:    name,
-			TTL:     ttl.RemainingTTL(ts, rawTTL, uint32(config.DefaultStaleTTL)),
-			EntryID: entryID,
+			Name: name,
+			TTL:  ttl.RemainingTTL(ts, rawTTL, uint32(config.DefaultStaleTTL)),
 		})
+	}
+	if err := rows.Err(); err != nil {
+		log.Warnf("CACHE: PTR rows iteration failed for %s: %v", ip, err)
+		return nil
 	}
 	return results
 }
@@ -195,7 +199,7 @@ func (s *SQLiteCache) Stats() []string {
 	var totalMS int64
 
 	// Single scan of query_stats — result+protocol+rcode breakdown + totals.
-	_ = s.db.SQ.QueryRow(
+	err := s.db.SQ.QueryRow(
 		"SELECT COALESCE(SUM(query_count), 0),"+
 			// result breakdown
 			" COALESCE(SUM(CASE WHEN result='hit' THEN query_count ELSE 0 END), 0),"+
@@ -243,6 +247,11 @@ func (s *SQLiteCache) Stats() []string {
 		&secureCount, &insecureCount, &bogusCount, &poisoned,
 		&totalMS,
 	)
+	if err != nil {
+		// The whole scan failed — only the entry-count line is trustworthy.
+		log.Warnf("CACHE: stats query failed: %v", err)
+		return []string{fmt.Sprintf("entries=%d total=%d avg=%.1fms", entries, 0, 0.0)}
+	}
 
 	var avgMs float64
 	if total > 0 {

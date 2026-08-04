@@ -50,7 +50,9 @@ func (s *Server) startDOTServer() error {
 		tlcpCfg.NextProtos = config.NextProtoDOT
 		tlcpListener := tlcp.NewListener(&tcpKeepAliveListener{Listener: rawListener}, tlcpCfg)
 
+		s.listenerMu.Lock()
 		s.dotListeners = append(s.dotListeners, tlcpListener)
+		s.listenerMu.Unlock()
 
 		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("TLCP DoT server")
@@ -89,9 +91,12 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 
 	clientIP := zdnsutil.ClientIPFromAddr(conn.RemoteAddr())
 
-	for {
-		_ = conn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
+	// Short pre-handshake deadline for the first read: a flood of idle TLCP
+	// connections must not hold a shared serverGroup slot for the full 60s
+	// idle timeout (mirrors the TLS package, tls.go:81).
+	_ = conn.SetReadDeadline(time.Now().Add(config.DefaultTLSHandshakeTimeout))
 
+	for {
 		msg, err := zdnsutil.ReadTCPMsg(conn)
 		if err != nil {
 			if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.EOF) {
@@ -99,6 +104,9 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 			}
 			return
 		}
+
+		// First read succeeded — extend to the regular idle timeout.
+		_ = conn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 
 		resp := s.handler.ServeDNS(msg, clientIP, true, config.ProtoTLCP)
 		if !s.sendDOTResponse(conn, resp, clientIP) {
@@ -116,6 +124,12 @@ func (s *Server) sendDOTResponse(conn net.Conn, resp *dns.Msg, clientIP net.IP) 
 	}
 	defer pool.DefaultMessage.Put(resp)
 
+	// Write deadline matching the other protocol handlers (tls.go:124,
+	// dnscrypt/tcp.go:42, dtlcp.go:368): a peer that stops reading (full
+	// receive window) must not block this connection goroutine forever.
+	if err := conn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout)); err != nil {
+		log.Debugf("TLCP: DoT SetWriteDeadline error to %s: %v", clientIP, err)
+	}
 	if err := zdnsutil.WriteTCPMsg(conn, resp); err != nil {
 		log.Debugf("TLCP: DoT write error to %s: %v", clientIP, err)
 		return false

@@ -214,14 +214,14 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 			if err != nil {
 				return fmt.Errorf("upstream server %d proxy URL invalid: %w", i, err)
 			}
-			if u.Scheme != "socks5" {
-				return fmt.Errorf("upstream server %d proxy scheme must be socks5 (got %q)", i, u.Scheme)
+			if u.Scheme != ProtoSOCKS5 {
+				return fmt.Errorf("upstream server %d proxy scheme must be %s (got %q)", i, ProtoSOCKS5, u.Scheme)
 			}
 			if u.Hostname() == "" {
 				return fmt.Errorf("upstream server %d proxy host required", i)
 			}
 			if p := u.Port(); p != "" {
-				if port, err := strconv.Atoi(p); err != nil || port < 1 || port > 65535 {
+				if port, err := strconv.Atoi(p); err != nil || port < 1 || port > MaxPortNumber {
 					return fmt.Errorf("upstream server %d proxy port invalid: %s", i, p)
 				}
 			}

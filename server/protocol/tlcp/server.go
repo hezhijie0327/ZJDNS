@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 	"zjdns/config"
 	"zjdns/edns"
@@ -22,15 +23,20 @@ import (
 
 // Server manages TLCP-based secure DNS protocol listeners and their lifecycle.
 type Server struct {
-	dotPort        string
-	dohPort        string
-	dohEndpoint    string
-	dtlcpPort      string
-	handler        edns.DNSHandler
-	tlcpConfig     *tlcp.Config
-	dtlcpConfig    *dtlcp.Config
-	ctx            context.Context
-	cancel         context.CancelCauseFunc
+	dotPort     string
+	dohPort     string
+	dohEndpoint string
+	dtlcpPort   string
+	handler     edns.DNSHandler
+	tlcpConfig  *tlcp.Config
+	dtlcpConfig *dtlcp.Config
+	ctx         context.Context
+	cancel      context.CancelCauseFunc
+	// listenerMu protects the listener/server slices below. Start's start*
+	// functions append under it and Shutdown snapshots under it; the signal
+	// handler is armed before Start, so a signal during listener startup
+	// runs Shutdown concurrently with the appends.
+	listenerMu     sync.Mutex
 	dotListeners   []net.Listener
 	dohListeners   []net.Listener
 	dohServers     []*http.Server
@@ -198,24 +204,34 @@ func (s *Server) Shutdown() error {
 
 	s.cancel(errors.New("tlcp server shutdown"))
 
-	for _, l := range s.dotListeners {
+	// Snapshot under listenerMu (Start's start* functions append under the
+	// same lock); the close calls run outside it — dohServer Shutdown blocks
+	// for up to DefaultShutdownTimeout.
+	s.listenerMu.Lock()
+	dotListeners := append([]net.Listener(nil), s.dotListeners...)
+	dohServers := append([]*http.Server(nil), s.dohServers...)
+	dohListeners := append([]net.Listener(nil), s.dohListeners...)
+	dtlcpListeners := append([]net.Listener(nil), s.dtlcpListeners...)
+	s.listenerMu.Unlock()
+
+	for _, l := range dotListeners {
 		if l != nil {
 			zdnsutil.CloseWithLog(l, "TLCP DoT listener", "TLCP")
 		}
 	}
-	for _, srv := range s.dohServers {
+	for _, srv := range dohServers {
 		if srv != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 			_ = srv.Shutdown(ctx)
 			cancel()
 		}
 	}
-	for _, l := range s.dohListeners {
+	for _, l := range dohListeners {
 		if l != nil {
 			zdnsutil.CloseWithLog(l, "TLCP DoH listener", "TLCP")
 		}
 	}
-	for _, l := range s.dtlcpListeners {
+	for _, l := range dtlcpListeners {
 		if l != nil {
 			zdnsutil.CloseWithLog(l, "TLCP DTLCP listener", "TLCP")
 		}

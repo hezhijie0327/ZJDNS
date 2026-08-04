@@ -106,7 +106,7 @@ func ServerDOHMsgAccept(m *dns.Msg) dns.MsgAcceptAction {
 	if m.Response {
 		return dns.MsgIgnore
 	}
-	// RFC 8484 §4.1.2: DoH serves only standard DNS QUERY semantics — reject
+	// RFC 8484 §4.1: DoH serves only standard DNS QUERY semantics — reject
 	// IQUERY/STATUS/NOTIFY/UPDATE/DSO instead of accepting every known opcode.
 	if m.Opcode != dns.OpcodeQuery {
 		return dns.MsgRejectNotImplemented

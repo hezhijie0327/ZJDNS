@@ -123,7 +123,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 
 	go func() {
 		defer zdnsutil.HandlePanic("UPSTREAM errgroup wait")
-		_ = g.Wait()
+		_ = g.Wait() // _ = error: upstream fan-out errors surface per-query via resultChan; group errors are best-effort
 		if cidrFilterRefused.Load() {
 			select {
 			case resultChan <- QueryResult{Err: ErrCIDRFilterRefused}:
@@ -188,19 +188,16 @@ func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]
 	// Pre-filter tags: keep only those that have CIDR rules so we call
 	// HasIPTag once per tag instead of once per record per tag.
 	type tagKey struct {
-		raw    string
-		name   string
-		negate bool
+		raw string
 	}
 	ipTags := make([]tagKey, 0, len(matchTags))
 	for _, t := range matchTags {
-		negate := t != "" && t[0] == '!'
 		name := t
-		if negate {
+		if t != "" && t[0] == '!' {
 			name = t[1:]
 		}
 		if r.crd.HasIPTag(name) {
-			ipTags = append(ipTags, tagKey{raw: t, name: name, negate: negate})
+			ipTags = append(ipTags, tagKey{raw: t})
 		}
 	}
 

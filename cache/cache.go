@@ -2,6 +2,7 @@
 package cache
 
 import (
+	"sync"
 	"zjdns/config"
 	"zjdns/internal/ttl"
 
@@ -15,16 +16,13 @@ type RequestRecord struct {
 	Qname        string // normalized FQDN
 	Qtype        uint16
 	Qclass       uint16
-	ECS          *config.ECSOption // for resolving entry_id FK; nil if none
-	DNSSECOK     bool              // for resolving entry_id FK
-	Protocol     string            // 'udp','tcp','tls','quic','https','http3','dtls','dnscrypt','dnscrypt-tcp','tlcp','http-tlcp','dtlcp'
-	Result       string            // 'hit','miss','stale','zone','error'
-	ResponseTime int64             // milliseconds
-	Rcode        int               // DNS response code
-	Server       string            // upstream server identifier
-	Poisoned     bool              // true when DNS poison was detected
-	DNSSECStatus string            // 'secure','insecure','bogus', or ''
-	EntryID      int64             // pre-resolved entry ID from Get()/Set(); 0 = no cache entry (zone/error)
+	Protocol     string // 'udp','tcp','tls','quic','https','http3','dtls','dnscrypt','dnscrypt-tcp','tlcp','http-tlcp','dtlcp'
+	Result       string // 'hit','miss','stale','zone','error'
+	ResponseTime int64  // milliseconds
+	Rcode        int    // DNS response code
+	Server       string // upstream server identifier
+	Poisoned     bool   // true when DNS poison was detected
+	DNSSECStatus string // 'secure','insecure','bogus', or ''
 }
 
 // StoreReader is the read-only subset of Store.  Consumers that only need
@@ -74,9 +72,22 @@ type Entry struct {
 
 // LookupResult holds a PTR reverse-lookup result.
 type LookupResult struct {
-	Name    string
-	TTL     uint32
-	EntryID int64
+	Name string
+	TTL  uint32
+}
+
+// requestRecordPool reuses RequestRecord values on the per-query hot path.
+// Safe because RecordRequest copies by value into the async writer and only
+// reads fields synchronously — callers release immediately after the call.
+var requestRecordPool = sync.Pool{New: func() any { return new(RequestRecord) }}
+
+// AcquireRequestRecord returns a zeroed RequestRecord from the pool.
+func AcquireRequestRecord() *RequestRecord { return requestRecordPool.Get().(*RequestRecord) }
+
+// ReleaseRequestRecord returns a record to the pool after RecordRequest.
+func ReleaseRequestRecord(r *RequestRecord) {
+	*r = RequestRecord{}
+	requestRecordPool.Put(r)
 }
 
 // IsExpired reports whether the entry's TTL has elapsed.
@@ -170,17 +181,4 @@ func hasDNSSECRecords(rrs []dns.RR) bool {
 		}
 	}
 	return false
-}
-
-// cloneRRs returns a deep copy of a slice of RRs. Each RR is cloned via
-// its Clone method, which copies the header and record data.
-func cloneRRs(rrs []dns.RR) []dns.RR {
-	if len(rrs) == 0 {
-		return nil
-	}
-	out := make([]dns.RR, len(rrs))
-	for i, rr := range rrs {
-		out[i] = rr.Clone()
-	}
-	return out
 }

@@ -9,6 +9,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"codeberg.org/miekg/dns"
@@ -160,7 +161,10 @@ func isTimeoutOrEOF(err error) bool {
 	if ok && netErr.Timeout() {
 		return true
 	}
-	return errors.Is(err, io.EOF) || strings.Contains(err.Error(), "broken pipe")
+	// EPIPE (local peer closed) and ECONNRESET (remote reset) cover the
+	// "connection died mid-pipeline" probes. String matching for "broken
+	// pipe" was previously needed for wrapped errors; errors.Is unwraps.
+	return errors.Is(err, io.EOF) || errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)
 }
 
 // probePipeline tests whether the server supports RFC 7766 query pipelining.

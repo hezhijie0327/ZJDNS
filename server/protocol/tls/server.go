@@ -335,59 +335,81 @@ func (s *Server) Shutdown() error {
 
 	s.cancel(errors.New("tls server shutdown"))
 
-	for _, l := range s.dotListeners {
+	// Snapshot the listener/conn references under listenerMu: Start's
+	// protocol goroutines append to these slices under the same lock
+	// (tls.go:41, https.go:52, quic.go:56, http3.go:38, dtls.go:60), and the
+	// signal handler is armed before Start, so a signal arriving during
+	// listener startup runs Shutdown concurrently with those appends —
+	// iterating without the lock is a data race on the slice headers.
+	// The close calls themselves run outside the lock: h3Server/dohServers
+	// Shutdown block for up to DefaultShutdownTimeout and must not hold it.
+	s.listenerMu.Lock()
+	dotListeners := append([]net.Listener(nil), s.dotListeners...)
+	doqListeners := append([]*quic.EarlyListener(nil), s.doqListeners...)
+	doqConns := append([]*net.UDPConn(nil), s.doqConns...)
+	doqTransports := append([]*quic.Transport(nil), s.doqTransports...)
+	dohServers := append([]*eHTTP.Server(nil), s.dohServers...)
+	httpsListeners := append([]net.Listener(nil), s.httpsListeners...)
+	h3Listeners := append([]*quic.EarlyListener(nil), s.h3Listeners...)
+	h3Transports := append([]*quic.Transport(nil), s.h3Transports...)
+	h3Conns := append([]*net.UDPConn(nil), s.h3Conns...)
+	dtlsListeners := append([]net.Listener(nil), s.dtlsListeners...)
+	h3Server := s.h3Server
+	s.listenerMu.Unlock()
+
+	for _, l := range dotListeners {
 		if l != nil {
 			zdnsutil.CloseWithLog(l, "DoT listener", "TLS")
 		}
 	}
-	for _, l := range s.doqListeners {
+	for _, l := range doqListeners {
 		if l != nil {
 			zdnsutil.CloseWithLog(l, "DoQ listener", "TLS")
 		}
 	}
-	for _, c := range s.doqConns {
+	for _, c := range doqConns {
 		if c != nil {
 			zdnsutil.CloseWithLog(c, "DoQ socket", "TLS")
 		}
 	}
-	for _, t := range s.doqTransports {
+	for _, t := range doqTransports {
 		if t != nil {
 			_ = t.Close()
 		}
 	}
-	if s.h3Server != nil {
+	if h3Server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 		defer cancel()
-		_ = s.h3Server.Shutdown(ctx)
+		_ = h3Server.Shutdown(ctx)
 	}
-	for _, srv := range s.dohServers {
+	for _, srv := range dohServers {
 		if srv != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 			_ = srv.Shutdown(ctx)
 			cancel()
 		}
 	}
-	for _, l := range s.httpsListeners {
+	for _, l := range httpsListeners {
 		if l != nil {
 			zdnsutil.CloseWithLog(l, "HTTPS listener", "TLS")
 		}
 	}
-	for _, l := range s.h3Listeners {
+	for _, l := range h3Listeners {
 		if l != nil {
 			zdnsutil.CloseWithLog(l, "HTTP/3 listener", "TLS")
 		}
 	}
-	for _, t := range s.h3Transports {
+	for _, t := range h3Transports {
 		if t != nil {
 			_ = t.Close()
 		}
 	}
-	for _, c := range s.h3Conns {
+	for _, c := range h3Conns {
 		if c != nil {
 			zdnsutil.CloseWithLog(c, "DoH3 socket", "TLS")
 		}
 	}
-	for _, l := range s.dtlsListeners {
+	for _, l := range dtlsListeners {
 		if l != nil {
 			zdnsutil.CloseWithLog(l, "DTLS listener", "TLS")
 		}

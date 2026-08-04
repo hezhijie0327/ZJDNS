@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // Prior to encryption, queries are padded using the ISO/IEC 7816-4 format.
@@ -129,11 +130,7 @@ func encryptPadding(packet []byte, minWireSize int) []byte {
 
 // unpad removes ISO/IEC 7816-4 padding from the packet.
 func UnPad(packet []byte) (unpadded []byte, err error) {
-	for i := len(packet); ; {
-		if i == 0 {
-			return nil, ErrInvalidPadding
-		}
-		i--
+	for i := range slices.Backward(packet) {
 		if packet[i] == 0x80 {
 			if i < MinDNSPacketSize {
 				return nil, ErrInvalidPadding
@@ -143,6 +140,7 @@ func UnPad(packet []byte) (unpadded []byte, err error) {
 			return nil, ErrInvalidPadding
 		}
 	}
+	return nil, ErrInvalidPadding
 }
 
 // computeSharedKey derives the shared secret key from the X25519 keypair using

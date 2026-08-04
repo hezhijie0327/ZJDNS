@@ -37,14 +37,14 @@ func RunDNSStampDecode(stampStr string) error {
 		// never be loaded back — fail loudly instead of emitting an
 		// unusable JSON entry.
 		return fmt.Errorf("%s stamps cannot be represented as a %s upstream", protoLabel(s.Proto), config.DefaultProjectName)
-	case zstamp.ProtoPlain, zstamp.ProtoDNSCrypt, zstamp.ProtoDOT, zstamp.ProtoDOQ:
-		entry.Address = s.Address
 	default:
+		// Every other stamp type carries a plain host:port address.
 		entry.Address = s.Address
 	}
 
-	// TLS SNI / DNSCrypt provider name.
-	if s.ProviderName != "" && s.Proto != zstamp.ProtoODoHTarget {
+	// TLS SNI / DNSCrypt provider name. The ODoH-target guard is unnecessary:
+	// those stamps already returned an error above.
+	if s.ProviderName != "" {
 		entry.ServerName = s.ProviderName
 	}
 

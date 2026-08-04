@@ -5,7 +5,6 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"net"
 	"sync/atomic"
 	"time"
@@ -139,19 +138,15 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 
 	err := h.chain.ServeDNS(h.ctx, qctx)
 
-	if errors.Is(err, ErrDrop) || qctx.Dropped {
-		// NOTE: Do NOT Put(req) here — the protocol caller owns the
-		// request message lifecycle and will Put it after ServeDNS returns.
-		// Putting here would cause a double-put race with the caller.
-		return nil
-	}
-
 	if err != nil && qctx.Res == nil {
 		msg := BuildResponseMsg(req)
 		msg.Rcode = dns.RcodeServerFailure
-		h.cache.RecordRequest(&cache.RequestRecord{
-			Result: "error", Protocol: protocol, Rcode: dns.RcodeServerFailure,
-		})
+		rec := cache.AcquireRequestRecord()
+		rec.Result = "error"
+		rec.Protocol = protocol
+		rec.Rcode = dns.RcodeServerFailure
+		h.cache.RecordRequest(rec)
+		cache.ReleaseRequestRecord(rec)
 		return msg
 	}
 
@@ -159,9 +154,12 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	// any stats-recording middleware; record them here so the badcookie
 	// result class is populated (RFC 7873 §5.2).
 	if qctx.Res != nil && qctx.Res.Rcode == dns.RcodeBadCookie {
-		h.cache.RecordRequest(&cache.RequestRecord{
-			Result: "badcookie", Protocol: protocol, Rcode: dns.RcodeBadCookie,
-		})
+		rec := cache.AcquireRequestRecord()
+		rec.Result = "badcookie"
+		rec.Protocol = protocol
+		rec.Rcode = dns.RcodeBadCookie
+		h.cache.RecordRequest(rec)
+		cache.ReleaseRequestRecord(rec)
 	}
 
 	if qctx.Res != nil && log.IsDebug() {

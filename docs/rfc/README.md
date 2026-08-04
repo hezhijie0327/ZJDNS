@@ -20,17 +20,18 @@ The DNSCrypt draft was downloaded from the IETF archive.
 | rfc1929.txt | Username/Password Authentication for SOCKS5 |
 | rfc1982.txt | Serial Number Arithmetic |
 | rfc2181.txt | Clarifications to the DNS Specification |
+| rfc3597.txt | Handling of Unknown DNS Resource Record (RR) Types |
 | rfc4033.txt | DNS Security Introduction and Requirements |
 | rfc4034.txt | Resource Records for the DNS Security Extensions |
-| rfc4035.txt |
+| rfc4035.txt | Protocol Modifications for the DNS Security Extensions |
+| rfc4343.txt | Domain Name System (DNS) Case Insensitivity Clarification |
 | rfc4509.txt | Use of SHA-256 in DNS Resource Records (DS) |
-| rfc5011.txt | Automated Updates of DNSSEC Trust Anchors | Protocol Modifications for the DNS Security Extensions |
+| rfc5011.txt | Automated Updates of DNSSEC Trust Anchors |
 | rfc5155.txt | DNS Security (DNSSEC) Hashed Authenticated Denial of Existence |
-| rfc5077.txt |
+| rfc5077.txt | Transport Layer Security (TLS) Session Resumption |
 | rfc8198.txt | Aggressive Use of NSEC/NSEC3 Caching |
 | rfc8499.txt | DNS Terminology |
 | rfc9077.txt | DNSSEC Trust Anchor Maintenance |
- Transport Layer Security (TLS) Session Resumption |
 | rfc6125.txt | Domain-Based Application Service Identity (TLS cert verification) |
 | rfc6672.txt | DNAME Redirection in the DNS |
 | rfc6761.txt | Special-Use Domain Names |
@@ -46,6 +47,7 @@ The DNSCrypt draft was downloaded from the IETF archive.
 | rfc7858.txt | Specification for DNS over Transport Layer Security (TLS) |
 | rfc7871.txt | Client Subnet in DNS Queries |
 | rfc7873.txt | Domain Name System (DNS) Cookies |
+| rfc7958.txt | DNSSEC Trust Anchor Publication for the Root Zone |
 | rfc8094.txt | DNS over Datagram Transport Layer Security (DTLS) |
 | rfc8310.txt | Usage Profiles for DNS over TLS and DNS over DTLS |
 | rfc8467.txt | Padding Policies for Extension Mechanisms for DNS (EDNS(0)) |

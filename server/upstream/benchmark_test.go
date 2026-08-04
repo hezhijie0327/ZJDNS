@@ -189,7 +189,7 @@ func startFakeTCPServer(tb testing.TB) (addr string, shutdown func()) {
 
 // handleFakeTCPConn handles a single RFC 1035 TCP DNS connection.
 func handleFakeTCPConn(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	var lengthBuf [2]byte
 	for {
@@ -235,7 +235,7 @@ func handleFakeTCPConn(conn net.Conn) {
 		}
 
 		respLen := make([]byte, 2)
-		binary.BigEndian.PutUint16(respLen, uint16(len(resp.Data)))
+		binary.BigEndian.PutUint16(respLen, uint16(len(resp.Data))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
 		if _, err := conn.Write(respLen); err != nil {
 			return
 		}

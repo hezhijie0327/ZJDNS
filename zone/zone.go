@@ -66,8 +66,12 @@ type Evaluator struct {
 	db        ZoneStorage
 	loadedAt  atomic.Int64
 	ruleCount atomic.Int64
-	dynamics  map[string]*dynamicEntry // qname → dynamic content
-	bypass    [][]matchTag             // global bypass rules (only Match, no Name/File)
+	// rulesMu guards dynamics/bypass: LoadRules rewrites them, Evaluate
+	// reads them on the query path (RLock). A runtime reload must not race
+	// in-flight queries (M27).
+	rulesMu  sync.RWMutex
+	dynamics map[string]*dynamicEntry // qname → dynamic content
+	bypass   [][]matchTag             // global bypass rules (only Match, no Name/File)
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +117,9 @@ func (e *Evaluator) HasRules() bool { return e.ruleCount.Load() > 0 }
 
 // LoadRules validates and loads zone rules into the SQLite database.
 func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
+	e.rulesMu.Lock()
+	defer e.rulesMu.Unlock()
+
 	if _, err := e.db.Exec(`DELETE FROM zone_entries`); err != nil {
 		return fmt.Errorf("zone: clear: %w", err)
 	}
@@ -256,6 +263,9 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 	if len(qname) > config.MaxDomainLength {
 		return Result{Rcode: dns.RcodeSuccess}
 	}
+
+	e.rulesMu.RLock()
+	defer e.rulesMu.RUnlock()
 
 	// 0. Check global bypass rules — if any matches, skip zone entirely.
 	for i, tags := range e.bypass {

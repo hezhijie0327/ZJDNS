@@ -10,6 +10,7 @@ import (
 	"strings"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
 	eHTTP "gitlab.com/go-extension/http"
@@ -41,7 +42,7 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 
 	var client *http.Client
 	var isCached bool
-	if c.dohTransports != nil { // Close() nils the map — a racing query must not panic
+	if c.dohTransports != nil { // Close() never nils the map (tls/client.go) — guarded for symmetry
 		client, isCached = c.dohTransports.Get(key)
 	}
 	if !isCached {
@@ -71,13 +72,29 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 		}
 	}
 
-	if err != nil && c.dohTransports != nil && c.dohTransports.CompareAndDelete(key, client) {
+	// Evict the transport only on transport-level failures, not on
+	// caller-side timeouts or cancelled contexts — a healthy connection pool
+	// must survive a slow upstream (http3.go applies the same distinction).
+	if err != nil && !isCallerSideTimeout(err) && c.dohTransports != nil && c.dohTransports.CompareAndDelete(key, client) {
 		if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
 			ct.CloseIdleConnections()
 		}
 	}
 
 	return resp, err
+}
+
+// isCallerSideTimeout reports whether err is a client-side deadline or
+// cancellation rather than a transport failure.
+func isCallerSideTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	netErr, ok := errors.AsType[net.Error](err)
+	return ok && netErr.Timeout()
 }
 
 // transportKey builds a cache key for transport-level connection pools
@@ -142,6 +159,12 @@ func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxy
 		proxyDialer := c.getProxy(&config.UpstreamServer{Proxy: proxyURL})
 		if proxyDialer != nil {
 			transport.DialContext = proxyDialer.DialContext
+		} else {
+			// The proxy could not be constructed (invalid URL etc.): dialing
+			// without it would silently bypass the configured proxy — a DNS
+			// privacy/egress change. getProxy has already logged the reason
+			// once; mark the downgrade here at Debug.
+			log.Debugf("DOH: proxy %s unavailable — %s transport will dial directly", proxyURL, serverName)
 		}
 	} else {
 		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {

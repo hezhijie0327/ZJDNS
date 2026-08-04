@@ -96,6 +96,11 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 			continue
 		}
 
+		// wg.Go must run under s.mu: Shutdown swaps s.wg under the same lock
+		// (server.go) and then Waits on the previous group. Adding under the
+		// lock guarantees Add either joins the waited group or the fresh
+		// (cancelled) one — never an Add-during-Wait on the swapped-out group.
+		s.mu.Lock()
 		s.wg.Go(func() {
 			defer zdnsutil.HandlePanic("DNSCrypt TCP handler")
 			defer func() { <-s.workerCap }()
@@ -107,6 +112,7 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 			}()
 			s.handleTCPConnection(ctx, conn)
 		})
+		s.mu.Unlock()
 	}
 }
 

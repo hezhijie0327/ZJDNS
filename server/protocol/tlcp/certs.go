@@ -86,7 +86,6 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
 	}
 
-	signSerial.Set(signSerial)
 	signTmpl := serverTemplate()
 	signTmpl.SerialNumber = signSerial
 	signDER, err := smx509.CreateCertificate(rand.Reader, signTmpl, caCert, &signKey.PublicKey, caKey)
@@ -95,7 +94,6 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
 	}
 
-	encSerial.Set(encSerial)
 	encTmpl := serverTemplate()
 	encTmpl.SerialNumber = encSerial
 	encDER, err := smx509.CreateCertificate(rand.Reader, encTmpl, caCert, &encKey.PublicKey, caKey)

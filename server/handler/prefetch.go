@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"sort"
+	"slices"
 	"sync"
 	"zjdns/config"
 )
@@ -75,7 +75,15 @@ func (pc *PrefetchCooldown) Cleanup(now, cooldownNanos int64) {
 		for k, v := range pc.data {
 			entries = append(entries, entry{k, v})
 		}
-		sort.Slice(entries, func(i, j int) bool { return entries[i].ts < entries[j].ts })
+		slices.SortFunc(entries, func(a, b entry) int {
+			switch {
+			case a.ts < b.ts:
+				return -1
+			case a.ts > b.ts:
+				return 1
+			}
+			return 0
+		})
 		evict := len(entries) - maxEntries/2
 		for i := range evict {
 			delete(pc.data, entries[i].key)

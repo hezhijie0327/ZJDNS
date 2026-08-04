@@ -39,31 +39,36 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 
 	if _, isTCP := w.RemoteAddr().(*net.TCPAddr); isTCP {
 		addr := w.RemoteAddr().String()
-		// NOTE: Lazy init via LoadOrStore + capacityOnce.Do means the map
-		// entry exists before channels are ready. Concurrent readers of
-		// entry.capacity or entry.writeMu between LoadOrStore and the Do
-		// closure would see nil channels, causing a nil-send hang. This is
-		// safe because the entry is only read after the Do completes within
-		// the same request goroutine -- the first request creates the entry
-		// synchronously and all subsequent requests find a fully-initialized one.
-		// Pre-increment refs on the candidate BEFORE publishing it: the
-		// writeMu sweep deletes entries with refs == 0, and a freshly
-		// LoadOrStored entry (lastAccess 0 < cutoff) would otherwise be
-		// deletable in the window before the Add below — the request then
-		// holds a writeMu detached from the map while the next request
-		// creates a second one, interleaving frames on the same TCP stream.
-		newEntry := &tcpWriteEntry{}
-		newEntry.refs.Add(1)
-		entryI, loaded := s.tcpWriteMu.LoadOrStore(addr, newEntry)
+		// Entry lifecycle is serialized by tcpMu: LoadOrStore and the
+		// in-flight ref happen under the lock, and the sweep's refs==0 check
+		// + Delete share the same lock. The sweep therefore can never delete
+		// an entry between a request's LoadOrStore and its ref add — no
+		// placeholder ref is needed, and a request can never hold a writeMu
+		// detached from the map while a newer entry (with a separate writeMu)
+		// is created for the same connection, which would interleave frames
+		// on the same TCP stream.
+		// NOTE: Lazy init via capacityOnce.Do means the map entry exists
+		// before channels are ready. Concurrent readers of entry.capacity or
+		// entry.writeMu between the LoadOrStore and the Do closure would see
+		// nil channels, causing a nil-send hang. This is safe because the
+		// entry is only read after the Do completes within the same request
+		// goroutine -- the first request creates the entry synchronously and
+		// all subsequent requests find a fully-initialized one.
+		s.tcpMu.Lock()
+		entryI, _ := s.tcpWriteMu.LoadOrStore(addr, &tcpWriteEntry{})
 		entry, ok := entryI.(*tcpWriteEntry)
 		if !ok {
-			newEntry.refs.Add(-1)
+			s.tcpMu.Unlock()
 			log.Warnf("SERVER: unexpected type in tcpWriteMu for %s: %T", addr, entryI)
 			return
 		}
-		if loaded {
-			entry.refs.Add(1)
-		}
+		// In-flight refcount: incremented under the lock so the sweep can
+		// never delete an entry a handler goroutine still holds (the
+		// goroutine releases it on exit; the synchronous SERVFAIL path
+		// releases it via defer before returning).
+		entry.refs.Add(1)
+		s.tcpMu.Unlock()
+
 		entry.capacityOnce.Do(func() {
 			entry.capacity = make(chan struct{}, config.DefaultMaxPipe)
 			entry.writeMu = make(chan struct{}, 1)

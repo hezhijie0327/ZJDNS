@@ -1263,3 +1263,12 @@ func TestEvaluator_FileMatchNegate(t *testing.T) {
 		t.Errorf("non-gateway client: A = %s, want 10.0.0.1", a.A.String())
 	}
 }
+
+// TestStmtZoneWildcardPlaceholderCount guards the qname IN-clause placeholder
+// count in database.StmtZoneWildcard against zone.maxWildcardLabels — a
+// mismatch silently truncates or over-pads the wildcard batch query.
+func TestStmtZoneWildcardPlaceholderCount(t *testing.T) {
+	if got, want := database.ZoneWildcardPlaceholders, maxWildcardLabels; got != want {
+		t.Errorf("database.ZoneWildcardPlaceholders = %d, want %d (zone.maxWildcardLabels)", got, want)
+	}
+}

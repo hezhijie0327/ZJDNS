@@ -127,6 +127,7 @@ func (r *Recursive) advanceApexZoneCut(ctx context.Context, queryName string, na
 		// The cut cannot be established — return without touching the
 		// chain, so the walk's parent-zone state stays intact for the next
 		// iteration.
+		log.Debugf("RECURSION: no reachable addresses for zone-cut candidate %s", queryName)
 		return nil, "", false
 	}
 	// Only mutate the chain once the cut is established: a partially
@@ -158,8 +159,11 @@ func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMa
 			DNSSECEDE: dns.ExtendedErrorNoReachableAuthority,
 		}
 	}
-	// Deep-copy before Put: the pooled message's backing arrays are reused
-	// by the next Get, so aliased slices would be corrupted asynchronously.
+	// Deep-copy before Put: the pooled msg is returned to the pool for
+	// reuse by another goroutine. RR objects are independently allocated
+	// (Unpack does not alias the wire buffer), so the copied slices stay
+	// valid — the copy documents that invariant and guards against future
+	// pool/Unpack changes (internal/pool/pool.go Put semantics).
 	nsSlice := make([]dns.RR, len(response.Ns))
 	copy(nsSlice, response.Ns)
 	extraSlice := make([]dns.RR, len(response.Extra))

@@ -49,14 +49,19 @@ type Server struct {
 	queryClient *upstream.Client
 	db          *database.DB
 
-	tls             *tls.Server
-	tlcpServer      *servertlcp.Server
-	dnscryptServer  *serverdnscrypt.Server
-	plain           *serverplain.Server
-	pprofServers    []*http.Server
-	shutdown        chan struct{}
-	tcpSem          chan struct{}
-	tcpWriteMu      sync.Map
+	tls            *tls.Server
+	tlcpServer     *servertlcp.Server
+	dnscryptServer *serverdnscrypt.Server
+	plain          *serverplain.Server
+	pprofServers   []*http.Server
+	shutdown       chan struct{}
+	tcpSem         chan struct{}
+	tcpWriteMu     sync.Map
+	// tcpMu serializes tcpWriteMu entry lifecycle: the request path does
+	// LoadOrStore + in-flight ref under the lock, the sweep does the refs==0
+	// check + Delete under the same lock. This closes the check-then-delete
+	// TOCTOU that would otherwise detach a writeMu from the map mid-request.
+	tcpMu           sync.Mutex
 	ctx             context.Context
 	cancel          context.CancelCauseFunc
 	backgroundGroup *errgroup.Group
@@ -270,7 +275,7 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 		Config:           cfg,
 		Cache:            cacheStore,
 		EDNS:             ednsH,
-		ZoneEvaluator:    zoneEvaluator, // set below
+		ZoneEvaluator:    zoneEvaluator,
 		TagMatcher:       nil,
 		Resolver:         dnsResolver,
 		Prober:           prober,

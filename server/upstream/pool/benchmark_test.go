@@ -31,8 +31,8 @@ func newFakeDNSConnPair() (client net.Conn, closeFn func()) {
 	go handleFakePipeConn(server, done)
 
 	return client, func() {
-		server.Close()
-		client.Close()
+		_ = server.Close()
+		_ = client.Close()
 		<-done
 	}
 }
@@ -41,7 +41,7 @@ func newFakeDNSConnPair() (client net.Conn, closeFn func()) {
 // back NOERROR responses.
 func handleFakePipeConn(conn net.Conn, done chan struct{}) {
 	defer close(done)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	var lengthBuf [zdnsutil.DNSFramePrefixLen]byte
 
@@ -88,7 +88,7 @@ func handleFakePipeConn(conn net.Conn, done chan struct{}) {
 		}
 
 		respLen := make([]byte, zdnsutil.DNSFramePrefixLen)
-		binary.BigEndian.PutUint16(respLen, uint16(len(resp.Data)))
+		binary.BigEndian.PutUint16(respLen, uint16(len(resp.Data))) //nolint:gosec // G115: DNS length prefix — max 65535 fits uint16
 		if _, err := conn.Write(respLen); err != nil {
 			return
 		}

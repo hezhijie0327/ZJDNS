@@ -2,10 +2,8 @@ package handler
 
 import (
 	"net"
-	"zjdns/cache"
 	"zjdns/edns"
 	"zjdns/server/resolver"
-	"zjdns/zone"
 
 	"codeberg.org/miekg/dns"
 )
@@ -33,21 +31,17 @@ type QueryContext struct {
 
 	// ── Zone match: populated by Zone ──
 
-	ZoneMatched bool         // true when a zone rule matched
-	ZoneResult  *zone.Result // non-nil when ZoneMatched
+	ZoneMatched bool // true when a zone rule matched
 
 	// ── Cache state: populated by CacheLookup ──
 
-	CacheHit     bool         // true when cache.Get found an entry (fresh or expired)
-	CacheEntry   *cache.Entry // the entry returned by cache.Get (nil if miss)
-	CacheIsStale bool         // true when the cached entry has expired
-	CacheServed  bool         // true when the response was built from cache (for logging)
+	CacheHit    bool // true when cache.Get found an entry (fresh or expired)
+	CacheServed bool // true when the response was built from cache (for logging)
 
 	// ── Resolution: populated by Resolution ──
 
 	ResolutionResult *resolver.QueryResult // set after resolver.Query completes
 	Resolved         bool                  // true after Resolution ran
-	ResolutionError  bool                  // true when resolver.Query returned an error
 
 	// ── Response: built stepwise through the chain ──
 
@@ -55,7 +49,6 @@ type QueryContext struct {
 
 	// ── Coordination ──
 
-	Dropped       bool   // true when ErrDrop was returned (no response will be sent)
 	OriginalName  string // original qname before zone rewrite (set by Zone)
 	RewrittenName string // rewritten qname after zone rewrite (set by Zone)
 	TCPKeepalive  uint16

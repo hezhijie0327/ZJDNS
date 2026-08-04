@@ -49,6 +49,7 @@ const (
 const (
 	DefaultCookieClientLen       = 8
 	DefaultCookieServerLen       = 16
+	MaxCookieLen                 = 40 // RFC 7873 §5.2.2: longest valid COOKIE option (client + server)
 	cookieVersion          uint8 = 1
 	cookieSigOffset              = 8 // siphash starts at byte 8 of the server cookie
 	cookieSecretSize             = 16

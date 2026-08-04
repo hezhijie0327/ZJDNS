@@ -13,15 +13,17 @@ import (
 // pqProfileExt is the pre-built, immutable PQ profile extension payload.
 // Content is invariant — allocated once to avoid per-certificate heap alloc.
 // TicketPlaintext is the decoded ticket plaintext. It carries every field
-// EncodeTicketPlaintext writes — including esVersion and peHash — so the
-// ticket's profile/version binding is enforced by the API itself instead of
-// callers re-indexing the raw bytes.
+// EncodeTicketPlaintext writes — including esVersion, serial, ts-end, and
+// peHash — so the ticket's profile/version/serial binding is enforced by
+// the API itself instead of callers re-indexing the raw bytes.
 type TicketPlaintext struct {
 	ESVersion      [2]byte
 	ClientMagic    [ClientMagicSize]byte
 	ResumeSecret   [SharedKeySize]byte
-	ProfileExtHash [32]byte
+	Serial         uint32
+	TSEnd          uint32
 	Expiry         uint32
+	ProfileExtHash [32]byte
 }
 
 var pqProfileExt = func() []byte {
@@ -43,6 +45,7 @@ var (
 	emptyTicketKeyID           [TicketKeyIDSize]byte
 )
 
+// HKDFSHA256 derives outLen bytes from ikm via HKDF-SHA256 with the given salt and info.
 func HKDFSHA256(salt, ikm, info []byte, outLen int) ([]byte, error) {
 	r := hkdf.New(sha256.New, ikm, salt, info)
 	out := make([]byte, outLen)
@@ -59,6 +62,7 @@ func PQProfileExtension() []byte {
 	return pqProfileExt // immutable, safe to share
 }
 
+// PQCertContext builds the PQ certificate context bytes from the raw binary certificate, or nil if the certificate is too short to carry the PQ extension.
 func PQCertContext(binCert []byte) []byte {
 	// Exported function with no documented length contract: guard the fixed
 	// offsets — a short input would panic with index-out-of-range.
@@ -82,6 +86,7 @@ func PQCertContext(binCert []byte) []byte {
 	return ctx
 }
 
+// PQDeriveSharedKey derives the PQ shared key from the KEM shared secret, client magic, certificate context, and ciphertext.
 func PQDeriveSharedKey(kemSS []byte, clientMagic [8]byte, certContext, ct []byte) ([SharedKeySize]byte, error) {
 	salt := make([]byte, 0, 10)
 	salt = append(salt, PQESVersion[0], PQESVersion[1])
@@ -98,6 +103,7 @@ func PQDeriveSharedKey(kemSS []byte, clientMagic [8]byte, certContext, ct []byte
 	return key, nil
 }
 
+// PQResumeSecret derives the resume secret from the shared key, client magic, and client nonce.
 func PQResumeSecret(sharedKey [SharedKeySize]byte, clientMagic [8]byte, clientNonce []byte) ([SharedKeySize]byte, error) {
 	salt := make([]byte, 0, 8+len(clientNonce))
 	salt = append(salt, clientMagic[:]...)
@@ -111,6 +117,7 @@ func PQResumeSecret(sharedKey [SharedKeySize]byte, clientMagic [8]byte, clientNo
 	return out, nil
 }
 
+// PQResumedSharedKey reconstructs the shared key from a resume secret, client magic, client nonce, and ticket.
 func PQResumedSharedKey(resumeSecret [SharedKeySize]byte, clientMagic [8]byte, clientNonce, ticket []byte) ([SharedKeySize]byte, error) {
 	salt := make([]byte, 0, 8+len(clientNonce))
 	salt = append(salt, clientMagic[:]...)
@@ -128,10 +135,12 @@ func PQResumedSharedKey(resumeSecret [SharedKeySize]byte, clientMagic [8]byte, c
 	return key, nil
 }
 
+// PQEncapsulate runs the X-Wing KEM encapsulate with the given public key, returning the shared secret and ciphertext.
 func PQEncapsulate(pk []byte) (kemSS, ct []byte, err error) {
 	return xwing.Encapsulate(pk, nil)
 }
 
+// PQDecapsulate runs the X-Wing KEM decapsulate with the given ciphertext and secret key, returning the shared secret.
 func PQDecapsulate(ct, sk []byte) (kemSS []byte, err error) {
 	// circl's Decapsulate panics on wrong-length input (PrivateKeySize /
 	// CiphertextSize): validate first so a malformed packet degrades to an
@@ -147,6 +156,8 @@ func PQDecapsulate(ct, sk []byte) (kemSS []byte, err error) {
 //
 //	pq_seed = SHA-256("DNSCrypt-PQ-seed-v1" || resolver_sk_seed)
 //	xwing_sk, xwing_pk = xwing.DeriveKeyPairPacked(pq_seed)
+//
+// DerivePQKeys expands a classical X25519 secret key into the X-Wing PQ public/secret keypair.
 func DerivePQKeys(classicalSk []byte) (pk, sk []byte) {
 	input := make([]byte, 0, 25+len(classicalSk))
 	input = append(input, "DNSCrypt-PQ-seed-v1"...)
@@ -160,6 +171,7 @@ func DerivePQKeys(classicalSk []byte) (pk, sk []byte) {
 // Ticket encryption (server-side)
 // ---------------------------------------------------------------------------
 
+// PQSealTicket encrypts and authenticates the ticket plaintext with XChaCha20-Poly1305 under key/keyID.
 func PQSealTicket(key [XchachaKeySize]byte, keyID [TicketKeyIDSize]byte, nonce [XchachaNonceSize]byte, plaintext []byte) ([]byte, error) {
 	ct, err := XchachaSeal(nil, nonce[:], plaintext, key[:])
 	if err != nil {
@@ -172,6 +184,7 @@ func PQSealTicket(key [XchachaKeySize]byte, keyID [TicketKeyIDSize]byte, nonce [
 	return out, nil
 }
 
+// PQOpenTicket decrypts and authenticates a ticket, trying the primary key then the previous key.
 func PQOpenTicket(key *[XchachaKeySize]byte, keyID *[TicketKeyIDSize]byte, prevKey *[XchachaKeySize]byte, prevKeyID *[TicketKeyIDSize]byte, ciphertext []byte) ([]byte, error) {
 	if len(ciphertext) < TicketKeyIDSize+XchachaNonceSize+TagSize {
 		return nil, ErrPQInvalidTicket
@@ -199,6 +212,7 @@ func PQOpenTicket(key *[XchachaKeySize]byte, keyID *[TicketKeyIDSize]byte, prevK
 // Control block (response-side)
 // ---------------------------------------------------------------------------
 
+// PQBuildControlBlock packs a ticket and its lifetime into the PQ control-block wire format.
 func PQBuildControlBlock(ticket []byte, lifetime uint32) []byte {
 	blockLen := 4 + 1 + 4 + 2 + len(ticket)
 	buf := make([]byte, blockLen)
@@ -210,6 +224,7 @@ func PQBuildControlBlock(ticket []byte, lifetime uint32) []byte {
 	return buf
 }
 
+// PQParseControlBlock unpacks a PQ control block into its ticket and lifetime.
 func PQParseControlBlock(control []byte) (ticket []byte, lifetime uint32, err error) {
 	if len(control) < 11 {
 		return nil, 0, ErrPQInvalidTicket
@@ -231,6 +246,7 @@ func PQParseControlBlock(control []byte) (ticket []byte, lifetime uint32, err er
 // Padding
 // ---------------------------------------------------------------------------
 
+// PQPad returns packet padded to at least floor bytes using ISO/IEC 7816-4 padding (multiple of 64).
 func PQPad(packet []byte, floor int) []byte {
 	padded := make([]byte, len(packet), len(packet)+64)
 	copy(padded, packet)
@@ -280,6 +296,8 @@ func DecodeTicketPlaintext(plaintext []byte) (TicketPlaintext, error) {
 	copy(t.ESVersion[:], plaintext[TicketPlaintextESOff:TicketPlaintextESOff+TicketPlaintextESLen])
 	copy(t.ResumeSecret[:], plaintext[TicketPlaintextSecretOff:TicketPlaintextSecretOff+TicketPlaintextSecretLen])
 	copy(t.ClientMagic[:], plaintext[TicketPlaintextMagicOff:TicketPlaintextMagicOff+TicketPlaintextMagicLen])
+	t.Serial = binary.BigEndian.Uint32(plaintext[TicketPlaintextSerialOff : TicketPlaintextSerialOff+TicketPlaintextSerialLen])
+	t.TSEnd = binary.BigEndian.Uint32(plaintext[TicketPlaintextTSEndOff : TicketPlaintextTSEndOff+TicketPlaintextTSEndLen])
 	copy(t.ProfileExtHash[:], plaintext[TicketPlaintextPEHashOff:TicketPlaintextPEHashOff+TicketPlaintextPEHashLen])
 	t.Expiry = binary.BigEndian.Uint32(plaintext[TicketPlaintextExpiryOff : TicketPlaintextExpiryOff+TicketPlaintextExpiryLen])
 	return t, nil

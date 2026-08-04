@@ -232,3 +232,41 @@ func TestZoneStorageMethods(t *testing.T) {
 	}
 	_ = tx.Commit()
 }
+
+// TestOpenPreservesStoredVersionWhenUnset verifies the H8 guard: when the
+// caller never wired database.Version (its "0.0.0" sentinel), Open must not
+// overwrite a real stored schema version — that would permanently mask the
+// upgrade state.
+func TestOpenPreservesStoredVersionWhenUnset(t *testing.T) {
+	orig := Version
+	t.Cleanup(func() { Version = orig })
+
+	dir := t.TempDir()
+	dbPath := dir + "/mig.db"
+	db, err := Open(dbPath, 0, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQ.Exec(`UPDATE version SET version = '3.5.0' WHERE rowid = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a caller that did not set database.Version.
+	Version = "0.0.0"
+	db2, err := Open(dbPath, 0, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db2.Close() }()
+
+	var stored string
+	if err := db2.SQ.QueryRow(`SELECT version FROM version WHERE rowid = 1`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "3.5.0" {
+		t.Errorf("stored version = %q after unset-Version reopen, want 3.5.0 (must not be masked)", stored)
+	}
+}

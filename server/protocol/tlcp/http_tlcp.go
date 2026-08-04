@@ -33,8 +33,6 @@ func (s *Server) startDOHServer() error {
 		tlcpCfg.NextProtos = config.NextProtoDOH
 		tlcpListener := tlcp.NewListener(keepAliveListener, tlcpCfg)
 
-		s.dohListeners = append(s.dohListeners, tlcpListener)
-
 		dohSrv := &http.Server{
 			Handler:           http.HandlerFunc(s.serveDOH),
 			ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
@@ -42,12 +40,15 @@ func (s *Server) startDOHServer() error {
 			IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
 			TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 		}
+		s.listenerMu.Lock()
+		s.dohListeners = append(s.dohListeners, tlcpListener)
 		s.dohServers = append(s.dohServers, dohSrv)
+		s.listenerMu.Unlock()
 
 		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("TLCP DoH server")
 			if err := dohSrv.Serve(tlcpListener); err != nil && err != http.ErrServerClosed {
-				log.Errorf("TLCP: DoH serve error: %v", err)
+				log.Warnf("TLCP: DoH serve error: %v", err)
 			}
 			return nil
 		})

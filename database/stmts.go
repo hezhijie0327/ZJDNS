@@ -1,5 +1,26 @@
 package database
 
+import "strings"
+
+const (
+	// ZoneWildcardPlaceholders is the number of qname ? placeholders in
+	// StmtZoneWildcard's IN clause. Must match zone.maxWildcardLabels
+	// (zone/zone.go) — guarded by the zone package test
+	// TestStmtZoneWildcardPlaceholderCount.
+	ZoneWildcardPlaceholders = 16
+
+	// IPLatencyPlaceholders is the number of rdata_ip ? placeholders in
+	// StmtIPLatency's IN clause. Must match cache.maxLatencyLookupIPs
+	// (cache/store.go) — guarded by the cache package test
+	// TestStmtIPLatencyPlaceholderCount.
+	IPLatencyPlaceholders = 64
+)
+
+var (
+	zoneWildcardPlaceholdersSQL = strings.Repeat("?,", ZoneWildcardPlaceholders-1) + "?"
+	ipLatencyPlaceholdersSQL    = strings.Repeat("?,", IPLatencyPlaceholders-1) + "?"
+)
+
 func (db *DB) prepareStatements() error {
 	var err error
 
@@ -8,6 +29,22 @@ func (db *DB) prepareStatements() error {
 		`SELECT id, timestamp, ttl, validated, msg_wire FROM entries
 		 WHERE qname = ? AND qtype = ? AND qclass = ?
 		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
+	)
+	if err != nil {
+		return err
+	}
+	db.StmtEntryExists, err = db.SQ.Prepare(
+		`SELECT EXISTS(SELECT 1 FROM entries
+			WHERE qname = ? AND qtype = ? AND qclass = ? AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?)`,
+	)
+	if err != nil {
+		return err
+	}
+	db.StmtEntryInsert, err = db.SQ.Prepare(
+		`INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok,
+			timestamp, ttl, expires_at, validated, msg_wire)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 RETURNING id`,
 	)
 	if err != nil {
 		return err
@@ -53,24 +90,34 @@ func (db *DB) prepareStatements() error {
 		return err
 	}
 
-	// Must match zone.maxWildcardLabels (16).
+	// Placeholder count must match zone.maxWildcardLabels — guarded by the
+	// zone package test TestStmtZoneWildcardPlaceholderCount.
 	db.StmtZoneWildcard, err = db.SQ.Prepare(
-		`SELECT qname, rcode, answer, authority, additional, match_tags
-		 FROM zone_entries WHERE is_wildcard = 1 AND qname IN (
-		 ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		 AND ((qtype = ? AND qclass = ?) OR (qtype = 0 AND qclass = 0))
-		 ORDER BY length(qname) DESC, qtype DESC`,
+		"SELECT qname, rcode, answer, authority, additional, match_tags " + //nolint:gosec // G202: parameterized placeholders, no user input
+			"FROM zone_entries WHERE is_wildcard = 1 AND qname IN (" +
+			zoneWildcardPlaceholdersSQL + ") " +
+			"AND ((qtype = ? AND qclass = ?) OR (qtype = 0 AND qclass = 0)) " +
+			"ORDER BY length(qname) DESC, qtype DESC",
 	)
 	if err != nil {
 		return err
 	}
 
-	// StmtIPLatency has 64 ? placeholders — must match cache.maxLatencyLookupIPs.
-	// Changing one without the other silently drops or truncates lookup IPs.
+	// Ruleset statements
+	db.StmtRulesetDomain, err = db.SQ.Prepare(
+		`SELECT tag FROM ruleset_entries WHERE type='domain' AND value=?`,
+	)
+	if err != nil {
+		return err
+	}
+
+	// StmtIPLatency has IPLatencyPlaceholders ? placeholders — must match
+	// cache.maxLatencyLookupIPs (guarded by the cache package test
+	// TestStmtIPLatencyPlaceholderCount). Changing one without the other
+	// silently drops or truncates lookup IPs.
 	db.StmtIPLatency, err = db.SQ.Prepare(
-		`SELECT rdata_ip, latency_ms FROM ip_latency WHERE rdata_ip IN (` +
-			`?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,` +
-			`?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"SELECT rdata_ip, latency_ms FROM ip_latency WHERE rdata_ip IN (" + //nolint:gosec // G202: parameterized placeholders, no user input
+			ipLatencyPlaceholdersSQL + ")",
 	)
 	if err != nil {
 		return err

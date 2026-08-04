@@ -10,7 +10,8 @@ import (
 	"codeberg.org/miekg/dns/rdata"
 )
 
-// Synthesizer performs DNS64 AAAA synthesis.
+// Synthesizer performs DNS64 AAAA synthesis (RFC 6147) using an RFC 6052
+// IPv4-embedded IPv6 prefix.
 type Synthesizer struct {
 	pref  netip.Prefix
 	bytes [16]byte // prefix as 16 bytes, right-padded with zero
@@ -20,11 +21,12 @@ const (
 	defaultPrefix = "64:ff9b::/96" // RFC 6052 §2.1 well-known prefix
 	maxPrefixLen  = 96             // RFC 6147 §5.2
 	maxSynTTL     = 600            // RFC 6147 §5.1.7 cap
-	nat64Offset   = 12             // IPv4 embedded at byte 12
 )
 
 var validPrefixLens = map[int]bool{32: true, 40: true, 48: true, 56: true, 64: true, 96: true}
 
+// New creates a Synthesizer for the given IPv6 prefix. The prefix length
+// must be one of 32, 40, 48, 56, 64, 96 (RFC 6052 Figure 1).
 func New(prefix string) (*Synthesizer, error) {
 	pref, err := netip.ParsePrefix(prefix)
 	if err != nil {
@@ -44,24 +46,40 @@ func New(prefix string) (*Synthesizer, error) {
 	return s, nil
 }
 
+// Prefix returns the configured IPv6 prefix in CIDR notation.
 func (s *Synthesizer) Prefix() string { return s.pref.String() }
 
+// MapAddr maps an IPv4 address to its IPv6 form by embedding it at the
+// position RFC 6052 Figure 1 defines for the configured prefix length. The
+// bits 64-71 (u octet) stay zero for every layout, and the suffix bits are
+// zero per RFC 6052 §2.2.
 func (s *Synthesizer) MapAddr(ip4 netip.Addr) netip.Addr {
 	var ip6 [16]byte
-	copy(ip6[:nat64Offset], s.bytes[:nat64Offset])
+	pl := s.pref.Bits()
+	copy(ip6[:pl/8], s.bytes[:pl/8])
 	ip4b := ip4.As4()
-	copy(ip6[nat64Offset:], ip4b[:])
+	switch pl {
+	case 32: // bits 32-63
+		copy(ip6[4:8], ip4b[:])
+	case 40: // bits 40-63 + 72-79
+		copy(ip6[5:8], ip4b[:3])
+		ip6[9] = ip4b[3]
+	case 48: // bits 48-63 + 72-87
+		copy(ip6[6:8], ip4b[:2])
+		copy(ip6[9:11], ip4b[2:])
+	case 56: // bits 56-63 + 72-95
+		ip6[7] = ip4b[0]
+		copy(ip6[9:12], ip4b[1:])
+	case 64: // bits 72-103
+		copy(ip6[9:13], ip4b[:])
+	default: // 96: bits 96-127
+		copy(ip6[12:16], ip4b[:])
+	}
 	return netip.AddrFrom16(ip6)
 }
 
-func (s *Synthesizer) ExtractIPv4(ip6 netip.Addr) (netip.Addr, bool) {
-	if !s.IsSynthesized(ip6) {
-		return netip.Addr{}, false
-	}
-	ip6b := ip6.As16()
-	return netip.AddrFrom4([4]byte(ip6b[nat64Offset:])), true
-}
-
+// IsSynthesized reports whether ip6 falls within the configured prefix
+// (i.e. could have been produced by MapAddr).
 func (s *Synthesizer) IsSynthesized(ip6 netip.Addr) bool { return s.pref.Contains(ip6) }
 
 func (s *Synthesizer) Synthesize(

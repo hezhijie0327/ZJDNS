@@ -233,7 +233,9 @@ func (s *Server) startDTLCPServer() error {
 		}
 
 		listener := newDTLCPListener(udpConn, s.dtlcpConfig)
+		s.listenerMu.Lock()
 		s.dtlcpListeners = append(s.dtlcpListeners, listener)
+		s.listenerMu.Unlock()
 		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("DTLCP server")
 			s.handleDTLCPConnections(listener)
@@ -263,9 +265,9 @@ func (s *Server) handleDTLCPConnections(listener net.Listener) {
 			default:
 				// Back off on temporary errors: an immediately-repeating
 				// temporary failure (e.g. EMFILE) would otherwise spin the
-				// accept loop at 100% CPU. A 50ms pause also gives the
-				// condition time to clear.
-				backoff := 50 * time.Millisecond
+				// accept loop at 100% CPU. The shared retry delay also gives
+				// the condition time to clear.
+				backoff := config.DefaultAcceptRetryDelay
 				if zdnsutil.IsTemporaryError(err) {
 					log.Debugf("TLCP: DTLCP accept temporary error: %v", err)
 				} else {

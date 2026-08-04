@@ -90,7 +90,8 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	// (spoofed or misrouted); serving it would poison the client's cache.
 	if ecsOpt != nil && responseECS != nil && !edns.VerifyECSResponse(ecsOpt, responseECS) {
 		log.Debugf("EDNS: ECS mismatch — returning SERVFAIL for spoofed response")
-		msg := handler.BuildResponseMsg(qctx.Req)
+		// Reuse the pooled msg built above — allocating a second one would
+		// leak the first to the GC.
 		msg.Rcode = dns.RcodeServerFailure
 		qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorOther, ExtraText: "ECS response mismatch"}
 		return msg
@@ -105,7 +106,6 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	}
 
 	// Cache population.
-	var entryID int64
 	if cacheable {
 		// RFC 4035 §5.3.3: cap TTL of authenticated RRsets.
 		if validated {
@@ -113,18 +113,23 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 		}
 
 		log.Debugf("CACHE: populating cache for %s", qname)
-		entryID = m.store.Set(qname, qtype, qclass, ecsOpt, dnssecOK, qr.Answer, qr.Authority, qr.Additional, validated)
+		m.store.Set(qname, qtype, qclass, ecsOpt, dnssecOK, qr.Answer, qr.Authority, qr.Additional, validated)
 	}
 
 	// Request log.
-	m.store.RecordRequest(&cache.RequestRecord{
-		Qname: qname, Qtype: qtype, Qclass: qclass,
-		ECS: ecsOpt, DNSSECOK: dnssecOK,
-		Protocol: qctx.Protocol, Result: "miss", ResponseTime: handler.ElapsedMS(qctx.StartTime),
-		Rcode: dns.RcodeSuccess, Server: qr.Server, Poisoned: qr.Poisoned,
-		DNSSECStatus: dnssecStatus,
-		EntryID:      entryID,
-	})
+	rec := cache.AcquireRequestRecord()
+	rec.Qname = qname
+	rec.Qtype = qtype
+	rec.Qclass = qclass
+	rec.Protocol = qctx.Protocol
+	rec.Result = "miss"
+	rec.ResponseTime = handler.ElapsedMS(qctx.StartTime)
+	rec.Rcode = dns.RcodeSuccess
+	rec.Server = qr.Server
+	rec.Poisoned = qr.Poisoned
+	rec.DNSSECStatus = dnssecStatus
+	m.store.RecordRequest(rec)
+	cache.ReleaseRequestRecord(rec)
 
 	// Latency probe.
 	if m.prober != nil {
@@ -163,14 +168,17 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 	if entry, found, isExpired := m.store.Get(qname, qtype, qclass, ecsOpt, dnssecOK); found {
 		if !isExpired || entry.CanServeExpired(config.DefaultStaleMaxAge) {
 			log.Debugf("CACHE: serving cached result for %s, ttl_remaining=%d", qname, entry.RemainingTTL())
-			m.store.RecordRequest(&cache.RequestRecord{
-				Qname: qname, Qtype: qtype, Qclass: qclass,
-				ECS: ecsOpt, DNSSECOK: dnssecOK,
-				Protocol: qctx.Protocol, Result: "error", Rcode: dns.RcodeServerFailure,
-				ResponseTime: handler.ElapsedMS(qctx.StartTime),
-				EntryID:      entry.ID,
-			})
-			return m.buildFromCacheEntry(qctx, entry, isExpired)
+			rec := cache.AcquireRequestRecord()
+			rec.Qname = qname
+			rec.Qtype = qtype
+			rec.Qclass = qclass
+			rec.Protocol = qctx.Protocol
+			rec.Result = "error"
+			rec.Rcode = dns.RcodeServerFailure
+			rec.ResponseTime = handler.ElapsedMS(qctx.StartTime)
+			m.store.RecordRequest(rec)
+			cache.ReleaseRequestRecord(rec)
+			return buildCacheResponse(qctx, entry, isExpired)
 		}
 	}
 
@@ -195,13 +203,17 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 		}
 	}
 
-	m.store.RecordRequest(&cache.RequestRecord{
-		Qname: qname, Qtype: qtype, Qclass: qclass,
-		ECS: ecsOpt, DNSSECOK: dnssecOK,
-		Protocol: qctx.Protocol, Result: "error", Rcode: dns.RcodeServerFailure,
-		ResponseTime: handler.ElapsedMS(qctx.StartTime),
-		DNSSECStatus: dnssecStatus,
-	})
+	rec := cache.AcquireRequestRecord()
+	rec.Qname = qname
+	rec.Qtype = qtype
+	rec.Qclass = qclass
+	rec.Protocol = qctx.Protocol
+	rec.Result = "error"
+	rec.Rcode = dns.RcodeServerFailure
+	rec.ResponseTime = handler.ElapsedMS(qctx.StartTime)
+	rec.DNSSECStatus = dnssecStatus
+	m.store.RecordRequest(rec)
+	cache.ReleaseRequestRecord(rec)
 
 	qctx.EDE = &dns.EDE{InfoCode: edeCode, ExtraText: ""}
 	return msg
@@ -211,8 +223,6 @@ func (m *CacheStore) buildCIDRRefused(qctx *handler.QueryContext) *dns.Msg {
 	qname := qctx.Qname
 	qtype := qctx.Qtype
 	qclass := qctx.Req.Question[0].Header().Class
-	ecsOpt := qctx.ECSOpt
-	dnssecOK := qctx.ClientRequestedDNSSEC
 
 	log.Debugf("RESULT: %s %s | rcode=REFUSED, blocked by CIDR filtering", qname, dns.TypeToString[qtype])
 
@@ -221,21 +231,16 @@ func (m *CacheStore) buildCIDRRefused(qctx *handler.QueryContext) *dns.Msg {
 
 	qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorBlocked, ExtraText: ""}
 
-	m.store.RecordRequest(&cache.RequestRecord{
-		Qname: qname, Qtype: qtype, Qclass: qclass,
-		ECS: ecsOpt, DNSSECOK: dnssecOK,
-		Protocol: qctx.Protocol, Result: "blocked", Rcode: dns.RcodeRefused,
-		ResponseTime: handler.ElapsedMS(qctx.StartTime),
-	})
-
-	return msg
-}
-
-func (m *CacheStore) buildFromCacheEntry(qctx *handler.QueryContext, entry *cache.Entry, isExpired bool) *dns.Msg {
-	msg := handler.BuildCacheEntryResponse(qctx.Req, entry, qctx.ClientRequestedDNSSEC, isExpired)
-	if isExpired {
-		qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorStaleAnswer, ExtraText: ""}
-	}
+	rec := cache.AcquireRequestRecord()
+	rec.Qname = qname
+	rec.Qtype = qtype
+	rec.Qclass = qclass
+	rec.Protocol = qctx.Protocol
+	rec.Result = "blocked"
+	rec.Rcode = dns.RcodeRefused
+	rec.ResponseTime = handler.ElapsedMS(qctx.StartTime)
+	m.store.RecordRequest(rec)
+	cache.ReleaseRequestRecord(rec)
 
 	return msg
 }

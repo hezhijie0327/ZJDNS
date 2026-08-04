@@ -38,6 +38,12 @@ func (m *Response) Wrap(next handler.QueryHandler) handler.QueryHandler {
 func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
 	msg := qctx.Res
 	req := qctx.Req
+	if req == nil {
+		// Defensive: the chain guarantees a request, but the Response
+		// middleware must not crash on a nil req (restoreDomain and the
+		// EDNS fallback both dereference it).
+		return
+	}
 
 	// Parse ECS if EDNS didn't run (early short-circuit).
 	ecsOpt := qctx.ECSOpt
@@ -63,7 +69,11 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
 	shouldAddEDNS := ecsOpt != nil || qctx.ClientRequestedDNSSEC || cookieStr != "" ||
 		qctx.EDE != nil || qctx.IsSecure || qctx.TCPKeepalive > 0 || len(qctx.Req.Pseudo) > 0
 
-	if shouldAddEDNS && m.edns != nil {
+	if shouldAddEDNS && m.edns != nil && !msgHasEDNSOptions(msg) {
+		// Skip when the response already carries EDNS options: a BADCOOKIE
+		// response built by the EDNS middleware applied its own
+		// SUBNET/COOKIE/padding, and re-applying would duplicate options
+		// inside a single OPT (RFC 7873: at most one COOKIE per message).
 		m.edns.ApplyToMessage(msg, ecsOpt, qctx.IsSecure, cookieStr, qctx.EDE, false, clientWantsPadding, qctx.TCPKeepalive)
 	}
 
@@ -108,6 +118,20 @@ func (m *Response) generateCookieStr(cookieOpt *edns.CookieOption, clientIP net.
 		return ""
 	}
 	return edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
+}
+
+// msgHasEDNSOptions reports whether the response already carries EDNS
+// options in its OPT pseudo-record.
+func msgHasEDNSOptions(msg *dns.Msg) bool {
+	for _, rr := range msg.Pseudo {
+		if _, ok := rr.(*dns.COOKIE); ok {
+			return true
+		}
+		if _, ok := rr.(*dns.SUBNET); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // restoreDomain rewrites owner names of RRs that exactly match currentName

@@ -136,7 +136,7 @@ go test -bench=. -short -benchtime=500ms ./...                 # stable numbers
 go test -bench=BenchmarkServerProcessQuery -benchtime=3s ./cmd/zjdns  # integration QPS
 ```
 
-**103 benchmarks** across 21 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
+**102 benchmarks** across 21 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
 
 ```bash
 # Update baseline
@@ -281,7 +281,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 - CNAME chain exceeded → SERVFAIL; FORMERR from auth → EDNS-free retry (RFC 6891 §6.2.2)
 
 ### Recursive Resolution
-- Root hints → TLD NS → authoritative NS walk with QNAME minimisation (RFC 9156, max 16 steps)
+- Root hints → TLD NS → authoritative NS walk with QNAME minimisation (RFC 9156 §2.3, max 10 iterations)
 - NS address latency-sorted cache; DNSSEC chain-of-trust at each delegation
 - Zone cut detection, lame delegation detection, glue record validation
 
@@ -290,7 +290,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | Mechanism | Layer | Algorithm |
 |-----------|-------|-----------|
 | **Hopguard** | UDP upstream | IP TTL fingerprint: auto-learn baseline, reject responses with TTL outside ±2 range |
-| **Spoofguard** | UDP upstream | Multi-read loop: reject `AR=0+NOERROR+EDNS`; accept `AN>=2`/`NS>0`/`AD=1`; collect ambiguous (≤500ms) → pick richest |
+| **Spoofguard** | UDP upstream | Multi-read loop: reject `AR=0+NOERROR` without EDNS (bare A/AAAA, GFW signature); accept `AN>=2`/`NS>0`/`AD=1`; collect ambiguous (≤500ms) → pick richest |
 | **Poisonguard** | Recursive | Zone-authority cross-validation on resolved answers |
 | **Splitguard** | TCP upstream | Random [1,N] payload segmentation with jitter |
 
@@ -301,7 +301,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | `ServerConfig` | `config` | Top-level config; owns `ECSConfig`, `ProtocolSettings`, `CertificateSettings` |
 | `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `SkipCache`, `Match`, `Proxy`, defense flags |
 | `ProtocolSettings` | `config` | Per-protocol port/endpoint: `UDP`, `TCP`, `TLS`, `QUIC`, `HTTPS`, `HTTP3`, `TLCP`, `DTLS`, `DTLCP`, `DNSCrypt` |
-| `DB` | `database` | Unified SQLite DB; WAL mode, 8 prepared stmts |
+| `DB` | `database` | Unified SQLite DB; WAL mode, 13 prepared stmts |
 | `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Stats/Close |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL |
 | `AsyncStatsWriter` | `cache` | Background goroutine: non-blocking channel → batched SQLite writes |
@@ -341,5 +341,5 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECUR
 | [docs/audit/](docs/audit/) | Per-audit detailed findings and fix plans |
 | [docs/debug/DEBUG.md](docs/debug/DEBUG.md) | Debug config, test domains, TLCP/DTLCP E2E tests |
 | [docs/benchmark/BENCHMARK.md](docs/benchmark/BENCHMARK.md) | Benchmark & E2E test guide (dnsperf, DNSCrypt, defense) |
-| [docs/rfc/](docs/rfc/) | Mirrored RFCs and drafts (50 total) |
+| [docs/rfc/](docs/rfc/) | Mirrored RFCs and drafts (52 total) |
 | [docs/rfc/GUIDELINE.md](docs/rfc/GUIDELINE.md) | RFC 精华指南 — 每个 RFC 的关键常量、协议流程、合规状态 |

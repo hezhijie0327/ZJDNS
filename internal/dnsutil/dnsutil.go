@@ -233,3 +233,19 @@ func IsTemporaryError(err error) bool {
 	// failure keywords — to avoid false positives from unrelated error text.
 	return strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "temporary")
 }
+
+// CloneRRs returns a deep copy of a slice of RRs. Each RR is cloned via its
+// Clone method, which copies the header and record data; nil entries are
+// preserved as nil.
+func CloneRRs(rrs []dns.RR) []dns.RR {
+	if len(rrs) == 0 {
+		return nil
+	}
+	out := make([]dns.RR, len(rrs))
+	for i, rr := range rrs {
+		if rr != nil {
+			out[i] = rr.Clone()
+		}
+	}
+	return out
+}

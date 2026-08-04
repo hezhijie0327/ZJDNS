@@ -97,7 +97,7 @@ func (c *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey *
 		return fmt.Errorf("%w: not a valid RRset (type/name/class mismatch)", ErrBogusSignature)
 	}
 
-	// RFC 4034 §3.1.1: the RRSIG signer name must be the DNSKEY's owner name.
+	// RFC 4034 §3.1.7: the RRSIG signer name must be the DNSKEY's owner name.
 	// Explicit check so the invariant does not silently depend on the library.
 	if !dns.EqualName(dnsutil.Fqdn(rrsig.SignerName), dnsutil.Fqdn(dnskey.Header().Name)) {
 		return fmt.Errorf("%w: RRSIG signer %s does not match DNSKEY owner %s",
@@ -142,7 +142,7 @@ func (c *CryptoValidator) VerifyDelegationDS(dsRecords []*dns.DS, childDNSKEYs [
 	var unsupportedDigest, noZoneKeyBit bool
 	for _, ds := range dsRecords {
 		for _, dnskey := range childDNSKEYs {
-			// The SEP bit is a deployment convention (RFC 4034 §2.1.2), not a
+			// The SEP bit is a deployment convention (RFC 4034 §2.1.1), not a
 			// validation requirement: RFC 4034/4035 do not require the key
 			// referenced by a DS to have SEP set. Try every key; a digest
 			// match is exact regardless of flags.
@@ -198,7 +198,7 @@ func (c *CryptoValidator) SelfVerifyDNSKEY(dnskeys []*dns.DNSKEY, dnskeyRRSIGs [
 	}
 
 	// The zone key self-signs the DNSKEY RRset. Try verifying with each key;
-	// SEP is a convention, not a requirement (RFC 4034 §2.1.2).
+	// SEP is a convention, not a requirement (RFC 4034 §2.1.1).
 	var verified bool
 	for _, rrsig := range dnskeyRRSIGs {
 		for _, ksk := range dnskeys {

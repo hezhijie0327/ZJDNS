@@ -5,7 +5,6 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"net"
 	"zjdns/edns"
 	"zjdns/zone"
@@ -19,8 +18,8 @@ import (
 
 // QueryHandler resolves a DNS query carried in the QueryContext.
 // Implementations may short-circuit the chain by setting qctx.Res and
-// returning nil, or delegate to the next handler.  Returning ErrDrop
-// discards the query silently.  Any other error produces a SERVFAIL.
+// returning nil, or delegate to the next handler.  Any non-nil error
+// produces a SERVFAIL.
 //
 // NOTE: Renamed from Handler to avoid collision with the existing Handler
 // struct.  The rename is permanent — the name QueryHandler is kept for
@@ -56,14 +55,6 @@ type EDNSHandler interface {
 	GenerateServerCookie(clientIP net.IP, clientCookie []byte) []byte
 	IsServerCookieValid(clientIP net.IP, clientCookie, serverCookie []byte) edns.CookieValStatus
 }
-
-// ---------------------------------------------------------------------------
-// Sentinel errors
-// ---------------------------------------------------------------------------
-
-// ErrDrop is returned by a Handler to signal that no response should be sent
-// to the client (e.g. rate-limit or hijack detection drops the query silently).
-var ErrDrop = errors.New("drop: no response")
 
 // ---------------------------------------------------------------------------
 // QueryHandlerFunc method

@@ -8,6 +8,7 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/log"
 	"zjdns/server/resolver/probe"
 
 	"codeberg.org/miekg/dns"
@@ -85,6 +86,18 @@ func (r *Recursive) getRootServers() []string {
 		return allRootAddrs()
 	}
 
+	// Root addresses change at most monthly, but the uncached path runs 26
+	// SQLite lookups (13 names × A/AAAA). Serve the memoized set within the
+	// root cache TTL; the refresh path below re-probes on expiry.
+	now := log.NowUnix()
+	r.rootCacheMu.Lock()
+	if r.rootCache != nil && now-r.rootCacheTime < int64(config.DefaultRootCacheTTL) {
+		cached := r.rootCache
+		r.rootCacheMu.Unlock()
+		return cached
+	}
+	r.rootCacheMu.Unlock()
+
 	hints := loadHints()
 	all := make([]string, 0, len(hints)*2) // ~2 addrs per root server
 	for name, addrs := range hints {
@@ -120,7 +133,15 @@ func (r *Recursive) getRootServers() []string {
 	// Global latency sort across families and names: per-entry sorting put
 	// every IPv6 record after every IPv4 record regardless of measured
 	// latency, so the fastest servers were never actually queried first.
-	return r.sortAddrsByLatency(all)
+	sorted := r.sortAddrsByLatency(all)
+
+	// Memoize for DefaultRootCacheTTL (M6): concurrent queries race to fill
+	// the cache; the loser's work is discarded, both serve the winner's set.
+	r.rootCacheMu.Lock()
+	r.rootCache = sorted
+	r.rootCacheTime = now
+	r.rootCacheMu.Unlock()
+	return sorted
 }
 
 // sortAddrsByLatency orders addresses by their cached probe latency (fastest
@@ -130,30 +151,30 @@ func (r *Recursive) sortAddrsByLatency(addrs []string) []string {
 	if len(addrs) <= 1 || r.cache == nil {
 		return addrs
 	}
+	// Pre-resolve hosts once — SplitHostPort inside the comparator would run
+	// O(n log n) times. Sort an index slice so the pre-resolved hosts stay
+	// positionally aligned with addrs.
+	hosts := make([]string, len(addrs))
 	lat := make(map[string]int64, len(addrs))
 	probed := make(map[string]bool, len(addrs))
-	for _, a := range addrs {
+	for i, a := range addrs {
 		host, _, err := net.SplitHostPort(a)
 		if err != nil {
 			host = a
 		}
+		hosts[i] = host
 		if ms, ok := r.cache.LatencyLastProbe(host); ok {
 			lat[host] = ms
 			probed[host] = true
 		}
 	}
-	sorted := slices.Clone(addrs)
-	slices.SortStableFunc(sorted, func(a, b string) int {
-		hostA, _, errA := net.SplitHostPort(a)
-		if errA != nil {
-			hostA = a
-		}
-		hostB, _, errB := net.SplitHostPort(b)
-		if errB != nil {
-			hostB = b
-		}
-		la, aOK := lat[hostA]
-		lb, bOK := lat[hostB]
+	idx := make([]int, len(addrs))
+	for i := range idx {
+		idx[i] = i
+	}
+	slices.SortStableFunc(idx, func(i, j int) int {
+		la, aOK := lat[hosts[i]]
+		lb, bOK := lat[hosts[j]]
 		switch {
 		case aOK != bOK:
 			if aOK {
@@ -168,6 +189,10 @@ func (r *Recursive) sortAddrsByLatency(addrs []string) []string {
 		}
 		return 0
 	})
+	sorted := make([]string, len(addrs))
+	for i, j := range idx {
+		sorted[i] = addrs[j]
+	}
 	return sorted
 }
 

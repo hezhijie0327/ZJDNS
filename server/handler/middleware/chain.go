@@ -91,6 +91,7 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 			synthesizer: deps.DNS64,
 			resolver:    deps.Resolver,
 			pending:     deps.PendingReqs,
+			store:       deps.Cache,
 		}).Wrap(h)
 	}
 
@@ -115,8 +116,9 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 		config: deps.Config,
 	}).Wrap(h)
 
-	// Zone rule evaluation (short-circuit on match).
-	if deps.ZoneEvaluator.HasRules() {
+	// Zone rule evaluation (short-circuit on match). The evaluator is
+	// always wired by server.New, but guard for tests and embedded use.
+	if deps.ZoneEvaluator != nil && deps.ZoneEvaluator.HasRules() {
 		h = (&Zone{
 			evaluator:  deps.ZoneEvaluator,
 			tagMatcher: deps.TagMatcher,

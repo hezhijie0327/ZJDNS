@@ -20,6 +20,9 @@ type RuleSetStorage interface {
 	SQLQueryRow(query string, args ...any) *sql.Row
 	SQLQuery(query string, args ...any) (*sql.Rows, error)
 	BeginTx() (*sql.Tx, error)
+	// RulesetDomainStmt returns the prepared domain-tag lookup statement —
+	// the per-query Match() hot path must not prepare a statement per call.
+	RulesetDomainStmt() *sql.Stmt
 }
 
 // Engine matches queries against rule sets to produce tags.
@@ -27,9 +30,10 @@ type RuleSetStorage interface {
 // The ruleset_entries PK is (type, tag, value), so WHERE type=? uses a PK
 // prefix seek (not a full scan).
 type Engine struct {
-	db     RuleSetStorage
-	tags   map[string]bool // all known tags from config
-	ipTrie ipTrie          // binary radix trie for O(128) CIDR matching
+	db          RuleSetStorage
+	tags        map[string]bool // all known tags from config
+	ipTrie      ipTrie          // binary radix trie for O(128) CIDR matching
+	domainRules int             // count of type='domain' rules; 0 short-circuits Match
 }
 
 // New creates an Engine backed by the given database.
@@ -83,10 +87,14 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 	}
 
 	// Reload tag set from committed rules.
-	var n int
+	var n, domainN int
 	if err := e.db.SQLQueryRow("SELECT COUNT(*) FROM ruleset_entries").Scan(&n); err != nil {
 		log.Warnf("RULESET: count query: %v", err)
 	}
+	if err := e.db.SQLQueryRow("SELECT COUNT(*) FROM ruleset_entries WHERE type='domain'").Scan(&domainN); err != nil {
+		log.Warnf("RULESET: domain count query: %v", err)
+	}
+	e.domainRules = domainN
 	log.Infof("RULESET: %d rules loaded into %d tags", n, len(e.tags))
 
 	// Preload all CIDR rules into memory to avoid SQL queries on the hot path.
@@ -121,21 +129,26 @@ func (e *Engine) loadIPRules() {
 func (e *Engine) Match(qname, ip string) map[string]bool {
 	var tags map[string]bool
 
-	// Domain: TLD+1 suffix lookup.
+	// Domain: TLD+1 suffix lookup via the prepared statement; short-circuit
+	// when no domain rules are configured (the prepare-per-call cost of a raw
+	// query would otherwise hit every query even on an empty table). The IP
+	// trie match below still runs.
 	key := tldPlusOne(qname)
-	domainRows, err := e.db.SQLQuery(
-		"SELECT tag FROM ruleset_entries WHERE type='domain' AND value=?",
-		key,
-	)
-	if err == nil {
-		defer func() { _ = domainRows.Close() }()
-		for domainRows.Next() {
-			var tag string
-			if domainRows.Scan(&tag) == nil && tag != "" {
-				if tags == nil {
-					tags = make(map[string]bool)
+	if e.domainRules > 0 {
+		domainRows, err := e.db.RulesetDomainStmt().Query(key)
+		if err == nil {
+			defer func() { _ = domainRows.Close() }()
+			for domainRows.Next() {
+				var tag string
+				if domainRows.Scan(&tag) == nil && tag != "" {
+					if tags == nil {
+						tags = make(map[string]bool)
+					}
+					tags[tag] = true
 				}
-				tags[tag] = true
+			}
+			if err := domainRows.Err(); err != nil {
+				log.Debugf("RULESET: domain match rows error for %s: %v", key, err)
 			}
 		}
 	}

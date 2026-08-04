@@ -53,7 +53,7 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 	key := b.String()
 	var httpClient *http.Client
 	var ok bool
-	if c.httpClient != nil { // Close() nils the map — a racing query must not panic
+	if c.httpClient != nil { // Close() never nils the map (client.go) — guarded for symmetry
 		httpClient, ok = c.httpClient.Get(key)
 	}
 	if !ok {
@@ -86,7 +86,12 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 		}
 
 		if c.httpClient != nil {
-			c.httpClient.Set(key, httpClient)
+			// LoadOrStore: concurrent first-use misses must not overwrite
+			// each other's client (the loser's transport would leak its
+			// connection pool) — use the winner's client instead.
+			if cached, ok := c.httpClient.LoadOrStore(key, httpClient); ok {
+				httpClient = cached
+			}
 		}
 	}
 

@@ -1,0 +1,478 @@
+[
+  {
+    "package": "internal (foundation: log, pool, lrumap, dnsutil, stamp, ttl, pending, siphash, ipdetect, ipttl, latency, doq, dns64, dnscryptcrypto)",
+    "files_read": 38,
+    "findings": [
+      {
+        "id": "F1",
+        "file": "internal/dns64/dns64.go",
+        "line": 49,
+        "severity": "HIGH",
+        "category": "rfc",
+        "title": "MapAddr embeds IPv4 at bytes 12-15 for every prefix length — RFC 6052 placement is prefix-dependent",
+        "description": "MapAddr (lines 49-55) unconditionally copies the first 12 prefix bytes and writes the IPv4 address at bytes 12-15 (nat64Offset=12). That is correct ONLY for /96 prefixes. RFC 6052 (mirrored at docs/rfc/rfc6052.txt, Figure 1 and the bullet list after it) requires: /32 -> bits 32-63 (bytes 4-7), /40 -> bits 40-63+72-79, /48 -> bits 48-63+72-87, /56 -> bits 56-63+72-95, /64 -> bits 72-103 (bytes 9-12, u octet at bits 64-71 = 0), /96 -> bits 96-127 (bytes 12-15). RFC 6052 §2.4 example: prefix 2001:db8::/32 + IPv4 192.0.2.33 must yield 2001:db8:c000:221::, but the code produces 2001:db8::c000:221. New() explicitly accepts 32/40/48/56/64/96 (validPrefixLens, line 26) and server/server.go:295 passes the user-configured DNS64.Prefix, so a non-default (network-specific) prefix is a supported configuration. The round-trip test TestMapAddr_CustomPrefix (/32) passes only because ExtractIPv4 (lines 57-63) reads back from the same wrong offset — internal consistency hides the RFC violation. Synthesized AAAA addresses for any non-/96 prefix will not be translated by a standards-conforming NAT64 gateway, silently breaking DNS64.",
+        "risk": "DNS64 synthesis produces non-RFC-6052 addresses for every valid non-/96 configured prefix; NAT64 gateways (which implement RFC 6052 placement) will not translate them, so AAAA synthesis silently serves unroutable addresses.",
+        "suggestion": "Make the IPv4 embedding position prefix-dependent: for /96 copy prefix bytes 0-12 and write IPv4 at 12-15; for /32-64 build the address per the RFC 6052 table (IPv4 split across positions PL..63 and 72..(72+31)), with bits 64-71 (u octet) zero. Update ExtractIPv4 and IsSynthesized to the same layout, and add a golden test for a /64 and /32 prefix using the RFC 6052 §2.4 examples."
+      },
+      {
+        "id": "F2",
+        "file": "internal/lrumap/lru.go",
+        "line": 156,
+        "severity": "LOW",
+        "category": "docs",
+        "title": "CompareAndDelete doc comment duplicated — two overlapping paragraphs say the same thing",
+        "description": "The doc comment on CompareAndDelete (lines 156-161) contains the description twice: lines 156-158 ('CompareAndDelete removes the entry for key only if it currently holds val. It reports whether the entry was removed. Atomic Get→compare→Delete: a concurrent Set installing a different value for the same key is preserved.') followed by lines 159-161 restating the same contract in different words. This looks like a merge artifact.",
+        "risk": "No functional impact; duplicated doc text makes the API contract harder to read and suggests the second paragraph was accidentally pasted.",
+        "suggestion": "Collapse to a single concise doc comment (keep the 'interface equality — V must be comparable' caveat)."
+      },
+      {
+        "id": "F3",
+        "file": "internal/dnscryptcrypto/pq.go",
+        "line": 15,
+        "severity": "LOW",
+        "category": "comment",
+        "title": "TicketPlaintext doc claims it carries 'every field EncodeTicketPlaintext writes' but Serial and TSEnd are absent",
+        "description": "The TicketPlaintext doc comment (lines 14-18) says: 'It carries every field EncodeTicketPlaintext writes — including esVersion and peHash'. EncodeTicketPlaintext (lines 262-272) writes resume-secret, es-version, client-magic, serial (offset 42), ts-end (offset 46), expiry, pe-hash — but the TicketPlaintext struct (lines 19-25) has no Serial or TSEnd fields. DecodeTicketPlaintext (lines 275-286) also omits them; callers (server/protocol/dnscrypt/crypto.go:285-286) re-index the raw plaintext buffer for serial/ts-end instead.",
+        "risk": "Misleading API documentation — a reader relying on the comment would assume the struct fully decodes the ticket plaintext; a future refactor could drop the raw-buffer re-indexing and lose the serial/ts-end binding.",
+        "suggestion": "Either add Serial and TSEnd fields to TicketPlaintext (and populate them in DecodeTicketPlaintext), or fix the comment to say it carries the fields used for validation, with serial/ts-end read from the raw plaintext by callers."
+      },
+      {
+        "id": "F4",
+        "file": "internal/log/log.go",
+        "line": 213,
+        "severity": "LOW",
+        "category": "inefficiency",
+        "title": "Component filter checked after fmt.Sprintf + sanitize — filtered-out messages still pay full formatting on hot paths",
+        "description": "In Log(), the level check short-circuits before formatting (line 202), but the component-filter rejection (lines 215-218) runs only after `message := sanitizeLogMessage(fmt.Sprintf(format, args...))` (line 213). In the intended filter scenario (e.g. log_level 'debug:UPSTREAM,RECURSION'), every Debug call from non-listed components — including per-query CACHE/RESULT/etc. debug logs on the request path — is formatted and sanitized (two allocations: the formatted string and the sanitized copy) and then dropped. The format strings for all 23 canonical prefixes are static ('PREFIX: ...'), so the prefix could be extracted from the format string first and the expensive rendered check reserved for the rare dynamic-prefix case the comment at lines 206-209 guards against.",
+        "risk": "When debug level + component filter is enabled (the exact feature combination the filter exists for), every filtered-out hot-path log call still pays two string allocations, degrading QPS on the debug instrumentation path.",
+        "suggestion": "Two-stage check: extract the prefix from the format string (static prefix case, all canonical prefixes) and reject before formatting; fall back to the rendered-message check only when the format string has no static prefix."
+      }
+    ]
+  },
+  {
+    "package": "server/protocol",
+    "files_read": 34,
+    "findings": [
+      {
+        "id": "F1",
+        "file": "server/protocol/tls/server.go",
+        "line": 338,
+        "severity": "HIGH",
+        "category": "race",
+        "title": "Shutdown iterates listener slices without listenerMu while Start goroutines append under it",
+        "description": "Start() launches per-protocol goroutines (server.go:205-257) that call startDOTServer/startDOHServer/startDOQServer/startDOH3Server/startDTLSServer; every one appends to s.dotListeners/s.doqConns/s.httpsListeners/s.dohServers/s.h3Listeners/etc. under s.listenerMu (e.g. tls.go:41-43, https.go:52-54, quic.go:56-58, http3.go:38-40, dtls.go:60-62). Shutdown() (server.go:333-402) iterates all of those slices and reads s.h3Server (line 358) with NO lock. The signal handler is armed in server.New() (server/tasks.go:22,166-184) before Start is ever invoked, so a SIGINT/SIGTERM arriving during listener startup runs shutdownServer() -> s.tls.Shutdown() concurrently with the append goroutines. Note closeListeners() (line 291-329) DOES take listenerMu, so the two close paths use different locking discipline on the same fields. Appends happen under listenerMu while Shutdown reads without it — a confirmed data race on the slice headers.",
+        "risk": "Data race on slice headers during shutdown-during-startup: torn iteration can miss listeners (bound ports leak until process exit) or, under the race detector / concurrent append growth, corrupt the slice and crash. Violates the codebase's own locking discipline (closeListeners takes the lock, Shutdown does not).",
+        "suggestion": "Take s.listenerMu around the slice iterations and the s.h3Server read in Shutdown() (or factor the close loop into closeListeners and call it from Shutdown under the lock)."
+      },
+      {
+        "id": "F2",
+        "file": "server/protocol/tlcp/server.go",
+        "line": 201,
+        "severity": "HIGH",
+        "category": "race",
+        "title": "Shutdown iterates listener/HTTP-server slices with no synchronization at all; Start appends are unsynchronized",
+        "description": "tlcp.Start() (server.go:168-193) calls startDOTServer (appends s.dotListeners at tlcp.go:53), startDOHServer (appends s.dohListeners/s.dohServers at http_tlcp.go:36,45) and startDTLCPServer (appends s.dtlcpListeners at dtlcp.go:236) — plain `append` with no mutex. Shutdown() (server.go:196-228) iterates all four slices without any lock. The signal handler is armed in server.New() (server/tasks.go:22) before the server starts, and tlcp.Start runs inside a goroutine (server/server.go:447-456), so a SIGINT during TLCP startup makes Shutdown iterate the slices concurrently with appends.",
+        "risk": "Concurrent append + iteration on the same slice header is a data race: can silently skip listeners (shutdown hangs or ports stay bound) or corrupt memory. Unlike the TLS package, tlcp has no mutex at all for these fields.",
+        "suggestion": "Add a sync.Mutex protecting the four listener/server slices, take it in both the Start append sites and Shutdown, and also protect s.handler (written in Start, read by serveDOH/handleDOTConn)."
+      },
+      {
+        "id": "F3",
+        "file": "server/protocol/tls/dtls.go",
+        "line": 90,
+        "severity": "MEDIUM",
+        "category": "resource",
+        "title": "DTLS accept-error loop has no backoff sleep — spins at 100% CPU on sustained temporary errors",
+        "description": "handleDTLSConnections (dtls.go:84-97): on Accept error it checks ctx, then `continue`s directly — no time.Sleep. Every other accept loop in the protocol packages backs off: tls.go:70 and quic.go:102 sleep DefaultAcceptRetryDelay, dtlcp.go:268-280 sleeps 50ms with an explicit comment ('an immediately-repeating temporary failure (e.g. EMFILE) would otherwise spin the accept loop at 100% CPU'), tlcp.go:79 and dnscrypt/tcp.go:74 sleep too. A sustained temporary accept error (EMFILE, ENOBUFS) makes the DTLS accept loop busy-spin at 100% CPU.",
+        "risk": "100% CPU burn and log flooding on any sustained temporary accept error (EMFILE under fd exhaustion, etc.), degrading the whole server exactly in the failure scenario where it should be recovering.",
+        "suggestion": "Add a select-with-timer backoff identical to dtlcp.go:268-280 (or reuse config.DefaultAcceptRetryDelay) before the `continue` in the DTLS accept error path."
+      },
+      {
+        "id": "F4",
+        "file": "server/protocol/tlcp/tlcp.go",
+        "line": 93,
+        "severity": "MEDIUM",
+        "category": "resource",
+        "title": "TLCP DoT handshake is bounded only by the 60s idle timeout — idle-connection flood starves the shared serverGroup",
+        "description": "handleDOTConn (tlcp.go:86-108) sets SetReadDeadline(now + config.DefaultTCPPoolIdleTimeout) (60s) before the first ReadTCPMsg, so the lazy TLCP handshake is bounded by 60s. The TLS package fixed exactly this hazard for DoT: tls.go:76-81 sets DefaultTLSHandshakeTimeout (10s) before the first read, with a comment explaining that a flood of never-handshaking connections otherwise holds a shared errgroup slot for the full idle timeout, starving the other listeners. TLCP shares one serverGroup (SetLimit config.DefaultServerGoroutineLimit=1024) across DoT-TLCP, DoH-TLCP and DTLCP accept loops — a flood of idle TLCP TCP connects occupies slots 6x longer than the TLS design allows and blocks DTLCP/DoH accept-loop serverGroup.Go calls.",
+        "risk": "Resource exhaustion: an attacker opening TLCP TCP connections without handshaking can starve the DTLCP and DoH-TLCP listeners (their accept loops block on serverGroup.Go once the 1024-slot limit is hit) for up to 60s per connection.",
+        "suggestion": "Mirror the tls package: set a short pre-handshake deadline (config.DefaultTLSHandshakeTimeout) before the first ReadTCPMsg and extend to DefaultTCPPoolIdleTimeout after the first successful read."
+      },
+      {
+        "id": "F5",
+        "file": "server/protocol/tlcp/tlcp.go",
+        "line": 119,
+        "severity": "MEDIUM",
+        "category": "resource",
+        "title": "TLCP DoT response writes have no write deadline — a stalled peer blocks the connection goroutine indefinitely",
+        "description": "sendDOTResponse (tlcp.go:113-124) calls zdnsutil.WriteTCPMsg(conn, resp) (tcpframe.go:100-115) which does a plain conn.Write with no SetWriteDeadline; handleDOTConn only ever sets READ deadlines (line 93). Every other writer in the protocol packages sets a write deadline: tls.go:124 (DefaultDNSQueryTimeout), dtlcp.go:368 (DefaultDTLSIdleTimeout, same package), dnscrypt/tcp.go:42 (defaultWriteTimeout). A client that keeps its TCP connection alive but stops reading (full receive window) leaves the handler goroutine blocked in Write forever — the 60s read deadline does not cover the write direction, and a live peer ACKs keepalives so TCP never tears the connection down.",
+        "risk": "Unbounded goroutine + fd leak per malicious connection (up to serverGroup limit 1024), and after the limit is hit the TLCP accept loops block entirely. DNSCrypt's TCP path comments exactly this hazard ('A client that stops reading must not block this goroutine forever').",
+        "suggestion": "Set conn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout)) before WriteTCPMsg in sendDOTResponse (or inside the loop before each write)."
+      },
+      {
+        "id": "F6",
+        "file": "server/protocol/tlcp/dtlcp.go",
+        "line": 268,
+        "severity": "LOW",
+        "category": "magic-number",
+        "title": "Hard-coded 50ms accept-error backoff instead of config.DefaultAcceptRetryDelay",
+        "description": "handleDTLCPConnections (dtlcp.go:264-281) declares `backoff := 50 * time.Millisecond` inline on the error path. config.DefaultAcceptRetryDelay (config/defaults.go:135, 100ms) exists for exactly this purpose and is used by the DoT/DoQ/DNSCrypt accept loops. A second, differently-valued retry delay for the same concept is a magic number that will drift from the documented default.",
+        "risk": "Inconsistent backoff policy across accept loops; a future change to DefaultAcceptRetryDelay (e.g. under load tests) silently misses DTLCP.",
+        "suggestion": "Replace the inline 50ms with config.DefaultAcceptRetryDelay (or a named const in this package if a different value is truly required, with a comment)."
+      },
+      {
+        "id": "F7",
+        "file": "server/protocol/tlcp/certs.go",
+        "line": 89,
+        "severity": "LOW",
+        "category": "dead-code",
+        "title": "signSerial.Set(signSerial) / encSerial.Set(encSerial) are self-aliasing no-ops",
+        "description": "certs.go:89 `signSerial.Set(signSerial)` and certs.go:98 `encSerial.Set(encSerial)` pass the receiver as the argument. big.Int.Set returns immediately when z == x (`if z != x { ... }`), so both calls are no-ops — dead code that looks like a copy/paste artifact of the CA-serial cloning pattern (caSerial is cloned via rand.Int, but sign/enc serials are already fresh rand.Int values).",
+        "risk": "Misleading code: a reader assumes the serials are being copied/cloned; the two calls do nothing and can be deleted without behavioral change.",
+        "suggestion": "Delete both self-Set calls (or replace with a comment if the intent was to clone, e.g. `signSerial = new(big.Int).Set(signSerial)`)."
+      }
+    ]
+  },
+  {
+    "package": "server/upstream",
+    "files_read": 27,
+    "findings": [
+      {
+        "id": "F1",
+        "file": "server/upstream/pool/tcp.go",
+        "line": 158,
+        "severity": "MEDIUM",
+        "category": "lock",
+        "title": "Exchange returns while holding c.mu — permanent conn deadlock in defensive branch",
+        "description": "In Conn.Exchange, c.mu is locked at line 140. The trackingID-collision patch block (lines 149-161) has an early return at line 157-158: `if len(writeBuf) < zdnsutil.DNSFramePrefixLen+2 { return nil, fmt.Errorf(...) }` — it returns WITHOUT c.mu.Unlock() (the sibling closed-check at line 141-143 correctly unlocks first). The mutex stays locked forever: every subsequent Exchange, readLoop's delivery RLock (line 277/294) and close() (line 319) block indefinitely. The conn is never marked dead, so ConnPool.Acquire keeps handing it out and every future query on it hangs until ctx timeout; c.close() can never run, leaking the fd and the readLoop goroutine. The branch is commented as unreachable (a Packed message is always >= 12 bytes, so len(writeBuf)=2+len(msgData) >= 14), but a lock leak inside a defensive branch is a latent permanent-deadlock defect if the invariant ever breaks (e.g. a future Pack change).",
+        "risk": "If the guard ever fires, the pooled connection deadlocks permanently and poisons the pool slot for that upstream key (fd + goroutine leak, all subsequent queries on that conn fail); even without firing, a return-inside-lock is a defect waiting to trip.",
+        "suggestion": "Unlock c.mu before the return (or restructure so the writeBuf patch happens after c.mu.Unlock, since the buffer is no longer shared at that point)."
+      },
+      {
+        "id": "F2",
+        "file": "server/upstream/tls/https.go",
+        "line": 44,
+        "severity": "LOW",
+        "category": "comment",
+        "title": "Stale comment \"Close() nils the map\" — maps are never nil'd; contradicts Close() comments",
+        "description": "Three call sites claim Close() nils the LRU map to justify their nil guard: tls/https.go:44 and tls/http3.go:85 (`if c.dohTransports != nil { // Close() nils the map — a racing query must not panic`) and tlcp/http_tlcp.go:56 (same for c.httpClient). Verified via grep: no `dohTransports = nil` / `doh3Transports = nil` / `httpClient = nil` exists anywhere. tls/client.go:106-108 and tlcp/client.go:43-44 explicitly state the maps are \"intentionally NOT nil'd here — in-flight queries read them (guarded by nil checks at the call sites)\". So the nil guards are dead defensive code and the comments describe behavior that does not exist.",
+        "risk": "Misleading comments; future maintainers may believe Close() clears the maps and rely on the guards instead of on lifecycle ordering.",
+        "suggestion": "Fix the three call-site comments to match reality (guards are defensive-only; maps die with the Client), or actually nil the maps under the LRU lock and keep the guards."
+      },
+      {
+        "id": "F3",
+        "file": "server/upstream/tlcp/http_tlcp.go",
+        "line": 89,
+        "severity": "LOW",
+        "category": "resource",
+        "title": "Cached DoH-over-TLCP client stored with plain Set — concurrent first-use race leaks the losing client",
+        "description": "ExecuteHTTPTLCP builds a new *http.Client (with a fresh http.Transport) on a cache miss and stores it with `c.httpClient.Set(key, httpClient)` (line 88-90). Two concurrent first queries for the same server both miss, both build clients, and the second Set replaces the first — the losing client (and its transport) is never closed. lrumap.Set on an existing key replaces e.val in place without invoking OnEvict (lru.go:84-88). The tls package handles this exact race with LoadOrStore + explicit close of the loser (tls/https.go createDOHClient lines 164-170; tls/http3.go lines 205-211); tlcp does not. The losing transport's TLCP idle connection stays open until IdleConnTimeout (config.DefaultHTTPIdleConnTimeout) or GC.",
+        "risk": "Under concurrent first-use of a TLCP upstream, one orphaned client leaks its connection for up to the idle timeout; pattern inconsistency with the tls package.",
+        "suggestion": "Use LoadOrStore and CloseIdleConnections() on the losing client, matching tls/createDOHClient."
+      },
+      {
+        "id": "F4",
+        "file": "server/upstream/dnscrypt/client.go",
+        "line": 150,
+        "severity": "LOW",
+        "category": "inefficiency",
+        "title": "Per-query 4096-byte heap allocation for DNSCrypt UDP response buffer",
+        "description": "executeOnce allocates `respBuf := make([]byte, config.DefaultDNSCryptUDPSize)` (4096) on every DNSCrypt UDP query (line 150). Every other UDP read path in the codebase reuses a sync.Pool: spoofguardBufPool in plain/udp.go is the exact same 4096 size (RFC 6891 §6.2.5 bound), and socks5.ReadPool/socks5ReadBufPool cover the proxy paths. A 4KB alloc per query is a measurable hot-path allocation for a recursive server.",
+        "risk": "Unnecessary per-query heap allocation on the DNSCrypt path; inconsistent with the pooling discipline used everywhere else.",
+        "suggestion": "Add a package-level sync.Pool of 4096-byte buffers (mirroring spoofguardBufPool) and clear() before Put, or reuse the existing pattern."
+      },
+      {
+        "id": "F5",
+        "file": "server/upstream/dnscrypt/client.go",
+        "line": 153,
+        "severity": "LOW",
+        "category": "logic",
+        "title": "deleteState on plain read timeout invalidates the 1-hour cert cache on any packet loss",
+        "description": "executeOnce calls c.deleteState(stampAddr, providerName) on ANY UDP read error (line 152-155), decrypt error (163-166) and unpack error (202-205). A read timeout — the most common error under packet loss — triggers cert-cache invalidation even though the server may not have rotated its certificate. The next query then pays a full plain-DNS cert TXT fetch (state.go state() cache miss) before it can send the real encrypted query. Under lossy networks each timeout cascades into extra refetches; the DefaultDNSCryptCertificateCacheTTL (1h) cache becomes ineffective exactly when the network is bad. Decrypt failure is the legitimate invalidation case (key rotation); read timeout is not.",
+        "risk": "Wasted cert re-fetches (extra RTTs) per lost packet on the DNSCrypt path; degraded performance precisely under packet loss.",
+        "suggestion": "Only invalidate state on decrypt/unpack failures (evidence of cert rotation); for read errors/timeouts return the error without deleteState."
+      },
+      {
+        "id": "F6",
+        "file": "server/upstream/socks5/socks5.go",
+        "line": 480,
+        "severity": "LOW",
+        "category": "context",
+        "title": "context.Background() used for relay-host DNS lookup in readAddress",
+        "description": "In readAddress, the ATYPDomain branch resolves the SOCKS5 relay hostname with `lookupCtx := context.Background()` (line 480), bounded only by a deadline derived from the connection's deadline via context.WithDeadline (lines 481-487). If a caller ever reaches readAddress without having set a deadline on the conn (establishUDPRelay only sets one when ctx has a deadline or d.timeout > 0), the lookup is unbounded — blocking the handshake goroutine and fd indefinitely. This is the flagged production context.Background() pattern; every other I/O path in the package carries ctx.",
+        "risk": "Unbounded DNS lookup blocks the SOCKS5 negotiation goroutine if no deadline was set; violates the codebase's ctx-first convention.",
+        "suggestion": "Thread ctx into readAddress (it is always available at both call sites: connect and establishUDPRelay) and use ctx directly instead of deriving from conn.Deadline()."
+      },
+      {
+        "id": "F7",
+        "file": "server/upstream/client.go",
+        "line": 306,
+        "severity": "LOW",
+        "category": "race",
+        "title": "Close() nils c.proxyDialers unsynchronized — check-then-use race window with concurrent proxyDialer()",
+        "description": "Client.Close() sets `c.proxyDialers = nil` (line 306) after Range-closing the dialers. warmup.go proxyDialer() concurrently does `if c.proxyDialers == nil { return nil }` then `c.proxyDialers.Get(...)` / `c.proxyDialers.Set(...)` without any synchronization. A nil map read is safe, but the nil-check-then-Set window means a query racing with Close can hit `c.proxyDialers.Set` on a nil map (lrumap.Map.Set → m.m[key]=e on nil m.m) and panic. The same shutdown concern is explicitly handled differently in tls/client.go Close() (lines 106-108: maps \"intentionally NOT nil'd here — a nil write would race those reads\"). The nil write here is the pattern the sibling code deliberately avoids.",
+        "risk": "Shutdown-time panic (Set on nil map) or silent proxy drop (query returns nil dialer) if Close races an in-flight query's first proxy use; inconsistent with the documented tls.Close convention.",
+        "suggestion": "Don't nil c.proxyDialers in Close (leave it to GC, matching tls.Client.Close), or guard with an atomic flag checked under the same lock as the map operations."
+      },
+      {
+        "id": "F8",
+        "file": "server/upstream/pool/tcp.go",
+        "line": 342,
+        "severity": "LOW",
+        "category": "comment",
+        "title": "Stale doc comment on NewConnPool references \"NewPool\" and type \"Pool\"",
+        "description": "Line 342-343: `// NewPool creates a Pool with the specified connection and in-flight limits.` precedes `func NewConnPool(maxConns, maxPipe int) *ConnPool`. The comment names a function (NewPool) and a type (Pool) that do not exist — the actual symbols are NewConnPool/ConnPool. The doc would render as stale godoc for an exported function.",
+        "risk": "Misleading exported godoc; a reader grepping for \"Pool\" constructor semantics sees a non-existent name.",
+        "suggestion": "Update the comment to \"NewConnPool creates a ConnPool with the specified connection and in-flight limits.\""
+      },
+      {
+        "id": "F9",
+        "file": "server/upstream/tls/https.go",
+        "line": 74,
+        "severity": "LOW",
+        "category": "logic",
+        "title": "DoH transport evicted on any error incl. caller-side timeout — contradicts http3.go's deliberate non-eviction policy",
+        "description": "ExecuteHTTPS ends with `if err != nil && c.dohTransports != nil && c.dohTransports.CompareAndDelete(key, client) { ... CloseIdleConnections() }` (lines 74-78) — the cached transport is evicted on ANY error, including context.DeadlineExceeded from caller-side cancellation and HTTP-level errors. The DoH3 counterpart explicitly documents the opposite policy (tls/http3.go lines 126-133: \"Caller-side cancellation, deadline expiry, and HTTP-level errors do not mean the transport is broken — tearing it down would hurt concurrent requests\"). A single timed-out query tears down the shared H2 transport (pooled conns closed), forcing a fresh TLS handshake and cache rebuild for all subsequent queries to that upstream.",
+        "risk": "Transport churn under load/timeouts: one caller's deadline expiry drops the shared pooled DoH connections and adds handshake latency for concurrent and future queries.",
+        "suggestion": "Gate the final eviction on a transport-level failure (e.g. reuse shouldRetryHTTP or a connection-reset check) instead of evicting on every error, matching the http3.go policy."
+      },
+      {
+        "id": "F10",
+        "file": "server/upstream/tls/https.go",
+        "line": 143,
+        "severity": "LOW",
+        "category": "validation",
+        "title": "Invalid proxy URL silently downgrades cached DoH transport to direct dial",
+        "description": "In createDOHClient, when proxyURL != \"\" but c.getProxy returns nil (URL failed to parse — socks5.New error), the `transport.DialContext = proxyDialer.DialContext` assignment (line 144) is skipped and the transport keeps its default dialer: queries go DIRECT to the DoH server, bypassing the configured proxy. The resulting client is then cached under the proxy-bearing key (LoadOrStore, line 164), so the direct-dial downgrade persists for the cache entry's lifetime even after the proxy URL is fixed (until LRU eviction at DefaultTransportMax*2 entries). The one-shot warning (warmup.go logProxyError) does not signal that the downgrade is now cached.",
+        "risk": "User-configured proxying is silently bypassed (source-IP exposure through the direct connection) and the downgrade persists after the proxy config is corrected.",
+        "suggestion": "When the proxy URL is invalid for a proxied upstream, fail the query (or skip caching the client) instead of falling back to a direct-dialing transport that then gets cached."
+      }
+    ]
+  },
+  {
+    "package": "server/resolver (+ dnssec, probe)",
+    "files_read": 18,
+    "findings": [
+      {
+        "id": "F1",
+        "file": "server/resolver/recursive.go",
+        "line": 233,
+        "severity": "MEDIUM",
+        "category": "logic",
+        "title": "apexCut failure path makes no state progress — repeats minimised queries until steps exhausted",
+        "description": "In resolve(), when isApexSOANODATA detects a zone cut (apexCut=true, lines 215-216) but advanceApexZoneCut returns ok=false (lines 222-234), the loop executes `continue` with nameservers, currentDomain, and the chain completely unchanged. Next iteration re-queries the same parent servers for the same minimised name; since the minimised name != qname, applyQnameMinimisation keeps incrementing minimiseSteps (recursive_helpers.go:75), so the loop re-issues the identical query/fan-out plus a fresh advanceApexZoneCut NS query ~10 times (until steps >= config.DefaultQnameMinimiseCount forces the full QNAME and the apexCut condition fails). Every cycle also re-runs the full queryNameserversConcurrent fan-out to every parent nameserver. The only escape is steps exhaustion; there is no early bail when the cut cannot be established.",
+        "risk": "For a parent server that hosts a child-zone copy whose NS names have no glue and unresolvable addresses (the exact topology apexCut targets, e.g. the cn/com.cn platform), each client query triggers up to ~10 redundant resolution cycles against the same servers — extra upstream load and up to ~10x added latency — instead of failing over to the full-QNAME walk immediately.",
+        "suggestion": "After a failed advanceApexZoneCut, advance the walk state deterministically (e.g. set minimiseSteps = config.DefaultQnameMinimiseCount so the next iteration exposes the full QNAME, or add a one-shot 'apex cut failed' flag that skips the apexCut branch on the retry)."
+      },
+      {
+        "id": "F2",
+        "file": "server/resolver/forward.go",
+        "line": 203,
+        "severity": "LOW",
+        "category": "dead-code",
+        "title": "tagKey.negate field in filterRecordsByCIDR is stored but never read",
+        "description": "filterRecordsByCIDR builds ipTags from []tagKey{raw, name, negate} (lines 190-205): `negate` is computed and stored, but the match loop (lines 225-234) only ever uses t.raw — `negate` (and `name` beyond the pre-filter) is never read. ruleset.Engine.MatchIP (ruleset/ruleset.go:168-176) already parses and applies the '!' prefix itself and returns the negated result, so the local negation bookkeeping is redundant. The in-code comment at line 222 even states 'the negate field was never used' — it is still unused after the rewrite.",
+        "risk": "Dead state that invites future maintainers to implement negation locally and get double-negation or bypass semantics wrong; no current functional defect.",
+        "suggestion": "Drop the negate (and if desired name) fields from tagKey — keep only the raw tag string passed through to MatchIP."
+      },
+      {
+        "id": "F3",
+        "file": "server/resolver/recursive_helpers.go",
+        "line": 161,
+        "severity": "LOW",
+        "category": "comment",
+        "title": "Comments claim pooled-message backing arrays are 'reused by the next Get' and alias corruption — contradicted by pool.Put semantics",
+        "description": "checkLameDelegation (lines 161-166) and collectBestNSMatch (line 45) justify their defensive deep-copies with 'the pooled message's backing arrays are reused by the next Get, so aliased slices would be corrupted asynchronously'. This is factually wrong: internal/pool/pool.go:70-79 Put() zeroes only the dns.Msg struct (`*msg = dns.Msg{}`), never the backing arrays, and its own doc comment states captured slices 'retain valid references'. After Put the next Get returns a fully zeroed Msg, so new parses allocate fresh arrays; the old arrays are only reachable via the caller's aliased slices and are never written again. The codebase is internally inconsistent: recursive.go:125-127, recursive.go:262-265, CNAME.resolve (recursive.go:391-392) and forward.go:277 alias pooled slices without deep-copy, relying on the pool semantics that the helper comments deny.",
+        "risk": "Misleading security-flavoured rationale for unnecessary per-query allocations on terminal/NODATA paths; a future pool change made against these comments could break the aliasing paths that do not copy.",
+        "suggestion": "Align the comments with pool.Put's documented header-only zeroing (or, if aliasing is meant to be forbidden, make the deep-copy the rule everywhere and add a pool invariant — either way the two claims cannot both stand)."
+      },
+      {
+        "id": "F4",
+        "file": "server/resolver/nameserver.go",
+        "line": 476,
+        "severity": "LOW",
+        "category": "dead-code",
+        "title": "resolveNSAddrType's second return value (addrs) is always discarded by both callers — dead return surface plus wasted allocations",
+        "description": "resolveNSAddrType has named returns (answer []dns.RR, addrs []string) and builds `addrs` by appending a.A.String()/a.AAAA.String() copies (lines 456-466) — a full duplicate of the strings already appended to the *nsAddrs pointer accumulator. Both callers discard it: `ansARecords, _ = r.resolveNSAddrType(...)` (lines 308, 317). No other caller exists (verified by grep).",
+        "risk": "Dead API surface; per NS address resolution it allocates and fills a duplicate string slice that is immediately garbage — small per-query waste on the recursive walk path.",
+        "suggestion": "Remove the second return value and return only the answer records needed for cache.Set, or reuse the returned slice for the *nsAddrs append."
+      },
+      {
+        "id": "F5",
+        "file": "server/resolver/forward.go",
+        "line": 126,
+        "severity": "LOW",
+        "category": "error-wrap",
+        "title": "errgroup wait errors discarded with `_ = g.Wait()` without the required comment",
+        "description": "queryUpstream (forward.go:126) and resolveNSAddressesConcurrent (nameserver.go:359) discard the errgroup result via `_ = g.Wait()` with no comment. The audit standard (dimension 8) requires `_`-discarded errors to carry a comment explaining type+reason (the per-goroutine errors here are already logged inside the workers — e.g. nameserver.go:186-188 logs the same value on the parallel wait path — so the discard is defensible, but it is unannotated).",
+        "risk": "Guideline violation only: no functional impact; the errgroup error is informational here since each worker logs its own failure.",
+        "suggestion": "Either log it like the nameserver.go:186 pattern, or annotate the discard: `_ = g.Wait() // errors already logged per-goroutine`."
+      }
+    ]
+  },
+  {
+    "package": "server/handler (+ server/handler/middleware)",
+    "files_read": 19,
+    "findings": [
+      {
+        "id": "F1",
+        "file": "server/handler/middleware/response.go",
+        "line": 67,
+        "severity": "MEDIUM",
+        "category": "rfc",
+        "title": "BADCOOKIE responses receive EDNS options twice — duplicate SUBNET/COOKIE options in one OPT",
+        "description": "On invalid/expired server cookie, middleware/edns.go buildBadCookieResponse (line 127) already calls ApplyToMessage (appends SUBNET+COOKIE to msg.Pseudo), then the outermost Response middleware's finalizeResponse runs unconditionally on any non-nil qctx.Res (no RcodeBadCookie guard) and calls ApplyToMessage again (line 67): shouldAddEDNS is true (qctx.ECSOpt non-nil, cookieStr non-empty, len(qctx.Req.Pseudo)>0). msg.Pseudo ends up [SUBNET, COOKIE, SUBNET, COOKIE]. edns.Handler.ApplyToMessage (edns/edns.go:118-136) only appends — it is not idempotent and there is no dedup at pack time.",
+        "risk": "The BADCOOKIE response violates RFC 7871 (multiple SUBNET options in one message are invalid) and RFC 7873 (cookie must be echoed once); clients may reject the OPT, fail to learn the new server cookie and loop on BADCOOKIE.",
+        "suggestion": "Guard finalizeResponse (or the shouldAddEDNS branch) for qctx.Res.Rcode == dns.RcodeBadCookie — the BADCOOKIE response already carries its EDNS options; or remove the pre-application in buildBadCookieResponse and let Response middleware apply EDNS exactly once."
+      },
+      {
+        "id": "F2",
+        "file": "server/handler/middleware/cache_lookup.go",
+        "line": 176,
+        "severity": "MEDIUM",
+        "category": "logic",
+        "title": "Stale-answer EDE (16) survives onto a freshly-refreshed response",
+        "description": "buildResponse(qctx, entry, true) sets qctx.EDE = ExtendedErrorStaleAnswer (line 227) when serving the stale response. When the foreground refresh in serveExpiredWithRefresh completes within DefaultServeExpiredClientTimeout (600ms), the fresh response replaces qctx.Res (line 176) but qctx.EDE is never cleared; the outer Response middleware then attaches EDE 16 (stale answer) to a response built from fresh resolution data.",
+        "risk": "Clients that rely on EDE 16 for staleness detection (RFC 8767/RFC 8914) misclassify fresh answers as stale data, potentially preferring alternate sources or refusing to cache.",
+        "suggestion": "Clear qctx.EDE (e.g. qctx.EDE = nil) in the '<-done' success branch before assigning the fresh response, or rebuild the EDE state from the refresh result."
+      },
+      {
+        "id": "F3",
+        "file": "server/handler/middleware/cache_lookup.go",
+        "line": 138,
+        "severity": "MEDIUM",
+        "category": "concurrency",
+        "title": "errgroup.Go called on the per-query path blocks when refresh concurrency limit is saturated",
+        "description": "cacheRefreshGroup is created with errgroup.WithContext + SetLimit(config.DefaultCacheRefreshConcurrency=64) (server/server.go:75-76). errgroup.Group.Go blocks until a slot frees. It is invoked synchronously inside the query path at lines 71 (prefetch on fresh hit, before the response is returned), 95 (stale prefetch) and 138 (serveExpiredWithRefresh — BEFORE the client-facing timer even starts). Each refresh goroutine is bounded by DefaultBackgroundTimeout (10s), so when 64 refreshes are in flight a cache-hit query can stall up to ~10s.",
+        "risk": "Latency cliff / head-of-line blocking: a burst of distinct expiring keys (e.g. after cache flush) stalls fresh-hit and stale-served query handling behind the refresh semaphore.",
+        "suggestion": "Run the refresh spawn in its own goroutine (bounded by HandlePanic + the pendingRefreshes dedup) so the query path never blocks on Go, or use a non-blocking semaphore (try-acquire) and fall back to skipping the refresh."
+      },
+      {
+        "id": "F4",
+        "file": "server/handler/middleware/cache_lookup.go",
+        "line": 168,
+        "severity": "MEDIUM",
+        "category": "pool-leak",
+        "title": "Stale pooled response message replaced without Put — pooled message lost on every fast stale-refresh",
+        "description": "The stale response is built at line 87 (qctx.Res = m.buildResponse(...) → pool.DefaultMessage.Get() via BuildResponseMsg). When the foreground refresh completes within the 600ms window, a second pooled message is built (line 168) and assigned to qctx.Res; the first message is never returned to pool.DefaultMessage (its buffers are dropped to GC). Same pattern in cache_store.go buildSuccess ECS-mismatch branch (line 93: second BuildResponseMsg discards the one from line 67).",
+        "risk": "Steady per-query allocation churn on the serve-expired path: pooled message and RR buffers are lost instead of reused, increasing GC pressure and pool miss rate (QPS drop on busy stale-serving deployments).",
+        "suggestion": "Put the replaced response before overwriting qctx.Res, matching the pool discipline in the protocol listeners (e.g. cache_lookup.go line 176: if qctx.Res != nil { qctx.Res.Data = nil; pool.DefaultMessage.Put(qctx.Res) } before assignment)."
+      },
+      {
+        "id": "F5",
+        "file": "server/handler/middleware/cache_store.go",
+        "line": 93,
+        "severity": "LOW",
+        "category": "pool-leak",
+        "title": "ECS-mismatch SERVFAIL path discards the already-built pooled response message",
+        "description": "In buildSuccess, msg := handler.BuildResponseMsg(qctx.Req) at line 67; on ECS response mismatch the branch builds a second message (line 93) and returns it, dropping the first pooled message without Put.",
+        "risk": "One pooled message lost per ECS-mismatched query (rare: spoofed/misrouted upstream responses), plus the wasted BuildResponseMsg work.",
+        "suggestion": "Reuse the existing msg: set msg.Answer/Ns/Extra = nil (or rebuild in place), set msg.Rcode = SERVFAIL and return it instead of allocating a second message."
+      },
+      {
+        "id": "F6",
+        "file": "server/handler/middleware.go",
+        "line": 66,
+        "severity": "LOW",
+        "category": "dead-code",
+        "title": "ErrDrop sentinel and QueryContext.Dropped have no producers — dead drop mechanism",
+        "description": "grep across the whole repo: ErrDrop is only referenced at its definition (middleware.go:66) and in handler.go:142 (errors.Is(err, ErrDrop) || qctx.Dropped); QueryContext.Dropped (context.go:58) is never assigned true anywhere. No middleware or defense component returns ErrDrop anymore, so the drop path (and the carefully documented no-double-Put guard at handler.go:143-145) is unreachable.",
+        "risk": "Dead code misleading future maintenance: the drop contract is documented in the QueryHandler interface doc but nothing can trigger it; the do-not-Put guard protects a path that never runs.",
+        "suggestion": "Either restore a producer (defense/hopguard drop on poison verdict) or remove ErrDrop, the Dropped field and the handler.go:142 branch; keep the guard only if a producer is planned."
+      },
+      {
+        "id": "F7",
+        "file": "server/handler/middleware/chain.go",
+        "line": 119,
+        "severity": "LOW",
+        "category": "panic",
+        "title": "AssembleChain calls deps.ZoneEvaluator.HasRules() without nil check, contradicting the 'nil-checked' doc comment",
+        "description": "The Dependencies doc comment (lines 24-26) lists ZoneEvaluator under 'Optional fields (nil-checked before use)', but line 119 calls deps.ZoneEvaluator.HasRules() unconditionally — a nil interface would panic at chain assembly. Production is safe only because server.go:96 always passes zone.New(db) (never nil).",
+        "risk": "Any future caller that follows the documented contract and passes a nil ZoneEvaluator crashes at startup with a nil-interface panic.",
+        "suggestion": "Either nil-check before HasRules (if deps.ZoneEvaluator != nil && deps.ZoneEvaluator.HasRules()) or correct the comment to state ZoneEvaluator is required."
+      },
+      {
+        "id": "F8",
+        "file": "server/handler/middleware/edns.go",
+        "line": 119,
+        "severity": "LOW",
+        "category": "panic",
+        "title": "buildBadCookieResponse nil-cookieOpt branch dereferences cookieOpt.ClientCookie — latent nil panic",
+        "description": "Line 117: if cookieOpt == nil || len(cookieOpt.ClientCookie) != edns.DefaultCookieClientLen { ... } — when cookieOpt is nil the branch is entered and line 119 evaluates len(cookieOpt.ClientCookie) in the Debugf call → nil pointer dereference. Both current callers (lines 87, 96) pass a non-nil cookieOpt (both are guarded by cookieOpt != nil before), so the panic is unreachable today, but the defensive nil-check itself is the trigger if it ever fires.",
+        "risk": "Panic (caught only by the protocol layer's HandlePanic, dropping the query) exactly in the case the guard claims to handle.",
+        "suggestion": "Hoist the length computation behind a nil check: if cookieOpt == nil { log...; return FORMERR } then use len(cookieOpt.ClientCookie) unconditionally."
+      },
+      {
+        "id": "F9",
+        "file": "server/handler/middleware/response.go",
+        "line": 46,
+        "severity": "LOW",
+        "category": "panic",
+        "title": "Response.finalizeResponse dereferences qctx.Req without nil guard — inconsistent with Validation's nil-Req handling",
+        "description": "Validation middleware explicitly handles qctx.Req == nil (validation.go:56-69), but finalizeResponse dereferences it: line 46 len(req.Question) and line 64 len(qctx.Req.Pseudo). With a nil Req, line 46 panics (ParseFromDNS is nil-safe but the Question access is not). Unreachable in production because Handler.ServeDNS (handler.go:108) rejects nil/empty-question requests before creating a QueryContext — but the chain-level contract is inconsistent: one middleware survives nil Req, the outermost one panics.",
+        "risk": "Panic (query dropped via HandlePanic) if the chain is ever invoked with a nil-Req QueryContext, e.g. by tests or a future refactored entry point.",
+        "suggestion": "Guard finalizeResponse: if req == nil { return } after msg := qctx.Res, or normalize req = &dns.Msg{} for nil before the Pseudo/Question accesses."
+      },
+      {
+        "id": "F10",
+        "file": "server/handler/middleware/cache_lookup.go",
+        "line": 214,
+        "severity": "LOW",
+        "category": "panic",
+        "title": "serveExpiredWithRefresh timer-branch goroutine calls m.refreshCtx.Done() without the nil guard used elsewhere in the same function",
+        "description": "The foreground refresh goroutine defensively handles nil refreshCtx (lines 148-151: rc := m.refreshCtx; if rc == nil { rc = context.Background() }), but the background-update goroutine spawned in the timer branch selects on m.refreshCtx.Done() (line 214) directly — with a nil context.Context interface this panics when the select is evaluated (also the select would never fire on the Done case). Production always supplies RefreshCtx (server.go:281), so this only bites non-standard wiring.",
+        "risk": "Panic in the background-update goroutine if a caller constructs CacheLookup with a nil refreshCtx (inconsistent defensive contract within one function).",
+        "suggestion": "Use the same local fallback: rc := m.refreshCtx; if rc == nil { rc = context.Background() } and select on rc.Done()."
+      }
+    ]
+  },
+  {
+    "package": "server+server/defense+cmd/zjdns",
+    "files_read": 19,
+    "findings": [
+      {
+        "id": "F1",
+        "file": "server/bridge.go",
+        "line": 65,
+        "severity": "HIGH",
+        "category": "memory",
+        "title": "tcpWriteEntry refcount never returns to 0 — tcpWriteMu sweep is dead, map grows unboundedly",
+        "description": "In handleDNSRequest's TCP path, the refs accounting is unbalanced. Line 56: newEntry.refs.Add(1) (pre-increment before LoadOrStore) is never decremented in the creator path — only in the !ok type-assertion branch (line 60). Lines 64-66: `if loaded { entry.refs.Add(1) }` adds another per-request increment that has no matching decrement anywhere (the goroutine's single `defer entry.refs.Add(-1)` at line 121 and the SERVFAIL `defer entry.refs.Add(-1)` at line 81 each balance only the line-76 in-flight increment). Result: for the creator refs ends at 1 permanently ((A)+(C)-(D)); for the loaded path refs grows +1 per request. The sweep in tasks.go:132 (`if entry.refs.Load() != 0 { return true }`) therefore never deletes any entry — the elaborate lastAccess/cutoff eviction logic is unreachable. tcpWriteMu accumulates one entry (struct + 16-slot capacity channel + writeMu channel) per distinct client address for the entire server lifetime.",
+        "risk": "Unbounded memory growth in tcpWriteMu over server lifetime — under sustained client churn (many ephemeral source ports, e.g. an open resolver or clients behind NAT) the map grows without bound until OOM, and the refs counter grows per request on the loaded path. The sweep's intended function (evicting idle entries after DefaultTCPWriteMuStaleCutoff) is completely defeated.",
+        "suggestion": "Balance the counters so refs returns to 0 when idle: delete the `if loaded { entry.refs.Add(1) }` block (the line-76 increment is the in-flight count), and after the line-76 Add, drop the creator's pre-increment with `if !loaded { entry.refs.Add(-1) }` — the window between LoadOrStore and line 76 was protected by the pre-increment, so it can be released once the in-flight ref exists. Then refs==0 exactly when idle and the sweep evicts stale entries again."
+      },
+      {
+        "id": "F2",
+        "file": "cmd/zjdns/cli/parse.go",
+        "line": 257,
+        "severity": "MEDIUM",
+        "category": "logic",
+        "title": "--sql query failures print the error but exit with code 0",
+        "description": "In the --sql dispatch (lines 250-267), both RunSQLRW and RunSQL errors are printed to stderr (`fmt.Fprintf(os.Stderr, \"sql: %v\\n\", err)`) but the function always returns `\"\", true, 0`. This contradicts the ParseFlags doc comment (lines 12-15: exit 1 for \"command failures (parse errors, probe/generate/dnsstamp failures)\") and the sibling commands (--probe line 218-221, --generate-config, --dnsstamp all return exit 1 on error). A failed query (syntax error, missing table, aborted --rw confirmation) is reported as success to the calling shell.",
+        "risk": "Scripts and CI pipelines that check $? after `zjdns --sql cache.db \"SELECT ...\"` get a false success for failed queries and aborted --rw confirmations — wrong command-result signalling.",
+        "suggestion": "Return `\"\", true, 1` after printing the error in both the RunSQLRW and RunSQL branches, matching the probe/dnsstamp/generate error handling."
+      },
+      {
+        "id": "F3",
+        "file": "cmd/zjdns/cli/dnsstamp.go",
+        "line": 40,
+        "severity": "LOW",
+        "category": "dead-code",
+        "title": "Unreachable default branch and dead ODoHTarget guard in RunDNSStampDecode",
+        "description": "The ProtoType switch (lines 27-44) covers all 8 stamp protocol values: ProtoODoHTarget/ProtoDNSCryptRelay/ProtoODoHRelay return an error at lines 34-39, ProtoDOH is handled at line 28-33, and ProtoPlain/ProtoDNSCrypt/ProtoDOT/ProtoDOQ at line 40-41. The `default: entry.Address = s.Address` at line 42-44 is therefore unreachable and identical to the explicit case body. Similarly the guard `s.Proto != zstamp.ProtoODoHTarget` at line 47 is always true — ODoHTarget already returned at line 39.",
+        "risk": "Dead code misleads future maintainers into thinking the default branch handles unlisted protocols; no functional defect.",
+        "suggestion": "Remove the `default` branch (or collapse the plain/dnscrypt/dot/doq case into it) and drop the `s.Proto != zstamp.ProtoODoHTarget` condition, keeping the ODoHTarget rejection where it is."
+      },
+      {
+        "id": "F4",
+        "file": "server/server.go",
+        "line": 273,
+        "severity": "LOW",
+        "category": "comment",
+        "title": "Stale/misplaced '// set below' comment on ZoneEvaluator in middleware.Dependencies",
+        "description": "In initHandler, the field `ZoneEvaluator: zoneEvaluator, // set below` carries a comment that no longer applies — the value is assigned in-place. The 'set below' note belongs to `TagMatcher` (line 287-291), which is genuinely assigned after the struct literal via `if rulesetEngine != nil`.",
+        "risk": "Misleading comment for readers tracing how dependencies are wired; trivial.",
+        "suggestion": "Move the '// set below' note to the TagMatcher assignment (or delete it — the code below is self-evident)."
+      }
+    ]
+  }
+]

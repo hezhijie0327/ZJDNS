@@ -90,7 +90,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 				rcode := result.Response.Rcode
 
 				if rcode == dns.RcodeNameError && len(result.Response.Answer) > 0 && !result.Response.Authoritative {
-					// RFC 6604 §1.1: NXDOMAIN may include CNAME/DNAME records
+					// RFC 6604 §3: NXDOMAIN may include CNAME/DNAME records
 					// when the original query name is an alias whose target
 					// does not exist. Only reject when non-alias answer records
 					// are present — those indicate data injection.
@@ -305,7 +305,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 				if queryCtx.Err() != nil {
 					return
 				}
-				ansARecords, _ = r.resolveNSAddrType(queryCtx, nsName, dns.TypeA, depth+1, forceTCP, &nsAddrs, &addrMu) // addrs captured via nsAddrs pointer
+				ansARecords = r.resolveNSAddrType(queryCtx, nsName, dns.TypeA, depth+1, forceTCP, &nsAddrs, &addrMu)
 			}()
 
 			go func() {
@@ -314,7 +314,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 				if queryCtx.Err() != nil {
 					return
 				}
-				ansAAAARecords, _ = r.resolveNSAddrType(queryCtx, nsName, dns.TypeAAAA, depth+1, forceTCP, &nsAddrs, &addrMu)
+				ansAAAARecords = r.resolveNSAddrType(queryCtx, nsName, dns.TypeAAAA, depth+1, forceTCP, &nsAddrs, &addrMu)
 			}()
 
 			wg.Wait()
@@ -444,10 +444,10 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 // resolved addresses to nsAddrs under addrMu. For A queries, AAAA glue from
 // the Additional section is also collected. Returns the answer records for
 // subsequent caching.
-func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype uint16, depth int, forceTCP bool, nsAddrs *[]string, addrMu *sync.Mutex) (answer []dns.RR, addrs []string) {
+func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype uint16, depth int, forceTCP bool, nsAddrs *[]string, addrMu *sync.Mutex) (answer []dns.RR) {
 	qr := r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP)
 	if qr.Err != nil {
-		return answer, addrs
+		return answer
 	}
 	addrMu.Lock()
 	defer addrMu.Unlock()
@@ -456,12 +456,10 @@ func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype 
 		case *dns.A:
 			if qtype == dns.TypeA {
 				*nsAddrs = append(*nsAddrs, net.JoinHostPort(a.A.String(), config.DefaultUDPPort))
-				addrs = append(addrs, a.A.String())
 			}
 		case *dns.AAAA:
 			if qtype == dns.TypeAAAA {
 				*nsAddrs = append(*nsAddrs, net.JoinHostPort(a.AAAA.String(), config.DefaultUDPPort))
-				addrs = append(addrs, a.AAAA.String())
 			}
 		}
 	}
@@ -473,5 +471,5 @@ func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype 
 			}
 		}
 	}
-	return qr.Answer, addrs
+	return qr.Answer
 }

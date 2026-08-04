@@ -59,6 +59,13 @@ and `dnscrypt/` respectively; dnsproxy is CLI-only (flags inline).
 go build -o /tmp/zjdns ./cmd/zjdns
 ```
 
+> [!NOTE]
+> **Windows (Git Bash)**：`pkill` 不可用，用 `taskkill //F //IM zjdns.exe`（或
+> 记录 PID 后 `taskkill //F //PID <pid>`）；配置里的 `/tmp/...` 路径是 Unix
+> 风格，Windows 下改用 `C:/Users/<user>/AppData/Local/Temp/...`（Go 程序按
+> Windows 路径解析，`/tmp` 会解析失败）；`openssl -subj` 需前缀
+> `MSYS_NO_PATHCONV=1` 防止路径被改写。
+
 ### DNSCrypt-proxy (external)
 
 > [!IMPORTANT]
@@ -131,7 +138,8 @@ The "Protocol" column is the upstream forwarding protocol.
 | `client-dtlcp.json` | 14653 | DTLCP | 8542 |
 | `client-dnscrypt.json` | 12444 | DNSCrypt (PQ) | 12443 |
 | `client-dnscrypt-classic.json` | 12445 | DNSCrypt (classical) | 12443 |
-| `client-dnscrypt-ephemeral.json` | 12445 | DNSCrypt + ephemeral_keys + PQ | 12443 |
+| `client-dnscrypt-ephemeral.json` | 12446 | DNSCrypt + ephemeral_keys + PQ | 12443 |
+| `client-dnscrypt-ephemeral-classical.json` | 22544 | DNSCrypt + ephemeral_keys (classical only) | 12443 |
 
 > [!NOTE]
 > Forwarding client configs set `tcp` to the same port as `udp`. Without it,
@@ -230,7 +238,12 @@ pkill -f "spoofguard"
 ### Spoofguard + SOCKS5 (forwarding UDP over proxy)
 
 ```bash
-# Start a SOCKS5 proxy (e.g. go-socks5)
+# Start a SOCKS5 proxy.
+# NOTE: things-go/go-socks5 v0.1.1 ships no cmd/socks5 binary — run its
+# _example server (binds :10800; edit the port to 11080 first):
+#   mkdir -p /tmp/socks5srv && cp $(go env GOMODCACHE)/github.com/things-go/go-socks5@v0.1.1/_example/main.go /tmp/socks5srv/
+#   cd /tmp/socks5srv && go mod init socks5srv && go mod tidy && sed -i 's/:10800/:11080/' main.go && go run .
+# (or any SOCKS5 server listening on 127.0.0.1:11080)
 go run github.com/things-go/go-socks5/cmd/socks5@latest -addr :11080 &
 sleep 1
 
@@ -329,14 +342,24 @@ pkill -f "recursive-defense"
 > RouteDNS can connect. Alternatively, configure ZJDNS with a fixed cert via
 > `certificate.tls.cert_file` / `certificate.tls.key_file`.
 
+> [!WARNING]
+> **ZJDNS serves DTLS 1.3 only** (a pion dual-stack negotiation bug deadlocks
+> the handshake — see `server/protocol/tls/dtls.go`). RouteDNS's DTLS client
+> builds a default `dtls.Config{}` (1.2+1.3) with no version option, so the
+> current RouteDNS release **cannot connect**. ZJDNS ↔ ZJDNS DTLS (loopback)
+> and pure-1.3 clients work; revisit once RouteDNS exposes a DTLS version
+> knob or pion fixes the dual-stack path.
+
 ### Setup (one-time)
 
 ```bash
 # Generate a self-signed ECDSA cert that both ZJDNS and RouteDNS will use
+# NOTE: on Windows Git Bash, prefix with MSYS_NO_PATHCONV=1 so the -subj
+# path is not rewritten to a Windows path.
 mkdir -p /tmp/zjdns-certs
-openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+MSYS_NO_PATHCONV=1 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
   -keyout /tmp/zjdns-certs/key.pem -out /tmp/zjdns-certs/cert.pem \
-  -days 30 -nodes -subj "/CN=zjdns-test.local"
+  -days 30 -nodes -subj "/CN=zjdns-test.local" -addext "subjectAltName=IP:127.0.0.1"
 ```
 
 ### Test
@@ -346,7 +369,9 @@ uses `self_signed: true` (ephemeral cert) — RouteDNS can't verify that.
 Create a config with `cert_file`/`key_file` pointing to the generated cert:
 
 ```bash
-# Create a DTLS-only server config with the fixed certificate
+# Create a DTLS-only server config with the fixed certificate.
+# NOTE: on Windows, replace /tmp/zjdns-certs/... with the Windows absolute
+# path (e.g. C:/Users/<user>/AppData/Local/Temp/zjdns-certs/...).
 cat > /tmp/zjdns-dtls-server.json << 'CONF'
 {
   "server": {
@@ -434,11 +459,17 @@ sleep 2
 dig @127.0.0.1 -p 12445 www.baidu.com A +short
 pkill -f "client-dnscrypt-classic"
 
-# Ephemeral keys (per-query forward secrecy)
+# Ephemeral keys (per-query forward secrecy) — PQ preferred
 /tmp/zjdns -config docs/debug/loopback/client-dnscrypt-ephemeral.json &
 sleep 2
-dig @127.0.0.1 -p 12445 www.baidu.com A +short
+dig @127.0.0.1 -p 12446 www.baidu.com A +short
 pkill -f "client-dnscrypt-ephemeral"
+
+# Ephemeral keys + classical only (no PQ downgrade protection)
+/tmp/zjdns -config docs/debug/loopback/client-dnscrypt-ephemeral-classical.json &
+sleep 2
+dig @127.0.0.1 -p 22544 www.baidu.com A +short
+pkill -f "client-dnscrypt-ephemeral-classical"
 ```
 
 ## Upstream Protocol Tests

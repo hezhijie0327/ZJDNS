@@ -205,11 +205,19 @@ func (m *Logger) Log(lvl Level, format string, args ...any) {
 
 	// Check component filter: if set, only emit messages whose prefix
 	// matches. Messages without a recognizable "PREFIX: " always pass.
-	// The filter applies to the RENDERED message — a dynamic prefix passed
-	// as an argument (e.g. "%s: ...") would otherwise bypass the filter.
+	// Static "PREFIX: ..." formats (all 23 canonical prefixes) are rejected
+	// before formatting so filtered-out hot-path calls pay no Sprintf.
+	// The rendered-message check below still applies for dynamic prefixes
+	// passed as arguments (e.g. "%s: ..."), which would otherwise bypass
+	// the filter.
 	m.mu.RLock()
 	filter := m.componentFilter
 	m.mu.RUnlock()
+	if filter != nil {
+		if prefix := extractPrefix(format); prefix != "" && !filter[prefix] {
+			return
+		}
+	}
 	message := sanitizeLogMessage(fmt.Sprintf(format, args...))
 	if filter != nil {
 		if prefix := extractPrefix(message); prefix != "" && !filter[prefix] {

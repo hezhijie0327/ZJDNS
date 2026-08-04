@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -33,6 +34,13 @@ type Recursive struct {
 	splitguard  bool            // from protocol=recursive upstream
 	poisonguard bool            // from protocol=recursive upstream
 	hopguard    bool            // from protocol=recursive upstream
+
+	// rootCache memoizes getRootServers' result: the root set changes at
+	// most monthly, but the uncached path issues 13 names × 2 types = 26
+	// SQLite lookups per recursive query.
+	rootCacheMu   sync.Mutex
+	rootCache     []string
+	rootCacheTime int64 // log.NowUnix() of the cache fill
 }
 
 // CNAME handles CNAME record chasing during DNS resolution, following the
@@ -229,6 +237,12 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 					currentDomain = nextZone
 					continue
 				}
+				// The zone cut could not be established (NS query failed, no
+				// NS records, or no reachable addresses). Force the full
+				// QNAME for the next iteration so the walk leaves the
+				// apexCut branch instead of re-issuing the same minimised
+				// query until minimiseSteps exhausts (M7).
+				minimiseSteps = config.DefaultQnameMinimiseCount
 			}
 			continue
 		}

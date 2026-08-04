@@ -112,6 +112,9 @@ func New() *Client {
 		proxyDialers: lrumap.New[string, *socks5.Dialer](config.DefaultTransportMax * 2),
 	}
 
+	// OnEvict runs with the map mutex held (lrumap contract) — Dialer.Close
+	// is local resource cleanup (UDP relay conn close, no network I/O), so
+	// it cannot block the map.
 	c.proxyDialers.OnEvict = func(_ string, d *socks5.Dialer) {
 		if d != nil {
 			_ = d.Close()
@@ -296,6 +299,11 @@ func (c *Client) Close() {
 	c.plainClient.Close()
 	c.tlsClient.Close()
 
+	// The dialer map is intentionally NOT nil'd here: in-flight proxied
+	// queries read c.proxyDialers from proxyDialer (warmup.go) and a nil
+	// write would race those reads (same pattern as tls.Client.Close —
+	// server/upstream/tls/client.go). The map dies with the Client, and the
+	// dialers are closed by the Range above.
 	if c.proxyDialers != nil {
 		c.proxyDialers.Range(func(key string, d *socks5.Dialer) bool {
 			if d != nil {
@@ -303,7 +311,6 @@ func (c *Client) Close() {
 			}
 			return true
 		})
-		c.proxyDialers = nil
 	}
 
 	c.dnscryptClient.Close()
