@@ -274,9 +274,8 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		}
 
 		if len(nsResult.addrs) == 0 {
-			nsSlice, extraSlice := response.Ns, response.Extra
 			pool.DefaultMessage.Put(response)
-			return QueryResult{Cacheable: true, Authority: nsSlice, Additional: extraSlice, Validated: validated, ECS: ecsResponse, Server: config.ProtoRecursive, DNSSECEDE: chain.lastEDECode}
+			return QueryResult{Cacheable: true, Poisoned: poisonSeen, Err: fmt.Errorf("could not resolve nameservers for %s", bestMatch)}
 		}
 
 		r.cacheGlueRecords(nsResult.glue)
