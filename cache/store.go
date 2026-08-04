@@ -71,6 +71,15 @@ var (
 // interface boxing (SA6002).
 var ecsCandidatesPool = sync.Pool{New: func() any { c := make([]ecsCandidate, 0, 5); return &c }}
 
+// isZstdCompressed reports whether data starts with the zstd frame magic
+// (0x28 0xB5 0x2F 0xFD).  Used to distinguish compressed from raw BLOBs
+// without a prefix byte, preserving backward compatibility with entries
+// written before threshold compression was introduced.
+func isZstdCompressed(data []byte) bool {
+	return len(data) >= 4 &&
+		data[0] == 0x28 && data[1] == 0xB5 && data[2] == 0x2F && data[3] == 0xFD
+}
+
 // New creates a cache backed by the given database. The caller is responsible
 // for opening the database via database.Open() before calling New.
 // New creates a SQLite-backed DNS cache.  Panics if db is nil (caller must
@@ -138,23 +147,32 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		return nil, false, false
 	}
 
-	// Decompress and unpack the wire format into a dns.Msg.
-	// Use a pooled buffer as the decompression destination to reduce
-	// per-cache-hit heap allocations (P3).  The buffer is returned to
-	// the pool after entry fields are extracted and msg.Data is cleared.
-	dbuf, ok := decompressBufPool.Get().(*[]byte)
-	if !ok {
-		b := make([]byte, 0, decompressBufCap)
-		dbuf = &b
+	// If the BLOB is zstd-compressed (starts with zstd frame magic),
+	// decompress it.  Entries below DefaultCompressionThreshold are
+	// stored raw — the wire format is already compact and small entries
+	// don't benefit from compression.
+	var wire []byte
+	if isZstdCompressed(msgWire) {
+		// Use a pooled buffer as the decompression destination to reduce
+		// per-cache-hit heap allocations (P3).  The buffer is returned to
+		// the pool after entry fields are extracted and msg.Data is cleared.
+		dbuf, ok := decompressBufPool.Get().(*[]byte)
+		if !ok {
+			b := make([]byte, 0, decompressBufCap)
+			dbuf = &b
+		}
+		var err error
+		wire, err = zdnsutil.DecompressTo(msgWire, *dbuf)
+		if err != nil {
+			clear(*dbuf)
+			decompressBufPool.Put(dbuf)
+			log.Warnf("CACHE: decompress wire for entry %d (name=%s type=%d): %v", id, qname, qtype, err)
+			return nil, false, false
+		}
+		defer func() { clear(*dbuf); decompressBufPool.Put(dbuf) }()
+	} else {
+		wire = msgWire
 	}
-	wire, err := zdnsutil.DecompressTo(msgWire, *dbuf)
-	if err != nil {
-		clear(*dbuf)
-		decompressBufPool.Put(dbuf)
-		log.Warnf("CACHE: decompress wire for entry %d (name=%s type=%d): %v", id, qname, qtype, err)
-		return nil, false, false
-	}
-	defer func() { clear(*dbuf); decompressBufPool.Put(dbuf) }()
 
 	msg := pool.DefaultMessage.Get()
 	// Safety: msg.Data aliases the decompression buffer.  The LIFO defer
@@ -351,7 +369,16 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		pool.DefaultMessage.Put(msg)
 		return 0
 	}
-	msgWire := zdnsutil.Compress(msg.Data)
+	// Compress only entries above the threshold — small entries
+	// (simple A/AAAA) don't compress well and the per-hit decompression
+	// cost outweighs the negligible storage savings.
+	var msgWire []byte
+	if len(msg.Data) > config.DefaultCompressionThreshold {
+		msgWire = zdnsutil.Compress(msg.Data)
+	} else {
+		msgWire = make([]byte, len(msg.Data))
+		copy(msgWire, msg.Data)
+	}
 	pool.DefaultMessage.Put(msg)
 
 	// ── Transaction ──────────────────────────────────────────────────────

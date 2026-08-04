@@ -50,6 +50,15 @@ const (
 	// DefaultMaxCacheableTTL caps the TTL of incoming records per RFC 8767 §4.
 	DefaultMaxCacheableTTL = 7 * 86400 // RFC 8767 §4: SHOULD cap at 604800 seconds (7 days)
 
+	// DefaultCompressionThreshold is the minimum wire-format size in bytes
+	// below which zstd compression is skipped.  Empirical benchmark data:
+	//   < 100B: compression often expands (129% @ 45B) — pure overhead
+	//   100-200B: marginal savings (73% @ 93B) — not worth 1.2µs decompress
+	//   > 200B: good savings (42% @ 206B) — decompress cost amortised
+	// 256 is chosen as a round number that excludes all simple A/AAAA
+	// responses while including DNSSEC-signed and large answer sets.
+	DefaultCompressionThreshold = 256
+
 	DefaultPrefetchThresholdPercent  = 10
 	DefaultServeExpiredClientTimeout = 600 * time.Millisecond // short client wait before serving stale (RFC 8767 stale-answer-ttl concept)
 	DefaultPrefetchThrottleInterval  = 3 * time.Second
