@@ -408,3 +408,40 @@ func TestVerdict_String(t *testing.T) {
 }
 
 // ── Domain normalization round-trip ────────────────────────────────────────────
+
+// ── Delegation proof records (RRSIG/NSEC) at TLD/root ───────────────────────
+
+// TestClassifyTLD_RRSIGProofExempt: a TLD server that also hosts the child
+// zone answers child queries with an authoritative NS RRset plus its RRSIG —
+// the RRSIG (type 46) must not be judged poisoned (real case: CNNIC serves
+// both cn and com.cn).
+func TestClassifyTLD_RRSIGProofExempt(t *testing.T) {
+	d := newDetector()
+	if v := d.classifyTLD("cn", "com.cn", dns.TypeRRSIG); v != VerdictClean {
+		t.Fatalf("TLD returning RRSIG for child zone should be clean, got %s", v)
+	}
+	if v := d.classifyTLD("cn", "com.cn", dns.TypeNS); v != VerdictClean {
+		t.Fatalf("TLD returning NS for child zone should be clean, got %s", v)
+	}
+	if v := d.classifyTLD("cn", "com.cn", dns.TypeNSEC); v != VerdictClean {
+		t.Fatalf("TLD returning NSEC proof for child zone should be clean, got %s", v)
+	}
+	// Data records for child names stay the injection signature.
+	if v := d.classifyTLD("cn", "com.cn", dns.TypeA); v != VerdictPoisoned {
+		t.Fatalf("TLD returning A for child zone should be poisoned, got %s", v)
+	}
+}
+
+func TestClassifyRoot_RRSIGProofExempt(t *testing.T) {
+	d := newDetector()
+	if v := d.classifyRoot("com", dns.TypeRRSIG); v != VerdictClean {
+		t.Fatalf("root returning RRSIG for TLD should be clean, got %s", v)
+	}
+	if v := d.classifyRoot("com", dns.TypeNSEC); v != VerdictClean {
+		t.Fatalf("root returning NSEC proof for TLD should be clean, got %s", v)
+	}
+	// A/AAAA data for a TLD name from the root is still an injection.
+	if v := d.classifyRoot("com", dns.TypeA); v != VerdictPoisoned {
+		t.Fatalf("root returning A for TLD should be poisoned, got %s", v)
+	}
+}

@@ -1137,7 +1137,7 @@ func TestSetReplacesExistingKeyWithoutCounterInflation(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	a1 := &dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("93.184.216.34")}}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false,
 			[]dns.RR{a1}, nil, nil, true)
 	}

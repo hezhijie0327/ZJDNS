@@ -144,14 +144,28 @@ func (d *Detector) classify(zone, name string, rrtype uint16) Verdict {
 // responses only contain:
 //   - Any record type for root-servers.net (SOA, RRSIG, NSEC, A, AAAA, etc.)
 //   - NS/DS records for TLDs (e.g. "com", "cn")
+//
+// delegationOrProof reports whether rrtype is a delegation or DNSSEC proof
+// record — the only record types a parent-zone server legitimately returns
+// for a child name (NS/DS delegations plus their RRSIG signatures and
+// NSEC/NSEC3 denial-of-existence proofs, RFC 4035 §3.1.1).
+func delegationOrProof(rrtype uint16) bool {
+	switch rrtype {
+	case dns.TypeNS, dns.TypeDS, dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNSEC3:
+		return true
+	}
+	return false
+}
+
 func (d *Detector) classifyRoot(name string, rrtype uint16) Verdict {
 	// Glue records for root server hostnames.
 	if d.isRootServerDomain(name) {
 		return VerdictClean
 	}
 
-	// NS/DS records for TLDs are legitimate root delegations.
-	if (rrtype == dns.TypeNS || rrtype == dns.TypeDS) && d.isTLD(name) {
+	// NS/DS records for TLDs are legitimate root delegations; their RRSIG
+	// and NSEC/NSEC3 proofs accompany them and must be exempted too.
+	if delegationOrProof(rrtype) && d.isTLD(name) {
 		return VerdictClean
 	}
 
@@ -170,7 +184,13 @@ func (d *Detector) classifyRoot(name string, rrtype uint16) Verdict {
 // Poisoned and the DNSSEC chain broke with SERVFAIL.
 func (d *Detector) classifyTLD(zone, name string, rrtype uint16) Verdict {
 	if name != zone {
-		if (rrtype == dns.TypeDS || rrtype == dns.TypeNS) && dnsutil.IsBelow(dnsutil.Fqdn(zone), dnsutil.Fqdn(name)) {
+		// Child-zone delegation and DNSSEC proof records (NS/DS/RRSIG/
+		// NSEC/NSEC3) are legitimate from a TLD server — it hosts the
+		// delegation, and may host the child zone itself (e.g. CNNIC
+		// serves both cn and com.cn, answering com.cn NS queries with an
+		// authoritative NS RRset + RRSIG). Data records (A/AAAA/CNAME/…)
+		// for child names remain the GFW injection signature → Poisoned.
+		if delegationOrProof(rrtype) && dnsutil.IsBelow(dnsutil.Fqdn(zone), dnsutil.Fqdn(name)) {
 			return VerdictClean
 		}
 		return VerdictPoisoned
