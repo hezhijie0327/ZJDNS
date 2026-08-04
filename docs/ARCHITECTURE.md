@@ -4,7 +4,7 @@ Detailed technical reference for ZJDNS. For working guidelines, see [CLAUDE.md](
 
 ## DB Schema
 
-The unified database (`database/`) contains nine SQLite tables (`github.com/ncruces/go-sqlite3`, WAL mode, mmap, zstd compression):
+The unified database (`database/`) contains nine SQLite tables (`modernc.org/sqlite`, WAL mode, mmap, zstd compression):
 
 ```sql
 -- Project version (singleton row). Set at build time via database.Version.

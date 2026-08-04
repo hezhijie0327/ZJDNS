@@ -16,7 +16,7 @@ import (
 	"zjdns/config"
 	"zjdns/internal/log"
 
-	_ "github.com/ncruces/go-sqlite3/driver"
+	_ "modernc.org/sqlite"
 )
 
 // Options configures SQLite PRAGMA tunables.
@@ -88,7 +88,7 @@ func Open(path string, maxEntries int, opts Options) (*DB, error) {
 		dsn = "file:" + path + "?" + dsnParams
 	}
 
-	sqldb, err := sql.Open("sqlite3", dsn)
+	sqldb, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite open: %w", err)
 	}

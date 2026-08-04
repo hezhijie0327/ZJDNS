@@ -15,11 +15,11 @@ RUN \
     && go get -u gitee.com/Trisia/gotlcp@main \
     && go get -u github.com/cloudflare/circl@main \
     && go get -u github.com/klauspost/compress@master \
-    && go get -u github.com/ncruces/go-sqlite3@main \
     && go get -u github.com/pion/dtls/v3@main \
     && go get -u github.com/quic-go/quic-go@master \
     && go get -u gitlab.com/go-extension/http@master \
     && go get -u gitlab.com/go-extension/tls@master \
+    && go get -u modernc.org/sqlite@master \
     && go mod tidy \
     && BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S_UTC') \
     && COMMIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") \
