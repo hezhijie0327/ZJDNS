@@ -237,7 +237,11 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) [
 // entry is expired or within the prefetch window.
 func lookupCachedRRs(store cache.Store, name string, qtype uint16) (addrs []string, needsRefresh bool) {
 	entry, found, expired := store.Get(name, qtype, dns.ClassINET, nil, false)
-	if !found || entry == nil || len(entry.Answer) == 0 {
+	if !found || entry == nil {
+		return nil, false
+	}
+	_ = entry.Unpack()
+	if len(entry.Answer) == 0 {
 		return nil, false
 	}
 	if expired && !entry.CanServeExpired(config.DefaultStaleMaxAge) {

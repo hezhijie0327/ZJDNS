@@ -54,7 +54,7 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// upstream query per AAAA miss.
 		var aqr *resolver.QueryResult
 		if m.store != nil {
-			if entry, found, _ := m.store.Get(qname, dns.TypeA, qclass, ecsOpt, dnssecOK); found && len(entry.Answer) > 0 {
+			if entry, found, _ := m.store.Get(qname, dns.TypeA, qclass, ecsOpt, dnssecOK); found && entry.Unpack() == nil && len(entry.Answer) > 0 {
 				aqr = &resolver.QueryResult{
 					Answer: entry.Answer, Authority: entry.Authority, Additional: entry.Additional,
 					Validated: entry.Validated,

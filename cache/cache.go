@@ -2,6 +2,7 @@
 package cache
 
 import (
+	"encoding/binary"
 	"sync"
 	"zjdns/config"
 	"zjdns/internal/ttl"
@@ -60,6 +61,9 @@ type Store interface {
 }
 
 // Entry holds a cached DNS response with timing metadata.
+// When ResponseWire is non-nil the entry was stored in pre-packed format:
+// the caller should adjust TTLs via TTLOffsets and serve directly, skipping
+// Unpack+Pack.  Answer/Authority/Additional are nil in this case.
 type Entry struct {
 	ID         int64    `json:"id"`
 	Answer     []dns.RR `json:"answer"`
@@ -68,7 +72,18 @@ type Entry struct {
 	Timestamp  int64    `json:"timestamp"`
 	TTL        int      `json:"ttl"`
 	Validated  bool     `json:"validated"`
+
+	// Pre-packed response (format 0x02): complete DNS response message as
+	// wire format, with TTLs at their original values.  TTLOffsets contains
+	// the byte offsets of each TTL field within ResponseWire.
+	ResponseWire []byte
+	TTLOffsets   []uint16
 }
+
+// Unpack populates Answer, Authority and Additional by unpacking the
+// pre-packed ResponseWire.  Callers that need the parsed RRs (tests,
+// latency sorting) call this once; the cache-hit hot path uses
+// ResponseWire directly and skips Unpack entirely.
 
 // LookupResult holds a PTR reverse-lookup result.
 type LookupResult struct {
@@ -80,6 +95,77 @@ type LookupResult struct {
 // Safe because RecordRequest copies by value into the async writer and only
 // reads fields synchronously — callers release immediately after the call.
 var requestRecordPool = sync.Pool{New: func() any { return new(RequestRecord) }}
+
+// Unpack populates Answer, Authority and Additional by unpacking the
+// pre-packed ResponseWire.  Callers that need the parsed RRs (tests,
+// latency sorting) call this once; the cache-hit hot path uses
+// ResponseWire directly via buildFromPrePacked and skips Unpack entirely.
+func (e *Entry) Unpack() error {
+	if e.ResponseWire == nil || len(e.Answer) > 0 {
+		return nil
+	}
+	msg := new(dns.Msg)
+	msg.Data = e.ResponseWire
+	if err := msg.Unpack(); err != nil {
+		return err
+	}
+	e.Answer = msg.Answer
+	e.Authority = msg.Ns
+	e.Additional = msg.Extra
+	return nil
+}
+
+// rebuildResponseWire repacks Answer/Authority/Additional into ResponseWire
+// and re-scans TTL offsets.  Called after latency-sorting Answer so the
+// pre-packed wire reflects the new order.
+func (e *Entry) rebuildResponseWire() {
+	msg := new(dns.Msg)
+	msg.Data = e.ResponseWire
+	_ = msg.Unpack() // extract original header + question
+	msg.Answer = e.Answer
+	msg.Ns = e.Authority
+	msg.Extra = e.Additional
+	if err := msg.Pack(); err != nil {
+		return
+	}
+
+	// Skip 12-byte header + question section to find the first RR.
+	pos := 12
+	for pos < len(msg.Data) && msg.Data[pos] != 0 {
+		pos++
+	}
+	questionEnd := pos + 5 // NUL + QTYPE(2) + QCLASS(2)
+
+	// Scan TTL offsets in the answer, authority and additional sections.
+	offsets := make([]uint16, 0, 8)
+	pos = questionEnd
+	for pos+10 <= len(msg.Data) {
+		// Skip owner name.
+		off := pos
+		for off < len(msg.Data) {
+			l := msg.Data[off]
+			if l == 0 {
+				off++
+				break
+			}
+			if l&0xC0 == 0xC0 {
+				off += 2
+				break
+			}
+			off += int(l) + 1
+		}
+		if off+10 > len(msg.Data) {
+			break
+		}
+		ttlOff := off + 4
+		offsets = append(offsets, uint16(ttlOff)) //nolint:gosec // G115: wire format offset bounded by message size
+		rdLen := int(binary.BigEndian.Uint16(msg.Data[off+8:]))
+		pos = off + 10 + rdLen
+	}
+
+	e.ResponseWire = msg.Data
+	e.TTLOffsets = offsets
+}
 
 // AcquireRequestRecord returns a zeroed RequestRecord from the pool.
 func AcquireRequestRecord() *RequestRecord { return requestRecordPool.Get().(*RequestRecord) }

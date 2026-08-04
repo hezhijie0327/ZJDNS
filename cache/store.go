@@ -1,12 +1,13 @@
 package cache
 
 import (
+	"bytes"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"zjdns/config"
@@ -44,6 +45,10 @@ const (
 	defaultStaleMaxAge  = int64(config.DefaultStaleMaxAge)
 	maxLatencyLookupIPs = 64 // cap IN-clause IPs to bound SQL compilation overhead
 	decompressBufCap    = 4096
+
+	// cacheFormatPrePacked is the BLOB format marker for pre-packed response
+	// wire with TTL offset table (format 0x02).
+	cacheFormatPrePacked = 0x02
 )
 
 // decompressBufPool reuses byte slices for zstd decompression on the
@@ -78,6 +83,46 @@ var ecsCandidatesPool = sync.Pool{New: func() any { c := make([]ecsCandidate, 0,
 func isZstdCompressed(data []byte) bool {
 	return len(data) >= 4 &&
 		data[0] == 0x28 && data[1] == 0xB5 && data[2] == 0x2F && data[3] == 0xFD
+}
+
+// scanTTLOffsets walks the answer, authority and additional sections of a
+// packed DNS message and returns the byte offset of every TTL field.  The
+// question section (bytes 12..questionEnd) is skipped.
+func scanTTLOffsets(wire []byte, questionEnd int) []uint16 {
+	offsets := make([]uint16, 0, 8)
+	pos := questionEnd
+	for pos+10 <= len(wire) {
+		// Skip the owner name (may include compression pointers).
+		off, ok := dnsSkipName(wire, pos)
+		if !ok || off+10 > len(wire) {
+			break
+		}
+		ttlOff := off + 4                         // TYPE(2) + CLASS(2) = 4 bytes after name
+		offsets = append(offsets, uint16(ttlOff)) //nolint:gosec // G115: wire format offset bounded by message size
+		rdLen := int(binary.BigEndian.Uint16(wire[off+8:]))
+		pos = off + 10 + rdLen // name + TYPE/CLASS/TTL/RDLENGTH(10) + RDATA
+	}
+	return offsets
+}
+
+// dnsSkipName returns the offset after the domain name at pos in wire.
+// Handles both label sequences and compression pointers (RFC 1035 §4.1.4).
+func dnsSkipName(wire []byte, pos int) (int, bool) {
+	for {
+		if pos >= len(wire) {
+			return 0, false
+		}
+		l := wire[pos]
+		if l == 0 {
+			return pos + 1, true
+		}
+		if l&0xC0 == 0xC0 {
+			// Compression pointer — skip 2 bytes, name ends here.
+			return pos + 2, true
+		}
+		// Label: l bytes of label data.
+		pos += int(l) + 1
+	}
 }
 
 // New creates a cache backed by the given database. The caller is responsible
@@ -147,22 +192,25 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		return nil, false, false
 	}
 
-	// If the BLOB is zstd-compressed (starts with zstd frame magic),
-	// decompress it.  Entries below DefaultCompressionThreshold are
-	// stored raw — the wire format is already compact and small entries
-	// don't benefit from compression.
-	var wire []byte
-	if isZstdCompressed(msgWire) {
-		// Use a pooled buffer as the decompression destination to reduce
-		// per-cache-hit heap allocations (P3).  The buffer is returned to
-		// the pool after entry fields are extracted and msg.Data is cleared.
+	// Pre-packed format (0x02): TTL offset table + complete DNS response
+	// wire.  TTLs are adjusted in-place by buildFromPrePacked before serving.
+	numOffsets := int(binary.BigEndian.Uint16(msgWire[1:3]))
+	offsets := make([]uint16, numOffsets)
+	wireStart := 3 + numOffsets*2
+	for i := range numOffsets {
+		offsets[i] = binary.BigEndian.Uint16(msgWire[3+i*2:])
+	}
+	wire := msgWire[wireStart:]
+
+	// Threshold decompression.
+	if isZstdCompressed(wire) {
 		dbuf, ok := decompressBufPool.Get().(*[]byte)
 		if !ok {
 			b := make([]byte, 0, decompressBufCap)
 			dbuf = &b
 		}
 		var err error
-		wire, err = zdnsutil.DecompressTo(msgWire, *dbuf)
+		wire, err = zdnsutil.DecompressTo(wire, *dbuf)
 		if err != nil {
 			clear(*dbuf)
 			decompressBufPool.Put(dbuf)
@@ -170,47 +218,32 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 			return nil, false, false
 		}
 		defer func() { clear(*dbuf); decompressBufPool.Put(dbuf) }()
-	} else {
-		wire = msgWire
 	}
 
-	msg := pool.DefaultMessage.Get()
-	// Safety: msg.Data aliases the decompression buffer.  The LIFO defer
-	// chain guarantees msg.Put (which zeroes Data) runs before dbuf is
-	// returned to decompressBufPool.  Do not insert new logic between
-	// the msg.Get and this line without understanding the ordering.
-	msg.Data = wire
-	if err := msg.Unpack(); err != nil {
-		// Deferred Put (line below) returns msg to the pool — do not
-		// double-Put here.
-		log.Warnf("CACHE: unpack wire for entry %d (name=%s type=%d): %v", id, qname, qtype, err)
-		return nil, false, false
-	}
-	defer pool.DefaultMessage.Put(msg)
-
-	// Detach RR name strings from msg.Data (which aliases the decompress
-	// buffer) so the returned Entry is self-contained.  This enables the
-	// ProcessRecords fast path when elapsed==0 — no RR clones needed when
-	// TTL is unchanged.
-	detachRRNames(msg.Answer)
-	detachRRNames(msg.Ns)
-	detachRRNames(msg.Extra)
-
+	// Copy the wire into an owned buffer — wire may alias the
+	// decompression pool buffer, which is cleared when Get() returns.
+	owned := make([]byte, len(wire))
+	copy(owned, wire)
 	entry := &Entry{
-		ID:         id,
-		Answer:     msg.Answer,
-		Authority:  msg.Ns,
-		Additional: msg.Extra,
-		Timestamp:  ts,
-		TTL:        entryTTL,
-		Validated:  validated != 0,
+		ID:           id,
+		Timestamp:    ts,
+		TTL:          entryTTL,
+		Validated:    validated != 0,
+		ResponseWire: owned,
+		TTLOffsets:   offsets,
 	}
-
-	// Sort A/AAAA answer records by latency from ip_latency so the
-	// fastest IP is returned first. Latency is per-IP — all domains
-	// sharing the same IP reuse the same row.
-	s.sortAnswerByLatency(entry)
-
+	// When latency data is available, sort A/AAAA records and
+	// rebuild ResponseWire so the pre-packed response serves IPs
+	// in latency order.  This is the only path that mutates
+	// ResponseWire after Set() — latency data may arrive after the
+	// entry was stored.
+	if s.hasLatencyData.Load() {
+		_ = entry.Unpack()
+		s.sortAnswerByLatency(entry)
+		if len(entry.Answer) > 0 {
+			entry.rebuildResponseWire()
+		}
+	}
 	isExpired := ttl.IsExpired(ts, entryTTL)
 	return entry, true, isExpired
 }
@@ -356,30 +389,63 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	answer = zdnsutil.CloneRRs(answer)
 	authority = zdnsutil.CloneRRs(authority)
 
-	// Pack wire format and compress.
+	// Build a complete DNS response message and pack it so the
+	// cache-hit path can serve the wire directly (skipping Unpack+Pack).
+	// The question section uses the canonical qname and the original
+	// qtype/qclass — the response echoes them exactly per RFC 1035 §4.1.1.
+	queryMsg := new(dns.Msg)
+	dnsutil.SetQuestion(queryMsg, qname, qtype)
+	// Pack the query just to get the wire-format question section length.
+	if err := queryMsg.Pack(); err != nil {
+		log.Debugf("CACHE: skipping cache write for %s (type=%d): query pack failed: %v", qname, qtype, err)
+		return 0
+	}
+
+	// Sort A/AAAA records by latency before packing — the pre-packed
+	// wire preserves this order and serves it directly without re-sorting.
+	if s.hasLatencyData.Load() && len(answer) > 1 {
+		tmp := &Entry{Answer: answer}
+		s.sortAnswerByLatency(tmp)
+		answer = tmp.Answer
+	}
+
 	msg := pool.DefaultMessage.Get()
+	dnsutil.SetReply(msg, queryMsg)
 	msg.Answer = answer
 	msg.Ns = authority
 	msg.Extra = additional
 	if err := msg.Pack(); err != nil {
-		// Uncacheable response (e.g. oversized): skip the insert entirely —
-		// a NULL msg_wire row can never be served (Get treats it as a miss)
-		// yet occupies a slot and would inflate the entry counter.
 		log.Debugf("CACHE: skipping cache write for %s (type=%d): pack failed: %v", qname, qtype, err)
 		pool.DefaultMessage.Put(msg)
 		return 0
 	}
-	// Compress only entries above the threshold — small entries
-	// (simple A/AAAA) don't compress well and the per-hit decompression
-	// cost outweighs the negligible storage savings.
-	var msgWire []byte
-	if len(msg.Data) > config.DefaultCompressionThreshold {
-		msgWire = zdnsutil.Compress(msg.Data)
-	} else {
-		msgWire = make([]byte, len(msg.Data))
-		copy(msgWire, msg.Data)
+
+	// Scan TTL offsets in the packed response, skipping the 12-byte
+	// header plus the question section.  queryMsg.Data = query_header(12)
+	// + question_wire, so len(queryMsg.Data) = response_header(12) +
+	// question_wire — the exact offset where the answer section begins.
+	ttlOffsets := scanTTLOffsets(msg.Data, len(queryMsg.Data))
+
+	// Build the pre-packed BLOB:
+	//   [0x02] [2:num_offsets] [2 each:offset] [wire]
+	// The wire portion may be zstd-compressed if above threshold.
+	wire := msg.Data
+	if len(wire) > config.DefaultCompressionThreshold {
+		wire = zdnsutil.Compress(wire)
 	}
 	pool.DefaultMessage.Put(msg)
+
+	var buf bytes.Buffer
+	buf.WriteByte(cacheFormatPrePacked)
+	var lenBuf [2]byte
+	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(ttlOffsets))) //nolint:gosec // G115: offset count bounded by RR count
+	buf.Write(lenBuf[:])
+	for _, off := range ttlOffsets {
+		binary.BigEndian.PutUint16(lenBuf[:], off)
+		buf.Write(lenBuf[:])
+	}
+	buf.Write(wire)
+	msgWire := buf.Bytes()
 
 	// ── Transaction ──────────────────────────────────────────────────────
 	// SQLite WAL mode serializes writers, so no application-level mutex is
@@ -672,15 +738,6 @@ func releaseECSCandidates(candidates []ecsCandidate) {
 	// practice) is dropped rather than grown in place.
 	if cap(candidates) <= 5 {
 		ecsCandidatesPool.Put(&candidates)
-	}
-}
-
-// detachRRNames copies the Header().Name of each RR to a new string so the
-// name no longer aliases the decompression buffer.  After detachment the RRs
-// are self-contained and safe to use after the buffer is returned to the pool.
-func detachRRNames(rrs []dns.RR) {
-	for _, rr := range rrs {
-		rr.Header().Name = strings.Clone(rr.Header().Name)
 	}
 }
 

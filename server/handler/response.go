@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/binary"
 	"zjdns/cache"
 	"zjdns/internal/pool"
 	"zjdns/internal/ttl"
@@ -34,19 +35,39 @@ func BuildResponseMsg(req *dns.Msg) *dns.Msg {
 // TTL deduction for fresh entries or cyclical stale-TTL for expired entries.
 // When isExpired is true, the caller should set qctx.EDE after calling.
 func BuildCacheEntryResponse(req *dns.Msg, entry *cache.Entry, dnssecOK, isExpired bool) *dns.Msg {
-	msg := BuildResponseMsg(req)
+	return buildFromPrePacked(entry, isExpired)
+}
 
+// buildFromPrePacked adjusts TTLs in the pre-packed response wire and returns
+// a dns.Msg with Data already populated — bridge.go skips packSafe() for such
+// messages and serves the wire directly.
+func buildFromPrePacked(entry *cache.Entry, isExpired bool) *dns.Msg {
+	// Copy the wire so the cached entry is not mutated.
+	wire := make([]byte, len(entry.ResponseWire))
+	copy(wire, entry.ResponseWire)
+
+	// Apply TTL deduction.
 	if isExpired {
-		responseTTL := entry.RemainingTTL()
-		msg.Answer = cache.ProcessRecords(entry.Answer, int64(responseTTL), false, dnssecOK)
-		msg.Ns = cache.ProcessRecords(entry.Authority, int64(responseTTL), false, dnssecOK)
-		msg.Extra = cache.ProcessRecords(entry.Additional, int64(responseTTL), false, dnssecOK)
+		staleTTL := entry.RemainingTTL()
+		for _, off := range entry.TTLOffsets {
+			binary.BigEndian.PutUint32(wire[off:], staleTTL)
+		}
 	} else {
 		elapsed := ttl.Elapsed(entry.Timestamp)
-		msg.Answer = cache.ProcessRecords(entry.Answer, elapsed, true, dnssecOK)
-		msg.Ns = cache.ProcessRecords(entry.Authority, elapsed, true, dnssecOK)
-		msg.Extra = cache.ProcessRecords(entry.Additional, elapsed, true, dnssecOK)
+		if elapsed > 0 {
+			for _, off := range entry.TTLOffsets {
+				oldTTL := int64(binary.BigEndian.Uint32(wire[off:]))
+				newTTL := uint32(max(oldTTL-elapsed, 0)) //nolint:gosec // G115: DNS TTL subtraction, protocol-bounded uint32
+				binary.BigEndian.PutUint32(wire[off:], newTTL)
+			}
+		}
 	}
+
+	msg := pool.DefaultMessage.Get()
+	msg.Data = wire
+	msg.Response = true
+	msg.Authoritative = false
+	msg.RecursionAvailable = true
 
 	if entry.Validated {
 		msg.AuthenticatedData = true

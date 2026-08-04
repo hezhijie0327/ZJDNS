@@ -30,6 +30,22 @@ func (m *Response) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return err
 		}
 
+		// Pre-packed response: unpack the pre-built wire so the normal
+		// EDNS + Pack pipeline can continue.  TTLs were already adjusted
+		// in-place by buildFromPrePacked.  Clear Data after Unpack so
+		// bridge.go calls Pack() with the EDNS options applied below.
+		// Overwrite the message ID — the pre-packed wire carries the
+		// ID from Set() time; the response must echo the client's ID.
+		if qctx.Res.Data != nil {
+			if err := qctx.Res.Unpack(); err != nil {
+				log.Debugf("RESPONSE: unpack pre-packed response: %v", err)
+				qctx.Res.Rcode = dns.RcodeServerFailure
+				return err
+			}
+			qctx.Res.ID = qctx.Req.ID
+			qctx.Res.Data = nil
+		}
+
 		m.finalizeResponse(qctx)
 		return err
 	})

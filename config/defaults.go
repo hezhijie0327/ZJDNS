@@ -34,8 +34,8 @@ const (
 
 const (
 	DefaultMaxCacheEntries   = 10000
-	DefaultCacheMMapSizeMB   = 64
-	DefaultCacheCacheSizeMB  = 32
+	DefaultCacheMMapSizeMB   = 16
+	DefaultCacheCacheSizeMB  = 8
 	DefaultCacheMaxOpenConns = 6 // SQLite WAL: single writer, readers served concurrently
 	DefaultCacheMaxIdleConns = 4
 

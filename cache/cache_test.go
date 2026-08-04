@@ -43,11 +43,12 @@ func TestSet_Get_RoundTrip(t *testing.T) {
 	if expired {
 		t.Error("entry should not be expired immediately")
 	}
-	if len(entry.Answer) != 1 {
-		t.Fatalf("answer count = %d, want 1", len(entry.Answer))
+	// Pre-packed format: ResponseWire is set, Answer/Authority/Additional are nil.
+	if entry.ResponseWire == nil {
+		t.Fatal("ResponseWire is nil — expected pre-packed response wire")
 	}
-	if dns.RRToType(entry.Answer[0]) != dns.TypeA {
-		t.Errorf("record type = %d, want %d", dns.RRToType(entry.Answer[0]), dns.TypeA)
+	if len(entry.TTLOffsets) < 1 {
+		t.Fatalf("TTLOffsets = %d, want at least 1", len(entry.TTLOffsets))
 	}
 }
 
@@ -128,6 +129,9 @@ func TestGet_ECSFallback(t *testing.T) {
 	// Fallback from /24 to /16 within same range
 	ecs24 := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("1.2.3.0").AsSlice()}
 	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs24, false)
+	if err := entry.Unpack(); err != nil {
+		t.Fatal(err)
+	}
 	if !found {
 		t.Error("should fallback from /24 to /16")
 	}
@@ -168,6 +172,9 @@ func TestGet_ECSFallback_ExactPreferred(t *testing.T) {
 
 	// Query with /24 should hit exact entry, not the /16 fallback
 	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs24, false)
+	if err := entry.Unpack(); err != nil {
+		t.Fatal(err)
+	}
 	if !found {
 		t.Fatal("should find entry")
 	}
@@ -178,6 +185,9 @@ func TestGet_ECSFallback_ExactPreferred(t *testing.T) {
 	// Query with different /24 in same /16 should fallback to /16
 	ecs24b := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("1.2.4.0").AsSlice()}
 	entry, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs24b, false)
+	if err := entry.Unpack(); err != nil {
+		t.Fatal(err)
+	}
 	if !found {
 		t.Fatal("should fallback to /16")
 	}
@@ -417,6 +427,9 @@ func TestSet_Get_NSAddrTXT(t *testing.T) {
 	mc.Set(".", dns.TypeNone, dns.ClassINET, nil, false, []dns.RR{txt}, nil, nil, false)
 
 	entry, found, _ := mc.Get(".", dns.TypeNone, dns.ClassINET, nil, false)
+	if err := entry.Unpack(); err != nil {
+		t.Fatal(err)
+	}
 	if !found {
 		t.Fatal("NS addr entry not found")
 	}
@@ -604,6 +617,9 @@ func TestSet_Get_MultipleRecords(t *testing.T) {
 		[]dns.RR{a1, a2}, []dns.RR{soa}, nil, true)
 
 	entry, found, _ := mc.Get("multi.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if err := entry.Unpack(); err != nil {
+		t.Fatal(err)
+	}
 	if !found {
 		t.Fatal("entry not found")
 	}
@@ -785,6 +801,9 @@ func TestE2E_FullLifecycle(t *testing.T) {
 
 	// ── Phase 2: Get + verify wire-format round-trip ────────────────────────
 	entry, found, expired := mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if err := entry.Unpack(); err != nil {
+		t.Fatal(err)
+	}
 	if !found || expired {
 		t.Fatalf("www.example.com A: found=%v expired=%v", found, expired)
 	}
@@ -812,6 +831,9 @@ func TestE2E_FullLifecycle(t *testing.T) {
 
 	// ── Phase 3: Negative cache + NXDOMAIN ──────────────────────────────────
 	entry, found, _ = mc.Get("beta.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if err := entry.Unpack(); err != nil {
+		t.Fatal(err)
+	}
 	if !found {
 		t.Fatal("negative cache entry not found")
 	}
@@ -926,6 +948,9 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		[]dns.RR{aNew}, nil, nil, false)
 
 	entry, found, _ = mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if err := entry.Unpack(); err != nil {
+		t.Fatal(err)
+	}
 	if !found {
 		t.Fatal("overwritten entry not found")
 	}
@@ -1006,6 +1031,9 @@ func TestE2E_LatencyOrdering(t *testing.T) {
 
 	// Before latency data: Get() returns original order.
 	entry, found, _ := mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if err := entry.Unpack(); err != nil {
+		t.Fatal(err)
+	}
 	if !found {
 		t.Fatal("entry not found")
 	}
@@ -1022,8 +1050,15 @@ func TestE2E_LatencyOrdering(t *testing.T) {
 	mc.UpdateLatency("10.0.0.20", 50)
 	mc.UpdateLatency("10.0.0.30", 5)
 
+	// Re-Set to trigger Set-time latency sort with the new data.
+	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false,
+		[]dns.RR{cname, a1, a2, a3}, nil, nil, false)
+
 	// After latency data: Get() should return A records sorted fastest-first.
 	entry, found, _ = mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if err := entry.Unpack(); err != nil {
+		t.Fatal(err)
+	}
 	if !found {
 		t.Fatal("entry not found")
 	}
@@ -1081,6 +1116,9 @@ func TestE2E_CompressionEfficacy(t *testing.T) {
 	for i := range 50 {
 		name := fmt.Sprintf("host-%02d.example.com.", i)
 		entry, found, _ := mc.Get(name, dns.TypeA, dns.ClassINET, nil, false)
+		if err := entry.Unpack(); err != nil {
+			t.Fatal(err)
+		}
 		if !found {
 			t.Errorf("entry %s not found", name)
 			continue

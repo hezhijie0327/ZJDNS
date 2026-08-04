@@ -190,6 +190,7 @@ func (c *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
 	if !found || cachedEntry == nil || expired {
 		return nil
 	}
+	_ = cachedEntry.Unpack()
 
 	records := cache.ProcessRecords(cachedEntry.Answer, 0, false, true)
 	return FindDNSKEYs(records)
