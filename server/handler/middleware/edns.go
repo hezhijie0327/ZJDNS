@@ -25,18 +25,22 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		req := qctx.Req
 
-		// The miekg/dns server only unpacks the question section by default
-		// (MsgOptionUnpackQuestion) for routing.  Force a full unpack so that
-		// EDNS options (ECS, Cookie, etc.) in the OPT record are extracted into
-		// req.Pseudo.  If this second pass fails, the message is malformed —
-		// reject it rather than silently operating on a partially-parsed message.
-		req.Options = 0
-		if err := req.Unpack(); err != nil {
-			log.Debugf("EDNS: full unpack failed: %v", err)
-			msg := handler.BuildResponseMsg(req)
-			msg.Rcode = dns.RcodeFormatError
-			qctx.Res = msg
-			return nil
+		// (MsgOptionUnpackQuestion) for routing.  When the OPT record is
+		// already present in Pseudo (full unpack already done), skip the
+		// redundant second parse to avoid per-query CPU and allocation cost.
+		// Otherwise force a full unpack so that EDNS options (ECS, Cookie,
+		// etc.) are extracted into req.Pseudo.  If this pass fails, the
+		// message is malformed — reject it rather than silently operating on
+		// a partially-parsed message.
+		if len(req.Pseudo) == 0 {
+			req.Options = 0
+			if err := req.Unpack(); err != nil {
+				log.Debugf("EDNS: full unpack failed: %v", err)
+				msg := handler.BuildResponseMsg(req)
+				msg.Rcode = dns.RcodeFormatError
+				qctx.Res = msg
+				return nil
+			}
 		}
 
 		// RFC 6891 §6.1.3 MUST: a request carrying an unsupported EDNS

@@ -132,7 +132,7 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 		IsSecure:  isSecure,
 		Protocol:  protocol,
 		StartTime: log.NowUnixNano(),
-		Qname:     dnsutil.Fqdn(qd.Header().Name),
+		Qname:     dnsutil.Canonical(qd.Header().Name),
 		Qtype:     dns.RRToType(qd),
 	}
 

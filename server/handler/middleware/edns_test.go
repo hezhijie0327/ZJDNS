@@ -91,6 +91,12 @@ func TestEDNSMiddleware_BadVers(t *testing.T) {
 	}
 	req.Data[versionOctet] = 1
 
+	// Simulate the server MsgOptionUnpackQuestion: only the question
+	// section was parsed, so Pseudo is empty.  The middleware must do a
+	// full Unpack to extract the EDNS version from the wire.
+	req.Pseudo = nil
+	req.Version = 0
+
 	qctx := &handler.QueryContext{Req: req, ClientIP: net.IPv4(192, 0, 2, 1)}
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)

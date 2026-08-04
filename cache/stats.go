@@ -12,7 +12,6 @@ import (
 	"zjdns/internal/ttl"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // RecordRequest logs a request outcome asynchronously. The record is queued
@@ -34,17 +33,14 @@ type statsMetric struct {
 //
 // When the async writer is nil (e.g. in tests), RecordRequest falls back to
 // synchronous writes so callers can observe results immediately.
+// RecordRequest logs a request outcome asynchronously. The caller must pass
+// a canonical qname (dnsutil.Canonical) in r.Qname.
 func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 	if r == nil {
 		return
 	}
-	qname := dnsutil.Canonical(r.Qname)
 	if s.asyncWriter != nil {
-		// Send a copy with the canonicalized qname so the caller's
-		// original record is not mutated as a side effect.
-		rec := *r
-		rec.Qname = qname
-		s.asyncWriter.Record(&rec)
+		s.asyncWriter.Record(r)
 		return
 	}
 
@@ -56,7 +52,7 @@ func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 		database.BoolToInt(r.Poisoned), r.ResponseTime)
 	if r.Result != "hit" {
 		_, _ = s.db.StmtQueryLog.Exec(
-			log.NowUnix(), qname, int(r.Qtype), int(r.Qclass),
+			log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass),
 			r.Protocol, r.Result, r.Rcode, r.ResponseTime, r.Server,
 			database.BoolToInt(r.Poisoned), r.DNSSECStatus,
 		)
@@ -366,6 +362,7 @@ func formatStatsLine(metrics ...statsMetric) string {
 // sharing the same IP reuse the same row — latency is measured once, not
 // once per domain. qtype is inferred from the IP address format.
 func (s *SQLiteCache) UpdateLatency(ip string, latencyMS int) {
+	s.hasLatencyData.Store(true)
 	if latencyMS < 0 {
 		latencyMS = 0
 	}

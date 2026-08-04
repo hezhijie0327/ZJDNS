@@ -38,7 +38,7 @@ type CacheLookup struct {
 func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		qd := qctx.Req.Question[0]
-		qname := qd.Header().Name
+		qname := qctx.Qname
 		qtype := dns.RRToType(qd)
 		qclass := qd.Header().Class
 		ecsOpt := qctx.ECSOpt

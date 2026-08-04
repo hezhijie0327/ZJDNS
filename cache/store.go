@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"zjdns/config"
@@ -26,6 +27,11 @@ type SQLiteCache struct {
 	db          *database.DB
 	evictCount  atomic.Int64
 	asyncWriter *AsyncStatsWriter
+
+	// hasLatencyData gates sortAnswerByLatency: when false (no latency data has
+	// ever been written), the per-hit ip_latency query is skipped entirely,
+	// saving a SQLite round trip on the cache-hit hot path.
+	hasLatencyData atomic.Bool
 }
 
 // ecsCandidate is a single ECS cache-key candidate used during fallback lookup.
@@ -95,12 +101,12 @@ func (s *SQLiteCache) Flush() {
 
 // Get retrieves a cached DNS response by decompressing and unpacking the stored
 // wire format. Returns the entry, whether it was found, and whether it's expired.
+// The caller must pass a canonical qname (dnsutil.Canonical).
 func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool) {
 	if s.db.IsClosed() {
 		return nil, false, false
 	}
 
-	qname = dnsutil.Canonical(qname)
 	dnssecInt := database.BoolToInt(dnssecOK)
 	var id int64
 	var ts int64
@@ -164,6 +170,14 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	}
 	defer pool.DefaultMessage.Put(msg)
 
+	// Detach RR name strings from msg.Data (which aliases the decompress
+	// buffer) so the returned Entry is self-contained.  This enables the
+	// ProcessRecords fast path when elapsed==0 — no RR clones needed when
+	// TTL is unchanged.
+	detachRRNames(msg.Answer)
+	detachRRNames(msg.Ns)
+	detachRRNames(msg.Extra)
+
 	entry := &Entry{
 		ID:         id,
 		Answer:     msg.Answer,
@@ -191,7 +205,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 // Uses a single pass over entry.Answer to separate A/AAAA from non-A/AAAA
 // records and collect IPs simultaneously, halving the iteration overhead.
 func (s *SQLiteCache) sortAnswerByLatency(entry *Entry) {
-	if len(entry.Answer) <= 1 {
+	if !s.hasLatencyData.Load() || len(entry.Answer) <= 1 {
 		return
 	}
 
@@ -631,6 +645,15 @@ func releaseECSCandidates(candidates []ecsCandidate) {
 	// practice) is dropped rather than grown in place.
 	if cap(candidates) <= 5 {
 		ecsCandidatesPool.Put(&candidates)
+	}
+}
+
+// detachRRNames copies the Header().Name of each RR to a new string so the
+// name no longer aliases the decompression buffer.  After detachment the RRs
+// are self-contained and safe to use after the buffer is returned to the pool.
+func detachRRNames(rrs []dns.RR) {
+	for _, rr := range rrs {
+		rr.Header().Name = strings.Clone(rr.Header().Name)
 	}
 }
 

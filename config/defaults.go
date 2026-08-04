@@ -36,8 +36,8 @@ const (
 	DefaultMaxCacheEntries   = 10000
 	DefaultCacheMMapSizeMB   = 64
 	DefaultCacheCacheSizeMB  = 32
-	DefaultCacheMaxOpenConns = 4 // SQLite WAL: single writer, readers served concurrently
-	DefaultCacheMaxIdleConns = 2
+	DefaultCacheMaxOpenConns = 6 // SQLite WAL: single writer, readers served concurrently
+	DefaultCacheMaxIdleConns = 4
 
 	DefaultQueryJournalRetention = 3 * 86400     // seconds — auto-cleanup window for query_stats + query_log
 	DefaultPruneInterval         = 1 * time.Hour // interval between PruneQueryJournal runs

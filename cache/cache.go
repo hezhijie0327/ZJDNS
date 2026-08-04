@@ -151,16 +151,15 @@ func ProcessRecords(rrs []dns.RR, value int64, isElapsed, includeDNSSEC bool) []
 	if len(rrs) == 0 {
 		return nil
 	}
-	// Fast path: no TTL adjustment and no DNSSEC filtering — return original
-	// slice to avoid per-query heap allocation (common on cache-miss serve path).
-	if value == 0 && !isElapsed && includeDNSSEC {
-		return rrs
-	}
-	// Fast path: no TTL adjustment, DNSSEC filtering requested but no
-	// DNSSEC records present — return original slice unchanged (common on
-	// cache-hit and non-DNSSEC upstream responses).
-	if value == 0 && !isElapsed && !includeDNSSEC && !hasDNSSECRecords(rrs) {
-		return rrs
+	// Fast path: TTL unchanged (value == 0) — no RR clones needed.
+	// isElapsed is irrelevant when the TTL adjustment is zero.
+	if value == 0 {
+		if includeDNSSEC {
+			return rrs
+		}
+		if !hasDNSSECRecords(rrs) {
+			return rrs
+		}
 	}
 	result := make([]dns.RR, 0, len(rrs))
 	for _, rr := range rrs {
