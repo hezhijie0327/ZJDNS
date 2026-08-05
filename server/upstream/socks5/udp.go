@@ -265,9 +265,9 @@ func (c *socks5PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 	if !ok {
 		return 0, nil, errors.New("socks5 read buffer pool type error")
 	}
-	defer func() { clear(*buf); socks5ReadBufPool.Put(buf) }()
-
 	nr, err := c.conn.Read((*buf))
+	// Zero only the used prefix, not the whole 64KB buffer (R3-L13).
+	defer func() { clear((*buf)[:nr]); socks5ReadBufPool.Put(buf) }()
 	if err != nil {
 		return 0, nil, fmt.Errorf("socks5: read: %w", err)
 	}
@@ -350,9 +350,9 @@ func (c *socks5UDPConn) Read(p []byte) (n int, err error) {
 	if !ok {
 		return 0, errors.New("socks5 read buffer pool type error")
 	}
-	defer func() { clear(*buf); socks5ReadBufPool.Put(buf) }()
-
 	nr, err := c.conn.Read((*buf))
+	// Zero only the used prefix, not the whole 64KB buffer (R3-L13).
+	defer func() { clear((*buf)[:nr]); socks5ReadBufPool.Put(buf) }()
 	if err != nil {
 		return 0, fmt.Errorf("socks5: read: %w", err)
 	}

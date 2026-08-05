@@ -194,6 +194,9 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 			cache.ReleaseRequestRecord(rec)
 			return buildCacheResponse(qctx, entry, isExpired)
 		}
+		// Entry cannot serve stale and is dropped — return the pool-owned
+		// TTL-offset slice (buildCacheResponse would have released it).
+		cache.ReleaseTTLOffsets(entry.TTLOffsets)
 	}
 
 	log.Debugf("RESULT: %s %s | rcode=SERVFAIL, no stale cache available", qname, dns.TypeToString[qtype])

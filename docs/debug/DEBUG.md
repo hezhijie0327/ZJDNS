@@ -678,6 +678,9 @@ dig @127.0.0.1 -p 15353 home.console.aliyun.com A
 dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.stats.clear CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.cache.clear CH TXT +short
+dig @127.0.0.1 -p 15353 zjdns.ptr.clear CH TXT +short
+dig @127.0.0.1 -p 15353 zjdns.latency.clear CH TXT +short
+dig @127.0.0.1 -p 15353 zjdns.querylog.clear CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.dnscrypt.clear CH TXT +short
 
 # 缓存/统计/DNSCrypt 证书窗口持久化在 SQLite (db_path)
@@ -739,13 +742,13 @@ docker exec -it zjdns /zjdns --sql /data/cache.db "
 
 ```bash
 # External upstream (DNSPod, requires skip_tls_verify)
-./zjdns -config <(echo '{"server":{"protocol":{"udp":"53535"}},"upstream":[{"address":"https://sm2.doh.pub/dns-query","protocol":"doh-tlcp","server_name":"sm2.doh.pub","skip_tls_verify":true}]}') &
+./zjdns -config <(echo '{"server":{"protocol":{"udp":"53535"}},"upstream":[{"address":"https://sm2.doh.pub/dns-query","protocol":"http-tlcp","server_name":"sm2.doh.pub","skip_tls_verify":true}]}') &
 
 # Self-hosted TLCP server (self-signed SM2 certs)
 ./zjdns -config <(echo '{"server":{"protocol":{"tlcp":"8530","http_tlcp":{"port":"4430","endpoint":"/dns-query"}},"certificate":{"domain":"tlcp.local","tlcp":{"self_signed":true}}},"upstream":[{"protocol": "recursive"}]}') &
 
 # TLCP HTTPS loopback
-./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454"}},"upstream":[{"address":"https://127.0.0.1:4430/dns-query","protocol":"doh-tlcp","server_name":"ZJDNS TLCP","skip_tls_verify":true}]}') &
+./zjdns -config <(echo '{"server":{"protocol":{"udp":"55454"}},"upstream":[{"address":"https://127.0.0.1:4430/dns-query","protocol":"http-tlcp","server_name":"ZJDNS TLCP","skip_tls_verify":true}]}') &
 dig @127.0.0.1 -p 55454 www.baidu.com A +short
 
 # DTLCP loopback (use [::1] on Windows)

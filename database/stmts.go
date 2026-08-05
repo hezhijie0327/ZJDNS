@@ -25,14 +25,6 @@ func (db *DB) prepareStatements() error {
 	var err error
 
 	// Cache statements.
-	db.StmtEntry, err = db.SQ.Prepare(
-		`SELECT id, timestamp, ttl, validated, msg_wire FROM entries
-		 WHERE qname = ? AND qtype = ? AND qclass = ?
-		 AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?`,
-	)
-	if err != nil {
-		return err
-	}
 	db.StmtEntryExists, err = db.SQ.Prepare(
 		`SELECT EXISTS(SELECT 1 FROM entries
 			WHERE qname = ? AND qtype = ? AND qclass = ? AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?)`,

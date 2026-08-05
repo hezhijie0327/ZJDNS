@@ -2,6 +2,7 @@ package tlcp
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/http"
@@ -72,10 +73,14 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate GET request size before delegation (same as TLS DoH handler).
+	// Validate GET request size before delegation — the base64url parameter
+	// must be DECODED first (base64 expands ~4/3): comparing the encoded
+	// length rejects valid messages between ~49KB and 64KB that the POST
+	// path and the TLS DoH handler accept (mirrors tls/https.go, R3-L18).
 	if r.Method == http.MethodGet {
 		dnsParam := r.URL.Query().Get("dns")
-		if dnsParam == "" || len(dnsParam) > config.DefaultDOHMaxRequestSize {
+		decoded, err := base64.RawURLEncoding.DecodeString(dnsParam)
+		if err != nil || len(decoded) > config.DefaultDOHMaxRequestSize {
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}

@@ -220,6 +220,13 @@ func (c *Client) executeOnce(
 		return nil, false, fmt.Errorf("unpacking dnscrypt response: %w", err)
 	}
 	response.Data = nil
+	// Reject ID mismatches like the other transports (M7 family, R3-L14) —
+	// a misbehaving upstream returning a stale datagram must not be served.
+	if response.ID != msg.ID {
+		pool.DefaultMessage.Put(response)
+		c.deleteState(stampAddr, providerName)
+		return nil, false, fmt.Errorf("dnscrypt: response id mismatch: expected %d, got %d", msg.ID, response.ID)
+	}
 
 	if response.Truncated {
 		state.mu.Lock()

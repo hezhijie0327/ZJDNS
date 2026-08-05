@@ -351,6 +351,9 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 			continue
 		}
 
+		// Sequential Put per loop iteration (defer would accumulate every
+		// query until the connection closes — the per-connection loop is
+		// not a single-request scope, AUDIT-METHODOLOGY §6.1.1).
 		response := s.handler.ServeDNS(query, clientIP, true, config.ProtoDTLCP)
 		pool.DefaultMessage.Put(query)
 		if !s.sendDTLCPResponse(conn, response) {

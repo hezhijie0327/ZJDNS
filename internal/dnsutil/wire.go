@@ -50,3 +50,28 @@ func DecompressTo(data, dst []byte) ([]byte, error) {
 	}
 	return zstdDecoder.DecodeAll(data, dst[:0])
 }
+
+// SkipWireName returns the offset after the domain name at pos in a packed
+// DNS message.  Handles both label sequences and compression pointers
+// (RFC 1035 §4.1.4).  Returns ok=false when the walk runs past the wire end.
+// The single shared implementation — bridge.go truncation and the cache's
+// TTL-offset scans previously each carried their own copy, which diverged
+// (the cache copy stopped at any NUL byte; the bridge copy handled pointers
+// correctly — R3-L24 family).
+func SkipWireName(wire []byte, pos int) (int, bool) {
+	for {
+		if pos >= len(wire) {
+			return 0, false
+		}
+		l := wire[pos]
+		if l == 0 {
+			return pos + 1, true
+		}
+		if l&0xC0 == 0xC0 {
+			// Compression pointer — skip 2 bytes, name ends here.
+			return pos + 2, true
+		}
+		// Label: l bytes of label data.
+		pos += int(l) + 1
+	}
+}

@@ -138,15 +138,18 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				return nil
 			}
 
-			return m.serveExpiredWithRefresh(ctx, qctx, qname, qtype, qclass, ecsOpt, entry)
+			return m.serveExpiredWithRefresh(qctx, qname, qtype, qclass, ecsOpt, entry)
 		}
 
 		// Expired and cannot serve stale — let the resolver handle it.
+		// The entry is dropped without being served: return the pool-owned
+		// TTL-offset slice (buildCacheResponse would have released it).
+		cache.ReleaseTTLOffsets(entry.TTLOffsets)
 		return next.ServeDNS(ctx, qctx)
 	})
 }
 
-func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler.QueryContext, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, entry *cache.Entry) error {
+func (m *CacheLookup) serveExpiredWithRefresh(qctx *handler.QueryContext, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, entry *cache.Entry) error {
 	done := make(chan struct{})
 	var qr *resolver.QueryResult
 	var refreshFinished atomic.Bool
@@ -154,8 +157,9 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 	// TryGo, not Go: this call sits on the per-query path, and Go blocks
 	// when the refresh concurrency limit is saturated — the client would
 	// wait for a refresh slot instead of getting the stale response. On
-	// saturation the done channel stays open and the timer path below
-	// serves stale immediately.
+	// saturation the done channel is closed below so the timer path serves
+	// stale immediately and the background closure (if it later acquires a
+	// slot) does not block on <-done forever.
 	if m.refreshGroup != nil {
 		if !m.refreshGroup.TryGo(func() error {
 			defer zdnsutil.HandlePanic("Cache refresh: foreground refresh")
@@ -178,6 +182,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			return nil
 		}) {
 			m.finishRefresh(qname, qtype, qclass, ecsOpt) // slot saturated
+			close(done)                                   // never closed otherwise — the timer-path closure would block until process exit (M5)
 		}
 	}
 
@@ -190,7 +195,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 			// Refresh completed — rebuild response with fresh data.
 			// qctx.Res already has the stale pooled response; return it to
 			// the pool before replacing it, and clear the stale-answer EDE
-			// (RFC 8914 code 16) — the served response is fresh now, and
+			// (RFC 8914 code 3, Stale Answer) — the served response is fresh now, and
 			// carrying the stale EDE would mislead the client.
 			if stale := qctx.Res; stale != nil {
 				pool.DefaultMessage.Put(stale)
@@ -276,7 +281,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 }
 
 // buildCacheResponse builds a response from a cached entry, marking the
-// stale-answer EDE (RFC 8914 code 16) when serving expired data. Shared by
+// stale-answer EDE (RFC 8914 code 3, Stale Answer) when serving expired data. Shared by
 // CacheLookup and CacheStore.
 func buildCacheResponse(qctx *handler.QueryContext, entry *cache.Entry, isExpired bool) *dns.Msg {
 	msg := handler.BuildCacheEntryResponse(qctx.Req, entry, qctx.ClientRequestedDNSSEC, isExpired)

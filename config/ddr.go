@@ -96,6 +96,9 @@ func addDDRRecords(cfg *ServerConfig) {
 	if cfg.Server.Protocol.UDP != "" && cfg.Server.Protocol.UDP != DefaultUDPPort {
 		ddrNames = append(ddrNames, "_"+cfg.Server.Protocol.UDP+"._dns."+domain)
 	}
+	// (The resolver.arpa NODATA rule is added in addResolverInfoRecords,
+	// AFTER the RESINFO rules — a same-name sentinel here would make
+	// hasZoneRule skip the RESINFO records entirely.)
 
 	// Build SVCB records for all enabled encrypted protocols.
 	// Each unique port gets one record; ALPNs are aggregated from all
@@ -162,14 +165,17 @@ func addDDRRecords(cfg *ServerConfig) {
 	})
 
 	zoneServiceRecords := make([]ZoneRecord, 0, len(records))
+	// RFC 9462 §4: ServiceMode SVCB responses for _dns.resolver.arpa MUST
+	// NOT use "." or "resolver.arpa" as the TargetName — the resolver's own
+	// hostname (the certificate domain) is used instead (R3-M12).
 	for priority, r := range records {
 		var content string
 		if r.dohpath != "" {
-			content = fmt.Sprintf("%d . alpn=%s port=%s dohpath=\"%s{?dns}\"",
-				priority+1, r.alpns, r.port, r.dohpath)
+			content = fmt.Sprintf("%d %s alpn=%s port=%s dohpath=\"%s{?dns}\"",
+				priority+1, domain, r.alpns, r.port, r.dohpath)
 		} else {
-			content = fmt.Sprintf("%d . alpn=%s port=%s",
-				priority+1, r.alpns, r.port)
+			content = fmt.Sprintf("%d %s alpn=%s port=%s",
+				priority+1, domain, r.alpns, r.port)
 		}
 		zoneServiceRecords = append(zoneServiceRecords, ZoneRecord{Type: dns.TypeSVCB, Content: content})
 	}

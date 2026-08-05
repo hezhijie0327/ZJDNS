@@ -32,14 +32,15 @@ type Handler struct {
 	CookieGenerator  *CookieGenerator
 }
 
-// NewHandler creates a Handler with the given default ECS configuration.
 // RFC 6975 algorithm lists advertised on upstream queries.  Static slices —
 // the validator's algorithm support is fixed at build time.
 var (
 	// dauAlgorithms: DNSSEC signing algorithms the resolver can validate
 	// (RSASHA256=8, RSASHA512=10, ECDSAP256SHA256=13, ECDSAP384SHA384=14,
-	// ED25519=15, ED448=16).
-	dauAlgorithms = []uint8{8, 10, 13, 14, 15, 16}
+	// ED25519=15).  RFC 6975 §4: only algorithms the validator can actually
+	// verify may be advertised — ED448 (16) is deliberately absent, the
+	// verifier has no ED448 support.
+	dauAlgorithms = []uint8{8, 10, 13, 14, 15}
 	// dhuAlgorithms: DS digest types the resolver can validate (SHA-1=1,
 	// SHA-256=2, SHA-384=4).
 	dhuAlgorithms = []uint8{1, 2, 4}
@@ -48,6 +49,7 @@ var (
 	n3uAlgorithms = []uint8{1}
 )
 
+// NewHandler creates a Handler with the given default ECS configuration.
 func NewHandler(defaultECS config.ECSConfig) (*Handler, error) {
 	cg, err := NewCookieGenerator()
 	if err != nil {

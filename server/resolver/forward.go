@@ -267,6 +267,14 @@ func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]
 // check is intentionally skipped — it would incorrectly reject all recursive responses.
 // Returns true if the goroutine should return (result sent or handled).
 func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server *config.UpstreamServer, question Question, resultChan chan<- QueryResult, nxdomainResult *atomic.Pointer[QueryResult], activeConnections *atomic.Int32, cancel context.CancelCauseFunc, groupCtx context.Context, cidrFilterRefused *atomic.Bool, lastEDE *atomic.Pointer[dns.EDE]) bool {
+	// RFC 5452 §9.3: reject responses that do not echo the query's question.
+	// The forwarding path already checks the response ID (spoofguard); the
+	// question echo closes the cross-name replay variant (R3-H1).
+	if !responseEchoesQuestion(queryResult.Response, question) {
+		log.Debugf("UPSTREAM: %s question echo mismatch for %s %s", server.Address, question.Name, dns.TypeToString[question.Qtype])
+		pool.DefaultMessage.Put(queryResult.Response)
+		return false
+	}
 	rcode := queryResult.Response.Rcode
 	serverDesc := server.Address
 	if server.Protocol != "" && server.Protocol != config.ProtoUDP {

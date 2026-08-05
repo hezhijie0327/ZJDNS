@@ -198,6 +198,13 @@ func Parse(stampStr string) (*DNSStamp, error) {
 // ProtoToConfig maps a stamp protocol ID to the corresponding config protocol
 // string ("dnscrypt-relay" / "odoh-relay" / "odoh" for the relay and ODoH
 // target types).
+//
+// ProtoDOH maps to "https" (config.ProtoHTTPS): the config/upstream protocol
+// vocabulary has no "doh" — the upstream client dispatches DoH via
+// ExecuteHTTPS under ProtoHTTPS.  Returning "doh" or "http" produced a
+// silently broken upstream (validateConfig ran before stamp normalization,
+// so the invalid protocol bypassed validation and every query failed with
+// "unsupported protocol").
 func ProtoToConfig(stampProto ProtoType) string {
 	switch stampProto {
 	case ProtoPlain:
@@ -205,7 +212,7 @@ func ProtoToConfig(stampProto ProtoType) string {
 	case ProtoDNSCrypt:
 		return "dnscrypt"
 	case ProtoDOH:
-		return "doh"
+		return "https"
 	case ProtoDOT:
 		return "dot"
 	case ProtoDOQ:
@@ -234,8 +241,21 @@ func (s *DNSStamp) BuildDoHURL() string {
 	}
 	if s.ProviderName != "" {
 		// The provider name is the TLS SNI host — it must be the URL host,
-		// not the address.
-		host = s.ProviderName
+		// not the address.  The encoder moves the port onto the hostname
+		// ("host:port"), so a port-bearing provider name supplies the URL
+		// port — otherwise JoinHostPort brackets the whole thing into an
+		// invalid "[host:port]:port" URL (R3-M17).  The cheap colon check
+		// keeps the common hostname-only path allocation- and error-free.
+		if strings.Contains(s.ProviderName, ":") {
+			if hn, hp, err := net.SplitHostPort(s.ProviderName); err == nil {
+				host = hn
+				port = hp
+			} else {
+				host = s.ProviderName
+			}
+		} else {
+			host = s.ProviderName
+		}
 	} else {
 		// SplitHostPort already stripped brackets; a bare IPv6 fallback
 		// still carries them — strip before JoinHostPort re-brackets.

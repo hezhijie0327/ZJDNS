@@ -244,8 +244,13 @@ func (db *DB) runMigrations() error {
 		return fmt.Errorf("read schema version: %w", err)
 	}
 
-	// "0.0.0" is the sentinel set by base DDL for fresh databases — treat as
-	// current and let runMigrations apply any pending migrations on top.
+	// "0.0.0" is the sentinel set by base DDL for fresh databases — the base
+	// DDL already builds the CURRENT schema, so the incremental migration
+	// chain (which rewrites tables from their OLD shapes) must NOT run on a
+	// fresh database: e.g. 3.2.21 reads the pre-3.2.21 request_log table,
+	// which the current base DDL never creates.  Migrations apply only when
+	// upgrading a database with a real prior version (live-test catch: a
+	// fresh persistent DB failed to start at migration 3.2.21).
 	if applied != "" && applied != "0.0.0" && compareSemver(applied, minSupportedVersion) < 0 {
 		return fmt.Errorf(
 			"database too old: version %s is below minimum supported %s; upgrade through an intermediate version first",
@@ -257,7 +262,7 @@ func (db *DB) runMigrations() error {
 		applied = "0.0.0"
 	}
 
-	if compareSemver(applied, Version) < 0 {
+	if applied != "0.0.0" && compareSemver(applied, Version) < 0 {
 		log.Infof("DB: running migrations %s → %s", applied, Version)
 		for _, m := range migrations {
 			if compareSemver(m.version, applied) <= 0 {

@@ -112,12 +112,22 @@ func (m *Response) ednsStateFor(qctx *handler.QueryContext) ednsState {
 
 	cookieStr := m.generateCookieStr(qctx.CookieOpt, qctx.ClientIP)
 
+	// qctx.IsSecure is deliberately NOT part of shouldAddEDNS — including it
+	// forced every TLS-family listener (DoT/DoQ/DoH/DoH3/DTLS/TLCP/DTLCP)
+	// onto the unpack+re-Pack path, silently disabling the pre-packed
+	// direct-wire fast path on 7 of 8 protocol families (R3-M1).  Padding —
+	// the only consumer of IsSecure — is added exactly when
+	// (isSecure && clientWantsPadding): legacy no-EDNS clients on secure
+	// transports get padded by default (HasPaddingOption returns true for
+	// them), EDNS clients that send no PADDING option opt out explicitly and
+	// can take the fast path, and plain transports never pad.
 	return ednsState{
 		ecsOpt:         ecsOpt,
 		cookieStr:      cookieStr,
 		clientWantsPad: clientWantsPadding,
 		shouldAddEDNS: ecsOpt != nil || qctx.ClientRequestedDNSSEC || cookieStr != "" ||
-			qctx.EDE != nil || qctx.IsSecure || qctx.TCPKeepalive > 0 || len(qctx.Req.Pseudo) > 0,
+			qctx.EDE != nil || (qctx.IsSecure && clientWantsPadding) ||
+			qctx.TCPKeepalive > 0 || len(qctx.Req.Pseudo) > 0,
 	}
 }
 

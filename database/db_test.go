@@ -63,8 +63,8 @@ func TestPreparedStatements(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	if db.StmtEntry == nil {
-		t.Error("StmtEntry is nil")
+	if db.StmtEntryFallback == nil {
+		t.Error("StmtEntryFallback is nil")
 	}
 	if db.StmtQueryLog == nil {
 		t.Error("StmtQueryLog is nil")

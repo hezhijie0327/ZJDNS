@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/server/handler"
@@ -18,7 +19,9 @@ import (
 //
 // It runs after the Zone middleware so operator-defined zone rules for ANY
 // queries take precedence; only unmatched ANY queries reach this short-circuit.
-type Any struct{}
+type Any struct {
+	store cache.Store
+}
 
 // Wrap implements Wrapper.
 func (m *Any) Wrap(next handler.QueryHandler) handler.QueryHandler {
@@ -41,6 +44,14 @@ func (m *Any) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		}}
 		qctx.Res = msg
 		qctx.CacheServed = true
+		// Record the short-circuit like Zone/PTR do — previously ANY answers
+		// never appeared in query_stats/query_log (R3-M21).
+		if m.store != nil {
+			m.store.RecordRequest(&cache.RequestRecord{
+				Qname: qd.Header().Name, Qtype: dns.TypeANY, Qclass: qd.Header().Class,
+				Protocol: qctx.Protocol, Result: "any", Rcode: dns.RcodeSuccess,
+			})
+		}
 		log.Debugf("ANY: serving RFC 8482 minimal response for %s", qd.Header().Name)
 		return nil
 	})

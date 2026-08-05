@@ -50,7 +50,10 @@ func (w *tcpResponseWriter) WriteMsg(_ context.Context, m *dns.Msg) error {
 func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 	defer zdnsutil.HandlePanic("DNSCrypt TCP server")
 
+	// Add under s.mu: Shutdown swaps s.wg under the same lock (R3-M2).
+	s.mu.Lock()
 	s.wg.Add(1)
+	s.mu.Unlock()
 	defer s.wg.Done()
 
 	for s.isStarted() {

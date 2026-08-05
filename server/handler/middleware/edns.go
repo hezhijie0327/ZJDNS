@@ -32,7 +32,14 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// etc.) are extracted into req.Pseudo.  If this pass fails, the
 		// message is malformed — reject it rather than silently operating on
 		// a partially-parsed message.
-		if len(req.Pseudo) == 0 {
+		//
+		// Data == nil means the caller built the request from fields
+		// (direct ServeDNS calls, benchmarks) — there is no wire to unpack
+		// and Pseudo cannot exist; treat it as a no-EDNS request instead of
+		// FORMERRing on a nil Data (chain-reorder regression: EDNS now runs
+		// before the Zone short-circuit, so this path executes for every
+		// zone-matched query).
+		if len(req.Pseudo) == 0 && req.Data != nil {
 			req.Options = 0
 			if err := req.Unpack(); err != nil {
 				log.Debugf("EDNS: full unpack failed: %v", err)

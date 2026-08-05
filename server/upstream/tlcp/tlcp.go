@@ -9,6 +9,7 @@ import (
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -89,6 +90,13 @@ func (c *Client) exchangeOverTLCP(ctx context.Context, msg *dns.Msg, addr string
 	response, err := zdnsutil.ReadTCPMsg(tlcpConn)
 	if err != nil {
 		return nil, err
+	}
+	// Reject ID mismatches like the TLS/plain-TCP paths (M7) — the response
+	// was read on a fresh per-query connection, but a misbehaving or
+	// intercepted server may still echo a stale datagram.
+	if response.ID != msg.ID {
+		pool.DefaultMessage.Put(response)
+		return nil, fmt.Errorf("tlcp: response id mismatch: expected %d, got %d", msg.ID, response.ID)
 	}
 	return response, nil
 }

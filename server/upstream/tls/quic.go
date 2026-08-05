@@ -160,6 +160,15 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 	}()
 
 	_ = stream.SetDeadline(time.Now().Add(timeout))
+	// Fail fast on ctx cancellation like the DoT/DTLS/DTLCP transports
+	// (R3-M6): stream I/O is not ctx-aware, so without this a cancelled
+	// query (client disconnect, shutdown) leaves the goroutine and stream
+	// blocked until the full timeout elapses.
+	stop := context.AfterFunc(ctx, func() {
+		stream.CancelRead(quic.StreamErrorCode(doq.QUICCodeRequestCancelled))
+		stream.CancelWrite(quic.StreamErrorCode(doq.QUICCodeRequestCancelled))
+	})
+	defer stop()
 
 	originalID := msg.ID
 	msg.ID = 0

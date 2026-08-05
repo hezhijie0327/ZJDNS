@@ -127,9 +127,22 @@ func stripDefaultPort(s string, defaultPort int) string {
 	return s
 }
 
+// bracketIPv6 wraps a bare IPv6 literal in square brackets (RFC 3986 §3.2.2).
+// The decoder's splitOptionalPort requires brackets to disambiguate the port —
+// previously the encoder emitted bare IPv6 that its own parser rejected (R3-M16).
+func bracketIPv6(host string) string {
+	if strings.HasPrefix(host, "[") {
+		return host // already bracketed
+	}
+	if strings.Count(host, ":") > 1 {
+		return "[" + host + "]"
+	}
+	return host
+}
+
 func encodeAddrAndHostname(addr, hostname string, defaultPort int) (encodedAddr, encodedHost string) {
 	if host, port := splitOptionalPort(addr); port != "" {
-		addr = host
+		addr = bracketIPv6(host)
 		if hostname != "" {
 			if _, hostPort := splitOptionalPort(hostname); hostPort == "" {
 				hostname = hostname + ":" + port
@@ -138,10 +151,12 @@ func encodeAddrAndHostname(addr, hostname string, defaultPort int) (encodedAddr,
 			// Move the port onto the hostname instead of discarding it:
 			// an empty hostname with a non-default port would otherwise
 			// encode the stamp with the protocol's default port.
-			hostname = addr + ":" + port
+			hostname = bracketIPv6(host) + ":" + port
 		}
 	}
-	return addr, stripDefaultPort(hostname, defaultPort)
+	// Bracket bare IPv6 in the no-port case too (a plain IPv6 address
+	// without a port still needs brackets for the decoder).
+	return bracketIPv6(addr), stripDefaultPort(hostname, defaultPort)
 }
 
 func appendHashes(bin []byte, hashes [][]byte) []byte {

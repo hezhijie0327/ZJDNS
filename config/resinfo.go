@@ -1,7 +1,9 @@
 package config
 
 import (
+	"net/url"
 	"strings"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
 )
@@ -13,13 +15,24 @@ func resinfoKeys(cfg *ServerConfig) []string {
 	// a boolean attribute (no '=' per RFC 6763 §6.4).
 	keys := []string{"qnamemin"}
 
-	// exterr: the EDE codes ZJDNS can return (RFC 9606 §5), matching the
-	// codes used in middleware/cache_lookup.go, cache_store.go and the
-	// DNSSEC validator.
-	keys = append(keys, "exterr=3,6,7,9,15,16,17,18,21,22,23,24,30")
+	// exterr: the EDE codes ZJDNS can actually return (RFC 9606 §5) —
+	// derived from the ExtendedError* constants used across the middleware
+	// chain and the DNSSEC validator (0,2,3,4,5,6,8,9,10,11,12,13,14,15,
+	// 19,23).  The list must not advertise codes the codebase never emits
+	// (R2: previously mis-advertised 7,16,17,18,21,22,24,30 and missed
+	// 2,4,5,8,10,11,12,13,14,19).
+	keys = append(keys, "exterr=0,2,3,4,5,6,8,9,10,11,12,13,14,15,19,23")
 
 	if cfg != nil && cfg.Server.Features.DDR.InfoURL != "" {
-		keys = append(keys, "infourl="+cfg.Server.Features.DDR.InfoURL)
+		// RFC 9606 §5 requires an https:// URI; RFC 6763 §6.1 caps a TXT
+		// character-string at 255 bytes — reject instead of advertising a
+		// broken key (R2 finding).
+		u, err := url.Parse(cfg.Server.Features.DDR.InfoURL)
+		if err == nil && u.Scheme == "https" && len(cfg.Server.Features.DDR.InfoURL) <= 255 {
+			keys = append(keys, "infourl="+cfg.Server.Features.DDR.InfoURL)
+		} else {
+			log.Warnf("CONFIG: DDR info_url %q ignored — must be an https:// URL under 255 bytes (RFC 9606 §5, RFC 6763 §6.1)", cfg.Server.Features.DDR.InfoURL)
+		}
 	}
 	return keys
 }
@@ -62,5 +75,14 @@ func addResolverInfoRecords(cfg *ServerConfig) {
 				Content: strings.Join(content, " "),
 			}},
 		})
+	}
+
+	// RFC 9462 §4/§6.4: clients MUST NOT query A/AAAA for resolver.arpa —
+	// serve NODATA locally instead of forwarding the SUDN upstream (R3-M13).
+	// Added AFTER the RESINFO rules: a same-name sentinel would otherwise
+	// make the hasZoneRule guard above skip the RESINFO records (live-test
+	// catch — resolver.arpa TYPE261 returned empty).
+	if !hasZoneRule(cfg, "resolver.arpa") {
+		cfg.Zone = append(cfg.Zone, ZoneRule{Name: "resolver.arpa"})
 	}
 }

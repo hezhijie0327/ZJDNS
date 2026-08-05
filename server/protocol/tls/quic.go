@@ -263,9 +263,11 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	}
 
 	clientIP := zdnsutil.ClientIPFromAddr(conn.RemoteAddr())
-	// RFC 9250 §4.3.1: abort on client STOP_SENDING / RESET_STREAM.
+	// RFC 9250 §4.3.1: abort on client STOP_SENDING / RESET_STREAM.  The
+	// pooled request must be returned before the early exit (R3-L17).
 	select {
 	case <-conn.Context().Done():
+		pool.DefaultMessage.Put(req)
 		return
 	default:
 	}

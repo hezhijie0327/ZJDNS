@@ -217,3 +217,48 @@ func TestResponseMiddleware_DNSSECFilterDO1(t *testing.T) {
 		t.Error("DO=1 client must keep the NSEC proof")
 	}
 }
+
+// TestResponseMiddleware_PrePackedFastPath_SecureTransport (R3-M1): a
+// TLS-family client (isSecure=true) that sends EDNS without a PADDING option
+// has opted out of padding — the pre-packed direct-wire fast path must be
+// taken.  Previously qctx.IsSecure was part of shouldAddEDNS, forcing the
+// unpack+re-Pack path on every secure-listener cache hit.
+func TestResponseMiddleware_PrePackedFastPath_SecureTransport(t *testing.T) {
+	chain, req := newResponseChain(t, false)
+	// EDNS client without padding: explicitly opts out of padding.
+	req.UDPSize = 1232
+
+	qctx := &handler.QueryContext{Req: req, IsSecure: true}
+	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+	if qctx.Res == nil {
+		t.Fatal("no response built")
+	}
+	if len(qctx.Res.Data) == 0 {
+		t.Error("secure transport without padding request must keep pre-packed Data (R3-M1)")
+	}
+	if len(qctx.Res.Pseudo) != 0 {
+		t.Errorf("fast path must not apply EDNS options, got %d", len(qctx.Res.Pseudo))
+	}
+}
+
+// TestResponseMiddleware_SecureLegacyClient_Pads covers the opposite side of
+// R3-M1: a legacy (no-EDNS) client on a secure transport pads by default.
+func TestResponseMiddleware_SecureLegacyClient_Pads(t *testing.T) {
+	chain, req := newResponseChain(t, false)
+
+	qctx := &handler.QueryContext{Req: req, IsSecure: true}
+	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+	foundPadding := false
+	for _, o := range qctx.Res.Pseudo {
+		if _, ok := o.(*dns.PADDING); ok {
+			foundPadding = true
+		}
+	}
+	if !foundPadding {
+		t.Error("legacy secure client must get default padding")
+	}
+}

@@ -93,7 +93,11 @@ func (h *HopGuard) Validate(serverIP string, observed uint8) bool {
 		return true
 	}
 
-	log.Debugf("UPSTREAM: hopguard reject TTL=%d for %s (trusted: %s)", observed, serverIP, trustedKeys(st))
+	// Evaluate trustedKeys only when debug is on — it sorts and joins the
+	// baseline keys on every rejection (R3-M20).
+	if log.IsDebug() {
+		log.Debugf("UPSTREAM: hopguard reject TTL=%d for %s (trusted: %s)", observed, serverIP, trustedKeys(st))
+	}
 	return false
 }
 

@@ -12,6 +12,7 @@ import (
 	"zjdns/server/upstream"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // initResolver creates the upstream query client and DNS resolver from the
@@ -65,20 +66,24 @@ func makeFlushFunc(op func() (int64, error), verb string) func() []string {
 // is constructed after the zone rules are wired.
 func wireZoneDynamicContent(store cache.Store, rules []config.ZoneRule, resetDNSCrypt func() error) {
 	for i := range rules {
-		switch rules[i].Name {
-		case config.DefaultProjectName + ".stats":
+		// Canonicalize both sides: zone.LoadRules stores canonical names,
+		// but the raw config rule may carry case variants or omit the
+		// trailing dot — an exact-string match silently never wired the
+		// dynamic function (R3-M19).
+		switch dnsutil.Canonical(rules[i].Name) {
+		case dnsutil.Canonical(config.DefaultProjectName + ".stats"):
 			rules[i].DynamicContent = store.Stats
-		case config.DefaultProjectName + ".cache.clear":
+		case dnsutil.Canonical(config.DefaultProjectName + ".cache.clear"):
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("cache") }, "flushed")
-		case config.DefaultProjectName + ".stats.clear":
+		case dnsutil.Canonical(config.DefaultProjectName + ".stats.clear"):
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("stats") }, "reset")
-		case config.DefaultProjectName + ".ptr.clear":
+		case dnsutil.Canonical(config.DefaultProjectName + ".ptr.clear"):
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("ptr") }, "flushed")
-		case config.DefaultProjectName + ".latency.clear":
+		case dnsutil.Canonical(config.DefaultProjectName + ".latency.clear"):
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("latency") }, "flushed")
-		case config.DefaultProjectName + ".querylog.clear":
+		case dnsutil.Canonical(config.DefaultProjectName + ".querylog.clear"):
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("querylog") }, "flushed")
-		case config.DefaultProjectName + ".dnscrypt.clear":
+		case dnsutil.Canonical(config.DefaultProjectName + ".dnscrypt.clear"):
 			rules[i].DynamicContent = func() []string {
 				if resetDNSCrypt == nil {
 					return []string{"error=dnscrypt not enabled"}

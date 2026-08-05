@@ -50,35 +50,90 @@ graph TD
 
 ```mermaid
 graph LR
-    Q[Query] --> R[Response<br/>EDNS · Cookie · EDE]
-    R --> CS[CacheStore<br/>Write · Request Log]
+    Q[Query] --> R[Response<br/>EDNS · Cookie · EDE<br/>Pre-packed fast path]
+    R --> E[EDNS<br/>Full unpack · ECS<br/>Cookie · Padding]
+    E --> MQ[MQTYPE<br/>RFC 10029 Merge]
+    MQ --> CS[CacheStore<br/>Write · Request Log]
     CS --> V[Validation<br/>Domain · Label · Type<br/>Opcode · QCLASS]
     V --> Z[Zone<br/>Rules · Wildcard<br/>Bypass]
-    Z --> E[EDNS<br/>ECS · Cookie<br/>Padding]
-    E --> CL[CacheLookup<br/>Fresh → Serve<br/>Stale → Refresh]
+    Z --> A[Any<br/>RFC 8482 HINFO]
+    A --> CL[CacheLookup<br/>Fresh → Serve<br/>Stale → Refresh]
     CL --> PT[PTR<br/>Reverse Lookup]
     PT --> D64[DNS64<br/>AAAA Synthesis]
     D64 --> RE[Resolution<br/>Upstream · Recursive<br/>Singleflight]
     classDef mw fill:#fef3c7,stroke:#f59e0b,color:#78350f
     class Q mw
-    class R,CS,V,Z,E,CL,PT,D64,RE mw
+    class R,E,MQ,CS,V,Z,A,CL,PT,D64,RE mw
+```
+
+### MQTYPE 合并（RFC 10029）
+
+```mermaid
+graph TD
+    Q[MQTYPE-Query<br/>EDNS option 20] --> PRE{MQTYPE.pre<br/>findMQQUERY}
+    PRE -->|invalid| F[FORMERR]
+    PRE -->|none| NEXT[Pass through]
+    PRE -->|valid| POST{post: CacheStore 已构建 Res?}
+    POST -->|miss 路径| M[merge 每附加 QTYPE<br/>cache → singleflight → resolver]
+    POST -->|hit 路径| UP[pre-packed 先 Unpack<br/>→ 再 merge]
+    M --> R1{RCODE/AD 一致?}
+    R1 -->|no| SKIP[跳过该 QTYPE]
+    R1 -->|yes| ADD[合并 RR + 去重<br/>budget 上限检查]
+    ADD --> MR[MQTYPE-Response option 21<br/>completed types]
+    MR --> OUT[Response 中间件 finalize]
+```
+
+### 缓存命中直发（pre-packed）
+
+```mermaid
+graph TD
+    HIT[CacheLookup 命中<br/>entry.ResponseWire + TTLOffsets] --> BP[buildFromPrePacked<br/>按 offset 表调整 TTL]
+    BP --> GATE{Response 快路径门<br/>无 EDNS 需求 · 无 zone 重写<br/>非 debug · 无 DNSSEC 证据}
+    GATE -->|yes| PATCH[仅 patch ID + RD<br/>Data 直发 · 零分配]
+    GATE -->|no| UNP[Unpack → EDNS 应用 → Pack]
+    UNP --> SEND[bridge / 协议层发送]
+    PATCH --> SEND
+```
+
+### TCP 写入分片（16 shard 注册表）
+
+```mermaid
+graph TD
+    TCP[TCP 请求] --> SHARD[FNV-1a 选 shard]
+    SHARD --> LOCK[shard.mu<br/>lookup-or-create + refs.Add]
+    LOCK --> CAP[capacity 信号量<br/>RFC 7766 管道上限]
+    CAP -->|saturated| SF[SERVFAIL<br/>writeMu 串行化]
+    CAP -->|ok| GORO[goroutine: handler → pack → writeMu → write]
+    GORO --> DONE[refs.Add(-1)]
+    SF --> DONE
+    SWEEP[Sweep: refs==0 → 删除 entry]
+    DONE --> SWEEP
 ```
 
 ## 缓存查询流程
 
 ```mermaid
 graph TD
-    Q[Query] --> ECSCAND[Build ECS Fallback Candidates<br/>addr/prefix granularities<br/>+ empty-ECS for non-ECS entries]
-    ECSCAND --> LOOP{Loop candidates}
-    LOOP -->|next| QUERY[SQLite Lookup<br/>qname+qtype+qclass+ecs]
-    QUERY -->|found| DECOMP[zstd Decompress]
-    QUERY -->|not found| LOOP
-    QUERY -->|error| MISS[Cache Miss]
-    LOOP -->|exhausted| MISS
-    DECOMP --> UNPACK[Unpack dns.Msg]
-    UNPACK --> SORT[Sort A/AAAA by<br/>IP Latency Probe]
-    SORT --> EXPIRED{TTL Expired?}
-    EXPIRED -->|No| HIT[Fresh Hit → Return]
+    Q[Query] --> ECS[ECS 候选<br/>单轮 SQL：5 候选 OR 子句<br/>ORDER BY CASE 优先级]
+    ECS --> SQL[SQLite Lookup<br/>StmtEntryFallback]
+    SQL -->|not found| MISS[Cache Miss]
+    SQL -->|found| FMT{msg_wire[0]==0x02<br/>且 [1]==0?}
+    FMT -->|legacy ≤v3.11.11| LEGACY[裸 zstd / 裸 wire<br/>无 offset 表 · 原 TTL]
+    FMT -->|pre-packed| OFFSET[读 offset 表<br/>numOffsets 边界校验]
+    OFFSET --> WIRE[提取 wire]
+    LEGACY --> WIRE2[提取 wire]
+    WIRE --> ZSTD{zstd 帧?}
+    WIRE2 --> ZSTD2{zstd 帧?}
+    ZSTD -->|yes| DECOMP[DecompressTo 池化解压<br/>owned 拷贝]
+    ZSTD -->|no| REF[引用 row 缓冲]
+    ZSTD2 -->|yes| DECOMP
+    ZSTD2 -->|no| REF
+    DECOMP --> LAT{hasLatencyData?}
+    REF --> LAT
+    LAT -->|yes| UNPACK[Unpack → 按延迟排序<br/>→ rebuildResponseWire]
+    LAT -->|no| EXPIRED{TTL Expired?}
+    UNPACK --> EXPIRED
+    EXPIRED -->|No| HIT[Fresh Hit → Return<br/>TTLOffsets 由调用方 Release]
     EXPIRED -->|Yes| STALE[Stale Hit]
     STALE --> PREFETCH{Should Prefetch?}
     PREFETCH -->|Yes| BG[Background Refresh<br/>Serve Stale + Update Cache]
@@ -88,7 +143,7 @@ graph TD
     classDef hit fill:#d1fae5,stroke:#10b981,color:#064e3b
     classDef miss fill:#fee2e2,stroke:#ef4444,color:#991b1b
     class Q start
-    class ECSCAND,LOOP,QUERY,DECOMP,UNPACK,SORT,EXPIRED,PREFETCH,BG proc
+    class ECS,SQL,FMT,OFFSET,WIRE,WIRE2,ZSTD,ZSTD2,DECOMP,REF,LAT,UNPACK,EXPIRED,PREFETCH,BG,LEGACY proc
     class HIT hit
     class MISS,RETURN,STALE miss
 ```

@@ -17,6 +17,13 @@ func (d *Dialer) DialContext(ctx context.Context, network, targetAddr string) (n
 	}
 
 	deadline, hasDeadline := ctx.Deadline()
+	if !hasDeadline && d.timeout > 0 {
+		// A ctx without a deadline must not leave the connect (and the
+		// SOCKS5 negotiation below) unbounded — fall back to the dialer's
+		// own timeout, mirroring establishUDPRelay (R3-L16).
+		deadline = time.Now().Add(d.timeout)
+		hasDeadline = true
+	}
 
 	dialer := net.Dialer{}
 	if hasDeadline {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	zstamp "zjdns/internal/stamp"
 
 	"codeberg.org/miekg/dns"
 )
@@ -273,11 +274,11 @@ func TestDDRRecords_AllProtocolsEnabled(t *testing.T) {
 	// Port 8853: DTLS(dot) → alpn=dot
 	// Port 9853: TLCP(dot) + DTLCP(dot) → alpn=dot
 	want := []string{
-		`1 . alpn=h2,h3 port=443 dohpath="/dns-query{?dns}" ipv4hint=127.0.0.1 ipv6hint=::1`,
-		`2 . alpn=h2 port=9443 dohpath="/dns-query{?dns}" ipv4hint=127.0.0.1 ipv6hint=::1`,
-		`3 . alpn=doq,dot port=853 ipv4hint=127.0.0.1 ipv6hint=::1`,
-		`4 . alpn=dot port=8853 ipv4hint=127.0.0.1 ipv6hint=::1`,
-		`5 . alpn=dot port=9853 ipv4hint=127.0.0.1 ipv6hint=::1`,
+		`1 dns.example.com alpn=h2,h3 port=443 dohpath="/dns-query{?dns}" ipv4hint=127.0.0.1 ipv6hint=::1`,
+		`2 dns.example.com alpn=h2 port=9443 dohpath="/dns-query{?dns}" ipv4hint=127.0.0.1 ipv6hint=::1`,
+		`3 dns.example.com alpn=doq,dot port=853 ipv4hint=127.0.0.1 ipv6hint=::1`,
+		`4 dns.example.com alpn=dot port=8853 ipv4hint=127.0.0.1 ipv6hint=::1`,
+		`5 dns.example.com alpn=dot port=9853 ipv4hint=127.0.0.1 ipv6hint=::1`,
 	}
 	if len(svcbRecords) != len(want) {
 		t.Fatalf("got %d SVCB records, want %d:\n%v", len(svcbRecords), len(want), svcbRecords)
@@ -336,7 +337,7 @@ func TestDDRRecords_HTTPSOnly(t *testing.T) {
 	if len(svcbRecords) != 1 {
 		t.Fatalf("got %d SVCB records, want 1", len(svcbRecords))
 	}
-	want := `1 . alpn=h2 port=443 dohpath="/dns-query{?dns}" ipv4hint=1.2.3.4`
+	want := `1 dns.example.com alpn=h2 port=443 dohpath="/dns-query{?dns}" ipv4hint=1.2.3.4`
 	if svcbRecords[0].Content != want {
 		t.Errorf("got  %s\nwant %s", svcbRecords[0].Content, want)
 	}
@@ -379,17 +380,17 @@ func TestDDRRecords_DifferentPorts(t *testing.T) {
 	}
 	// Sorted: stream group by port → 784 < 853 < 8853
 	// Port 784: QUIC(doq) only
-	want0 := `1 . alpn=doq port=784 ipv4hint=10.0.0.1`
+	want0 := `1 dns.example.com alpn=doq port=784 ipv4hint=10.0.0.1`
 	if svcbRecords[0].Content != want0 {
 		t.Errorf("record 0:\n  got  %s\n  want %s", svcbRecords[0].Content, want0)
 	}
 	// Port 853: TLS(dot) only
-	want1 := `2 . alpn=dot port=853 ipv4hint=10.0.0.1`
+	want1 := `2 dns.example.com alpn=dot port=853 ipv4hint=10.0.0.1`
 	if svcbRecords[1].Content != want1 {
 		t.Errorf("record 1:\n  got  %s\n  want %s", svcbRecords[1].Content, want1)
 	}
 	// Port 8853: DTLS(dot) only
-	want2 := `3 . alpn=dot port=8853 ipv4hint=10.0.0.1`
+	want2 := `3 dns.example.com alpn=dot port=8853 ipv4hint=10.0.0.1`
 	if svcbRecords[2].Content != want2 {
 		t.Errorf("record 2:\n  got  %s\n  want %s", svcbRecords[2].Content, want2)
 	}
@@ -430,7 +431,7 @@ func TestDDRRecords_TLSAndDTLS_SamePort(t *testing.T) {
 	if len(svcbRecords) != 1 {
 		t.Fatalf("got %d SVCB records, want 1 (merged)", len(svcbRecords))
 	}
-	want := `1 . alpn=dot port=853 ipv4hint=10.0.0.1`
+	want := `1 dns.example.com alpn=dot port=853 ipv4hint=10.0.0.1`
 	if svcbRecords[0].Content != want {
 		t.Errorf("got  %s\nwant %s", svcbRecords[0].Content, want)
 	}
@@ -500,5 +501,42 @@ func TestValidateConfig_MissingCertDomain(t *testing.T) {
 	_, err := LoadConfig(path)
 	if err == nil {
 		t.Error("expected error for TLS without cert domain")
+	}
+}
+
+// ── R3-H2: DoH sdns:// stamp → config protocol ────────────────────────────────
+// A DoH stamp must resolve to protocol "https" (the only DoH dispatch in the
+// upstream client).  Previously it mapped to "doh", which bypassed validation
+// (validateConfig runs before stamp normalization) and made every query fail
+// with "unsupported protocol: doh".
+
+func TestResolveStamp_DoH_ProtocolHTTPS(t *testing.T) {
+	stamp := &zstamp.DNSStamp{
+		Proto:        zstamp.ProtoDOH,
+		Address:      "9.9.9.9:443",
+		ProviderName: "dns.quad9.net:443",
+		Path:         "/dns-query",
+	}
+	server := &UpstreamServer{Address: stamp.String()}
+	if err := resolveStamp(server, 0, "upstream"); err != nil {
+		t.Fatalf("resolveStamp: %v", err)
+	}
+	if server.Protocol != ProtoHTTPS {
+		t.Errorf("DoH stamp protocol = %q, want %q", server.Protocol, ProtoHTTPS)
+	}
+	if server.Address != "https://dns.quad9.net:443/dns-query" {
+		t.Errorf("DoH stamp address = %q, want the built https:// URL", server.Address)
+	}
+}
+
+func TestProtocolMatchesStamp_DoH(t *testing.T) {
+	if !protocolMatchesStamp(ProtoHTTPS, zstamp.ProtoDOH) {
+		t.Error("protocolMatchesStamp(https, ProtoDOH) should match")
+	}
+	if protocolMatchesStamp(ProtoHTTP, zstamp.ProtoDOH) {
+		t.Error("protocolMatchesStamp(http, ProtoDOH) must not match — 'http' has no upstream dispatch")
+	}
+	if protocolMatchesStamp(ProtoUDP, zstamp.ProtoDOH) {
+		t.Error("protocolMatchesStamp(udp, ProtoDOH) must not match")
 	}
 }

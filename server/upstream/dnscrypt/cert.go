@@ -49,7 +49,8 @@ func FetchCert(ctx context.Context, addr string, query []byte, preferTCP bool) (
 
 // fetchCertOverUDP sends a single UDP DNS query and returns the unpacked response.
 func fetchCertOverUDP(ctx context.Context, addr string, query []byte) (*dns.Msg, error) {
-	conn, err := net.Dial("udp", addr)
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "udp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial udp: %w", err)
 	}
@@ -80,7 +81,11 @@ func fetchCertOverUDP(ctx context.Context, addr string, query []byte) (*dns.Msg,
 // fetchCertOverTCP sends a DNS query over TCP (2-byte length prefix) and
 // returns the unpacked response.
 func fetchCertOverTCP(ctx context.Context, addr string, query []byte) (*dns.Msg, error) {
-	conn, err := net.Dial("tcp", addr)
+	// DialContext, not net.Dial: the connect itself must honor the query
+	// budget — a black-holed peer (dropped SYN) would otherwise block far
+	// beyond the caller's ctx deadline (M3).
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial tcp: %w", err)
 	}

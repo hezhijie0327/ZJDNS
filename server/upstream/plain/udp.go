@@ -101,6 +101,7 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 	var conn net.Conn
 	var pconn net.PacketConn
 	var buf []byte
+	var lastN int // last read length — buffer prefix zeroed on return
 
 	if proxyDialer != nil {
 		var err error
@@ -114,8 +115,9 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 			return nil, errors.New("socks5 read pool type error")
 		}
 		buf = *bufPtr
-		// clear() before Put prevents data leakage between reuse cycles.
-		defer func() { clear(buf); socks5.ReadPool.Put(bufPtr) }()
+		// Zero only the used prefix — nothing reads beyond the last read
+		// length (R3-L13 family; the buffer is reused across loop reads).
+		defer func() { clear(buf[:lastN]); socks5.ReadPool.Put(bufPtr) }()
 	} else {
 		var err error
 		conn, err = net.Dial("udp", server.Address)
@@ -131,8 +133,8 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 			return nil, errors.New("spoofguard buffer pool type error")
 		}
 		buf = *bufPtr
-		// clear() before Put prevents data leakage between reuse cycles.
-		defer func() { clear(buf); spoofguardBufPool.Put(bufPtr) }()
+		// Zero only the used prefix (R3-L13 family).
+		defer func() { clear(buf[:lastN]); spoofguardBufPool.Put(bufPtr) }()
 	}
 
 	// ── HopGuard: enable TTL/HopLimit capture on raw UDP conns ──
@@ -163,6 +165,18 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 	for {
 		select {
 		case <-ctx.Done():
+			// Return every pooled candidate — the error path below does the
+			// same; a bare return leaked them to the GC on first-win
+			// cancellation (M2).
+			if sg.last != nil {
+				pool.DefaultMessage.Put(sg.last)
+			}
+			if sg.prev != nil {
+				pool.DefaultMessage.Put(sg.prev)
+			}
+			if sg.nonEDNS != nil {
+				pool.DefaultMessage.Put(sg.nonEDNS)
+			}
 			return nil, ctx.Err()
 		default:
 		}
@@ -179,6 +193,7 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 			_ = conn.SetDeadline(time.Now().Add(config.DefaultSpoofguardPollInterval))
 			n, err = conn.Read(buf)
 		}
+		lastN = n
 
 		if err != nil && !errors.Is(err, ipttl.ErrNoControlMessage) {
 			// A missing TTL control message (ipttl.ErrNoControlMessage) is

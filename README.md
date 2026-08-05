@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.11.14-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.11.15-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -85,7 +85,7 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 - **RESINFO**：[RFC 9606](docs/rfc/rfc9606.txt)，`resolver.arpa` 的解析器能力信息（qnamemin/exterr/infourl，随 DDR 发布）
 
 ### 缓存与数据库
-基于 SQLite WAL + mmap 的统一数据库（[九表设计](docs/ARCHITECTURE.md#db-schema)），zstd 压缩存储，缓存命中 ~0.5ms。A/AAAA 记录按延迟探测排序。异步统计写入（non-blocking channel + 后台 goroutine）。懒惰过期 + 条数上限淘汰。
+基于 SQLite WAL + mmap 的统一数据库（[九表设计](docs/ARCHITECTURE.md#db-schema)），zstd 压缩存储，缓存命中走 pre-packed 直发路径（零分配、纳秒级）。A/AAAA 记录按延迟探测排序。异步统计写入（non-blocking channel + 后台 goroutine）。懒惰过期 + 条数上限淘汰。
 
 ### 规则集
 统一的 IP + 域名标签匹配引擎，上游可按标签分流、Zone 可按标签过滤：

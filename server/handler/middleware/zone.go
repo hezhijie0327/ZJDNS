@@ -24,6 +24,9 @@ type Zone struct {
 	cache      cache.Store
 }
 
+// wildcardPrefix is the zone-rule wildcard marker (matches zone package).
+const wildcardPrefix = "*."
+
 // isDestructiveChaosName reports whether the qname is one of the CHAOS
 // control endpoints that mutate server state (cache/ptr/latency flush,
 // stats reset, DNSCrypt key reset). Case-insensitive: zone-rule matching is
@@ -41,6 +44,20 @@ func isDestructiveChaosName(qname string) bool {
 		return true
 	}
 	return false
+}
+
+// rewriteOwnerNames rewrites RR owner names that exactly match from, setting
+// them to the target name — wildcard zone rules store answers under
+// "*.<domain>" and must serve them with the queried name as the owner
+// (RFC 1034 §4.3.3, R3-M7).
+// The RRs are freshly unpacked per query, so in-place mutation is safe.
+func rewriteOwnerNames(rrs []dns.RR, from, to string) []dns.RR {
+	for _, rr := range rrs {
+		if rr != nil && dns.EqualName(rr.Header().Name, from) {
+			rr.Header().Name = to
+		}
+	}
+	return rrs
 }
 
 // Wrap implements Wrapper.
@@ -103,10 +120,26 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		if hasRecords {
 			elapsed := ttl.Elapsed(zoneResult.CreatedAt)
 			response := handler.BuildResponseMsg(qctx.Req)
+			// Zone rules are served authoritatively by this server — the AA
+			// bit is required for RESINFO responses (RFC 9606 §3: AA MUST be
+			// set on the resolver's own records) and matches the semantics
+			// of local policy data (R2 finding).
+			response.Authoritative = true
 			response.Answer = ttl.DeductElapsedCyclical(zoneResult.Answer, elapsed)
 			response.Ns = ttl.DeductElapsedCyclical(zoneResult.Authority, elapsed)
 			response.Extra = ttl.DeductElapsedCyclical(zoneResult.Additional, elapsed)
 			response.Rcode = dns.RcodeSuccess
+			// RFC 1034 §4.3.3: a wildcard match serves the stored records
+			// with the QUERIED name as owner — the wildcard rule's records
+			// carry the literal "*.<domain>" owner (the stored Domain has no
+			// "*." prefix — LoadRules strips it), which must be rewritten
+			// before serving (R3-M7).
+			if zoneResult.Wildcard {
+				wildOwner := wildcardPrefix + zoneResult.Domain
+				response.Answer = rewriteOwnerNames(response.Answer, wildOwner, qname)
+				response.Ns = rewriteOwnerNames(response.Ns, wildOwner, qname)
+				response.Extra = rewriteOwnerNames(response.Extra, wildOwner, qname)
+			}
 			// Operator-configured zone rules are legitimate policy, not
 			// security forgeries — omit EDE so clients don't misclassify.
 			qctx.Res = response

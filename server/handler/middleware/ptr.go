@@ -56,6 +56,13 @@ func (m *PTR) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		qctx.Res = response
 		qctx.CacheServed = true
 
+		// Record the short-circuit like Zone/ANY do — PTR answers from the
+		// ptr_map never appeared in query_stats/query_log (R3-M21).
+		m.store.RecordRequest(&cache.RequestRecord{
+			Qname: qname, Qtype: dns.TypePTR, Qclass: qclass,
+			Protocol: qctx.Protocol, Result: "ptr", Rcode: dns.RcodeSuccess,
+		})
+
 		log.Debugf("PTR: reverse lookup %s -> %d records (from cache)", qname, len(records))
 		return nil
 	})

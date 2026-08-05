@@ -136,6 +136,13 @@ func (r *EncryptedResponse) Encrypt(
 			return nil, fmt.Errorf("padding classical response: %w", err)
 		}
 	} else {
+		// TCP: bound the plaintext like the PQ path — a DNS payload beyond
+		// MaxDNSUDPPacketSize cannot be served by any DNSCrypt transport
+		// (R3-M22).  The server-side truncation loop shrinks responses
+		// before this point, so this is a defense-in-depth guard.
+		if len(packet) > MaxDNSUDPPacketSize {
+			return nil, ErrResponseTooLarge
+		}
 		padded = PadResponse(packet, &sharedKey, clientNonce)
 	}
 
@@ -297,8 +304,8 @@ func (r *EncryptedResponse) Decrypt(
 	}
 
 	// Strip PQ control block if present.  For resumed responses the server
-	// emits \x00\x00 as a zero-length control prefix; initial responses
-	// carry a full PQDR control block.  We only strip when controlLen is
+	// emits a zero-length control prefix; initial responses carry a full
+	// PQDR control block.  We only strip when controlLen is
 	// zero or the magic validates — otherwise the packet lacks the prefix
 	// the packet has no control prefix and the DNS payload starts at offset 0.
 	if r.ESVersion.IsPQ() && len(packet) >= 2 {

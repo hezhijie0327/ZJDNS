@@ -23,11 +23,20 @@ func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP boo
 		ESVersion: q.ESVersion,
 		Nonce:     q.Nonce,
 	}
-	err = m.Pack()
-	if err != nil {
-		return nil, fmt.Errorf("packing dns message: %w", err)
-	}
+
+	// Pre-packed cache-hit responses carry the complete DNS wire in m.Data
+	// with empty RR sections.  m.Pack() would rebuild from those empty
+	// fields (m.Data = m.Data[:Len()] then re-serialize) — truncating the
+	// full response to header+question.  Serve the existing wire directly;
+	// when Data is empty the fields path packs as usual.
 	packet := m.Data
+	if len(packet) == 0 {
+		err = m.Pack()
+		if err != nil {
+			return nil, fmt.Errorf("packing dns message: %w", err)
+		}
+		packet = m.Data
+	}
 
 	maxWireLen := 0
 	if isUDP {

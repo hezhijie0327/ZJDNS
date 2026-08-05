@@ -13,6 +13,12 @@ import (
 // query, printing results as an aligned columnar table (like sqlite3 -column
 // -header).
 func RunSQL(dbPath, query string) error {
+	// Read-only tool: opening a nonexistent path must not CREATE a fresh
+	// database (the default SQLite open mode does) — the user asked to
+	// inspect an existing cache (R3-M11).
+	if _, err := os.Stat(dbPath); err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
 	db, err := database.Open(dbPath, 0, database.Options{})
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -128,6 +134,8 @@ func RunSQLRW(dbPath, query string) error {
 		return fmt.Errorf("exec error: %w", err)
 	}
 
+	// _ = error: RowsAffected only fails on closed-result misuse — the
+	// Exec already succeeded, and 0 rows is a fine fallback for display.
 	n, _ := result.RowsAffected()
 	fmt.Fprintf(os.Stderr, "%d row(s) affected\n", n)
 	return nil

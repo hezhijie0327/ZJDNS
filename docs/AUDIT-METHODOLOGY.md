@@ -6,6 +6,15 @@
 
 每次审计的详细发现和修复计划存档于 [`docs/audit/`](audit/)。
 
+### 历史记录
+
+| 轮次 | 日期 | 范围 | 发现 | 修复 |
+|------|------|------|------|------|
+| 2026-08-full | 2026-08-04 | 全库（93611d5 前） | 97（CRITICAL 0 / HIGH 8 / MEDIUM 25 / LOW 64） | 93611d5 全量修复 |
+| 2026-08-round2 | 2026-08-05 | delta v3.11.7–v3.11.14 | 152 原始（C 10 / H 20 / M 49 / L 73，去重后核心 22 项） | 未修（存档 6bedbfb） |
+| 2026-08-round3 | 2026-08-05 | 差缺补漏：89 个零覆盖文件 + 修复方向复核 | 51 新发现（C 1 / H 2 / M 23 / L 25）+ 14 项复核 | 未修（存档 166b52b） |
+| 2026-08-round3-fix | 2026-08-05 | 两轮全部发现修复 | — | 分 Sprint 1-4 提交（见 git log） |
+
 ---
 
 ## 一、审计流程
@@ -145,26 +154,33 @@ go test -short ./cache/...        # 缓存测试
 
 ### 3.3 Benchmark 回归检测
 
-审计修复可能引入性能回退（如额外的 nil 检查、锁竞争、内存分配）。每个 Sprint 修复完成后必须执行 benchmark 对比：
+审计修复可能引入性能回退（如额外的 nil 检查、锁竞争、内存分配）。每个 Sprint 修复完成后必须执行 benchmark 对比。**分配（allocs）与延迟（ns/op）同等重要**——本项目的 pre-packed 直发路径承诺 0 B/op / 0 allocs/op，任何引入分配的改动都是契约破坏，即使 ns/op 仍在噪声带内。
 
 ```bash
-# 刷新基线
-go test -bench=. -short -benchtime=500ms ./... \
+# 刷新基线（必须带 -benchmem：Alloc 回归不体现在 ns/op 中）
+go test -bench=. -short -benchtime=500ms -benchmem ./... \
   | grep '^Benchmark' | sort > docs/benchmark/benchmark-baseline.txt
 
-# 对比旧基线（>15% 变慢即为回归）
+# 对比旧基线（ns/op 或 allocs/op 任一超阈值即为回归）
 git diff HEAD~1 -- docs/benchmark/benchmark-baseline.txt
 ```
 
 回归判定标准：
 
-| 变化 | 判断 |
-|------|------|
-| >15% 变慢 | **回归** — 审计修改影响了热路径，需回滚或优化 |
-| <15% 波动 | 测量噪声 — `time.Now()` 调用 ~28ns 是正常下限，<5ns 为编译器架空 |
-| >15% 变快 | 附带优化 — 记录到提交信息中 |
+| 指标 | 变化 | 判断 |
+|------|------|------|
+| ns/op | >15% 变慢 | **回归** — 审计修改影响了热路径，需回滚或优化 |
+| ns/op | <15% 波动 | 测量噪声 — `time.Now()` 调用 ~28ns 是正常下限，<5ns 为编译器架空 |
+| ns/op | >15% 变快 | 附带优化 — 记录到提交信息中 |
+| **allocs/op** | **任何增加（>0）** | **回归** — 热路径（缓存命中直发、ServeDNS 直发等承诺零分配的路径）引入任何分配都视为契约破坏；非零分配路径（如 zone 合成 + Pack）则按 ns/op 的 >15% 标准判定 |
+| B/op | 与 allocs/op 同向增加 | 同上（两者一起看；大对象单次分配会放大 B/op） |
+| 出现新列 / 列消失 | 路径变化 | **先验证路径有效性**（见下），再判定 |
 
-回退判定前需确认：(1) 修改确实触及了该 benchmark 的代码路径，(2) 差异不是运行环境波动（CPU 频率、缓存状态）。
+**路径有效性验证（必做）**：异常快（或异常慢）的结果必须先确认 benchmark 测的是预期路径，再下结论。2026-08 实测教训：链序重排后 `BenchmarkServerProcessQuery` 显示 34ns / 28.9M qps（"快 103 倍"）——实际是 EDNS.pre 对 `Data=nil` 的直接调用请求 Unpack 失败 → FORMERR 短路，benchmark 测的是错误路径；修复后真实路径为 3451ns / 290K qps，与基线一致。验证方法：对怀疑的 benchmark 打印响应形态（rcode/answer 数/Data 长度），或临时断言（`if resp.Rcode != 0 { b.Fatal(...) }`）——benchmark 里缺少响应断言是本次漏检的根因，新 benchmark 必须带 `b.Fatal` 级响应正确性检查。
+
+回退判定前需确认：(1) 修改确实触及了该 benchmark 的代码路径，(2) 差异不是运行环境波动（CPU 频率、缓存状态），(3) **该 benchmark 的输出正确性已断言**（响应 rcode/answer 符合预期，未被短路路径绕过）。
+
+**跨版本对比**：涉及重排/重构时，用 `git worktree add <dir> <旧commit>` 在旧版本上跑同一命令对比——同机同参数才是可比基准（6bedbfb 基线文件里 66µs 的 UDP 查询与同机实测 330µs 的差异即环境漂移实例）。
 
 ### 3.4 Linter 纪律
 

@@ -97,7 +97,7 @@ func WriteTCPMsgSegmented(conn net.Conn, msg []byte, segSize int) (int, error) {
 }
 
 // WriteTCPMsg writes a DNS message prefixed with a 2-byte big-endian length
-// to conn (RFC 1035 §4.2.2) in two separate writes (2-byte prefix + payload).
+// to conn (RFC 1035 §4.2.2) in a single write (RFC 7766 §8).
 // Callers must serialize access to conn — concurrent calls on the same
 // net.Conn will interleave frames and corrupt the TCP stream. Use a
 // per-connection sync.Mutex or equivalent.
@@ -108,8 +108,13 @@ func WriteTCPMsg(conn net.Conn, msg *dns.Msg) error {
 	if err := msg.Pack(); err != nil {
 		return err
 	}
+	// RFC 1035 §2.3.4: a DNS message is at most 65535 bytes on the wire —
+	// a longer payload cannot be represented by the length prefix and would
+	// silently wrap (R3-M23).
+	if len(msg.Data) > dns.MaxMsgSize {
+		return errors.New("dns: message exceeds 65535-byte TCP limit")
+	}
 	length := uint16(len(msg.Data)) //nolint:gosec // G115: DNS TCP message — protocol-bounded uint16
-	// RFC 7766 §8: pass length prefix and message in a single write.
 	buf := make([]byte, 2+len(msg.Data))
 	buf[0] = byte(length >> 8) //nolint:gosec // G115: DNS wire format — protocol-bounded byte
 	buf[1] = byte(length)      //nolint:gosec // G115: DNS wire format — protocol-bounded byte

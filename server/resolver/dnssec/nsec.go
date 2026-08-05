@@ -251,7 +251,16 @@ func matchesNSEC3NODATA(verified []*dns.NSEC3, qname string, qtype uint16, hashA
 	matched := matchNSEC3(verified, wildcardHash)
 	if matched == nil {
 		// Covered-name NODATA: no NSEC3 exists for H(qname) or H(*.CE).
-		// The CE walk's next-closer cover is the authenticated denial.
+		// The CE walk's next-closer cover proves no NSEC3 owner at H(qname).
+		// That is only an authenticated denial when the covering record is
+		// in Opt-Out space (RFC 5155 §8.6/§8.9): a missing exact-match in a
+		// non-Opt-Out zone means an incomplete/corrupt proof (every
+		// existing name — including empty non-terminals — has an NSEC3
+		// owner there), so the NODATA must fail closed instead of being
+		// accepted and negatively cached (R3-M14).
+		if !nsec3CoveringHasOptOut(verified, qnameHash) {
+			return false
+		}
 		return true
 	}
 	if slices.Contains(matched.TypeBitMap, dns.TypeCNAME) {
@@ -319,6 +328,21 @@ func hasNSEC3Covering(verified []*dns.NSEC3, hash string) bool {
 		next := strings.ToLower(n.NextDomain)
 		if isDomainInRange(hash, owner, next) {
 			return true
+		}
+	}
+	return false
+}
+
+// nsec3CoveringHasOptOut reports whether the NSEC3 covering hash carries the
+// Opt-Out flag (RFC 5155 §6.1 bit 0x01).  Used by covered-name NODATA
+// validation — only Opt-Out space may lack an exact-match NSEC3 for a name
+// that exists (RFC 5155 §8.6).
+func nsec3CoveringHasOptOut(verified []*dns.NSEC3, hash string) bool {
+	for _, n := range verified {
+		owner := nsec3HashLabel(n.Header().Name)
+		next := strings.ToLower(n.NextDomain)
+		if isDomainInRange(hash, owner, next) {
+			return n.Flags&nsec3OptOutFlag != 0
 		}
 	}
 	return false

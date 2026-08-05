@@ -261,21 +261,17 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 		return false, fmt.Errorf("no DNSKEY records found for %s", childZone)
 	}
 
-	matchedKey, dsMatchErr := crypto.VerifyDelegationDS(verifiedDS, dnskeyRecords)
-	if dsMatchErr != nil {
-		log.Debugf("SECURITY: zone cut — DS→DNSKEY mismatch for %s: %v", childZone, dsMatchErr)
-		chain.lastEDECode = dns.ExtendedErrorDNSBogus
-		return false, nil
-	}
-
-	// Verify the DNSKEY RRset's own RRSIG before using or caching it: the DS
-	// match proves only ONE key; an attacker who can inject the DNSKEY
-	// response could append their own key and validate a forged answer with
-	// it (CryptoValidator.IsResponseValid accepts any key in the slice).
 	allKeySigs := dnssec.CollectRRSIGs(dnskeyResp.Answer, dnskeyResp.Ns, dnskeyResp.Extra)
 	dnskeyRRSIGs := dnssec.FindRRSIGs(allKeySigs, dnsutil.Fqdn(childZone), dns.TypeDNSKEY)
-	if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err != nil {
-		log.Debugf("SECURITY: zone cut — child DNSKEY RRset self-signature failed for %s: %v", childZone, err)
+
+	// The DS match proves only ONE key; the matched key must additionally
+	// sign the ENTIRE RRset (RFC 4035 §5.2) — otherwise an attacker who can
+	// inject the DNSKEY response could append a rogue key and validate a
+	// forged answer with it (CryptoValidator.IsResponseValid accepts any
+	// key in the slice).  verifyDNSKEYWithDS enforces both.
+	matchedKey, dsMatchErr := verifyDNSKEYWithDS(crypto, verifiedDS, dnskeyRecords, dnskeyRRSIGs)
+	if dsMatchErr != nil {
+		log.Debugf("SECURITY: zone cut — DS→DNSKEY verification failed for %s: %v", childZone, dsMatchErr)
 		chain.lastEDECode = dns.ExtendedErrorDNSBogus
 		return false, nil
 	}

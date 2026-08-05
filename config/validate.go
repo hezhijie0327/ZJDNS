@@ -177,8 +177,11 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 				if _, _, err := net.SplitHostPort(server.Address); err != nil {
 					if protocol == ProtoHTTPS || protocol == ProtoHTTP3 ||
 						protocol == ProtoHTTPTLCP {
-						if _, err := url.Parse(server.Address); err != nil {
-							return fmt.Errorf("upstream server %d address invalid: %w", i, err)
+						// url.Parse accepts empty strings and scheme-less
+						// hosts — both silently dial ':443' later (R3-M10).
+						u, err := url.Parse(server.Address)
+						if err != nil || u.Scheme == "" || u.Host == "" {
+							return fmt.Errorf("upstream server %d address invalid for %s: %q", i, protocol, server.Address)
 						}
 					} else {
 						return fmt.Errorf("upstream server %d address invalid: %w", i, err)

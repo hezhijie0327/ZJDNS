@@ -21,6 +21,21 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// responseEchoesQuestion verifies that a response echoes the query's question
+// section (RFC 5452 §9.3).  Without this check, an on-path attacker could
+// replay a captured signed response for ANY name in the same zone: the DNSSEC
+// signatures cover the RRset, not the question, so the replayed data would
+// validate and poison the cache under a different name.
+func responseEchoesQuestion(resp *dns.Msg, question Question) bool {
+	if resp == nil || len(resp.Question) == 0 {
+		return false
+	}
+	q := resp.Question[0]
+	return dns.EqualName(q.Header().Name, question.Name) &&
+		dns.RRToType(q) == question.Qtype &&
+		q.Header().Class == question.Qclass
+}
+
 func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question Question, mqt []uint16, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector defense.Detector) (*dns.Msg, defense.Verdict, error) {
 	if len(nameservers) == 0 {
 		return nil, defense.VerdictClean, errors.New("no nameservers")
@@ -93,6 +108,15 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 			result := r.resolver.queryClient.ExecuteQuery(subCtx, msg, server)
 			if result.Error == nil && result.Response != nil {
+				// RFC 5452 §9.3: reject responses that do not echo the query's
+				// question — a replayed signed response for a different name
+				// in the same zone would otherwise validate and poison the
+				// cache (R3-H1).
+				if !responseEchoesQuestion(result.Response, question) {
+					log.Debugf("RECURSION: ns=%s question echo mismatch for %s %s", nsAddr, question.Name, dns.TypeToString[question.Qtype])
+					pool.DefaultMessage.Put(result.Response)
+					return nil
+				}
 				rcode := result.Response.Rcode
 
 				if rcode == dns.RcodeNameError && len(result.Response.Answer) > 0 && !result.Response.Authoritative {
@@ -417,6 +441,12 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 		return
 	}
 	if retryResult.Response == nil {
+		return
+	}
+	// RFC 5452 §9.3: same question-echo gate as the main path (R3-H1).
+	if !responseEchoesQuestion(retryResult.Response, question) {
+		log.Debugf("RECURSION: ns=%s FORMERR retry question echo mismatch for %s %s", nsAddr, question.Name, dns.TypeToString[question.Qtype])
+		pool.DefaultMessage.Put(retryResult.Response)
 		return
 	}
 

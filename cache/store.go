@@ -55,8 +55,8 @@ const (
 	fallbackSentinelAddr = "\x00"
 
 	// maxTTLOffsets caps pooled TTL-offset slices: responses beyond this RR
-	// count (never in practice — DNS responses are bounded by transport size)
-	// allocate fresh instead of growing the pool entry.
+	// count allocate fresh instead of growing the pool entry (large
+	// DNSSEC/ANY responses exceed it routinely).
 	maxTTLOffsets = 16
 )
 
@@ -89,7 +89,9 @@ var ecsCandidatesPool = sync.Pool{New: func() any { c := make([]ecsCandidate, 0,
 // Stored as *[]uint16 to avoid interface boxing (SA6002).
 var ttloOffsetsPool = sync.Pool{New: func() any { s := make([]uint16, 0, 8); return &s }}
 
-// AcquireTTLOffsets returns a zeroed slice of length n from the pool.
+// AcquireTTLOffsets returns a slice of length n from the pool.  The pool
+// entries are NOT zeroed on reuse — callers must overwrite every element
+// before use (Get writes all n offsets before serving).
 func AcquireTTLOffsets(n int) []uint16 {
 	s := *ttloOffsetsPool.Get().(*[]uint16)
 	if cap(s) < n {
@@ -118,13 +120,13 @@ func isZstdCompressed(data []byte) bool {
 // scanTTLOffsets walks the answer, authority and additional sections of a
 // packed DNS message and returns the byte offset of every TTL field.  The
 // question section (bytes 12..questionEnd) is skipped.  The returned slice
-// is pool-owned — release with releaseTTLOffsets when done.
+// is pool-owned — release with ReleaseTTLOffsets when done.
 func scanTTLOffsets(wire []byte, questionEnd int) []uint16 {
 	offsets := AcquireTTLOffsets(0)
 	pos := questionEnd
 	for pos+10 <= len(wire) {
 		// Skip the owner name (may include compression pointers).
-		off, ok := dnsSkipName(wire, pos)
+		off, ok := zdnsutil.SkipWireName(wire, pos)
 		if !ok || off+10 > len(wire) {
 			break
 		}
@@ -147,7 +149,7 @@ func WireHasDNSSEC(wire []byte) bool {
 	pos := 12
 	questions := int(binary.BigEndian.Uint16(wire[4:6]))
 	for range questions {
-		off, ok := dnsSkipName(wire, pos)
+		off, ok := zdnsutil.SkipWireName(wire, pos)
 		if !ok {
 			return false
 		}
@@ -155,7 +157,7 @@ func WireHasDNSSEC(wire []byte) bool {
 	}
 	// Walk the RR sections checking TYPE codes.
 	for pos+10 <= len(wire) {
-		off, ok := dnsSkipName(wire, pos)
+		off, ok := zdnsutil.SkipWireName(wire, pos)
 		if !ok || off+10 > len(wire) {
 			return false
 		}
@@ -167,26 +169,6 @@ func WireHasDNSSEC(wire []byte) bool {
 		pos = off + 10 + rdLen // name + TYPE/CLASS/TTL/RDLENGTH(10) + RDATA
 	}
 	return false
-}
-
-// dnsSkipName returns the offset after the domain name at pos in wire.
-// Handles both label sequences and compression pointers (RFC 1035 §4.1.4).
-func dnsSkipName(wire []byte, pos int) (int, bool) {
-	for {
-		if pos >= len(wire) {
-			return 0, false
-		}
-		l := wire[pos]
-		if l == 0 {
-			return pos + 1, true
-		}
-		if l&0xC0 == 0xC0 {
-			// Compression pointer — skip 2 bytes, name ends here.
-			return pos + 2, true
-		}
-		// Label: l bytes of label data.
-		pos += int(l) + 1
-	}
 }
 
 // New creates a cache backed by the given database. The caller is responsible
@@ -258,19 +240,47 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		return nil, false, false
 	}
 
-	if len(msgWire) == 0 {
+	if len(msgWire) < 3 {
 		return nil, false, false
 	}
 
-	// Pre-packed format (0x02): TTL offset table + complete DNS response
-	// wire.  TTLs are adjusted in-place by buildFromPrePacked before serving.
-	numOffsets := int(binary.BigEndian.Uint16(msgWire[1:3]))
-	offsets := AcquireTTLOffsets(numOffsets)
-	wireStart := 3 + numOffsets*2
-	for i := range numOffsets {
-		offsets[i] = binary.BigEndian.Uint16(msgWire[3+i*2:])
+	// Format dispatch: pre-packed (0x02) carries a TTL offset table before
+	// the DNS wire; legacy entries (<= v3.11.11) are a bare zstd-compressed
+	// or raw DNS wire with no marker.  Entries are read without a format
+	// check previously — a legacy raw wire whose ID high byte happens to be
+	// 0x02 was parsed as pre-packed, and the garbage numOffsets drove the
+	// offset-table loop out of bounds (upgrade panic window: entries survive
+	// up to DefaultMaxCacheableTTL + DefaultStaleMaxAge = 10 days).
+	// msgWire[1] discriminates the collision: it is the high byte of
+	// numOffsets (0 for any real entry — responses store fewer than 256
+	// RRs), while byte[1] of a raw DNS response is the low byte of the
+	// query ID.  If a legacy raw wire slips through (ID low byte 0), the
+	// flags bytes are read as numOffsets — always >= 0x8000 because the QR
+	// flag is set — which the bounds check below rejects (> (len-3)/2 for
+	// any legal message size), so no legacy row can ever be misparsed.
+	var (
+		wire    []byte
+		offsets []uint16
+	)
+	if msgWire[0] == cacheFormatPrePacked && msgWire[1] == 0 {
+		numOffsets := int(binary.BigEndian.Uint16(msgWire[1:3]))
+		// Bounds check: a corrupt row must not drive the offset table past
+		// the BLOB end (previously a slice-bounds panic).
+		if numOffsets > (len(msgWire)-3)/2 {
+			log.Warnf("CACHE: entry %d (name=%s type=%d) offset table out of bounds: %d offsets in %d bytes", id, qname, qtype, numOffsets, len(msgWire))
+			return nil, false, false
+		}
+		offsets = AcquireTTLOffsets(numOffsets)
+		for i := range numOffsets {
+			offsets[i] = binary.BigEndian.Uint16(msgWire[3+i*2:])
+		}
+		wire = msgWire[3+numOffsets*2:]
+	} else {
+		// Legacy format (<= v3.11.11): zstd-compressed or raw DNS wire
+		// without a marker.  No TTL offset table — TTLs are served at their
+		// stored values, expiring naturally within the migration window.
+		wire = msgWire
 	}
-	wire := msgWire[wireStart:]
 
 	// Threshold decompression.
 	var owned []byte
@@ -283,6 +293,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		var err error
 		wire, err = zdnsutil.DecompressTo(wire, *dbuf)
 		if err != nil {
+			ReleaseTTLOffsets(offsets)
 			clear(*dbuf)
 			decompressBufPool.Put(dbuf)
 			log.Warnf("CACHE: decompress wire for entry %d (name=%s type=%d): %v", id, qname, qtype, err)
@@ -620,9 +631,11 @@ func (s *SQLiteCache) evictIfNeeded() {
 	}
 
 	// Use the atomic entry counter for fast-path checks; resync from DB
-	// every 20 evictions to correct drift from concurrent writers.
+	// every 20 evictions to correct drift from concurrent writers.  The
+	// counter can only drift upward (TOCTOU duplicate inserts), never below
+	// zero — the resync is purely periodic (R3-L25).
 	count = s.db.EntryCount()
-	if count < 0 || s.evictCount.Load()%20 == 0 {
+	if s.evictCount.Load()%20 == 0 {
 		if err := s.db.SQ.QueryRow("SELECT COUNT(*) FROM entries").Scan(&count); err == nil {
 			s.db.SetEntryCount(count)
 		}

@@ -190,6 +190,11 @@ func (c *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
 	if !found || cachedEntry == nil || expired {
 		return nil
 	}
+	// cache.Get returns a pool-owned TTLOffsets slice — release it on every
+	// exit path, or every DNSKEY cache hit (a per-delegation-change hot path)
+	// leaks a pooled slice to the GC (R3-M15, same family as dns64/mqtype).
+	defer cache.ReleaseTTLOffsets(cachedEntry.TTLOffsets)
+	// _ = error: an unpack failure leaves Answer nil — treated as a miss.
 	_ = cachedEntry.Unpack()
 
 	records := cache.ProcessRecords(cachedEntry.Answer, 0, false, true)

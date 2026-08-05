@@ -41,9 +41,10 @@ const (
 	// real authoritative answer from a GFW-injected one.  This is the
 	// authoritative-level blind spot.
 	//
-	// No caller checks VerdictUncertain (VerdictPoisoned is the only
-	// actionable signal). Retained as a placeholder for future
-	// multi-vantage-point analysis that could resolve this ambiguity.
+	// NOTE: no caller currently consumes VerdictUncertain (VerdictPoisoned
+	// is the only actionable signal).  It is retained as the return path of
+	// the classification switch so future multi-vantage-point analysis can
+	// consume it without changing classify()'s contract.
 	VerdictUncertain
 )
 
@@ -81,6 +82,9 @@ func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 	n := dnsutil.Canonical(queryName)
 
 	for _, rr := range response.Answer {
+		if rr == nil {
+			continue // defensive: malformed responses must not panic the validator (R2)
+		}
 		if dnsutil.Canonical(rr.Header().Name) != n {
 			continue
 		}

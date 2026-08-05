@@ -9,6 +9,7 @@ import (
 	"zjdns/server/resolver"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // DNS64 synthesises AAAA records from A-record answers when the
@@ -43,7 +44,11 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return err
 		}
 
-		qname := qd.Header().Name
+		// Canonicalize: cache.Get requires a canonical qname (Set stores the
+		// canonical form) — the raw wire name may carry mixed case, which
+		// would miss every time (regression of the removed internal
+		// canonicalization).
+		qname := dnsutil.Canonical(qd.Header().Name)
 		qclass := qd.Header().Class
 		ecsOpt := qctx.ECSOpt
 		dnssecOK := qctx.ClientRequestedDNSSEC
@@ -55,6 +60,9 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		var aqr *resolver.QueryResult
 		if m.store != nil {
 			if entry, found, _ := m.store.Get(qname, dns.TypeA, qclass, ecsOpt, dnssecOK); found && entry.Unpack() == nil && len(entry.Answer) > 0 {
+				// Return the pool-owned TTL-offset slice before the entry is
+				// dropped (same family as M15 / dns64 TTLOffsets leak).
+				cache.ReleaseTTLOffsets(entry.TTLOffsets)
 				aqr = &resolver.QueryResult{
 					Answer: entry.Answer, Authority: entry.Authority, Additional: entry.Additional,
 					Validated: entry.Validated,

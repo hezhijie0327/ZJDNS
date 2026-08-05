@@ -201,3 +201,51 @@ func TestCheckLameDelegation_AuthoritativeNODATA(t *testing.T) {
 		t.Errorf("authoritative NODATA should not be an error: %v", termRes.Err)
 	}
 }
+
+// ── responseEchoesQuestion (R3-H1) ────────────────────────────────────────────
+// RFC 5452 §9.3: a response that does not echo the query's question must be
+// rejected — a replayed signed response for a different name in the same zone
+// would otherwise validate and poison the cache.
+
+func TestResponseEchoesQuestion_Match(t *testing.T) {
+	resp := &dns.Msg{Question: []dns.RR{&dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET}}}}
+	q := Question{Name: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
+	if !responseEchoesQuestion(resp, q) {
+		t.Error("matching question should echo")
+	}
+}
+
+func TestResponseEchoesQuestion_NameMismatch(t *testing.T) {
+	resp := &dns.Msg{Question: []dns.RR{&dns.A{Hdr: dns.Header{Name: "bank.example.com.", Class: dns.ClassINET}}}}
+	q := Question{Name: "attacker.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
+	if responseEchoesQuestion(resp, q) {
+		t.Error("different-name question must be rejected (cross-name replay)")
+	}
+}
+
+func TestResponseEchoesQuestion_TypeMismatch(t *testing.T) {
+	resp := &dns.Msg{Question: []dns.RR{&dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET}}}}
+	q := Question{Name: "www.example.com.", Qtype: dns.TypeAAAA, Qclass: dns.ClassINET}
+	if responseEchoesQuestion(resp, q) {
+		t.Error("different qtype must be rejected")
+	}
+}
+
+func TestResponseEchoesQuestion_MissingQuestion(t *testing.T) {
+	resp := &dns.Msg{} // no question section — some broken servers omit it
+	q := Question{Name: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
+	if responseEchoesQuestion(resp, q) {
+		t.Error("missing question section must be rejected")
+	}
+	if responseEchoesQuestion(nil, q) {
+		t.Error("nil response must be rejected")
+	}
+}
+
+func TestResponseEchoesQuestion_CaseInsensitive(t *testing.T) {
+	resp := &dns.Msg{Question: []dns.RR{&dns.A{Hdr: dns.Header{Name: "WWW.Example.COM.", Class: dns.ClassINET}}}}
+	q := Question{Name: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
+	if !responseEchoesQuestion(resp, q) {
+		t.Error("question names must compare case-insensitively (RFC 4343)")
+	}
+}

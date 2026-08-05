@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -51,12 +52,25 @@ type pendingCall struct {
 
 const pendingRequestCapacity = 10000 // safety bound against unbounded growth
 
+// errPendingEvicted is delivered to followers when their in-flight leader
+// call is LRU-evicted before completion — the query must surface as SERVFAIL
+// rather than being silently dropped (R3-M4).
+var errPendingEvicted = errors.New("pending request evicted before completion")
+
 // NewPendingRequests creates a PendingRequests ready for use.
 func NewPendingRequests() *PendingRequests {
 	p := &PendingRequests{
 		sets: lrumap.New[PendingKey, *pendingCall](pendingRequestCapacity),
 	}
-	p.sets.OnEvict = func(_ PendingKey, call *pendingCall) { call.once.Do(func() { close(call.done) }) }
+	// An evicted in-flight call must wake its followers with an error — a
+	// bare close(done) left call.result nil, and the DoJoin callers turn a
+	// nil result into a silently dropped query (no response at all).
+	p.sets.OnEvict = func(_ PendingKey, call *pendingCall) {
+		call.once.Do(func() {
+			call.result = &resolver.QueryResult{Err: errPendingEvicted}
+			close(call.done)
+		})
+	}
 	return p
 }
 

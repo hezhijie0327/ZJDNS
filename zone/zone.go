@@ -32,8 +32,13 @@ type matchTag struct {
 
 // Result holds the outcome of a zone rule evaluation.
 type Result struct {
-	Domain     string
-	Matched    bool
+	Domain  string
+	Matched bool
+	// Wildcard is true when the match came from a "*." rule — the stored
+	// Domain carries no prefix (LoadRules strips it), but the answer RR
+	// owners keep the literal "*.<domain>" and must be rewritten to the
+	// queried name before serving (RFC 1034 §4.3.3).
+	Wildcard   bool
 	Rcode      int
 	Answer     []dns.RR
 	Authority  []dns.RR
@@ -429,6 +434,7 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 		best = Result{
 			Domain:     matchedQname,
 			Matched:    true,
+			Wildcard:   true, // every row of the wildcard IN query is a "*." rule
 			Rcode:      rcode,
 			Answer:     unpackRRs(answerBlob),
 			Authority:  unpackRRs(authBlob),
@@ -532,7 +538,10 @@ func parseMatchTagsText(text string) []matchTag {
 	parts := strings.Split(text, ",")
 	tags, err := parseMatchTags(parts)
 	if err != nil {
-		log.Warnf("ZONE: invalid match tags %q: %v", text, err)
+		// Debug, not Warn: this sits on the per-query path (rule rows are
+		// parsed for every matching query) — malformed tags are already
+		// reported at rule load time (R3-M8).
+		log.Debugf("ZONE: invalid match tags %q: %v", text, err)
 	}
 	return tags
 }

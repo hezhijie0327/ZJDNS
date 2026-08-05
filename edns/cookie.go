@@ -2,6 +2,7 @@ package edns
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -189,7 +190,10 @@ func (c *CookieGenerator) IsServerCookieValid(clientIP net.IP, clientCookie, ser
 		copy(key[:], secret)
 
 		expect := rfc9018MAC(&key, clientCookie, reserved, ts, clientIP)
-		if sig == expect {
+		// Constant-time compare: the MAC is keyed with the server secret —
+		// a short-circuiting array compare leaks the match position through
+		// timing (R3-L6).
+		if subtle.ConstantTimeCompare(sig[:], expect[:]) == 1 {
 			if i > 0 || needsRenew {
 				// Validated with a staging/old secret or needs a
 				// fresher timestamp — tell the client to renew.

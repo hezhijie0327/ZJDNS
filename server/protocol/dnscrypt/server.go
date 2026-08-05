@@ -125,8 +125,15 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, 
 			if !bytes.Equal(signingPK, identity[64:96]) {
 				log.Warnf("DNSCRYPT: config public_key changed, dropping old persisted state")
 			} else {
-				persistedWindows, _ = decodeWindows(windowsBlob)
-				log.Infof("DNSCRYPT: loaded persisted identity (%d cert window(s))", len(persistedWindows))
+				// _ = error: corrupt persisted windows fall back to a fresh
+				// generation below (windowsFromState returns nil) — logged,
+				// not fatal (R3-L21).
+				persistedWindows, err = decodeWindows(windowsBlob)
+				if err != nil {
+					log.Warnf("DNSCRYPT: corrupt persisted windows, starting fresh: %v", err)
+				} else {
+					log.Infof("DNSCRYPT: loaded persisted identity (%d cert window(s))", len(persistedWindows))
+				}
 			}
 		}
 	}

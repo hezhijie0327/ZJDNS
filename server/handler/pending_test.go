@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 	"zjdns/edns"
+	"zjdns/internal/lrumap"
 	"zjdns/internal/pending"
 	"zjdns/server/resolver"
 
@@ -441,5 +442,76 @@ func TestPendingRefreshes_LeaderDoneFollowerCanProceed(t *testing.T) {
 	case <-followerDone:
 	case <-time.After(time.Second):
 		t.Fatal("follower never became leader after Done")
+	}
+}
+
+// ── R3-M4: LRU-evicted in-flight call ─────────────────────────────────────────
+// When the pending-request LRU evicts an in-flight leader call, followers
+// must wake with an error result (→ SERVFAIL) instead of a nil result (→ the
+// query silently dropped with no response).
+
+func TestPendingRequests_OnEvict_CarriesError(t *testing.T) {
+	p := NewPendingRequests()
+	call := &pendingCall{done: make(chan struct{})}
+	p.sets.OnEvict(PendingKey{}, call)
+	select {
+	case <-call.done:
+	default:
+		t.Fatal("eviction must close the done channel")
+	}
+	if call.result == nil || call.result.Err == nil {
+		t.Error("evicted call must carry an error result so followers SERVFAIL (R3-M4)")
+	}
+}
+
+func TestPendingRequests_EvictedLeader_WakesFollowerWithError(t *testing.T) {
+	// Capacity-1 registry so the second key evicts the first.
+	p := &PendingRequests{sets: lrumap.New[PendingKey, *pendingCall](1)}
+	p.sets.OnEvict = func(_ PendingKey, call *pendingCall) {
+		call.once.Do(func() {
+			call.result = &resolver.QueryResult{Err: errPendingEvicted}
+			close(call.done)
+		})
+	}
+
+	keyA := BuildPendingKey("a.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	keyB := BuildPendingKey("b.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+
+	if _, follower := p.Join("a.example.com.", dns.TypeA, dns.ClassINET, nil, false); follower {
+		t.Fatal("first join must be the leader")
+	}
+
+	start := make(chan struct{})
+	got := make(chan *resolver.QueryResult, 1)
+	go func() {
+		<-start
+		qr, follower := p.Join("a.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+		if !follower {
+			got <- nil
+			return
+		}
+		got <- qr
+	}()
+	close(start)
+	// Give the follower time to block on the leader's done channel.
+	time.Sleep(100 * time.Millisecond)
+
+	// Filling the single slot with B evicts A's in-flight call.
+	if _, follower := p.Join("b.example.com.", dns.TypeA, dns.ClassINET, nil, false); follower {
+		t.Fatal("second join must be the leader")
+	}
+	_ = keyA
+	_ = keyB
+
+	select {
+	case qr := <-got:
+		if qr == nil {
+			t.Fatal("follower became leader instead of observing the eviction — test raced")
+		}
+		if qr.Err == nil {
+			t.Errorf("follower must wake with an error, got %v", qr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("follower never woke after leader eviction")
 	}
 }

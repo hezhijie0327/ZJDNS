@@ -56,11 +56,12 @@ type Dependencies struct {
 // Execution order (outermost → innermost):
 //
 //	Response      — EDNS / cookie / EDE application
+//	EDNS          — ECS + cookie parsing (full unpack of plain transport msgs)
+//	MQTYPE        — RFC 10029 multi-QTYPE merge (recursive mode)
 //	CacheStore    — cache write + request logging + latency probe
 //	Validation    — domain length / label / NXNAME-AXFR-IXFR rejection
-//	Any           — RFC 8482 minimal ANY response (HINFO)
 //	Zone          — zone rule evaluation (short-circuit on match)
-//	EDNS          — ECS + cookie parsing
+//	Any           — RFC 8482 minimal ANY response (HINFO)
 //	CacheLookup   — cache lookup (short-circuit on hit)
 //	PTR           — reverse PTR from cache (cache-miss only)
 //	DNS64         — AAAA synthesis
@@ -111,16 +112,10 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 		resolver:         deps.Resolver,
 	}).Wrap(h)
 
-	// EDNS parsing + cookie validation.
-	h = (&EDNS{
-		edns:   deps.EDNS,
-		config: deps.Config,
-	}).Wrap(h)
-
 	// RFC 8482 minimal ANY response — wrapped INSIDE Zone (earlier Wrap call
 	// = inner layer), so operator-defined zone rules for ANY queries run
 	// first and take precedence; only unmatched ANY queries reach Any.
-	h = (&Any{}).Wrap(h)
+	h = (&Any{store: deps.Cache}).Wrap(h)
 
 	// Zone rule evaluation (short-circuit on match). The evaluator is
 	// always wired by server.New, but guard for tests and embedded use.
@@ -135,20 +130,33 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	// Request validation — reject malformed queries early.
 	h = (&Validation{}).Wrap(h)
 
+	// Cache storage: runs after resolution, writes to cache + starts probes.
+	h = (&CacheStore{
+		store:    deps.Cache,
+		prober:   deps.Prober,
+		resolver: deps.Resolver,
+	}).Wrap(h)
+
 	// RFC 10029 MQTYPE-Query: merges additional QTYPE responses into the
 	// primary reply (recursive mode).  In forwarding mode the option is
 	// passed through to the upstream by Resolution.
+	//
+	// Positioned outside CacheStore so its post-phase runs after CacheStore
+	// has built qctx.Res from ResolutionResult (miss path — the merge was
+	// previously dead on the dominant recursive-mode path), and inside EDNS
+	// so the MQTYPE-Query option is visible in Pseudo before pre runs.
 	h = (&MQTYPE{
 		store:    deps.Cache,
 		resolver: deps.Resolver,
 		pending:  deps.PendingReqs,
 	}).Wrap(h)
 
-	// Cache storage: runs after resolution, writes to cache + starts probes.
-	h = (&CacheStore{
-		store:    deps.Cache,
-		prober:   deps.Prober,
-		resolver: deps.Resolver,
+	// EDNS parsing + cookie validation — outside MQTYPE: EDNS.pre performs
+	// the full request unpack (plain UDP/TCP listeners deliver question-only
+	// messages), populating Pseudo before MQTYPE.pre's findMQQUERY.
+	h = (&EDNS{
+		edns:   deps.EDNS,
+		config: deps.Config,
 	}).Wrap(h)
 
 	// Response finalization: always runs, applies EDNS + restores domain.

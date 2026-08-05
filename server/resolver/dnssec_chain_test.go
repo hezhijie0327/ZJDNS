@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"crypto/ecdsa"
+	"errors"
 	"net/netip"
 	"strings"
 	"testing"
@@ -352,6 +353,143 @@ func TestValidateWithDNSSEC_WrongDNSKEY(t *testing.T) {
 	validated := rr.isValidWithDNSSEC(msg, zone+".", chain)
 	if validated {
 		t.Error("isValidWithDNSSEC should return false when DNSKEYs don't match RRSIG")
+	}
+}
+
+// ── verifyDNSKEYWithDS (R3-C1) ────────────────────────────────────────────────
+// A DS digest match proves only ONE key belongs to the zone; the matched key
+// must additionally sign the ENTIRE DNSKEY RRset (RFC 4035 §5.2).  These tests
+// cover the fix against the self-signature requirement, including the attack
+// where an injected rogue key self-signs the modified set (which the previous
+// any-key SelfVerifyDNSKEY check would have wrongly accepted).
+
+func TestVerifyDNSKEYWithDS_ValidSelfSigned(t *testing.T) {
+	crypto := dnssec.NewCryptoValidator(nil)
+	zone := "secure.example.com"
+	ksk, kskPriv := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	zsk, _ := genTestKey(zone, dns.FlagZONE)
+	ds := ksk.ToDS(dns.SHA256)
+
+	dnskeyRRs := []dns.RR{ksk, zsk}
+	rrsig := signRRset(dnskeyRRs, zone, kskPriv, ksk.KeyTag())
+
+	matchedKey, err := verifyDNSKEYWithDS(crypto, []*dns.DS{ds}, []*dns.DNSKEY{ksk, zsk}, []*dns.RRSIG{rrsig})
+	if err != nil || matchedKey == nil {
+		t.Fatalf("verifyDNSKEYWithDS: expected success, got key=%v err=%v", matchedKey, err)
+	}
+	if matchedKey.KeyTag() != ksk.KeyTag() {
+		t.Errorf("matched key tag = %d, want %d", matchedKey.KeyTag(), ksk.KeyTag())
+	}
+}
+
+func TestVerifyDNSKEYWithDS_NoSelfSignature(t *testing.T) {
+	crypto := dnssec.NewCryptoValidator(nil)
+	zone := "secure.example.com"
+	ksk, _ := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	zsk, _ := genTestKey(zone, dns.FlagZONE)
+	ds := ksk.ToDS(dns.SHA256)
+
+	// No RRSIG at all — the DS match alone must not authenticate the set.
+	if _, err := verifyDNSKEYWithDS(crypto, []*dns.DS{ds}, []*dns.DNSKEY{ksk, zsk}, nil); !errors.Is(err, errDNSKEYSelfSign) {
+		t.Fatalf("verifyDNSKEYWithDS: expected errDNSKEYSelfSign, got %v", err)
+	}
+}
+
+func TestVerifyDNSKEYWithDS_RogueKeySelfSigned(t *testing.T) {
+	// The attack: an on-path attacker appends its own key K2 to the DNSKEY
+	// set and self-signs the MODIFIED set with K2.  The legitimate KSK's
+	// signature (over the original set) no longer covers the modified set,
+	// so verification with the DS-matched key must fail — even though
+	// K2's signature verifies with K2 itself.
+	crypto := dnssec.NewCryptoValidator(nil)
+	zone := "secure.example.com"
+	ksk, kskPriv := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	zsk, _ := genTestKey(zone, dns.FlagZONE)
+	rogue, roguePriv := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	ds := ksk.ToDS(dns.SHA256)
+
+	originalSet := []dns.RR{ksk, zsk}
+	kskSig := signRRset(originalSet, zone, kskPriv, ksk.KeyTag()) // over the ORIGINAL set
+	modifiedSet := []dns.RR{ksk, zsk, rogue}
+	rogueSig := signRRset(modifiedSet, zone, roguePriv, rogue.KeyTag()) // over the MODIFIED set
+
+	// Sanity: the rogue signature validates with the rogue key (the reason
+	// the previous any-key SelfVerifyDNSKEY check was insufficient).
+	if err := crypto.VerifyRRset(modifiedSet, rogueSig, rogue); err != nil {
+		t.Fatalf("sanity: rogue self-signature should verify with rogue key: %v", err)
+	}
+
+	_, err := verifyDNSKEYWithDS(crypto, []*dns.DS{ds}, []*dns.DNSKEY{ksk, zsk, rogue}, []*dns.RRSIG{kskSig, rogueSig})
+	if !errors.Is(err, errDNSKEYSelfSign) {
+		t.Fatalf("verifyDNSKEYWithDS: expected errDNSKEYSelfSign for rogue key injection, got %v", err)
+	}
+}
+
+func TestVerifyDNSKEYWithDS_DSMismatch(t *testing.T) {
+	crypto := dnssec.NewCryptoValidator(nil)
+	zone := "secure.example.com"
+	otherZone := "other.example.com"
+	ksk, kskPriv := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	otherKSK, _ := genTestKey(otherZone, dns.FlagSEP|dns.FlagZONE)
+	ds := otherKSK.ToDS(dns.SHA256) // DS for a DIFFERENT zone's key
+
+	rrsig := signRRset([]dns.RR{ksk}, zone, kskPriv, ksk.KeyTag())
+	_, err := verifyDNSKEYWithDS(crypto, []*dns.DS{ds}, []*dns.DNSKEY{ksk}, []*dns.RRSIG{rrsig})
+	if !errors.Is(err, dnssec.ErrDSMismatch) {
+		t.Fatalf("verifyDNSKEYWithDS: expected ErrDSMismatch, got %v", err)
+	}
+}
+
+// TestValidateWithDNSSEC_DSMatch exercises isValidWithDNSSEC's DS-match branch
+// (previously untested): a valid self-signed DNSKEY set matching the parent DS
+// authenticates the answer.
+func TestValidateWithDNSSEC_DSMatch(t *testing.T) {
+	rr := newTestRecursive()
+	zone := "secure.example.com"
+	ksk, kskPriv := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	zsk, zskPriv := genTestKey(zone, dns.FlagZONE)
+	ds := ksk.ToDS(dns.SHA256)
+
+	a := aRec("www."+zone, "192.0.2.1")
+	aRRSIG := signRRset([]dns.RR{a}, zone, zskPriv, zsk.KeyTag())
+	dnskeyRRs := []dns.RR{ksk, zsk}
+	dnskeyRRSIG := signRRset(dnskeyRRs, zone, kskPriv, ksk.KeyTag())
+
+	msg := &dns.Msg{Answer: []dns.RR{a, aRRSIG, ksk, zsk, dnskeyRRSIG}}
+	chain := &dnssecChain{childDS: []*dns.DS{ds}}
+
+	validated := rr.isValidWithDNSSEC(msg, zone+".", chain)
+	if !validated {
+		t.Error("isValidWithDNSSEC: DS match + self-signed DNSKEY set should validate")
+	}
+}
+
+// TestValidateWithDNSSEC_DSMatchRogueKey proves the fix at the orchestration
+// layer: an injected rogue key in the DNSKEY set (self-signing the modified
+// set) must NOT authenticate — the answer RRSIG signed by the rogue key must
+// be rejected even though the legitimate key still matches the parent DS.
+func TestValidateWithDNSSEC_DSMatchRogueKey(t *testing.T) {
+	rr := newTestRecursive()
+	zone := "secure.example.com"
+	ksk, kskPriv := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	zsk, _ := genTestKey(zone, dns.FlagZONE)
+	rogue, roguePriv := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	ds := ksk.ToDS(dns.SHA256)
+
+	rogueA := aRec("www."+zone, "203.0.113.99")
+	// The attacker signs the answer with the rogue key (forged data).
+	aRRSIG := signRRset([]dns.RR{rogueA}, zone, roguePriv, rogue.KeyTag())
+	originalSet := []dns.RR{ksk, zsk}
+	kskSig := signRRset(originalSet, zone, kskPriv, ksk.KeyTag())
+	modifiedSet := []dns.RR{ksk, zsk, rogue}
+	rogueSig := signRRset(modifiedSet, zone, roguePriv, rogue.KeyTag())
+
+	msg := &dns.Msg{Answer: []dns.RR{rogueA, aRRSIG, ksk, zsk, rogue, kskSig, rogueSig}}
+	chain := &dnssecChain{childDS: []*dns.DS{ds}}
+
+	validated := rr.isValidWithDNSSEC(msg, zone+".", chain)
+	if validated {
+		t.Error("isValidWithDNSSEC: rogue key injection must NOT validate (R3-C1)")
 	}
 }
 

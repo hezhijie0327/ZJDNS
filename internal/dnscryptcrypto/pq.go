@@ -137,6 +137,12 @@ func PQResumedSharedKey(resumeSecret [SharedKeySize]byte, clientMagic [8]byte, c
 
 // PQEncapsulate runs the X-Wing KEM encapsulate with the given public key, returning the shared secret and ciphertext.
 func PQEncapsulate(pk []byte) (kemSS, ct []byte, err error) {
+	// circl's Encapsulate panics on wrong-length input (PublicKeySize) —
+	// validate first so a malformed packet degrades to an error instead of
+	// crashing the process (mirrors PQDecapsulate's guard, R3-M18).
+	if len(pk) != xwing.PublicKeySize {
+		return nil, nil, ErrPQInvalidTicket
+	}
 	return xwing.Encapsulate(pk, nil)
 }
 

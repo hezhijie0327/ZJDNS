@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"sync"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/ttl"
 
 	"codeberg.org/miekg/dns"
@@ -63,7 +64,8 @@ type Store interface {
 // Entry holds a cached DNS response with timing metadata.
 // When ResponseWire is non-nil the entry was stored in pre-packed format:
 // the caller should adjust TTLs via TTLOffsets and serve directly, skipping
-// Unpack+Pack.  Answer/Authority/Additional are nil in this case.
+// Unpack+Pack.  Answer/Authority/Additional are nil until Unpack is called
+// (the latency-sorting path in Get unpacks; everyone else serves the wire).
 type Entry struct {
 	ID         int64    `json:"id"`
 	Answer     []dns.RR `json:"answer"`
@@ -79,11 +81,6 @@ type Entry struct {
 	ResponseWire []byte
 	TTLOffsets   []uint16
 }
-
-// Unpack populates Answer, Authority and Additional by unpacking the
-// pre-packed ResponseWire.  Callers that need the parsed RRs (tests,
-// latency sorting) call this once; the cache-hit hot path uses
-// ResponseWire directly and skips Unpack entirely.
 
 // LookupResult holds a PTR reverse-lookup result.
 type LookupResult struct {
@@ -129,12 +126,16 @@ func (e *Entry) rebuildResponseWire() {
 		return
 	}
 
-	// Skip 12-byte header + question section to find the first RR.
-	pos := 12
-	for pos < len(msg.Data) && msg.Data[pos] != 0 {
-		pos++
+	// Skip 12-byte header + question section to find the first RR.  A
+	// label-aware walk, not a zero-byte scan: QNAME label content may
+	// legally contain NUL octets (RFC 1035 §3.1), which stopped the scan
+	// mid-name and produced a misaligned offset table (R3-L24).
+	pos := dns.MsgHeaderSize
+	off, ok := zdnsutil.SkipWireName(msg.Data, pos)
+	if !ok {
+		return
 	}
-	questionEnd := pos + 5 // NUL + QTYPE(2) + QCLASS(2)
+	questionEnd := off + 4 // QTYPE(2) + QCLASS(2)
 
 	// Scan TTL offsets in the answer, authority and additional sections.
 	offsets := make([]uint16, 0, 8)

@@ -76,7 +76,9 @@ func dialProbeTarget(addr string) (net.Conn, error) {
 			InsecureSkipVerify: true, // probe may test servers with self-signed certificates
 			CurvePreferences:   []eTLS.CurveID{},
 		}
-		tcpConn, err := net.Dial("tcp", host)
+		// Bound the connect itself — a black-holed target would otherwise
+		// block far beyond probeDialTimeout (R3-L10).
+		tcpConn, err := net.DialTimeout("tcp", host, probeDialTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -318,7 +320,14 @@ func probeIdleTimeout(addr string) error {
 				fmt.Printf("  server still alive after %.1fs — waiting for close...\n", time.Since(start).Seconds())
 				continue
 			}
-			fmt.Printf("\nConnection closed by server after %.1fs\n", time.Since(start).Seconds())
+			// Only EOF/reset is a server-side close — any other read error
+			// (protocol violation, RST mid-frame) must not be mislabeled
+			// (R3-L12).
+			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+				fmt.Printf("\nConnection closed by server after %.1fs\n", time.Since(start).Seconds())
+				return nil
+			}
+			fmt.Printf("\nConnection error: %v\n", err)
 			return nil
 		}
 	}

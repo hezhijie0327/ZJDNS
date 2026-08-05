@@ -42,7 +42,6 @@ type DB struct {
 	entryCount atomic.Int64
 
 	// Cache prepared statements
-	StmtEntry         *sql.Stmt
 	StmtEntryFallback *sql.Stmt
 	StmtEntryExists   *sql.Stmt
 	StmtEntryInsert   *sql.Stmt
@@ -149,10 +148,11 @@ func (db *DB) Close() error {
 		return nil
 	}
 	for _, stmt := range []*sql.Stmt{
-		db.StmtEntry, db.StmtEntryFallback, db.StmtEntryExists, db.StmtEntryInsert,
+		db.StmtEntryFallback, db.StmtEntryExists, db.StmtEntryInsert,
 		db.StmtQueryLog, db.StmtQueryStats,
 		db.StmtInsertLatency, db.StmtLastProbe,
 		db.StmtZoneExact, db.StmtZoneWildcard, db.StmtIPLatency,
+		db.StmtRulesetDomain,
 		db.StmtDNSCryptLoad, db.StmtDNSCryptSave,
 	} {
 		if stmt != nil {

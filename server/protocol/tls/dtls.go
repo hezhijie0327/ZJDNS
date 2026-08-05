@@ -174,6 +174,9 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 			continue
 		}
 
+		// Sequential Put per loop iteration (defer would accumulate every
+		// query until the connection closes — the per-connection loop is
+		// not a single-request scope, AUDIT-METHODOLOGY §6.1.1).
 		response := s.handler.ServeDNS(query, clientIP, true, config.ProtoDTLS)
 		pool.DefaultMessage.Put(query)
 		if !s.sendDTLSResponse(conn, response) {

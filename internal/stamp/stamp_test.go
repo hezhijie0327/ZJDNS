@@ -422,7 +422,7 @@ func TestProtoToConfig(t *testing.T) {
 	}{
 		{ProtoPlain, "udp"},
 		{ProtoDNSCrypt, "dnscrypt"},
-		{ProtoDOH, "doh"},
+		{ProtoDOH, "https"},
 		{ProtoDOT, "dot"},
 		{ProtoDOQ, "doq"},
 		{ProtoODoHTarget, "odoh"},
@@ -672,5 +672,34 @@ func TestParseConsistency(t *testing.T) {
 
 	if s1.Proto != s2.Proto || s1.Address != s2.Address || s1.ProviderName != s2.ProviderName || s1.Path != s2.Path {
 		t.Error("inconsistent parsing of same stamp")
+	}
+}
+
+// ── R3-M16 / R3-M17 ───────────────────────────────────────────────────────────
+
+// TestBuildDoHURL_PortInProviderName: the encoder moves the port onto the
+// provider name — BuildDoHURL must split it off instead of producing an
+// invalid "[host:port]:port" URL.
+func TestBuildDoHURL_PortInProviderName(t *testing.T) {
+	s := &DNSStamp{Proto: ProtoDOH, Address: "9.9.9.9:443", ProviderName: "dns.quad9.net:443", Path: "/dns-query"}
+	if got := s.BuildDoHURL(); got != "https://dns.quad9.net:443/dns-query" {
+		t.Errorf("BuildDoHURL = %q, want %q", got, "https://dns.quad9.net:443/dns-query")
+	}
+}
+
+// TestEncodeDecode_IPv6RoundTrip: the encoder must bracket bare IPv6
+// literals so its own parser accepts the output (R3-M16).
+func TestEncodeDecode_IPv6RoundTrip(t *testing.T) {
+	s := &DNSStamp{Proto: ProtoDOH, Address: "2606:4700::1111:443", ProviderName: "", Path: "/dns-query"}
+	encoded := s.String()
+	decoded, err := Parse(encoded)
+	if err != nil {
+		t.Fatalf("Parse(%q): %v", encoded, err)
+	}
+	// The decoder keeps the bracket form (matching the DNSCrypt IPv6
+	// convention "[2620:fe::fe]:8443") — the round-trip must at least
+	// parse and preserve the address.
+	if decoded.Address != "[2606:4700::1111:443]" {
+		t.Errorf("round-trip address = %q, want %q", decoded.Address, "[2606:4700::1111:443]")
 	}
 }

@@ -56,7 +56,12 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 		log.Warnf("DNSCRYPT: Failed to configure UDP socket: %v", err)
 	}
 
+	// Add under s.mu: Shutdown swaps s.wg under the same lock, so Add either
+	// joins the waited group or the fresh (cancelled) one — never races the
+	// previous group's Wait (R3-M2, same discipline as the wg.Go calls below).
+	s.mu.Lock()
 	s.wg.Add(1)
+	s.mu.Unlock()
 	defer s.wg.Done()
 
 	buf := pool.DefaultBuffer.Get()

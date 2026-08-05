@@ -5,6 +5,7 @@ import (
 	"time"
 	"zjdns/config"
 	"zjdns/database"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 )
 
@@ -117,6 +118,9 @@ drainLoop:
 // When the record channel is closed, remaining records are drained and flushed,
 // then the goroutine exits.
 func (w *AsyncStatsWriter) run() {
+	// A panic inside flush (e.g. SQLite failure) must not crash the process
+	// (R2: missing HandlePanic previously did).
+	defer zdnsutil.HandlePanic("Cache stats writer")
 	defer close(w.done)
 
 	const batchSize = 64

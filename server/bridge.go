@@ -42,6 +42,12 @@ type tcpWriteShard struct {
 // shards, so a busy server never contends on a single global lock.
 const tcpWriteShardCount = 16
 
+// tcpFramePool reuses the 2+N byte TCP write frame on the per-response hot
+// path (the frame is built and written synchronously inside the writeMu
+// critical section).  Frames grown beyond the pool cap are dropped rather
+// than grown in place (mirrors the tcpReadBufPool policy).
+var tcpFramePool = sync.Pool{New: func() any { b := make([]byte, 0, 512); return &b }}
+
 // tcpWriteShardFor returns the shard owning addr.  FNV-1a over the address
 // string — stable so the sweep finds entries in the same shard.
 func (s *Server) tcpWriteShardFor(addr string) *tcpWriteShard {
@@ -91,10 +97,13 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 			}
 			shard.entries[addr] = entry
 		}
-		// In-flight refcount: incremented under the lock so the sweep can
-		// never delete an entry a handler goroutine still holds (the
+		// In-flight refcount: incremented once, under the lock, so the sweep
+		// can never delete an entry a handler goroutine still holds (the
 		// goroutine releases it on exit; the synchronous SERVFAIL path
-		// releases it via defer before returning).
+		// releases it via defer before returning).  A second Add outside the
+		// lock (previously present) unbalanced the count — every request left
+		// refs at +1, making the sweep's refs==0 check dead code and the
+		// registry grow per connection for the process lifetime.
 		entry.refs.Add(1)
 		shard.mu.Unlock()
 
@@ -102,12 +111,6 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 			entry.capacity = make(chan struct{}, config.DefaultMaxPipe)
 			entry.writeMu = make(chan struct{}, 1)
 		})
-
-		// In-flight refcount: incremented synchronously so the sweep can never
-		// delete an entry a handler goroutine still holds (the goroutine
-		// releases it on exit; the synchronous SERVFAIL path releases it via
-		// defer before returning).
-		entry.refs.Add(1)
 
 		select {
 		case entry.capacity <- struct{}{}:
@@ -210,14 +213,30 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 					return
 				}
 				// Write the RFC 1035 §4.2.2 length prefix + payload in one
-				// frame.  Msg.WriteTo would allocate a fresh 2+len frame per
-				// response; preallocate once instead.
-				frame := make([]byte, zdnsutil.DNSFramePrefixLen+len(response.Data))
+				// frame from the pool.  Msg.WriteTo would allocate a fresh
+				// 2+len frame per response; the pooled frame is written
+				// synchronously inside the writeMu critical section, so the
+				// buffer is free to reuse as soon as Write returns.  The
+				// whole frame is overwritten each use (prefix + full payload
+				// copy), so no stale bytes can escape — no clear needed.
+				framePtr, ok := tcpFramePool.Get().(*[]byte)
+				if !ok {
+					b := make([]byte, 0, 512)
+					framePtr = &b
+				}
+				frame := *framePtr
+				if cap(frame) < zdnsutil.DNSFramePrefixLen+len(response.Data) {
+					frame = make([]byte, zdnsutil.DNSFramePrefixLen+len(response.Data))
+				} else {
+					frame = frame[:zdnsutil.DNSFramePrefixLen+len(response.Data)]
+				}
 				binary.BigEndian.PutUint16(frame, uint16(len(response.Data))) //nolint:gosec // G115: TCP frame length — protocol-bounded uint16
 				copy(frame[zdnsutil.DNSFramePrefixLen:], response.Data)
+				*framePtr = frame
 				if _, err := w.Write(frame); err != nil {
 					log.Debugf("SERVER: TCP write error for %s: %v", addr, err)
 				}
+				tcpFramePool.Put(framePtr)
 				pool.DefaultMessage.Put(response)
 			}
 		}()
@@ -282,11 +301,11 @@ func truncateWire(wire []byte) []byte {
 	if len(wire) < dns.MsgHeaderSize {
 		return wire
 	}
-	// Question section: starts after the 12-byte header.
-	pos := 12
+	// Question section: starts after the DNS header.
+	pos := dns.MsgHeaderSize
 	questions := int(binary.BigEndian.Uint16(wire[4:6]))
 	for range questions {
-		off, ok := skipWireName(wire, pos)
+		off, ok := zdnsutil.SkipWireName(wire, pos)
 		if !ok {
 			// Malformed question — keep only the header.
 			return wire[:dns.MsgHeaderSize]
@@ -298,7 +317,7 @@ func truncateWire(wire []byte) []byte {
 	// Scan the RR sections for a trailing OPT (type 41) to preserve.
 	var opt []byte
 	for pos+10 <= len(wire) {
-		off, ok := skipWireName(wire, pos)
+		off, ok := zdnsutil.SkipWireName(wire, pos)
 		if !ok || off+10 > len(wire) {
 			break
 		}
@@ -330,24 +349,6 @@ func truncateWire(wire []byte) []byte {
 		truncated[10], truncated[11] = 0, 0 // ARCOUNT
 	}
 	return truncated
-}
-
-// skipWireName returns the offset after the domain name at pos in a packed
-// message.  Handles label sequences and compression pointers (RFC 1035 §4.1.4).
-func skipWireName(wire []byte, pos int) (int, bool) {
-	for {
-		if pos >= len(wire) {
-			return 0, false
-		}
-		l := wire[pos]
-		if l == 0 {
-			return pos + 1, true
-		}
-		if l&0xC0 == 0xC0 {
-			return pos + 2, true
-		}
-		pos += int(l) + 1
-	}
 }
 
 // packSafe calls msg.Pack() and recovers from any panic, returning it as an

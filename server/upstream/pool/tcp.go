@@ -193,14 +193,17 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 
 	// Bound the write: a stalled peer with a full receive window blocks the
 	// write (and, behind writeMu, every queued query on this connection)
-	// until the readLoop's 60s idle timeout closes it. Set a write deadline
-	// from the query's ctx so the 9s timeout contract holds.
+	// until the readLoop's 60s idle timeout closes it. The deadline set and
+	// zero-restore live INSIDE the writeMu critical section: a concurrent
+	// Exchange must not have its deadline wiped by another's deferred
+	// restore while it is still writing (R3-M5) — serialized under the lock
+	// each exchange sets, writes, and clears its own deadline in turn.
+	c.writeMu.Lock()
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = c.conn.SetWriteDeadline(deadline)
-		defer func() { _ = c.conn.SetWriteDeadline(time.Time{}) }()
 	}
-	c.writeMu.Lock()
 	_, writeErr := zdnsutil.WriteTCPMsgSegmented(c.conn, writeBuf, c.segmentSize)
+	_ = c.conn.SetWriteDeadline(time.Time{})
 	c.writeMu.Unlock()
 	if writeErr != nil {
 		c.close()
@@ -426,8 +429,9 @@ func (p *ConnPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc f
 
 // WarmUp dials a new connection and adds it to the pool without returning it.
 // This is used to pre-establish connections (e.g. TLS handshakes) so the first
-// real query doesn't pay the dial latency.  If the pool is at capacity a dead
-// connection is replaced; if none are dead the connection is discarded.
+// real query doesn't pay the dial latency.  When the pool is at capacity the
+// call is a no-op — dead connections are replaced lazily by Acquire's live
+// scan, not here (R3-L15).
 func (p *ConnPool) WarmUp(ctx context.Context, key, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) error {
 	p.mu.Lock()
 	if len(p.conns[key]) >= p.maxConns {

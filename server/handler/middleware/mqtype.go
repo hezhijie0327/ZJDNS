@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/binary"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -10,6 +11,7 @@ import (
 	"zjdns/server/resolver"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // MQTYPE implements RFC 10029 server-side MQTYPE-Query handling: a client may
@@ -79,12 +81,17 @@ func (m *MQTYPE) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return err
 		}
 
-		// Forwarding mode: the upstream handles the merge (Resolution passes
-		// the option through); the upstream's MQTYPE-Response is forwarded by
-		// CacheStore.buildSuccess.  Local merging applies to recursive mode
-		// only.
-		if len(m.resolver.UpstreamServers()) > 0 {
-			return err
+		// Forwarding mode: a REAL upstream handles the merge (Resolution
+		// passes the option through); the upstream's MQTYPE-Response is
+		// forwarded by CacheStore.buildSuccess.  Local merging applies to
+		// recursive mode only — the recursive pseudo-server is in the
+		// upstream list too, so counting entries would misclassify a
+		// recursive-only config as forwarding and silently skip the merge
+		// (live-test catch, DEBUG.md RFC 10029 test).
+		for _, s := range m.resolver.UpstreamServers() {
+			if !s.IsRecursive() {
+				return err
+			}
 		}
 
 		m.merge(ctx, qctx, mqQuery)
@@ -127,6 +134,29 @@ func (m *MQTYPE) validate(qctx *handler.QueryContext, mq *dns.MQQUERY) error {
 // RFC 10029 §3.4: same RCODE/flags, deduplicated RRs, size-capped.
 func (m *MQTYPE) merge(ctx context.Context, qctx *handler.QueryContext, mq *dns.MQQUERY) {
 	msg := qctx.Res
+	if msg.Data != nil {
+		// Cache-hit primary responses are pre-packed: Data carries the full
+		// wire and the RR sections are nil.  Unpack so the merged RRs and the
+		// MQTYPE-Response option are added to real sections — the outer
+		// Response middleware would otherwise Unpack the wire later and
+		// rebuild the sections from it, silently discarding the merge.
+		// This also makes msg.Len() report the true primary size for the
+		// merge budget below.
+		if err := msg.Unpack(); err != nil {
+			log.Debugf("MQTYPE: unpack pre-packed primary response: %v", err)
+			return
+		}
+		msg.ID = qctx.Req.ID
+		msg.RecursionDesired = qctx.Req.RecursionDesired
+		// Filter DNSSEC proofs for DO=0 clients, mirroring the Response
+		// middleware's unpack path.
+		if !qctx.ClientRequestedDNSSEC {
+			msg.Answer = cache.ProcessRecords(msg.Answer, 0, false, false)
+			msg.Ns = cache.ProcessRecords(msg.Ns, 0, false, false)
+			msg.Extra = cache.ProcessRecords(msg.Extra, 0, false, false)
+		}
+		msg.Data = nil
+	}
 	qd := qctx.Req.Question[0]
 	qname := qd.Header().Name
 	qclass := qd.Header().Class
@@ -200,8 +230,15 @@ func (m *MQTYPE) merge(ctx context.Context, qctx *handler.QueryContext, mq *dns.
 // resolve performs the secondary lookup for one QTYPE: cache first, then
 // singleflight resolution — the same pattern as the DNS64 middleware.
 func (m *MQTYPE) resolve(ctx context.Context, qname string, qt, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool) *resolver.QueryResult {
+	// Canonicalize: cache.Get requires the canonical qname (Set stores it) —
+	// the merge entry passes the raw wire name, which can carry mixed case
+	// (regression of the removed internal canonicalization).
+	qname = dnsutil.Canonical(qname)
 	if m.store != nil {
 		if entry, found, _ := m.store.Get(qname, qt, qclass, ecsOpt, dnssecOK); found && entry.Unpack() == nil {
+			// Return the pool-owned TTL-offset slice before the entry is
+			// dropped (same family as M15 / dns64 TTLOffsets leak).
+			cache.ReleaseTTLOffsets(entry.TTLOffsets)
 			return &resolver.QueryResult{
 				Answer: entry.Answer, Authority: entry.Authority, Additional: entry.Additional,
 				Validated: entry.Validated, Rcode: entryRcode(entry),
@@ -263,10 +300,56 @@ func equalRR(a, b dns.RR) bool {
 	return a.String() == b.String()
 }
 
-// entryRcode extracts the rcode from a pre-packed entry's wire header.
+// entryRcode extracts the rcode from a pre-packed entry's wire header,
+// including extended rcodes (>= 16): the low 4 bits live in the header flags
+// byte, the extended bits in the OPT record's TTL high byte (RFC 6891
+// §6.1.3).  Reading only the low nibble misclassified e.g. BADVERS (16) as
+// NOERROR, breaking the RFC 10029 §3.4 RCODE-match check.
 func entryRcode(entry *cache.Entry) uint16 {
-	if len(entry.ResponseWire) >= 4 {
-		return uint16(entry.ResponseWire[3] & 0x0F) //nolint:gosec // G115: DNS rcode — protocol-bounded byte
+	wire := entry.ResponseWire
+	if len(wire) < 4 {
+		return 0
 	}
-	return 0
+	rcode := uint16(wire[3] & 0x0F) //nolint:gosec // G115: DNS rcode — protocol-bounded byte
+	// Scan the wire for the OPT record.  The cached wire's question section
+	// is uncompressed (canonical qname built by Set), so a plain label walk
+	// finds its end.
+	pos := dns.MsgHeaderSize
+	for pos < len(wire) {
+		l := int(wire[pos])
+		if l == 0 {
+			pos += 1 + 4 // root label + QTYPE(2) + QCLASS(2)
+			break
+		}
+		if l&0xC0 == 0xC0 {
+			return rcode // compression pointer in the question — not the cache format
+		}
+		pos += l + 1
+	}
+	for pos+11 <= len(wire) {
+		off := pos
+		// Name: labels or a compression pointer.
+		for off < len(wire) {
+			b := wire[off]
+			if b&0xC0 == 0xC0 {
+				off += 2
+				break
+			}
+			if b == 0 {
+				off++
+				break
+			}
+			off += int(b) + 1
+		}
+		if off+10 > len(wire) {
+			break
+		}
+		typ := binary.BigEndian.Uint16(wire[off:])
+		if typ == dns.TypeOPT {
+			rcode |= uint16(wire[off+4]) << 4 // OPT TTL byte 0 = extended rcode (RFC 6891 §6.1.3)
+			return rcode
+		}
+		pos = off + 10 + int(binary.BigEndian.Uint16(wire[off+8:]))
+	}
+	return rcode
 }
