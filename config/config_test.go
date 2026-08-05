@@ -540,3 +540,38 @@ func TestProtocolMatchesStamp_DoH(t *testing.T) {
 		t.Error("protocolMatchesStamp(udp, ProtoDOH) must not match")
 	}
 }
+
+// ── R3-H2 family: DoT/DoQ stamps must map to the config protocol vocabulary ──
+// The upstream client dispatches DoT under "tls" and DoQ under "quic" — the
+// stamp names "dot"/"doq" produced a silently broken upstream ("unsupported
+// protocol") exactly like the fixed "doh" case.
+
+func TestResolveStamp_DoT_ProtocolTLS(t *testing.T) {
+	stamp := &zstamp.DNSStamp{
+		Proto:        zstamp.ProtoDOT,
+		Address:      "9.9.9.9:853",
+		ProviderName: "dns.quad9.net",
+	}
+	server := &UpstreamServer{Address: stamp.String()}
+	if err := resolveStamp(server, 0, "upstream"); err != nil {
+		t.Fatalf("resolveStamp: %v", err)
+	}
+	if server.Protocol != ProtoTLS {
+		t.Errorf("DoT stamp protocol = %q, want %q", server.Protocol, ProtoTLS)
+	}
+}
+
+func TestResolveStamp_DoQ_ProtocolQUIC(t *testing.T) {
+	stamp := &zstamp.DNSStamp{
+		Proto:        zstamp.ProtoDOQ,
+		Address:      "9.9.9.9:853",
+		ProviderName: "dns.quad9.net",
+	}
+	server := &UpstreamServer{Address: stamp.String()}
+	if err := resolveStamp(server, 0, "upstream"); err != nil {
+		t.Fatalf("resolveStamp: %v", err)
+	}
+	if server.Protocol != ProtoQUIC {
+		t.Errorf("DoQ stamp protocol = %q, want %q", server.Protocol, ProtoQUIC)
+	}
+}

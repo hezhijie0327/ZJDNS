@@ -199,12 +199,14 @@ func Parse(stampStr string) (*DNSStamp, error) {
 // string ("dnscrypt-relay" / "odoh-relay" / "odoh" for the relay and ODoH
 // target types).
 //
-// ProtoDOH maps to "https" (config.ProtoHTTPS): the config/upstream protocol
-// vocabulary has no "doh" — the upstream client dispatches DoH via
-// ExecuteHTTPS under ProtoHTTPS.  Returning "doh" or "http" produced a
-// silently broken upstream (validateConfig ran before stamp normalization,
-// so the invalid protocol bypassed validation and every query failed with
-// "unsupported protocol").
+// The encrypted-protocol stamps map to the config/upstream protocol
+// vocabulary, NOT the stamp's own names: the upstream client dispatches DoT
+// via ExecuteTLS under ProtoTLS ("tls"), DoQ via ExecuteQUIC under ProtoQUIC
+// ("quic"), DoH via ExecuteHTTPS under ProtoHTTPS ("https").  Returning the
+// stamp names ("dot"/"doq"/"doh") produced a silently broken upstream —
+// validateConfig runs before stamp normalization, so the invalid protocol
+// bypassed validation and every query failed with "unsupported protocol"
+// (R3-H2 family: "doh" fixed earlier, "dot"/"doq" the same defect).
 func ProtoToConfig(stampProto ProtoType) string {
 	switch stampProto {
 	case ProtoPlain:
@@ -214,9 +216,9 @@ func ProtoToConfig(stampProto ProtoType) string {
 	case ProtoDOH:
 		return "https"
 	case ProtoDOT:
-		return "dot"
+		return "tls"
 	case ProtoDOQ:
-		return "doq"
+		return "quic"
 	case ProtoODoHTarget:
 		return "odoh"
 	case ProtoDNSCryptRelay:

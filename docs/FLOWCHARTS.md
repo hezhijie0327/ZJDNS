@@ -104,7 +104,7 @@ graph TD
     LOCK --> CAP[capacity 信号量<br/>RFC 7766 管道上限]
     CAP -->|saturated| SF[SERVFAIL<br/>writeMu 串行化]
     CAP -->|ok| GORO[goroutine: handler → pack → writeMu → write]
-    GORO --> DONE[refs.Add(-1)]
+    GORO --> DONE["refs.Add(-1)"]
     SF --> DONE
     SWEEP[Sweep: refs==0 → 删除 entry]
     DONE --> SWEEP
@@ -117,7 +117,7 @@ graph TD
     Q[Query] --> ECS[ECS 候选<br/>单轮 SQL：5 候选 OR 子句<br/>ORDER BY CASE 优先级]
     ECS --> SQL[SQLite Lookup<br/>StmtEntryFallback]
     SQL -->|not found| MISS[Cache Miss]
-    SQL -->|found| FMT{msg_wire[0]==0x02<br/>且 [1]==0?}
+    SQL -->|found| FMT{"msg_wire[0]==0x02<br/>且 [1]==0?"}
     FMT -->|legacy ≤v3.11.11| LEGACY[裸 zstd / 裸 wire<br/>无 offset 表 · 原 TTL]
     FMT -->|pre-packed| OFFSET[读 offset 表<br/>numOffsets 边界校验]
     OFFSET --> WIRE[提取 wire]
