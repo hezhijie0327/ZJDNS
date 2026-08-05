@@ -4,9 +4,50 @@
 
 格式：**概述 → 常量 → 关键要求 → 协议流程 → 我们的实现**
 
+### 状态图例
+
+Section 标题栏位格式：`[RFC NNNN: 状态]` `合规标记`
+
+| 标记 | RFC 状态 | 说明 |
+|------|----------|------|
+| `[Standard]` | Internet Standard (STD) | 正式互联网标准 |
+| `[Internet Standard]` | Internet Standard (STD) | 正式互联网标准 |
+| `[Proposed Standard]` | Standards Track | 标准轨道提案 |
+| `[Best Current Practice]` | BCP | 当前最佳实践 |
+| `[Informational]` | Informational | 信息性文档 |
+| `[Experimental]` | Experimental | 实验性协议 |
+| `[Historic]` | Historic | 已废弃/被取代 |
+
+| 标记 | 合规状态 | 说明 |
+|------|----------|------|
+| ✅ | 合规 | 已完整实现 |
+| ⚠️ | 部分合规 | 已知差距，见条目详情 |
+| ⚪ | 参考 | 不适用（非递归解析器职责）或仅供参考 |
+| ❌ | 不合规 | 要求未实现（当前无此项） |
+
+### 统计摘要
+
+| 状态 | 数量 |
+|------|------|
+| Internet Standard / Standard | 3 (RFC 768, 1034, 1035) |
+| Proposed Standard | 74 |
+| Best Current Practice | 3 (RFC 2929, 6895, 8499) |
+| Informational | 10 |
+| Experimental | 8 |
+| Historic | 6 |
+| Internet-Draft | 3 (DNS Stamp, DNSCrypt, DELEG) |
+| 国密标准 | 1 (TLCP/DTLCP) |
+| **总计** | **108** |
+
+| 合规 | 数量 |
+|------|------|
+| ✅ 合规 | 87 |
+| ⚠️ 部分合规 | 4 (RFC 5001, 5011/9077, 8198, 9567) |
+| ⚪ 参考 | 16 |
+
 ---
 
-## RFC 768 — User Datagram Protocol
+## RFC 768 — User Datagram Protocol  `[RFC 768: Standard (STD 6)]`  ✅
 
 **DNS 的 UDP 传输基础（端口 53、最大 512 字节消息、无连接语义）。**
 
@@ -19,7 +60,7 @@
 
 ---
 
-## RFC 1034 — DNS 概念与设施
+## RFC 1034 — DNS 概念与设施  `[RFC 1034: Internet Standard (STD 13)]`  ✅
 
 **域名系统（DNS）的概念基础：命名空间、资源记录、名称服务器、解析器算法。**
 
@@ -59,7 +100,7 @@
 - `zonecut.go`：区域切割检测与 glue 记录处理
 - CNAME 链处理在 `cname.go` 带循环检测
 
-## RFC 1035 — DNS 实现规范
+## RFC 1035 — DNS 实现规范  `[RFC 1035: Internet Standard (STD 13)]`  ✅
 
 **域名系统（DNS）的线格式、消息结构、传输协议和查询语义。**
 
@@ -86,7 +127,7 @@
 
 ---
 
-## RFC 1348 — NSAP Records（已废弃）
+## RFC 1348 — NSAP Records（已废弃）  `[RFC 1348: Historic (Obsoleted by RFC 1706)]`  ⚪
 
 **NSAP RR（22）：OSI NSAP 地址的 DNS 发布（后被 RFC 1706 取代并从标准中移除）。**
 
@@ -96,7 +137,7 @@
 
 ---
 
-## RFC 1876 — LOC Record
+## RFC 1876 — LOC Record  `[RFC 1876: Experimental]`  ✅
 
 **LOC RR（29）：地理定位（纬度/经度/高度/精度）。**
 
@@ -106,7 +147,7 @@
 
 ---
 
-## RFC 1995 — Incremental Zone Transfer (IXFR)
+## RFC 1995 — Incremental Zone Transfer (IXFR)  `[RFC 1995: Proposed Standard]`  ⚪
 
 **增量区域传输：仅传输变化的 RRset（SOA SERIAL 比较）。**
 
@@ -116,7 +157,7 @@
 
 ---
 
-## RFC 1996 — DNS NOTIFY
+## RFC 1996 — DNS NOTIFY  `[RFC 1996: Proposed Standard]`  ⚪
 
 **区域变更提示：主服务器通知辅助服务器"区域变了"，辅助再发起 SOA 查询/传输。**
 
@@ -126,7 +167,7 @@
 
 ---
 
-## RFC 2065 / 2537 / 3110 / 3445 — DNSSEC 历史与旧算法
+## RFC 2065 / 2537 / 3110 / 3445 — DNSSEC 历史与旧算法  `[RFC 2065: Historic (Obsoleted by RFC 4033–4035) | RFC 2537: Historic (Obsoleted by RFC 3110) | RFC 3110: Historic (Obsoleted) | RFC 3445: Historic (Obsoleted by RFC 4033–4035)]`  ⚪ ⚪ ⚪ ⚪
 
 **历史参考：**
 - 2065: DNSSEC 原始规范（被 2535 取代）
@@ -140,7 +181,7 @@
 
 ---
 
-## RFC 2136 — Dynamic Updates in the DNS (DNS UPDATE)
+## RFC 2136 — Dynamic Updates in the DNS (DNS UPDATE)  `[RFC 2136: Proposed Standard]`  ⚪
 
 **DNS 动态更新协议（UPDATE 消息、Prerequisite 与 Update 段、SOA 序列号递增）。**
 
@@ -155,7 +196,7 @@
 
 ---
 
-## RFC 2181 — DNS 规范澄清
+## RFC 2181 — DNS 规范澄清  `[RFC 2181: Proposed Standard]`  ✅
 
 **对 RFC 1034/1035 的关键澄清：RRsets、TC 位语义、TTL 一致性、缓存信任等级。**
 
@@ -197,7 +238,7 @@
 - RRSet 验证：`dnssec/crypto.go` 遵循 §5
 - 源地址选择：Go `net` 包默认行为
 
-## RFC 2671 — Extension Mechanisms for DNS (EDNS0)
+## RFC 2671 — Extension Mechanisms for DNS (EDNS0)  `[RFC 2671: Historic (Obsoleted by RFC 6891)]`  ⚪
 
 **EDNS(0) 原始规范（被 RFC 6891 取代）：OPT 伪记录、UDP 载荷扩展、扩展 RCODE。**
 
@@ -207,7 +248,7 @@
 
 ---
 
-## RFC 2782 — SRV Record
+## RFC 2782 — SRV Record  `[RFC 2782: Proposed Standard]`  ✅
 
 **SRV RR（33）：服务定位（`_service._proto.name` → 目标 + 端口 + 权重/优先级）。**
 
@@ -222,7 +263,7 @@
 
 ---
 
-## RFC 2845 / 4635 — TSIG
+## RFC 2845 / 4635 — TSIG  `[RFC 2845: Proposed Standard | RFC 4635: Proposed Standard]`  ⚪ ⚪
 
 **TSIG（250）：事务签名（HMAC-SHA* 的共享密钥认证，4635 定义 HMAC-SHA1/224/256/384/512 算法标识）。**
 
@@ -237,7 +278,7 @@
 
 ---
 
-## RFC 2915 / 3401 / 3402 / 3403 — NAPTR 与 DDDS
+## RFC 2915 / 3401 / 3402 / 3403 — NAPTR 与 DDDS  `[RFC 2915: Proposed Standard (Obsoleted by RFC 3401–3403) | RFC 3401: Informational | RFC 3402: Proposed Standard | RFC 3403: Proposed Standard]`  ⚪ ✅ ✅ ✅
 
 **NAPTR RR（35）+ DDDS 框架三部曲：字符串重写规则驱动的服务解析（ENUM、SIP 等）。**
 
@@ -250,7 +291,7 @@
 
 ---
 
-## RFC 2929 / 6895 — DNS IANA Considerations
+## RFC 2929 / 6895 — DNS IANA Considerations  `[RFC 2929: Best Current Practice (BCP 42) | RFC 6895: Best Current Practice (BCP 182)]`  ⚪ ⚪
 
 **DNS 参数注册表管理：类型/类/操作码/RCODE 的分配政策与保留。**
 
@@ -260,7 +301,7 @@
 
 ---
 
-## RFC 3123 — APL Record
+## RFC 3123 — APL Record  `[RFC 3123: Experimental]`  ✅
 
 **APL RR（42）：地址前缀列表（IPv4/IPv6 CIDR + 否定标记）。**
 
@@ -270,7 +311,7 @@
 
 ---
 
-## RFC 3225 — DO bit (DNSSEC OK)
+## RFC 3225 — DO bit (DNSSEC OK)  `[RFC 3225: Proposed Standard]`  ✅
 
 **EDNS0 扩展位（DO）：客户端声明理解 DNSSEC 记录；无 DO 的响应不应包含 DNSSEC 记录。**
 
@@ -285,7 +326,7 @@
 
 ---
 
-## RFC 3596 — AAAA Record
+## RFC 3596 — AAAA Record  `[RFC 3596: Proposed Standard]`  ✅
 
 **AAAA RR（28）：IPv6 地址。更新 RFC 1886。**
 
@@ -295,7 +336,22 @@
 
 ---
 
-## RFC 4025 — IPSECKEY Record
+## RFC 3597 — Handling of Unknown DNS RR Types  `[RFC 3597: Proposed Standard]`  ✅
+
+**未知 RR 类型的通用表示（TYPE=\<any\>、`\#` 格式的 RDATA 十六进制编码），允许 DNS 软件在不更新代码的情况下处理新 RR 类型。**
+
+### 关键点
+
+- 未知类型用 `\# <length> <hex>` 表示 RDATA
+- DNS 软件 MUST 能解析和转发未知类型，不得因未知类型拒绝消息
+
+### 我们的实现
+
+- miekg/dns 完整支持 RFC 3597 未知类型表示；ZJDNS 透传所有未知类型 ✓
+
+---
+
+## RFC 4025 — IPSECKEY Record  `[RFC 4025: Proposed Standard]`  ✅
 
 **IPSECKEY RR（45）：存储 IPsec 网关信息与密钥材料。**
 
@@ -305,7 +361,7 @@
 
 ---
 
-## RFC 4033/4034/4035 — DNSSEC
+## RFC 4033/4034/4035 — DNSSEC  `[RFC 4033: Proposed Standard | RFC 4034: Proposed Standard | RFC 4035: Proposed Standard]`  ✅ ✅ ✅
 
 **DNS 安全扩展，通过数字签名保证 DNS 数据的完整性和真实性。**
 
@@ -328,7 +384,7 @@ DNSKEY (自签名) → DS (父域授权) → DNSKEY (子域) → RRSIG (签名�
 
 ---
 
-## RFC 4255 — SSHFP Record
+## RFC 4255 — SSHFP Record  `[RFC 4255: Proposed Standard]`  ✅
 
 **SSHFP RR（44）：SSH 主机密钥指纹，SSH 证书验证用。**
 
@@ -338,7 +394,23 @@ DNSKEY (自签名) → DS (父域授权) → DNSKEY (子域) → RRSIG (签名�
 
 ---
 
-## RFC 4408 — Sender Policy Framework (SPF)
+## RFC 4343 — DNS Case Insensitivity Clarification  `[RFC 4343: Proposed Standard]`  ✅
+
+**澄清 DNS 名称大小写不敏感的确切语义：比较时 ASCII 字母的高零位（0x20 位）必须被忽略，但其他位精确匹配。**
+
+### 关键要求
+
+- **MUST**: 名称比较时清除 ASCII 字母的第 5 位（0x20），其他所有位精确匹配
+- **MUST**: 响应中 QNAME 的大小写 MUST 原样回显（不能标准化），但比较时大小写不敏感
+- 更新 RFC 1034/1035/2181
+
+### 我们的实现
+
+- Go `strings.EqualFold` + miekg/dns `dns.Equal()` 严格执行 DNS 大小写规则 ✓
+
+---
+
+## RFC 4408 — Sender Policy Framework (SPF)  `[RFC 4408: Experimental]`  ✅
 
 **SPF RR（99）：邮件发件人授权验证（后被 RFC 7208 TXT 取代，类型不再推荐使用）。**
 
@@ -348,11 +420,17 @@ DNSKEY (自签名) → DS (父域授权) → DNSKEY (子域) → RRSIG (签名�
 
 ---
 
-## RFC 4509 — SHA-256 in DS RRs
+## RFC 4509 — SHA-256 in DS RRs  `[RFC 4509: Proposed Standard]`  ✅
 
-\*\*DNSSEC DS 摘要 MUST 支持 SHA-256（更新 RFC 4---
+\*\*DNSSEC DS 摘要 MUST 支持 SHA-256（更新 RFC 4034）。\*\*
 
-## RFC 4592 — The Role of Wildcards in the DNS
+### 我们的实现
+
+- `dnssec/crypto.go` 验证器支持 DS 摘要类型 2（SHA-256）✓
+
+---
+
+## RFC 4592 — The Role of Wildcards in the DNS  `[RFC 4592: Proposed Standard]`  ✅
 
 **泛域名（`*.example.com`）语义的权威澄清：匹配规则、与显式数据的优先级、委托取消。**
 
@@ -368,7 +446,7 @@ DNSKEY (自签名) → DS (父域授权) → DNSKEY (子域) → RRSIG (签名�
 
 ---
 
-## RFC 4701 — DHCID Record
+## RFC 4701 — DHCID Record  `[RFC 4701: Proposed Standard]`  ✅
 
 **DHCID RR（49）：DHCP 客户端身份标识，用于 FQDN 更新冲突检测。**
 
@@ -378,7 +456,7 @@ DNSKEY (自签名) → DS (父域授权) → DNSKEY (子域) → RRSIG (签名�
 
 ---
 
-## RFC 4892 — Requirements for a Mechanism Identifying a Name Server Instance
+## RFC 4892 — Requirements for a Mechanism Identifying a Name Server Instance  `[RFC 4892: Informational]`  ✅
 
 **NSID 的需求文档（`id.server`/`hostname.bind` CHAOS 查询作为临时方案），RFC 5001 的动机。**
 
@@ -388,7 +466,7 @@ DNSKEY (自签名) → DS (父域授权) → DNSKEY (子域) → RRSIG (签名�
 
 ---
 
-## RFC 5001 — DNS Name Server Identifier (NSID)
+## RFC 5001 — DNS Name Server Identifier (NSID)  `[RFC 5001: Proposed Standard]`  ⚠️
 
 **EDNS0 选项（OPTION-CODE 3）：响应中携带服务器实例标识，用于 anycast/负载均衡环境识别应答者。**
 
@@ -401,7 +479,7 @@ DNSKEY (自签名) → DS (父域授权) → DNSKEY (子域) → RRSIG (签名�
 
 ---
 
-## RFC 5011/9077 — Trust Anchor 自动化
+## RFC 5011/9077 — Trust Anchor 自动化  `[RFC 5011: Proposed Standard | RFC 9077: Proposed Standard]`  ⚠️ ⚠️
 
 **DNSSEC 信任锚的自动化管理（RFC 9077 更新 5011）。**
 
@@ -409,7 +487,7 @@ DNSKEY (自签名) → DS (父域授权) → DNSKEY (子域) → RRSIG (签名�
 
 ---
 
-## RFC 5077 — TLS Session Resumption (Session Tickets)
+## RFC 5077 — TLS Session Resumption (Session Tickets)  `[RFC 5077: Proposed Standard]`  ✅
 
 **通过 Session Ticket 恢复 TLS 会话，避免完整握手（减少 1 RTT）。**
 
@@ -427,7 +505,7 @@ DNSKEY (自签名) → DS (父域授权) → DNSKEY (子域) → RRSIG (签名�
 
 ---
 
-## RFC 5155 — NSEC3（哈希认证的否定存在证明）
+## RFC 5155 — NSEC3（哈希认证的否定存在证明）  `[RFC 5155: Proposed Standard]`  ✅
 
 **NSEC3 替代 NSEC 提供否定存在证明，同时防止区域枚举（zone walking）。**
 
@@ -476,7 +554,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 5205 — HIP Record
+## RFC 5205 — HIP Record  `[RFC 5205: Experimental]`  ✅
 
 **HIP RR（55）：Host Identity Protocol 的 DNS 扩展（HIT、RVS 服务器）。**
 
@@ -486,7 +564,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 5702 — SHA-2 in DNSSEC
+## RFC 5702 — SHA-2 in DNSSEC  `[RFC 5702: Proposed Standard]`  ✅
 
 **SHA-256/SHA-512 的 DNSSEC 支持：算法 8（RSASHA256）/10（RSASHA512）、DS 摘要 2（SHA-256）/4（SHA-384）。**
 
@@ -496,7 +574,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 5936 — Zone Transfer Protocol (AXFR)
+## RFC 5936 — Zone Transfer Protocol (AXFR)  `[RFC 5936: Proposed Standard]`  ⚪
 
 **完整区域传输协议：序列化传输整个 zone（SOA 起始与结束）。**
 
@@ -506,7 +584,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 5966 — DNS Transport over TCP
+## RFC 5966 — DNS Transport over TCP  `[RFC 5966: Historic (Obsoleted by RFC 7766)]`  ⚪
 
 **TCP 传输要求（RFC 7766 的前身与基础）：所有实现 MUST 同时支持 UDP 与 TCP。**
 
@@ -520,7 +598,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 6052/6147 — DNS64
+## RFC 6052/6147 — DNS64  `[RFC 6052: Proposed Standard | RFC 6147: Proposed Standard]`  ✅ ✅
 
 **IPv6-only 客户端访问 IPv4-only 服务器的 NAT64 过渡技术。**
 
@@ -544,7 +622,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 6125 — TLS 证书名验证
+## RFC 6125 — TLS 证书名验证  `[RFC 6125: Proposed Standard]`  ✅
 
 **TLS 客户端如何验证服务端证书中的标识名（SAN/CN）。**
 
@@ -561,7 +639,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 6604/6840/7344 — DNSSEC 补充
+## RFC 6604/6840/7344 — DNSSEC 补充  `[RFC 6604: Proposed Standard | RFC 6840: Proposed Standard | RFC 7344: Informational]`  ✅ ✅ ✅
 
 **对 DNSSEC 的澄清和自动化更新。**
 
@@ -573,7 +651,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 6605 — ECDSA P-256 for DNSSEC
+## RFC 6605 — ECDSA P-256 for DNSSEC  `[RFC 6605: Proposed Standard]`  ✅
 
 **算法 13（ECDSAP256SHA256）：DNSSEC 椭圆曲线签名（含 GOST 与 P-384 的讨论）。**
 
@@ -583,7 +661,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 6672 — DNAME
+## RFC 6672 — DNAME  `[RFC 6672: Proposed Standard]`  ✅
 
 **将整个子树重定向到另一个域名的 DNS RR 类型（类似 CNAME 但对整个 zone）。**
 
@@ -600,7 +678,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 6725 — DNSKEY Algorithm IANA Registry Updates
+## RFC 6725 — DNSKEY Algorithm IANA Registry Updates  `[RFC 6725: Proposed Standard]`  ⚪
 
 **DNSKEY 算法注册表状态整理（划分 MUST/MAY 支持等）。**
 
@@ -610,7 +688,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 6742 — ILNP Records
+## RFC 6742 — ILNP Records  `[RFC 6742: Experimental]`  ✅
 
 **ILNP RR 家族（NID=104、L32=105、L64=106、LP=107）：Identifier-Locator Network Protocol 的 DNS 编码。**
 
@@ -620,7 +698,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 6761 — 特殊域名
+## RFC 6761 — 特殊域名  `[RFC 6761: Proposed Standard]`  ✅
 
 **DNS 中具有特殊含义、不应全局解析的域名。**
 
@@ -641,7 +719,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 6840 — DNSSEC 澄清与更新
+## RFC 6840 — DNSSEC 澄清与更新  `[RFC 6840: Proposed Standard]`  ✅
 
 **对 RFC 4033–4035 和 5155 的关键澄清，提升 MUST/SHOULD 级别。**
 
@@ -683,7 +761,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 6844 / 8659 — Certification Authority Authorization (CAA)
+## RFC 6844 / 8659 — Certification Authority Authorization (CAA)  `[RFC 6844: Proposed Standard | RFC 8659: Proposed Standard]`  ✅ ✅
 
 **CAA RR（257）：域名所有者声明允许的 CA 列表，控制证书签发。**
 
@@ -698,7 +776,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 6891 — EDNS(0)
+## RFC 6891 — EDNS(0)  `[RFC 6891: Proposed Standard]`  ✅
 
 **DNS 的扩展机制，支持更大的 UDP 负载、额外的 OPT 选项。**
 
@@ -722,7 +800,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 6944 — DNSSEC DNSKEY Algorithm Status
+## RFC 6944 — DNSSEC DNSKEY Algorithm Status  `[RFC 6944: Proposed Standard]`  ⚪
 
 **算法状态（撤销/废弃/可选）：RSAMD5、RSASHA1、DSA 等的 MUST/MAY 清单。**
 
@@ -732,7 +810,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 6975 — Algorithm Understanding in DNSSEC
+## RFC 6975 — Algorithm Understanding in DNSSEC  `[RFC 6975: Proposed Standard]`  ✅
 
 **EDNS0 选项 DAU（5）/DHU（6）/N3U（7）：解析器向权威宣告支持的签名/摘要/NSEC3 哈希算法。**
 
@@ -742,7 +820,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 7043 — EUI48/EUI64 Records
+## RFC 7043 — EUI48/EUI64 Records  `[RFC 7043: Informational]`  ✅
 
 **EUI48（108）/EUI64（109）RR：IEEE EUI 标识符（MAC 地址）的 DNS 发布。**
 
@@ -752,7 +830,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 7314 — EDNS EXPIRE Option
+## RFC 7314 — EDNS EXPIRE Option  `[RFC 7314: Experimental]`  ⚪
 
 **EDNS0 选项（OPTION-CODE 9）：辅助服务器通告其 SOA EXPIRE 状态，主服务器可据此调整通知策略。**
 
@@ -762,7 +840,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 7477 — Child-to-Parent Synchronization (CSYNC)
+## RFC 7477 — Child-to-Parent Synchronization (CSYNC)  `[RFC 7477: Proposed Standard]`  ⚪
 
 **CSYNC RR（62）：子区向父区宣告应同步的记录（NS/DS 等），父区代理据此更新。**
 
@@ -772,7 +850,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 7553 — URI Record
+## RFC 7553 — URI Record  `[RFC 7553: Informational]`  ✅
 
 **URI RR（256）：URI 元数据发布（带优先级/权重）。**
 
@@ -782,13 +860,13 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 7719 / 8499 — DNS Terminology
+## RFC 7719 / 8499 — DNS Terminology  `[RFC 7719: Informational (Obsoleted by RFC 8499) | RFC 8499: Best Current Practice (BCP 219)]`  ✅ ✅
 
 **DNS 术语标准参考（8499 更新 7719）。** ✓
 
 ---
 
-## RFC 7766 — DNS over TCP
+## RFC 7766 — DNS over TCP  `[RFC 7766: Proposed Standard]`  ✅
 
 **DNS TCP 传输的实现要求，更新 RFC 1035。**
 
@@ -815,7 +893,7 @@ Client ← [2字节长度][DNS响应] ← Server  (按序)
 
 ---
 
-## RFC 7828 — EDNS TCP Keepalive
+## RFC 7828 — EDNS TCP Keepalive  `[RFC 7828: Proposed Standard]`  ✅
 
 **EDNS0 选项，协商 TCP/DoT 连接的保活超时。**
 
@@ -830,7 +908,7 @@ Client ← [2字节长度][DNS响应] ← Server  (按序)
 
 ---
 
-## RFC 7858 — DNS over TLS (DoT)
+## RFC 7858 — DNS over TLS (DoT)  `[RFC 7858: Proposed Standard]`  ✅
 
 **通过 TLS 加密传输 DNS 查询，防止窃听和篡改。**
 
@@ -856,7 +934,7 @@ Client ⇄ [2字节长度][DNS消息] ⇄ Server  (TLS 加密通道内)
 
 ---
 
-## RFC 7871 — EDNS Client Subnet (ECS)
+## RFC 7871 — EDNS Client Subnet (ECS)  `[RFC 7871: Informational]`  ✅
 
 **允许递归解析器向权威服务器传递客户端子网信息（用于 CDN 定位）。**
 
@@ -884,7 +962,7 @@ Client ⇄ [2字节长度][DNS消息] ⇄ Server  (TLS 加密通道内)
 
 ---
 
-## RFC 7873/9018 — DNS Cookies
+## RFC 7873/9018 — DNS Cookies  `[RFC 7873: Proposed Standard | RFC 9018: Proposed Standard]`  ✅ ✅
 
 **轻量级无状态 DNS 事务认证机制，防止放大攻击和缓存投毒。**
 
@@ -925,7 +1003,7 @@ Client ⇄ [2字节长度][DNS消息] ⇄ Server  (TLS 加密通道内)
 
 ---
 
-## RFC 7958 — DNSSEC Trust Anchor Publication
+## RFC 7958 — DNSSEC Trust Anchor Publication  `[RFC 7958: Informational]`  ✅
 
 **根信任锚（root-anchors.xml）的发布格式与获取方式（ICANN 发布、RFC 8145 信任锚传送）。**
 
@@ -935,7 +1013,7 @@ Client ⇄ [2字节长度][DNS消息] ⇄ Server  (TLS 加密通道内)
 
 ---
 
-## RFC 8080 — EdDSA for DNSSEC
+## RFC 8080 — EdDSA for DNSSEC  `[RFC 8080: Proposed Standard]`  ✅
 
 **算法 15（ED25519）/16（ED448）：EdDSA 签名，DNSSEC 的最优现代算法。**
 
@@ -945,7 +1023,7 @@ Client ⇄ [2字节长度][DNS消息] ⇄ Server  (TLS 加密通道内)
 
 ---
 
-## RFC 8094 — DNS over DTLS
+## RFC 8094 — DNS over DTLS  `[RFC 8094: Experimental]`  ✅
 
 **通过 DTLS（UDP 上的 TLS）加密传输 DNS。**
 
@@ -980,7 +1058,7 @@ Client ⇄ DTLS 记录 [DNS消息] ⇄ Server  (UDP 数据报)
 
 ---
 
-## RFC 8198 — Aggressive NSEC Caching
+## RFC 8198 — Aggressive NSEC Caching  `[RFC 8198: Proposed Standard]`  ⚠️
 
 **利用缓存的 NSEC/NSEC3 范围推导否定回答。**
 
@@ -988,7 +1066,7 @@ Client ⇄ DTLS 记录 [DNS消息] ⇄ Server  (UDP 数据报)
 
 ---
 
-## RFC 8310 — DoT/DTLS Privacy Profiles
+## RFC 8310 — DoT/DTLS Privacy Profiles  `[RFC 8310: Proposed Standard]`  ✅
 
 **定义了 Strict 和 Opportunistic 两种隐私配置模式。**
 
@@ -1017,7 +1095,7 @@ Client ⇄ DTLS 记录 [DNS消息] ⇄ Server  (UDP 数据报)
 
 ---
 
-## RFC 8427 — Representing DNS Messages in JSON
+## RFC 8427 — Representing DNS Messages in JSON  `[RFC 8427: Informational]`  ⚪
 
 **DNS 消息（或其组成部分）的通用 JSON 表示格式，用于数据交换（查询日志、被动 DNS、消息组装）。**
 
@@ -1044,7 +1122,7 @@ Client ⇄ DTLS 记录 [DNS消息] ⇄ Server  (UDP 数据报)
 
 ---
 
-## RFC 8446 — TLS 1.3
+## RFC 8446 — TLS 1.3  `[RFC 8446: Proposed Standard]`  ✅
 
 **TLS 协议的当前版本，废弃不安全的旧算法，强制前向安全性。**
 
@@ -1062,7 +1140,7 @@ Client ⇄ DTLS 记录 [DNS消息] ⇄ Server  (UDP 数据报)
 
 ---
 
-## RFC 8467/7830 — EDNS Padding
+## RFC 8467/7830 — EDNS Padding  `[RFC 8467: Experimental | RFC 7830: Proposed Standard]`  ✅ ✅
 
 **DNS 响应的填充策略，防止流量分析推断查询内容。**
 
@@ -1082,7 +1160,7 @@ Client ⇄ DTLS 记录 [DNS消息] ⇄ Server  (UDP 数据报)
 
 ---
 
-## RFC 8482 — Minimal-Sized Responses to DNS Queries That Have QTYPE=ANY
+## RFC 8482 — Minimal-Sized Responses to DNS Queries That Have QTYPE=ANY  `[RFC 8482: Proposed Standard]`  ✅
 
 **对 ANY 查询返回最小化响应（空 ANSWER + HINFO 或最小记录），避免 ANY 被滥用放大。**
 
@@ -1098,7 +1176,7 @@ Client ⇄ DTLS 记录 [DNS消息] ⇄ Server  (UDP 数据报)
 
 ---
 
-## RFC 8484 — DNS over HTTPS (DoH)
+## RFC 8484 — DNS over HTTPS (DoH)  `[RFC 8484: Proposed Standard]`  ✅
 
 **通过 HTTPS 传输 DNS 查询。**
 
@@ -1135,13 +1213,13 @@ Body: [DNS 线格式消息]
 
 ---
 
-## RFC 8499 — DNS Terminology
+## RFC 8499 — DNS Terminology  `[RFC 8499: Best Current Practice (BCP 219)]`  ✅
 
 **DNS 标准术语参考。** ✓
 
 ---
 
-## RFC 8767 — Serving Stale Data
+## RFC 8767 — Serving Stale Data  `[RFC 8767: Proposed Standard]`  ✅
 
 **通过提供过期缓存数据来提高 DNS 可用性（当权威服务器不可达时）。**
 
@@ -1169,7 +1247,7 @@ Body: [DNS 线格式消息]
 
 ---
 
-## RFC 8777 — AMTRELAY Record
+## RFC 8777 — AMTRELAY Record  `[RFC 8777: Proposed Standard]`  ✅
 
 **AMTRELAY RR（260）：AMT（Automatic Multicast Tunneling）中继发现，更新 RFC 7450。反向 IP zone 发布。**
 
@@ -1179,7 +1257,7 @@ Body: [DNS 线格式消息]
 
 ---
 
-## RFC 8914 — Extended DNS Errors (EDE)
+## RFC 8914 — Extended DNS Errors (EDE)  `[RFC 8914: Proposed Standard]`  ✅
 
 **在 DNS 响应中携带额外的错误信息（如 DNSSEC 验证失败原因）。**
 
@@ -1215,7 +1293,7 @@ Body: [DNS 线格式消息]
 
 ---
 
-## RFC 8976 — Message Digest for DNS Zones (ZONEMD)
+## RFC 8976 — Message Digest for DNS Zones (ZONEMD)  `[RFC 8976: Proposed Standard]`  ✅
 
 **ZONEMD RR（63）：区域数据静态摘要（SHA-384 等），防区域数据篡改（配合 DNSSEC 或独立）。**
 
@@ -1230,7 +1308,7 @@ Body: [DNS 线格式消息]
 
 ---
 
-## RFC 9000 — QUIC
+## RFC 9000 — QUIC  `[RFC 9000: Proposed Standard]`  ✅
 
 **UDP 上的多路复用安全传输协议（QUIC v1）。**
 
@@ -1250,7 +1328,7 @@ Body: [DNS 线格式消息]
 
 ---
 
-## RFC 9103 — DNS Zone Transfer over TLS (XoT)
+## RFC 9103 — DNS Zone Transfer over TLS (XoT)  `[RFC 9103: Proposed Standard]`  ⚪
 
 **通过 TLS 加密 AXFR/IXFR 区域传输，更新 RFC 1995/5936/7766。**
 
@@ -1279,7 +1357,7 @@ Body: [DNS 线格式消息]
 
 ---
 
-## RFC 9114 — HTTP/3
+## RFC 9114 — HTTP/3  `[RFC 9114: Proposed Standard]`  ✅
 
 **QUIC 上的 HTTP 协议，DoH3 的基础传输层。**
 
@@ -1294,7 +1372,7 @@ Body: [DNS 线格式消息]
 
 ---
 
-## RFC 9156 — QNAME Minimisation
+## RFC 9156 — QNAME Minimisation  `[RFC 9156: Proposed Standard]`  ✅
 
 **通过逐步暴露查询名的最小标签数来增强 DNS 隐私。**
 
@@ -1321,7 +1399,7 @@ Body: [DNS 线格式消息]
 
 ---
 
-## RFC 9250 — DNS over QUIC (DoQ)
+## RFC 9250 — DNS over QUIC (DoQ)  `[RFC 9250: Proposed Standard]`  ✅
 
 **通过 QUIC 传输 DNS，利用 QUIC 的 0-RTT 和多路复用能力。**
 
@@ -1356,7 +1434,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 ---
 
-## RFC 9460 — Service Binding and Parameter Specification (SVCB and HTTPS)
+## RFC 9460 — Service Binding and Parameter Specification (SVCB and HTTPS)  `[RFC 9460: Proposed Standard]`  ✅
 
 **SVCB（64）/HTTPS（65）RR：服务绑定 + 参数（alpn、port、ech、dohpath…），替代 SRV 的更优方案。**
 
@@ -1372,7 +1450,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 ---
 
-## RFC 9461 — Service Binding Mapping for DNS Servers (SVCB for DNS)
+## RFC 9461 — Service Binding Mapping for DNS Servers (SVCB for DNS)  `[RFC 9461: Proposed Standard]`  ✅
 
 **SVCB/HTTPS 记录在 DNS 服务器发现上的映射：如何用 SVCB 参数描述 DoH/DoT/DoQ 端点。**
 
@@ -1385,7 +1463,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 ---
 
-## RFC 9462 — Discovery of Designated Resolvers (DDR)
+## RFC 9462 — Discovery of Designated Resolvers (DDR)  `[RFC 9462: Proposed Standard]`  ✅
 
 **客户端通过 `_dns.resolver.arpa` 的 SVCB/HTTPS 记录发现加密 DNS 解析器（DoH/DoT/DoQ）。**
 
@@ -1402,7 +1480,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 ---
 
-## RFC 9567 — DNS Error Reporting
+## RFC 9567 — DNS Error Reporting  `[RFC 9567: Proposed Standard]`  ⚠️
 
 **通过 EDNS0 Report-Channel 选项（OPTION-CODE 0x12）+ 构造的 QNAME，把验证失败/错误上报给权威运营者。**
 
@@ -1426,7 +1504,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 ---
 
-## RFC 9606 — DNS Resolver Information (RESINFO)
+## RFC 9606 — DNS Resolver Information (RESINFO)  `[RFC 9606: Proposed Standard]`  ✅
 
 **新 RR 类型 RESINFO（261），让 DNS 客户端查询递归解析器的能力信息（隐私/过滤/透明策略），用于解析器选择。**
 
@@ -1454,7 +1532,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 ---
 
-## RFC 9660 — DNS Zone Version (ZONEVERSION)
+## RFC 9660 — DNS Zone Version (ZONEVERSION)  `[RFC 9660: Proposed Standard]`  ⚪
 
 **EDNS0 选项（OPTION-CODE 0x13）：权威服务器在响应中原子性地携带区域版本（SOA SERIAL），类似 NSID 的诊断用途。**
 
@@ -1469,7 +1547,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 ---
 
-## RFC 9715 — IP Fragmentation Avoidance in DNS over UDP
+## RFC 9715 — IP Fragmentation Avoidance in DNS over UDP  `[RFC 9715: Informational]`  ✅
 
 **避免 DNS/UDP 报文 IP 分片的推荐做法（Informational，原拟 BCP）。**
 
@@ -1498,7 +1576,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 ---
 
-## RFC 9824 — Compact Denial of Existence in DNSSEC
+## RFC 9824 — Compact Denial of Existence in DNSSEC  `[RFC 9824: Proposed Standard]`  ✅
 
 **紧凑否认证明（Compact Answers，更新 4034/4035）：权威对不存在的名字返回 NODATA + 单条匹配 QNAME 的 NSEC/NSEC3（bitmap 含 NXNAME 信号），替代 NXDOMAIN——响应更小、在线签名开销更低、防 zone 枚举。**
 
@@ -1522,7 +1600,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 ---
 
-## RFC 9859 — DNS Synchronization (DSYNC RR)
+## RFC 9859 — DNS Synchronization (DSYNC RR)  `[RFC 9859: Proposed Standard]`  ⚪
 
 **扩展 DNS NOTIFY 的触发机制：新 RR 类型 DSYNC（66），父区→子区（或反之）的 NS/DS 更新通知，含 DNSSEC 启动（bootstrapping）。**
 
@@ -1538,7 +1616,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 ---
 
-## RFC 10029 — Multiple QTYPEs in a Single DNS Query (MQTYPE-Query/Response)
+## RFC 10029 — Multiple QTYPEs in a Single DNS Query (MQTYPE-Query/Response)  `[RFC 10029: Proposed Standard]`  ✅
 
 **EDNS0 选项 MQTYPE-Query（20）/MQTYPE-Response（21）：客户端在查询中附加 QTYPE 列表，服务端把多类型响应合并进单个回复，解决 ANY 不可靠与单 question 限制。适用于 stub→递归 与 递归→权威 两个方向。**
 
