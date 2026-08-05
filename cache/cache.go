@@ -163,6 +163,8 @@ func (e *Entry) rebuildResponseWire() {
 		pos = off + 10 + rdLen
 	}
 
+	// The old offsets (pool-owned from Get) are replaced — return them.
+	ReleaseTTLOffsets(e.TTLOffsets)
 	e.ResponseWire = msg.Data
 	e.TTLOffsets = offsets
 }

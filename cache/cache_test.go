@@ -10,6 +10,7 @@ import (
 	"time"
 	"zjdns/config"
 	"zjdns/database"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/rdata"
@@ -324,7 +325,11 @@ func TestEntry_CanServeExpired(t *testing.T) {
 }
 
 func TestEntry_RemainingTTL(t *testing.T) {
-	entry := &Entry{Timestamp: time.Now().Unix(), TTL: 300}
+	// Use the same cached clock as RemainingTTL (log.NowUnix, refreshed by a
+	// 1s ticker).  A real-clock timestamp can straddle a second boundary that
+	// the cache has not ticked across yet, making remaining = 301 and flaking
+	// the assertion.
+	entry := &Entry{Timestamp: log.NowUnix(), TTL: 300}
 	remaining := entry.RemainingTTL()
 	if remaining < 299 || remaining > 300 {
 		t.Errorf("remaining TTL = %d, want ~300", remaining)

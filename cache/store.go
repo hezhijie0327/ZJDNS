@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/binary"
 	"errors"
@@ -49,6 +48,16 @@ const (
 	// cacheFormatPrePacked is the BLOB format marker for pre-packed response
 	// wire with TTL offset table (format 0x02).
 	cacheFormatPrePacked = 0x02
+
+	// fallbackSentinelAddr fills unused ECS fallback slots in StmtEntryFallback.
+	// It can never match a stored row — ecs_addr values are IP strings ("" or
+	// dotted/colon notation), and "\x00" is not a valid IP string.
+	fallbackSentinelAddr = "\x00"
+
+	// maxTTLOffsets caps pooled TTL-offset slices: responses beyond this RR
+	// count (never in practice — DNS responses are bounded by transport size)
+	// allocate fresh instead of growing the pool entry.
+	maxTTLOffsets = 16
 )
 
 // decompressBufPool reuses byte slices for zstd decompression on the
@@ -76,6 +85,27 @@ var (
 // interface boxing (SA6002).
 var ecsCandidatesPool = sync.Pool{New: func() any { c := make([]ecsCandidate, 0, 5); return &c }}
 
+// ttloOffsetsPool reuses the per-hit TTL-offset slice (2 bytes per RR).
+// Stored as *[]uint16 to avoid interface boxing (SA6002).
+var ttloOffsetsPool = sync.Pool{New: func() any { s := make([]uint16, 0, 8); return &s }}
+
+// AcquireTTLOffsets returns a zeroed slice of length n from the pool.
+func AcquireTTLOffsets(n int) []uint16 {
+	s := *ttloOffsetsPool.Get().(*[]uint16)
+	if cap(s) < n {
+		return make([]uint16, n)
+	}
+	return s[:n]
+}
+
+// ReleaseTTLOffsets returns a pooled offset slice.  Slices grown beyond the
+// pool cap are dropped rather than grown in place.
+func ReleaseTTLOffsets(s []uint16) {
+	if cap(s) <= maxTTLOffsets {
+		ttloOffsetsPool.Put(&s)
+	}
+}
+
 // isZstdCompressed reports whether data starts with the zstd frame magic
 // (0x28 0xB5 0x2F 0xFD).  Used to distinguish compressed from raw BLOBs
 // without a prefix byte, preserving backward compatibility with entries
@@ -87,9 +117,10 @@ func isZstdCompressed(data []byte) bool {
 
 // scanTTLOffsets walks the answer, authority and additional sections of a
 // packed DNS message and returns the byte offset of every TTL field.  The
-// question section (bytes 12..questionEnd) is skipped.
+// question section (bytes 12..questionEnd) is skipped.  The returned slice
+// is pool-owned — release with releaseTTLOffsets when done.
 func scanTTLOffsets(wire []byte, questionEnd int) []uint16 {
-	offsets := make([]uint16, 0, 8)
+	offsets := AcquireTTLOffsets(0)
 	pos := questionEnd
 	for pos+10 <= len(wire) {
 		// Skip the owner name (may include compression pointers).
@@ -103,6 +134,39 @@ func scanTTLOffsets(wire []byte, questionEnd int) []uint16 {
 		pos = off + 10 + rdLen // name + TYPE/CLASS/TTL/RDLENGTH(10) + RDATA
 	}
 	return offsets
+}
+
+// WireHasDNSSEC reports whether a packed DNS message contains DNSSEC record
+// types (RRSIG/NSEC/NSEC3/DNSKEY/DS) in its answer, authority or additional
+// sections.  Used by the Response middleware fast path: a dnssec_ok=0 entry
+// stores whatever the DO=1 upstream returned, and a DO=0 client must not
+// receive those proofs — if the wire carries any, the response takes the
+// unpack+filter path instead of being served directly.
+func WireHasDNSSEC(wire []byte) bool {
+	// Skip the 12-byte header + question section.
+	pos := 12
+	questions := int(binary.BigEndian.Uint16(wire[4:6]))
+	for range questions {
+		off, ok := dnsSkipName(wire, pos)
+		if !ok {
+			return false
+		}
+		pos = off + 4 // QTYPE(2) + QCLASS(2)
+	}
+	// Walk the RR sections checking TYPE codes.
+	for pos+10 <= len(wire) {
+		off, ok := dnsSkipName(wire, pos)
+		if !ok || off+10 > len(wire) {
+			return false
+		}
+		switch binary.BigEndian.Uint16(wire[off:]) {
+		case dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNSEC3, dns.TypeDNSKEY, dns.TypeDS:
+			return true
+		}
+		rdLen := int(binary.BigEndian.Uint16(wire[off+8:]))
+		pos = off + 10 + rdLen // name + TYPE/CLASS/TTL/RDLENGTH(10) + RDATA
+	}
+	return false
 }
 
 // dnsSkipName returns the offset after the domain name at pos in wire.
@@ -167,23 +231,29 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	var entryTTL int
 	var validated int
 	var msgWire []byte
-	found := false
+	// Single-round-trip lookup over all ECS fallback candidates (exact +
+	// standard prefixes), instead of up to 5 sequential QueryRow calls.
+	// StmtEntryFallback binds exactly 5 (addr, prefix) pairs with slot order
+	// = candidate specificity; unused slots bind a sentinel addr that can
+	// never match a stored row.
 	candidates := ecsFallbackCandidates(ecs)
 	defer releaseECSCandidates(candidates)
-	for _, c := range candidates {
-		err := s.db.StmtEntry.QueryRow(
-			qname, int(qtype), int(qclass), c.addr, c.prefix, dnssecInt,
-		).Scan(&id, &ts, &entryTTL, &validated, &msgWire)
-		if err == nil {
-			found = true
-			break
+	var args [14]any
+	args[0], args[1], args[2], args[3] = qname, int(qtype), int(qclass), dnssecInt
+	for i := range 5 {
+		idx := 4 + i*2
+		if i < len(candidates) {
+			args[idx], args[idx+1] = candidates[i].addr, candidates[i].prefix
+		} else {
+			args[idx], args[idx+1] = fallbackSentinelAddr, 0
 		}
+	}
+	err := s.db.StmtEntryFallback.QueryRow(args[:]...).Scan(&id, &ts, &entryTTL, &validated, &msgWire)
+	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			log.Warnf("CACHE: get query failed for %s (type=%d): %v", qname, qtype, err)
 			return nil, false, false
 		}
-	}
-	if !found {
 		log.Debugf("CACHE: miss for %s (type=%d)", qname, qtype)
 		return nil, false, false
 	}
@@ -195,7 +265,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	// Pre-packed format (0x02): TTL offset table + complete DNS response
 	// wire.  TTLs are adjusted in-place by buildFromPrePacked before serving.
 	numOffsets := int(binary.BigEndian.Uint16(msgWire[1:3]))
-	offsets := make([]uint16, numOffsets)
+	offsets := AcquireTTLOffsets(numOffsets)
 	wireStart := 3 + numOffsets*2
 	for i := range numOffsets {
 		offsets[i] = binary.BigEndian.Uint16(msgWire[3+i*2:])
@@ -203,6 +273,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	wire := msgWire[wireStart:]
 
 	// Threshold decompression.
+	var owned []byte
 	if isZstdCompressed(wire) {
 		dbuf, ok := decompressBufPool.Get().(*[]byte)
 		if !ok {
@@ -218,12 +289,14 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 			return nil, false, false
 		}
 		defer func() { clear(*dbuf); decompressBufPool.Put(dbuf) }()
+		// Copy out of the pool buffer — it is cleared when Get() returns.
+		owned = make([]byte, len(wire))
+		copy(owned, wire)
+	} else {
+		// Uncompressed: wire is a slice of the fresh per-row msgWire buffer
+		// allocated by the SQLite driver — safe to keep by reference, no copy.
+		owned = wire
 	}
-
-	// Copy the wire into an owned buffer — wire may alias the
-	// decompression pool buffer, which is cleared when Get() returns.
-	owned := make([]byte, len(wire))
-	copy(owned, wire)
 	entry := &Entry{
 		ID:           id,
 		Timestamp:    ts,
@@ -389,6 +462,13 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	answer = zdnsutil.CloneRRs(answer)
 	authority = zdnsutil.CloneRRs(authority)
 
+	// NOTE: the stored wire keeps the RAW records (DNSSEC proofs included —
+	// upstream queries always carry DO=1 per RFC 6840 §5.9).  DNSSEC
+	// filtering for dnssec_ok=0 entries happens at SERVE time (WireHasDNSSEC
+	// gate + ProcessRecords in the Response middleware) so the zone-key cache
+	// (CacheZoneKeys, which stores verified DNSKEYs under dnssec_ok=0) keeps
+	// its raw content.
+
 	// Build a complete DNS response message and pack it so the
 	// cache-hit path can serve the wire directly (skipping Unpack+Pack).
 	// The question section uses the canonical qname and the original
@@ -411,6 +491,15 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 
 	msg := pool.DefaultMessage.Get()
 	dnsutil.SetReply(msg, queryMsg)
+	// The pre-packed wire is served verbatim on cache hits (both the
+	// direct-wire fast path and the Unpack path re-derive header flags from
+	// the stored wire) — complete the flags SetReply leaves unset: RA
+	// (recursion available) and AD (authenticated data for validated
+	// entries).  Without this every cache hit would serve RA=0/AD=0.
+	msg.RecursionAvailable = true
+	if validated {
+		msg.AuthenticatedData = true
+	}
 	msg.Answer = answer
 	msg.Ns = authority
 	msg.Extra = additional
@@ -435,17 +524,19 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	}
 	pool.DefaultMessage.Put(msg)
 
-	var buf bytes.Buffer
-	buf.WriteByte(cacheFormatPrePacked)
+	// Build the BLOB with exact-size preallocation — a bytes.Buffer would
+	// grow geometrically and copy.  [0x02] [2:num_offsets] [2 each:offset] [wire]
+	msgWire := make([]byte, 0, 3+2*len(ttlOffsets)+len(wire))
+	msgWire = append(msgWire, cacheFormatPrePacked)
 	var lenBuf [2]byte
 	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(ttlOffsets))) //nolint:gosec // G115: offset count bounded by RR count
-	buf.Write(lenBuf[:])
+	msgWire = append(msgWire, lenBuf[:]...)
 	for _, off := range ttlOffsets {
 		binary.BigEndian.PutUint16(lenBuf[:], off)
-		buf.Write(lenBuf[:])
+		msgWire = append(msgWire, lenBuf[:]...)
 	}
-	buf.Write(wire)
-	msgWire := buf.Bytes()
+	msgWire = append(msgWire, wire...)
+	ReleaseTTLOffsets(ttlOffsets)
 
 	// ── Transaction ──────────────────────────────────────────────────────
 	// SQLite WAL mode serializes writers, so no application-level mutex is

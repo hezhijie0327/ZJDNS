@@ -43,6 +43,7 @@ type DB struct {
 
 	// Cache prepared statements
 	StmtEntry         *sql.Stmt
+	StmtEntryFallback *sql.Stmt
 	StmtEntryExists   *sql.Stmt
 	StmtEntryInsert   *sql.Stmt
 	StmtQueryLog      *sql.Stmt
@@ -148,7 +149,8 @@ func (db *DB) Close() error {
 		return nil
 	}
 	for _, stmt := range []*sql.Stmt{
-		db.StmtEntry, db.StmtQueryLog, db.StmtQueryStats,
+		db.StmtEntry, db.StmtEntryFallback, db.StmtEntryExists, db.StmtEntryInsert,
+		db.StmtQueryLog, db.StmtQueryStats,
 		db.StmtInsertLatency, db.StmtLastProbe,
 		db.StmtZoneExact, db.StmtZoneWildcard, db.StmtIPLatency,
 		db.StmtDNSCryptLoad, db.StmtDNSCryptSave,
