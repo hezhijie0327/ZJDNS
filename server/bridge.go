@@ -242,26 +242,20 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		// truncate and set TC so the client retries over TCP.  Use the real
 		// wire length — Msg.Len() computes the uncompressed size from RR
 		// fields, which are nil for pre-packed responses.
-		udpSize := max(req.UDPSize, dns.MinMsgSize)
+		// RFC 9715 R3: cap the response at the recommended 1400-byte
+		// maximum DNS/UDP payload (MTU 1500 minus IP/UDP headers, allowing
+		// for tunnel overhead) — larger responses get truncated (TC=1) and
+		// the client retries over TCP, avoiding IP fragmentation.
+		udpSize := min(max(req.UDPSize, dns.MinMsgSize), config.DefaultMaxUDPResponseSize)
 		if len(response.Data) > int(udpSize) {
-			// Pre-packed wire: unpack so Truncate can operate on the RR
-			// sections instead of producing an empty message.
-			if len(response.Answer) == 0 {
-				if err := response.Unpack(); err != nil {
-					log.Debugf("SERVER: UDP unpack for truncation failed for %s: %v", w.RemoteAddr().String(), err)
-					pool.DefaultMessage.Put(response)
-					return
-				}
-				response.Data = nil
-			}
-			// RFC 8914 §3: drop EDE options before truncating answer data.
-			response.Pseudo = dropEDE(response.Pseudo)
-			dnsutil.Truncate(response)
-			if err := packSafe(response); err != nil {
-				log.Debugf("SERVER: UDP truncate pack error for %s: %v", w.RemoteAddr().String(), err)
-				pool.DefaultMessage.Put(response)
-				return
-			}
+			// Wire-level truncation (RFC 2181 §9 + RFC 9715 R3): set TC,
+			// drop every RR section, keep header + question (+ OPT).  No
+			// Unpack/Pack round-trip — pre-packed cache wires stay
+			// pre-packed, and EDE inside the preserved OPT is kept (RFC
+			// 8914 §3's space trade-off does not apply — the whole answer
+			// section is freed).
+			response.Data = truncateWire(response.Data)
+			response.Truncated = true
 		}
 
 		// Use WriteTo, not w.Write(response.Data).
@@ -276,6 +270,86 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	}
 }
 
+// truncateWire performs RFC 2181 §9 truncation directly on a packed message:
+// sets the TC bit, zeroes the RR counts and drops every RR section, keeping
+// only the header + question section and — when present — the trailing OPT
+// record (RFC 6891 §6.2.5).  Unlike dnsutil.Truncate + re-Pack, no
+// Unpack/Pack round-trip happens: the truncated wire is produced in place
+// with zero allocations (the typical pre-packed cache wire has no OPT).
+// EDE options are kept inside the preserved OPT — the truncation frees the
+// entire answer section, so RFC 8914 §3's space trade-off does not apply.
+func truncateWire(wire []byte) []byte {
+	if len(wire) < dns.MsgHeaderSize {
+		return wire
+	}
+	// Question section: starts after the 12-byte header.
+	pos := 12
+	questions := int(binary.BigEndian.Uint16(wire[4:6]))
+	for range questions {
+		off, ok := skipWireName(wire, pos)
+		if !ok {
+			// Malformed question — keep only the header.
+			return wire[:dns.MsgHeaderSize]
+		}
+		pos = off + 4 // QTYPE(2) + QCLASS(2)
+	}
+	questionEnd := pos
+
+	// Scan the RR sections for a trailing OPT (type 41) to preserve.
+	var opt []byte
+	for pos+10 <= len(wire) {
+		off, ok := skipWireName(wire, pos)
+		if !ok || off+10 > len(wire) {
+			break
+		}
+		rrEnd := off + 10 + int(binary.BigEndian.Uint16(wire[off+8:]))
+		if rrEnd > len(wire) {
+			break
+		}
+		if binary.BigEndian.Uint16(wire[off:]) == dns.TypeOPT {
+			opt = wire[pos:rrEnd] // include the owner name (root label)
+		}
+		pos = rrEnd
+	}
+
+	// Rebuild: header + question (+ OPT).  TC bit = flags byte 2, bit 0x02.
+	truncated := wire[:questionEnd]
+	if len(truncated) < dns.MsgHeaderSize {
+		// Defensive: questionEnd is derived from QDCOUNT and can never be
+		// below 12, but a malformed wire must not panic the request path.
+		// (wire length ≥ MsgHeaderSize guaranteed by the guard above.)
+		return wire[:dns.MsgHeaderSize] //nolint:gosec // G602: guarded above
+	}
+	truncated[2] |= 0x02
+	truncated[6], truncated[7] = 0, 0 // ANCOUNT
+	truncated[8], truncated[9] = 0, 0 // NSCOUNT
+	if opt != nil {
+		truncated = append(truncated, opt...)
+		binary.BigEndian.PutUint16(truncated[10:12], 1) // ARCOUNT
+	} else {
+		truncated[10], truncated[11] = 0, 0 // ARCOUNT
+	}
+	return truncated
+}
+
+// skipWireName returns the offset after the domain name at pos in a packed
+// message.  Handles label sequences and compression pointers (RFC 1035 §4.1.4).
+func skipWireName(wire []byte, pos int) (int, bool) {
+	for {
+		if pos >= len(wire) {
+			return 0, false
+		}
+		l := wire[pos]
+		if l == 0 {
+			return pos + 1, true
+		}
+		if l&0xC0 == 0xC0 {
+			return pos + 2, true
+		}
+		pos += int(l) + 1
+	}
+}
+
 // packSafe calls msg.Pack() and recovers from any panic, returning it as an
 // error so the caller can handle it gracefully (e.g. send SERVFAIL) instead
 // of crashing the request goroutine.
@@ -287,16 +361,4 @@ func packSafe(msg *dns.Msg) (err error) {
 		}
 	}()
 	return msg.Pack()
-}
-
-// dropEDE removes EDE options from Pseudo section before truncation,
-// per RFC 8914 §3 SHOULD: drop EDE before dropping answer data.
-func dropEDE(pseudo []dns.RR) []dns.RR {
-	filtered := pseudo[:0]
-	for _, rr := range pseudo {
-		if _, ok := rr.(*dns.EDE); !ok {
-			filtered = append(filtered, rr)
-		}
-	}
-	return filtered
 }

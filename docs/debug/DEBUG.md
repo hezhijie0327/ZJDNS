@@ -166,6 +166,33 @@ dig @127.0.0.1 -p 10753 www.baidu.com A +short +tcp     # TCP
 pkill -f "client-tls"
 ```
 
+### RFC Feature Tests
+
+```bash
+# RFC 10029 MQTYPE-Query: merge additional QTYPE into one response.
+# 20 = MQTYPE-Query option code; 001c = AAAA (28).  Answer must contain A+AAAA
+# and an OPT carrying MQTYPE-Response.  Works with MQTYPE-capable upstreams
+# (e.g. AliDNS) in forwarding mode, or recursive mode.
+dig @127.0.0.1 -p 10533 +ednsopt=20:001c example.com A +short
+
+# RFC 9606 RESINFO: requires "resolver_info" in config features.
+dig @127.0.0.1 -p 10533 resolver.arpa TYPE261 +noall +answer   # qnamemin exterr=... infourl=...
+
+# RFC 8482 minimal ANY: HINFO "RFC8482" instead of REFUSED/full zone.
+dig @127.0.0.1 -p 10533 example.com ANY +short
+
+# RFC 9824: NXNAME(128) queries MUST NOT be forwarded — REFUSED + EDE 30.
+dig @127.0.0.1 -p 10533 example.com TYPE128 +short
+
+# RFC 9715: oversized responses are truncated (TC=1) at 1400 bytes and the
+# client retries over TCP.  Serve a large answer via a zone rule, then:
+dig @127.0.0.1 -p 10533 big.test A +bufsize=4096 +ignore   # expect "tc" flag
+dig @127.0.0.1 -p 10533 big.test A +bufsize=4096           # TCP retry, full answer
+
+# NXDOMAIN propagation: miss and cache-hit must both report NXDOMAIN.
+dig @127.0.0.1 -p 10533 nonexistent-xyz12345.com A +short  # NXDOMAIN (repeat → hit)
+```
+
 ## DNSSEC Test
 
 Verifies DNSSEC enforcement (bogus → SERVFAIL, valid → NOERROR):

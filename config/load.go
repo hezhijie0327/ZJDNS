@@ -45,6 +45,9 @@ func LoadConfig(configFile string) (*ServerConfig, error) {
 
 	if shouldEnableDDR(cfg) {
 		addDDRRecords(cfg)
+		// RFC 9606 RESINFO rides along with DDR — published at
+		// resolver.arpa (+ the DDR domain) whenever DDR is enabled.
+		addResolverInfoRecords(cfg)
 	}
 
 	addChaosRecord(cfg)

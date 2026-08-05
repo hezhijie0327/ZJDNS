@@ -12,6 +12,7 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server/defense"
+	"zjdns/server/resolver/dnssec"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -211,6 +212,15 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		}
 
 		validated = r.validateNODATAWithNSEC(response, ctx, nameservers, currentDomain, chain, validated)
+
+		// RFC 9824 §5.1: a cryptographically valid compact NODATA proof
+		// (NSEC/NSEC3 carrying the NXNAME bit) signals a nonexistent name —
+		// restore the NXDOMAIN semantic for the client, the negative cache
+		// and the minimisation logic below.
+		if validated && dnssec.HasCompactNXNAME(response) {
+			log.Debugf("RECURSION: compact NODATA with NXNAME signal for %s — restoring NXDOMAIN", currentDomain)
+			response.Rcode = dns.RcodeNameError
+		}
 
 		// An authoritative NODATA whose SOA owner is the minimised qname
 		// proves the qname is a zone apex — a parent server that also hosts

@@ -63,3 +63,62 @@ func TestBuildCookieResponse(t *testing.T) {
 		t.Error("BuildCookieResponse should return empty for invalid client cookie")
 	}
 }
+
+// TestApplyToMessage_RequestFlags verifies RFC 9824 CO bit and RFC 6975
+// algorithm options on upstream (request) messages.
+func TestApplyToMessage_RequestFlags(t *testing.T) {
+	h, err := NewHandler(config.ECSConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := new(dns.Msg)
+	h.ApplyToMessage(msg, nil, false, "", nil, true, true, 0)
+
+	if !msg.CompactAnswers {
+		t.Error("request must set the CO (Compact Answers OK) bit (RFC 9824)")
+	}
+	var dau, dhu, n3u bool
+	for _, o := range msg.Pseudo {
+		switch opt := o.(type) {
+		case *dns.DAU:
+			dau = true
+			if len(opt.AlgCode) == 0 {
+				t.Error("DAU must list algorithms")
+			}
+		case *dns.DHU:
+			dhu = true
+			if len(opt.AlgCode) == 0 {
+				t.Error("DHU must list digests")
+			}
+		case *dns.N3U:
+			n3u = true
+			if len(opt.AlgCode) == 0 {
+				t.Error("N3U must list hashes")
+			}
+		}
+	}
+	if !dau || !dhu || !n3u {
+		t.Errorf("request missing RFC 6975 options: dau=%t dhu=%t n3u=%t", dau, dhu, n3u)
+	}
+}
+
+// TestApplyToMessage_ResponseNoAlgorithmOptions verifies responses do not
+// carry the request-only CO bit and algorithm options.
+func TestApplyToMessage_ResponseNoAlgorithmOptions(t *testing.T) {
+	h, err := NewHandler(config.ECSConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := new(dns.Msg)
+	h.ApplyToMessage(msg, nil, false, "", nil, false, true, 0)
+
+	if msg.CompactAnswers {
+		t.Error("response must not set the CO bit")
+	}
+	for _, o := range msg.Pseudo {
+		switch o.(type) {
+		case *dns.DAU, *dns.DHU, *dns.N3U:
+			t.Errorf("response must not carry RFC 6975 options, got %T", o)
+		}
+	}
+}

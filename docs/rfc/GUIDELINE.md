@@ -6,6 +6,19 @@
 
 ---
 
+## RFC 768 — User Datagram Protocol
+
+**DNS 的 UDP 传输基础（端口 53、最大 512 字节消息、无连接语义）。**
+
+- UDP 头 8 字节；IPv4 最小 MTU 68、IPv6 最小 MTU 1280
+- 512 字节限制 → EDNS(0)（RFC 6891）扩展
+
+### 我们的实现
+
+- 全链路 UDP 支持（服务端 + 上游客户端），EDNS 载荷 1232 ✓
+
+---
+
 ## RFC 1034 — DNS 概念与设施
 
 **域名系统（DNS）的概念基础：命名空间、资源记录、名称服务器、解析器算法。**
@@ -45,6 +58,102 @@
 - 递归解析器实现完整的 §5.3.3 算法（`server/resolver/recursive.go`）
 - `zonecut.go`：区域切割检测与 glue 记录处理
 - CNAME 链处理在 `cname.go` 带循环检测
+
+## RFC 1035 — DNS 实现规范
+
+**域名系统（DNS）的线格式、消息结构、传输协议和查询语义。**
+
+### 关键常量
+
+- DNS 端口: **53** (UDP + TCP)
+- 域名最大长度: **255** 字节（线格式）= 253 字符（表示格式，去掉长度前缀和根终止符）
+- 标签最大长度: **63** 字符
+- UDP 消息最大: **512** 字节（无 EDNS）
+
+### 关键要求
+
+- **MUST**: UDP 和 TCP 均使用端口 53
+- **MUST**: TCP 消息以 2 字节大端长度前缀开头
+- **MUST**: 支持 TCP 连接复用（同一连接多查询）
+- **MUST**: 截断（TC）响应触发 TCP 重试
+- TCP 空闲超时建议约 **2 分钟**
+
+### 我们的实现
+
+- `config.MaxDNSMessageSize = 65535`（TCP 最大消息）
+- `config.MaxDomainLength = 253`
+- TCP 管线化：`server/upstream/pool/tcp.go`（RFC 7766 增强）
+
+---
+
+## RFC 1348 — NSAP Records（已废弃）
+
+**NSAP RR（22）：OSI NSAP 地址的 DNS 发布（后被 RFC 1706 取代并从标准中移除）。**
+
+### 我们的实现
+
+- ⚪ 历史参考
+
+---
+
+## RFC 1876 — LOC Record
+
+**LOC RR（29）：地理定位（纬度/经度/高度/精度）。**
+
+### 我们的实现
+
+- miekg/dns 类型支持；zone 规则可配置 ✓
+
+---
+
+## RFC 1995 — Incremental Zone Transfer (IXFR)
+
+**增量区域传输：仅传输变化的 RRset（SOA SERIAL 比较）。**
+
+### 我们的实现
+
+- ⚪ 参考：ZJDNS 不做区域传输（非权威）；ANY/AXFR/IXFR 查询被拒绝（REFUSED）✓
+
+---
+
+## RFC 1996 — DNS NOTIFY
+
+**区域变更提示：主服务器通知辅助服务器"区域变了"，辅助再发起 SOA 查询/传输。**
+
+### 我们的实现
+
+- ⚪ 参考：非权威/辅助场景，ZJDNS 无此职责
+
+---
+
+## RFC 2065 / 2537 / 3110 / 3445 — DNSSEC 历史与旧算法
+
+**历史参考：**
+- 2065: DNSSEC 原始规范（被 2535 取代）
+- 2537: RSA/MD5 KEY/SIG（算法 1，已废弃）
+- 3110: RSA/SHA-1 SIG 与 KEY（算法 5，已废弃）
+- 3445: 限制 KEY RR 作用域（仅静态/动态更新标识，后被 4034 DNSKEY 取代）
+
+### 我们的实现
+
+- ⚪ 历史参考：现代 DNSSEC 见 RFC 4033/4034/4035、5702、6605、8080 条目
+
+---
+
+## RFC 2136 — Dynamic Updates in the DNS (DNS UPDATE)
+
+**DNS 动态更新协议（UPDATE 消息、Prerequisite 与 Update 段、SOA 序列号递增）。**
+
+### 关键点
+
+- OPCODE=5；Prerequisite（依赖检查）与 Update（添加/删除/替换）段
+- 更新须经授权（TSIG/源地址）；SOA SERIAL 由主服务器维护
+
+### 我们的实现
+
+- ⚪ 参考：ZJDNS 非权威服务器，不提供动态更新；Validation 中间件拒绝非 QUERY opcode（NOTIMP）✓
+
+---
 
 ## RFC 2181 — DNS 规范澄清
 
@@ -88,489 +197,111 @@
 - RRSet 验证：`dnssec/crypto.go` 遵循 §5
 - 源地址选择：Go `net` 包默认行为
 
-## RFC 1035 — DNS 实现规范
+## RFC 2671 — Extension Mechanisms for DNS (EDNS0)
 
-**域名系统（DNS）的线格式、消息结构、传输协议和查询语义。**
+**EDNS(0) 原始规范（被 RFC 6891 取代）：OPT 伪记录、UDP 载荷扩展、扩展 RCODE。**
 
-### 关键常量
+### 我们的实现
 
-- DNS 端口: **53** (UDP + TCP)
-- 域名最大长度: **255** 字节（线格式）= 253 字符（表示格式，去掉长度前缀和根终止符）
-- 标签最大长度: **63** 字符
-- UDP 消息最大: **512** 字节（无 EDNS）
+- 已实现（RFC 6891 条目）；本条目为历史参考
+
+---
+
+## RFC 2782 — SRV Record
+
+**SRV RR（33）：服务定位（`_service._proto.name` → 目标 + 端口 + 权重/优先级）。**
+
+### 关键点
+
+- RDATA: priority、weight、port、target；权重 0 表示无负载均衡偏好
+- 客户端按 priority 升序、weight 随机选择
+
+### 我们的实现
+
+- miekg/dns 类型支持；zone 规则可配置 ✓
+
+---
+
+## RFC 2845 / 4635 — TSIG
+
+**TSIG（250）：事务签名（HMAC-SHA* 的共享密钥认证，4635 定义 HMAC-SHA1/224/256/384/512 算法标识）。**
+
+### 关键点
+
+- 签名覆盖消息 + TSIG 变量（时间戳、MAC 等）；时间戳防重放（±300s 窗口）
+- 用于动态更新、区域传输、缓存投毒防护
+
+### 我们的实现
+
+- ⚪ 参考：ZJDNS 上游查询/客户端不启用 TSIG（RFC 8945 提及但无部署需求）；miekg/dns 类型支持
+
+---
+
+## RFC 2915 / 3401 / 3402 / 3403 — NAPTR 与 DDDS
+
+**NAPTR RR（35）+ DDDS 框架三部曲：字符串重写规则驱动的服务解析（ENUM、SIP 等）。**
+
+- NAPTR RDATA: order、preference、flags（"s"/"a"）、service、regexp、replacement
+- DDDS 算法：迭代应用重写规则直到 terminal 规则；RFC 3403 定义 DNS 作为 DDDS 数据库的编码
+
+### 我们的实现
+
+- miekg/dns 类型支持；zone 规则可配置 ✓
+
+---
+
+## RFC 2929 / 6895 — DNS IANA Considerations
+
+**DNS 参数注册表管理：类型/类/操作码/RCODE 的分配政策与保留。**
+
+### 我们的实现
+
+- ⚪ 参考：类型/选项号与 miekg/dns 一致
+
+---
+
+## RFC 3123 — APL Record
+
+**APL RR（42）：地址前缀列表（IPv4/IPv6 CIDR + 否定标记）。**
+
+### 我们的实现
+
+- miekg/dns 类型支持 ✓
+
+---
+
+## RFC 3225 — DO bit (DNSSEC OK)
+
+**EDNS0 扩展位（DO）：客户端声明理解 DNSSEC 记录；无 DO 的响应不应包含 DNSSEC 记录。**
 
 ### 关键要求
 
-- **MUST**: UDP 和 TCP 均使用端口 53
-- **MUST**: TCP 消息以 2 字节大端长度前缀开头
-- **MUST**: 支持 TCP 连接复用（同一连接多查询）
-- **MUST**: 截断（TC）响应触发 TCP 重试
-- TCP 空闲超时建议约 **2 分钟**
+- 响应方 SHOULD 在响应 OPT 中回显 DO 位（RFC 3225 最初语义，后由 RFC 6840 §5.9 调整）
+- DO=0 客户端不应收到 RRSIG/NSEC/NSEC3/DNSKEY/DS
 
 ### 我们的实现
 
-- `config.MaxDNSMessageSize = 65535`（TCP 最大消息）
-- `config.MaxDomainLength = 253`
-- TCP 管线化：`server/upstream/pool/tcp.go`（RFC 7766 增强）
+- `msg.Security`（DO 位）解析/设置 ✓；缓存按 dnssec_ok 键隔离 DO=0/1 内容；DO=0 命中过滤 DNSSEC 证明 ✓
 
 ---
 
-## RFC 6891 — EDNS(0)
+## RFC 3596 — AAAA Record
 
-**DNS 的扩展机制，支持更大的 UDP 负载、额外的 OPT 选项。**
-
-### 关键常量
-
-- UDP 最小负载: **512** 字节（向后兼容）
-- 推荐 UDP 最大: **4096** 字节（适合 DNSSEC 签名响应）
-- DNS Flag Day 2020 推荐: **1232** 字节（避免 IPv6 分片）
-
-### 协议要求
-
-- **MUST**: 不支持 EDNS 版本的响应 → FORMERR
-- **MUST**: 响应方 UDPSize 反映自身最大负载能力
-- 发送方 UDPSize 过大导致响应被截断时，应回退到较小值
+**AAAA RR（28）：IPv6 地址。更新 RFC 1886。**
 
 ### 我们的实现
 
-- 标准查询: `pool.UDPBufferSize = 1232`
-- 递归查询: `pool.RecursiveUDPBufferSize = 4096`（DNSSEC 链需要更大空间）
-- `edns/edns.go:ApplyToMessage()` 在响应中设置 UDPSize
+- 全链路支持（含 DNS64 合成）✓
 
 ---
 
-## RFC 7766 — DNS over TCP
+## RFC 4025 — IPSECKEY Record
 
-**DNS TCP 传输的实现要求，更新 RFC 1035。**
-
-### 关键要求
-
-- **MUST**: 支持 TCP 查询管线化（不等响应即可发送后续查询）
-- **RECOMMENDED**: 支持并行准备响应并乱序发送（客户端 **MUST** 能处理乱序响应，用 Message ID 匹配）
-- **MUST NOT**: 客户端不得复用同一 TCP 连接上正在进行的查询的 DNS Message ID
-- 服务端空闲超时 **RECOMMENDED** 在秒级（RFC 不指定具体值，建议至少几秒）
-- 连接复用优于每条查询新建连接
-
-### 协议流程
-
-```
-Client → [2字节长度][DNS消息] → Server
-Client → [2字节长度][DNS消息] → Server  (管线化，不等响应)
-Client ← [2字节长度][DNS响应] ← Server  (按序)
-```
+**IPSECKEY RR（45）：存储 IPsec 网关信息与密钥材料。**
 
 ### 我们的实现
 
-- ConnPool 管线化连接池：`server/upstream/pool/tcp.go`
-- `DefaultTCPPoolIdleTimeout = 60s`（客户端侧，减少重连）
-
----
-
-## RFC 8446 — TLS 1.3
-
-**TLS 协议的当前版本，废弃不安全的旧算法，强制前向安全性。**
-
-### 关键要点
-
-- 移除 RSA 密钥交换、RC4、3DES、CBC 模式
-- 仅保留 AEAD 密码套件（AES-GCM、Chacha20-Poly1305）
-- 0-RTT 握手（通过 `pre_shared_key` 扩展）
-- 强制 Perfect Forward Secrecy
-
-### 我们的实现
-
-- 服务端：`MinVersion = eTLS.VersionTLS13` ✓
-- 客户端：`MinVersion = eTLS.VersionTLS12`（允许 TLS 1.2 兼容）
-
----
-
-## RFC 5077 — TLS Session Resumption (Session Tickets)
-
-**通过 Session Ticket 恢复 TLS 会话，避免完整握手（减少 1 RTT）。**
-
-### 关键常量
-
-- Ticket 由服务端加密（仅服务端可解密）
-- Ticket lifetime 建议 ≤ 24h
-
-### 我们的实现
-
-- `DefaultTLSSessionCacheSize = 128`
-- `DefaultDTLSSessionCacheSize = 128`
-- TLCP/DTLCP 各自独立的 session cache
-- DNSCrypt PQ ticket 会话恢复（类似概念，独立实现）
-
----
-
-## RFC 6125 — TLS 证书名验证
-
-**TLS 客户端如何验证服务端证书中的标识名（SAN/CN）。**
-
-### 关键要求
-
-- **MUST**: 验证 `subjectAltName` (SAN) dNSName
-- **MUST NOT**: 仅依赖 CN（Common Name）
-- 支持通配符：`*.example.com` 匹配 `foo.example.com`
-
-### 我们的实现
-
-- Go `crypto/tls` 库默认执行 RFC 6125 验证
-- `ServerName` 字段设置 TLS SNI + 证书验证 ✓
-
----
-
-## RFC 7858 — DNS over TLS (DoT)
-
-**通过 TLS 加密传输 DNS 查询，防止窃听和篡改。**
-
-### 关键常量
-
-- 端口: **853**
-- ALPN: **`"dot"`**
-- 消息帧: 2 字节长度前缀（同 TCP）
-
-### 协议流程
-
-```
-Client → TLS 握手 (ALPN="dot") → Server
-Client ⇄ [2字节长度][DNS消息] ⇄ Server  (TLS 加密通道内)
-连接关闭 → TLS close_notify
-```
-
-### 我们的实现
-
-- `DefaultTLSPort = "853"`
-- 服务端：`server/protocol/tls/tls.go`
-- 客户端：`server/upstream/tls/tls.go`（管线化连接池）
-
----
-
-## RFC 8094 — DNS over DTLS
-
-**通过 DTLS（UDP 上的 TLS）加密传输 DNS。**
-
-### 关键常量
-
-- 端口: **853**
-- 空闲超时: 建议 **几秒到几十秒**（无硬性值）
-- 消息帧: **DTLS 记录本身提供分帧**，无需额外长度前缀
-
-### 关键要求
-
-- **MUST**: 空闲超时后发送 DTLS fatal alert 并销毁 DTLS 状态
-- DTLS 1.2+ 必须支持
-- DTLS 记录层已提供数据报边界，不需要内层长度前缀
-- 响应过大（>PMTU）：服务器 **MUST** 设置 TC 位并返回截断响应
-- **客户端识别到 DTLS 超时/失败后应回退到 DoT**（§5）：大响应超过 PMTU 时服务器设 TC，客户端在 Strict 模式下 MUST 回退到 DoT
-
-### 协议流程
-
-```
-Client → DTLS 握手 (UDP) → Server
-Client ⇄ DTLS 记录 [DNS消息] ⇄ Server  (UDP 数据报)
-空闲超时 → Server 发送 fatal alert → 关闭
-```
-
-### 我们的实现
-
-- 端口 **8853**（非标准，避免与 DoT 853 冲突）
-- `DefaultDTLSIdleTimeout = 30s`
-- ✓ 空闲超时正确处理：timeout → return（关闭连接，发送 fatal alert）
-- ✓ DTLS 失败时自动 fallback 到 DoT（RFC 8094 §3.3 PMTU 场景）
-
----
-
-## RFC 8484 — DNS over HTTPS (DoH)
-
-**通过 HTTPS 传输 DNS 查询。**
-
-### 关键常量
-
-- 端口: **443**
-- Content-Type: **`application/dns-message`**
-- 路径: **`/dns-query`**（推荐但非强制）
-- 方法: **POST** + GET（服务端 **MUST** 两者都实现；GET 使用 Base64url 无填充编码）
-- DoH 使用 **UDP 线格式**（无 2 字节长度前缀），与 DoT 的 TCP 线格式不同
-- **MUST**: DoH 服务器忽略 DNS 请求中的 EDNS UDP 负载大小
-- 最大消息: **65535** 字节（RFC 8484 §6）
-
-### 协议流程
-
-```
-POST /dns-query HTTP/2
-Content-Type: application/dns-message
-Accept: application/dns-message
-Body: [DNS 线格式消息]
-
-→ 200 OK
-Content-Type: application/dns-message
-Body: [DNS 线格式消息]
-```
-
-### 我们的实现
-
-- `DefaultHTTPSPort = "443"`，`DefaultHTTP3Port = "443"`
-- `DefaultQueryPath = "/dns-query"`
-- `DefaultDOHMaxRequestSize = 8192`
-- 服务端：`server/protocol/tls/https.go`（HTTP/2+HTTP/3）
-- 客户端：`server/upstream/tls/https.go`（连接池 + 会话复用）
-
----
-
-## RFC 9250 — DNS over QUIC (DoQ)
-
-**通过 QUIC 传输 DNS，利用 QUIC 的 0-RTT 和多路复用能力。**
-
-### 关键常量
-
-- 端口: **853**
-- ALPN: **`"doq"`**
-- 流映射: **每个查询一个双向流**
-
-### 关键要求
-
-- **MUST**: DNS Message ID 设为 **0**
-- **MUST**: 发送 STREAM FIN 标记查询结束
-- **MUST NOT**: 在 DoQ 连接上发送 edns-tcp-keepalive (RFC 7828)
-- **MUST**: 每流一个查询（多查询 → `DOQ_PROTOCOL_ERROR`）
-- **MUST**: 非零 Message ID → `DOQ_PROTOCOL_ERROR`
-
-### 协议流程
-
-```
-Client → QUIC 握手 (ALPN="doq") → Server
-Client → STREAM[0]: [2字节长度][DNS消息(ID=0)] → FIN → Server
-Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
-```
-
-### 我们的实现
-
-- `DefaultQUICPort = "853"`，ALPN `"doq"` ✓
-- 客户端：`server/upstream/tls/quic.go` — 正确设置 `msg.ID = 0`
-- ✓ 服务端验证 Message ID = 0（非零 → `DOQ_PROTOCOL_ERROR`）
-- ✓ 全部 7 个 DoQ 错误码已定义（`QUICCode*`）
-
----
-
-## RFC 8767 — Serving Stale Data
-
-**通过提供过期缓存数据来提高 DNS 可用性（当权威服务器不可达时）。**
-
-### 关键常量
-
-- TTL 上限（入站记录）: **SHOULD ≤ 604,800 秒（7 天）** — §4
-- Stale 保留期: 建议 **1–3 天** — §6
-- 客户端等待超时: **SHOULD 短于查询超时** — §5.2
-
-### 协议流程
-
-```
-查询到达 → 缓存命中（已过期）
-  → 后台刷新（异步查询权威）
-  → 立即返回过期数据（stale-while-revalidate）
-  → 刷新成功 → 更新缓存
-  → 刷新失败 → 保留过期数据直到超过 stale 保留期
-```
-
-### 我们的实现
-
-- `DefaultStaleMaxAge = 3 * 86400`（3 天，匹配 RFC 8767 §6 建议 1–3 天）
-- `DefaultServeExpiredClientTimeout = 600ms`
-- ✓ 入站记录 TTL 上限 `DefaultMaxCacheableTTL = 7 * 86400`（`minTTL()` 中 clamp）
-
----
-
-## RFC 9156 — QNAME Minimisation
-
-**通过逐步暴露查询名的最小标签数来增强 DNS 隐私。**
-
-### 关键常量
-
-- 最大迭代数 `MAX_MINIMISE_COUNT`: 推荐 **10**
-- 逐一标签阶段 `MINIMISE_ONE_LAB`: 推荐 **4**
-
-### 算法（§2.3）
-
-```
-第 1–4 次迭代: 每次多加 1 个标签（逐一暴露）
-第 5–10 次迭代: 按比例分配剩余标签
-  perStep = labelsLeft / remainingSteps
-  remainder = labelsLeft % remainingSteps
-  最后 remainder 次迭代各多加 1 个标签
-超过 10 次: 暴露全部剩余标签
-```
-
-### 我们的实现
-
-- `DefaultQnameMinimiseCount = 10`，`DefaultMinimiseOneLabel = 4` ✓
-- `qname_minimise.go:labelsToAdd()` 精确实现比例分配算法 ✓
-
----
-
-## RFC 7873/9018 — DNS Cookies
-
-**轻量级无状态 DNS 事务认证机制，防止放大攻击和缓存投毒。**
-
-### 关键常量（RFC 9018）
-
-| 参数            | 值            | 说明                    |
-| --------------- | ------------- | ----------------------- |
-| Client Cookie   | **8** 字节    | 客户端生成（随机数）    |
-| Server Cookie   | **8–32** 字节 | 服务端 SipHash-2-4 生成 |
-| Secret 轮换间隔 | **30 分钟**   | 定期更换防止长期泄露    |
-| Cookie 有效期   | **1 小时**    | 超过后客户端需更新      |
-| 续期阈值        | **30 分钟**   | 提前提示客户端续期      |
-| 未来容忍        | **5 分钟**    | 容忍时钟偏差            |
-
-### 协议流程（RFC 9018 §4.3）
-
-```
-客户端首次查询 → Client Cookie (8B 随机)
-服务端 → BADCOOKIE + 有效 Server Cookie
-客户端后续查询 → Client Cookie + Server Cookie
-服务端验证 → CookieValid / CookieValidRenew / CookieExpired / CookieFuture
-```
-
-### 序列号运算（RFC 1982）
-
-- 使用 32 位序列号空间
-- 比较：在 2^31 窗口内判定先后
-- 减法：模运算避免溢出
-
-### 我们的实现
-
-- `edns/cookie.go`: `compare1982()`, `subtract1982()` 实现序列号运算 ✓
-- `DefaultCookieSecretRotationInterval = 24h`（RFC 7873 §7.1 默认 1 天）✓
-- Cookie 生命周期常量：1h/30min/5min（硬编码，匹配 RFC 9018 §4.3）✓
-- `buildBadCookieResponse()`：使用 `RcodeBadCookie(23)` ✓
-- ✓ `rfc9018MAC()`：IPv4 使用 4 字节，IPv6 使用 16 字节（RFC 9018 §4.4 防替换攻击）
-- ✓ Reserved bytes：接收值包含在 hash 计算中（生成时为零，验证时用接收值）
-
----
-
-## RFC 7871 — EDNS Client Subnet (ECS)
-
-**允许递归解析器向权威服务器传递客户端子网信息（用于 CDN 定位）。**
-
-### 关键常量
-
-| 参数          | RFC 推荐        | 我们的值 |
-| ------------- | --------------- | -------- |
-| IPv4 前缀长度 | **/24**         | `/24` ✓  |
-| IPv6 前缀长度 | **/56**         | `/56` ✓  |
-| SCOPE 默认    | **0**（不可用） | `0` ✓    |
-
-### 关键要求
-
-- **MUST**: ECS 选项仅用于递归→权威方向（不发送给客户端）
-- **SHOULD**: IPv6 使用 /56（允许站点内子网聚合）
-- SCOPE=0 表示"响应未应用 ECS"
-
-### 我们的实现
-
-- `edns/ecs.go`: `DefaultECSv4Len=24`, `DefaultECSv6Len=56`, `DefaultECSScope=0`
-- ECS 选项格式: FAMILY(2) + SOURCE PREFIX-LENGTH(1) + SCOPE PREFIX-LENGTH(1) + ADDRESS(变长)
-- 缓存按 ECS 地址最长前缀匹配分桶；Additional/Authority Section 记录不绑定网络
-- Birthday Attack 缓解：响应 ECS 必须回显查询的 FAMILY/ADDRESS/SOURCE PREFIX（不匹配 → 丢弃）
-- 收到 REFUSED 时 MUST 去除 ECS 重试
-
----
-
-## RFC 8467/7830 — EDNS Padding
-
-**DNS 响应的填充策略，防止流量分析推断查询内容。**
-
-### 关键常量
-
-| 参数       | 值                | 说明                  |
-| ---------- | ----------------- | --------------------- |
-| 请求块大小 | **128**           | 查询填充到 128 的倍数 |
-| 响应块大小 | **468**           | 响应填充到 468 的倍数 |
-| 客户端退出 | `+nopadding` 标记 | 通过 OPT 选项禁用填充 |
-
-### 我们的实现
-
-- `DefaultPaddingRequestBlockSize = 128` ✓
-- `DefaultPaddingResponseBlockSize = 468` ✓
-- `edns/padding.go:HasPaddingOption()` 检测客户端退出请求 ✓
-
----
-
-## RFC 9000 — QUIC
-
-**UDP 上的多路复用安全传输协议（QUIC v1）。**
-
-### 关键常量
-
-- 空闲超时: **30s**（默认）
-- Keep-Alive: **20s**（防中间盒超时）
-- 地址验证 Token 缓存: 128 条目（LRU）
-
-### 我们的实现
-
-- `DefaultQUICServerIdleTimeout = 30s` ✓
-- `DefaultQUICClientIdleTimeout = 60s`
-- `DefaultQUICKeepAlive = 20s` ✓
-- `DefaultQUICAddrCacheTTL = 30min`
-- 地址验证器：`server/protocol/tls/addr_validator.go` — LRU cache, 128 entries ✓
-
----
-
-## RFC 8310 — DoT/DTLS Privacy Profiles
-
-**定义了 Strict 和 Opportunistic 两种隐私配置模式。**
-
-### 两种 Profile
-
-| 要求       | Strict                | Opportunistic      |
-| ---------- | --------------------- | ------------------ |
-| 加密       | MUST                  | SHOULD             |
-| 证书验证   | MUST (SPKI pin 或 CA) | MAY                |
-| 回退到明文 | MUST NOT              | 允许（加密失败后） |
-| 认证域名   | MUST                  | MAY                |
-
-### 关键要求
-
-- **MUST**: 实现 Raw Public Keys (RFC 7250)
-- **SHOULD**: 实现 TLS False Start (RFC 7918)
-- **SHOULD**: 实现 Cached Info Extension (RFC 7924)
-- **MUST**: TLS 1.2+，禁用压缩，支持会话复用
-
-### 我们的实现
-
-- ✓ `PrivacyProfile` 配置字段：`"strict"`（默认，PKIX 验证）和 `"opportunistic"`（允许 `SkipTLSVerify`）
-- ✓ 默认为 Strict Privacy（RFC 8310 §6）：TLS + PKIX 证书验证
-- TLS 1.3 服务端 / TLS 1.2+ 客户端 ✓
-- 会话缓存已实现 ✓
-
----
-
-## RFC 9103 — DNS Zone Transfer over TLS (XoT)
-
-**通过 TLS 加密 AXFR/IXFR 区域传输，更新 RFC 1995/5936/7766。**
-
-### 关键常量
-
-- 端口: **853**（同 DoT）
-- ALPN: **`"dot"`**
-
-### 关键要求
-
-- **MUST**: 仅使用 **TLS 1.3+**
-- **MUST**: ALPN `"dot"` 在 TLS 握手中
-- **MUST**: 客户端通过 Strict Privacy + ADN 认证服务器
-- **MUST**: 服务端验证客户端（mTLS 或 IP ACL + TSIG/SIG(0)）
-- **MUST**: 单连接支持多个并发 IXFR/AXFR
-- **MUST**: 最后一个 AXoT 响应的 SOA 与第一个相同
-- **MUST**: Secondary 容忍填充过的 AXoT 响应（包括"空"填充）
-- **MUST**: 整个传输组 XoT 策略一致
-- **SHOULD**: XoT 连接上对非 XFR 流量返回 REFUSED + EDE 21
-- **SHOULD**: 使用 edns-tcp-keepalive 维持持久连接
-
-### 我们的实现
-
-- XoT 是 zone transfer 加密机制，非通用 DoT 运维指南
-- ZJDNS 不实现 zone transfer（不是权威服务器），此 RFC 仅供参考
+- miekg/dns 类型支持 ✓
 
 ---
 
@@ -597,51 +328,104 @@ DNSKEY (自签名) → DS (父域授权) → DNSKEY (子域) → RRSIG (签名�
 
 ---
 
-## RFC 6840 — DNSSEC 澄清与更新
+## RFC 4255 — SSHFP Record
 
-**对 RFC 4033–4035 和 5155 的关键澄清，提升 MUST/SHOULD 级别。**
-
-### 算法要求（§2）
-
-- 验证器 **MUST** 支持 NSEC + NSEC3（若支持算法 6/7）
-- 验证器 **MUST** 支持 RSASHA256（8）+ RSASHA512（10）+ SHA-256 DS（2）
-
-### BAD Cache（§3.1）
-
-- 从 RFC 4035 的 MAY 提升为 **SHOULD**（安全感知解析器应实现 BAD cache）
-
-### 祖先委托 NSEC/NSEC3（§4.1）
-
-- 祖先域的 NSEC/NSEC3（NS=1、SOA=0、签名者短于 Owner Name）**MUST NOT** 用于证明子域不存在
-
-### CNAME 位检查（§4.3）
-
-- 验证 NOERROR/NODATA 时 **MUST** 检查匹配 NSEC/NSEC3 的 CNAME 位
-- 未检查将被攻击者剥离 CNAME 伪装成 NODATA
-
-### 不安全委托证明（§4.4）
-
-- **MUST** 验证 NSEC/NSEC3 的 NS 位存在，或被 Opt-Out NSEC3 覆盖
-
-### CD/AD 位（§5.8–5.9）
-
-- 上游查询 **SHOULD** 每个都设置 **CD 位**（无论传入 CD 位）
-- 仅在请求含 **DO 或 AD 位**时设置 AD 位
-
-### 多 RRSIG（§5.4）
-
-- **SHOULD** 接受任意一个有效 RRSIG；仅在所有 RRSIG 都失败时 Bogus
+**SSHFP RR（44）：SSH 主机密钥指纹，SSH 证书验证用。**
 
 ### 我们的实现
 
-- 祖先委托限制：`dnssec/nsec.go` 检查 NS/SOA 位
-- CNAME 位检查：验证逻辑中包含
+- miekg/dns 类型支持；zone 规则可配置 ✓
+
+---
+
+## RFC 4408 — Sender Policy Framework (SPF)
+
+**SPF RR（99）：邮件发件人授权验证（后被 RFC 7208 TXT 取代，类型不再推荐使用）。**
+
+### 我们的实现
+
+- miekg/dns 类型支持 ✓
 
 ---
 
 ## RFC 4509 — SHA-256 in DS RRs
 
 \*\*DNSSEC DS 摘要 MUST 支持 SHA-256（更新 RFC 4---
+
+## RFC 4592 — The Role of Wildcards in the DNS
+
+**泛域名（`*.example.com`）语义的权威澄清：匹配规则、与显式数据的优先级、委托取消。**
+
+### 关键点
+
+- 泛域名不匹配自身（`*.example.com` 不匹配 `example.com`）
+- 显式数据抑制泛域名；委托取消泛域名；ENT（空非终端）匹配泛域名
+- CNAME 泛域名链的语义
+
+### 我们的实现
+
+- zone 规则支持 `*.` 通配符条目（`zone/zone.go`），`maxWildcardLabels` 批量查询；`restoreDomain` 处理通配符改写后的名字还原
+
+---
+
+## RFC 4701 — DHCID Record
+
+**DHCID RR（49）：DHCP 客户端身份标识，用于 FQDN 更新冲突检测。**
+
+### 我们的实现
+
+- miekg/dns 类型支持 ✓
+
+---
+
+## RFC 4892 — Requirements for a Mechanism Identifying a Name Server Instance
+
+**NSID 的需求文档（`id.server`/`hostname.bind` CHAOS 查询作为临时方案），RFC 5001 的动机。**
+
+### 我们的实现
+
+- CHAOS 类查询已放行（Validation 中间件允许 ClassCHAOS），内省支持在 handler 层 ✓
+
+---
+
+## RFC 5001 — DNS Name Server Identifier (NSID)
+
+**EDNS0 选项（OPTION-CODE 3）：响应中携带服务器实例标识，用于 anycast/负载均衡环境识别应答者。**
+
+- 载荷为服务器自选的字节串（通常含主机名）
+- 请求方在查询中带空 NSID 选项，响应方回填
+
+### 我们的实现
+
+- ⚠ 未实现。备选：`id.server` CHAOS 查询已有等价内省信息，NSID 可后补
+
+---
+
+## RFC 5011/9077 — Trust Anchor 自动化
+
+**DNSSEC 信任锚的自动化管理（RFC 9077 更新 5011）。**
+
+- ⚠ **已知差距**：§4 状态机（Add Hold-Down 30 天 + 事件驱动）是实现大功能。当前 `named.root` 静态加载已满足基本需求，REVOKE 位检查已实现
+
+---
+
+## RFC 5077 — TLS Session Resumption (Session Tickets)
+
+**通过 Session Ticket 恢复 TLS 会话，避免完整握手（减少 1 RTT）。**
+
+### 关键常量
+
+- Ticket 由服务端加密（仅服务端可解密）
+- Ticket lifetime 建议 ≤ 24h
+
+### 我们的实现
+
+- `DefaultTLSSessionCacheSize = 128`
+- `DefaultDTLSSessionCacheSize = 128`
+- TLCP/DTLCP 各自独立的 session cache
+- DNSCrypt PQ ticket 会话恢复（类似概念，独立实现）
+
+---
 
 ## RFC 5155 — NSEC3（哈希认证的否定存在证明）
 
@@ -692,25 +476,47 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 5011/9077 — Trust Anchor 自动化
+## RFC 5205 — HIP Record
 
-**DNSSEC 信任锚的自动化管理（RFC 9077 更新 5011）。**
+**HIP RR（55）：Host Identity Protocol 的 DNS 扩展（HIT、RVS 服务器）。**
 
-- ⚠ **已知差距**：§4 状态机（Add Hold-Down 30 天 + 事件驱动）是实现大功能。当前 `named.root` 静态加载已满足基本需求，REVOKE 位检查已实现
+### 我们的实现
 
----
-
-## RFC 8198 — Aggressive NSEC Caching
-
-**利用缓存的 NSEC/NSEC3 范围推导否定回答。**
-
-- ⚠ **已知差距**：miekg/dns 提供 NSEC/NSEC3 数据但不提供覆盖判断。需自行实现范围比较 + RRSIG 附带 + 通配符处理。之前尝试过但边界条件问题多，暂不实现
+- miekg/dns 类型支持 ✓
 
 ---
 
-## RFC 8499 — DNS Terminology
+## RFC 5702 — SHA-2 in DNSSEC
 
-**DNS 标准术语参考。** ✓
+**SHA-256/SHA-512 的 DNSSEC 支持：算法 8（RSASHA256）/10（RSASHA512）、DS 摘要 2（SHA-256）/4（SHA-384）。**
+
+### 我们的实现
+
+- `dnssec/crypto.go` 验证器支持 RSASHA256(8)/RSASHA512(10) + SHA-256 DS ✓
+
+---
+
+## RFC 5936 — Zone Transfer Protocol (AXFR)
+
+**完整区域传输协议：序列化传输整个 zone（SOA 起始与结束）。**
+
+### 我们的实现
+
+- ⚪ 参考：AXFR 查询被拒绝（REFUSED）；加密传输变体见 RFC 9103 条目
+
+---
+
+## RFC 5966 — DNS Transport over TCP
+
+**TCP 传输要求（RFC 7766 的前身与基础）：所有实现 MUST 同时支持 UDP 与 TCP。**
+
+- TCP 帧 = 2 字节长度前缀 + 消息
+- 支持连接复用；解析器不应因 TCP 开销回避 TCP 重试
+- 截断（TC）响应 MUST 触发 TCP 重试
+
+### 我们的实现
+
+- 已实现（与 RFC 7766 条目合并）：TCP 管线化连接池、TC → TCP 自动重试 ✓
 
 ---
 
@@ -738,6 +544,23 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
+## RFC 6125 — TLS 证书名验证
+
+**TLS 客户端如何验证服务端证书中的标识名（SAN/CN）。**
+
+### 关键要求
+
+- **MUST**: 验证 `subjectAltName` (SAN) dNSName
+- **MUST NOT**: 仅依赖 CN（Common Name）
+- 支持通配符：`*.example.com` 匹配 `foo.example.com`
+
+### 我们的实现
+
+- Go `crypto/tls` 库默认执行 RFC 6125 验证
+- `ServerName` 字段设置 TLS SNI + 证书验证 ✓
+
+---
+
 ## RFC 6604/6840/7344 — DNSSEC 补充
 
 **对 DNSSEC 的澄清和自动化更新。**
@@ -747,6 +570,16 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 | RFC 6604 | NXDOMAIN 可包含 CNAME/DNAME | `nameserver.go:78`   |
 | RFC 6840 | §5.3 放宽签名有效期检查     | `dnssec/nsec.go:139` |
 | RFC 7344 | CDS/CDNSKEY 自动化信任锚    | `dnssec_chain.go`    |
+
+---
+
+## RFC 6605 — ECDSA P-256 for DNSSEC
+
+**算法 13（ECDSAP256SHA256）：DNSSEC 椭圆曲线签名（含 GOST 与 P-384 的讨论）。**
+
+### 我们的实现
+
+- 验证器支持 ECDSAP256SHA256(13) ✓（cloudflare 等主流 zone 默认算法）
 
 ---
 
@@ -767,6 +600,221 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
+## RFC 6725 — DNSKEY Algorithm IANA Registry Updates
+
+**DNSKEY 算法注册表状态整理（划分 MUST/MAY 支持等）。**
+
+### 我们的实现
+
+- ⚪ 参考：算法支持状态与验证器一致
+
+---
+
+## RFC 6742 — ILNP Records
+
+**ILNP RR 家族（NID=104、L32=105、L64=106、LP=107）：Identifier-Locator Network Protocol 的 DNS 编码。**
+
+### 我们的实现
+
+- miekg/dns 类型支持 ✓
+
+---
+
+## RFC 6761 — 特殊域名
+
+**DNS 中具有特殊含义、不应全局解析的域名。**
+
+### 关键域名
+
+| 域名                  | 用途             |
+| --------------------- | ---------------- |
+| `localhost.`          | 回环地址         |
+| `.local`              | mDNS 本地链路    |
+| `.onion`              | Tor 隐藏服务     |
+| `test.` / `invalid.`  | 测试 / 无效域名  |
+| `10.in-addr.arpa.` 等 | 私有地址反向区域 |
+
+### 我们的实现
+
+- ✓ 已满足：特殊域名按普通名字正常解析/缓存（RFC 6761 允许解析器转发这些查询，行为合规）
+- 不做本地拦截——本地过滤属于策略选择，可由 zone 规则实现
+
+---
+
+## RFC 6840 — DNSSEC 澄清与更新
+
+**对 RFC 4033–4035 和 5155 的关键澄清，提升 MUST/SHOULD 级别。**
+
+### 算法要求（§2）
+
+- 验证器 **MUST** 支持 NSEC + NSEC3（若支持算法 6/7）
+- 验证器 **MUST** 支持 RSASHA256（8）+ RSASHA512（10）+ SHA-256 DS（2）
+
+### BAD Cache（§3.1）
+
+- 从 RFC 4035 的 MAY 提升为 **SHOULD**（安全感知解析器应实现 BAD cache）
+
+### 祖先委托 NSEC/NSEC3（§4.1）
+
+- 祖先域的 NSEC/NSEC3（NS=1、SOA=0、签名者短于 Owner Name）**MUST NOT** 用于证明子域不存在
+
+### CNAME 位检查（§4.3）
+
+- 验证 NOERROR/NODATA 时 **MUST** 检查匹配 NSEC/NSEC3 的 CNAME 位
+- 未检查将被攻击者剥离 CNAME 伪装成 NODATA
+
+### 不安全委托证明（§4.4）
+
+- **MUST** 验证 NSEC/NSEC3 的 NS 位存在，或被 Opt-Out NSEC3 覆盖
+
+### CD/AD 位（§5.8–5.9）
+
+- 上游查询 **SHOULD** 每个都设置 **CD 位**（无论传入 CD 位）
+- 仅在请求含 **DO 或 AD 位**时设置 AD 位
+
+### 多 RRSIG（§5.4）
+
+- **SHOULD** 接受任意一个有效 RRSIG；仅在所有 RRSIG 都失败时 Bogus
+
+### 我们的实现
+
+- 祖先委托限制：`dnssec/nsec.go` 检查 NS/SOA 位
+- CNAME 位检查：验证逻辑中包含
+
+---
+
+## RFC 6844 / 8659 — Certification Authority Authorization (CAA)
+
+**CAA RR（257）：域名所有者声明允许的 CA 列表，控制证书签发。**
+
+### 关键点
+
+- RDATA: `flags` + `tag`（issue/issuewild/iodef）+ `value`
+- 签发方 MUST 检查 CAA；递归解析器在应答中透传即可
+
+### 我们的实现
+
+- miekg/dns 支持 CAA 类型；zone 规则可配置 CAA 记录 ✓
+
+---
+
+## RFC 6891 — EDNS(0)
+
+**DNS 的扩展机制，支持更大的 UDP 负载、额外的 OPT 选项。**
+
+### 关键常量
+
+- UDP 最小负载: **512** 字节（向后兼容）
+- 推荐 UDP 最大: **4096** 字节（适合 DNSSEC 签名响应）
+- DNS Flag Day 2020 推荐: **1232** 字节（避免 IPv6 分片）
+
+### 协议要求
+
+- **MUST**: 不支持 EDNS 版本的响应 → FORMERR
+- **MUST**: 响应方 UDPSize 反映自身最大负载能力
+- 发送方 UDPSize 过大导致响应被截断时，应回退到较小值
+
+### 我们的实现
+
+- 标准查询: `pool.UDPBufferSize = 1232`
+- 递归查询: `pool.RecursiveUDPBufferSize = 4096`（DNSSEC 链需要更大空间）
+- `edns/edns.go:ApplyToMessage()` 在响应中设置 UDPSize
+
+---
+
+## RFC 6944 — DNSSEC DNSKEY Algorithm Status
+
+**算法状态（撤销/废弃/可选）：RSAMD5、RSASHA1、DSA 等的 MUST/MAY 清单。**
+
+### 我们的实现
+
+- ⚪ 参考：验证器按 4035/6840 要求支持主流算法
+
+---
+
+## RFC 6975 — Algorithm Understanding in DNSSEC
+
+**EDNS0 选项 DAU（5）/DHU（6）/N3U（7）：解析器向权威宣告支持的签名/摘要/NSEC3 哈希算法。**
+
+### 我们的实现
+
+- ✓ 上游查询携带 DAU={8,10,13,14,15,16}、DHU={1,2,4}、N3U={1}（`edns/edns.go:ApplyToMessage`，仅请求方向）
+
+---
+
+## RFC 7043 — EUI48/EUI64 Records
+
+**EUI48（108）/EUI64（109）RR：IEEE EUI 标识符（MAC 地址）的 DNS 发布。**
+
+### 我们的实现
+
+- miekg/dns 类型支持 ✓
+
+---
+
+## RFC 7314 — EDNS EXPIRE Option
+
+**EDNS0 选项（OPTION-CODE 9）：辅助服务器通告其 SOA EXPIRE 状态，主服务器可据此调整通知策略。**
+
+### 我们的实现
+
+- ⚪ 参考：辅助/传输场景，ZJDNS 非权威
+
+---
+
+## RFC 7477 — Child-to-Parent Synchronization (CSYNC)
+
+**CSYNC RR（62）：子区向父区宣告应同步的记录（NS/DS 等），父区代理据此更新。**
+
+### 我们的实现
+
+- ⚪ 参考：父区管理场景；miekg/dns 类型支持
+
+---
+
+## RFC 7553 — URI Record
+
+**URI RR（256）：URI 元数据发布（带优先级/权重）。**
+
+### 我们的实现
+
+- miekg/dns 类型支持 ✓
+
+---
+
+## RFC 7719 / 8499 — DNS Terminology
+
+**DNS 术语标准参考（8499 更新 7719）。** ✓
+
+---
+
+## RFC 7766 — DNS over TCP
+
+**DNS TCP 传输的实现要求，更新 RFC 1035。**
+
+### 关键要求
+
+- **MUST**: 支持 TCP 查询管线化（不等响应即可发送后续查询）
+- **RECOMMENDED**: 支持并行准备响应并乱序发送（客户端 **MUST** 能处理乱序响应，用 Message ID 匹配）
+- **MUST NOT**: 客户端不得复用同一 TCP 连接上正在进行的查询的 DNS Message ID
+- 服务端空闲超时 **RECOMMENDED** 在秒级（RFC 不指定具体值，建议至少几秒）
+- 连接复用优于每条查询新建连接
+
+### 协议流程
+
+```
+Client → [2字节长度][DNS消息] → Server
+Client → [2字节长度][DNS消息] → Server  (管线化，不等响应)
+Client ← [2字节长度][DNS响应] ← Server  (按序)
+```
+
+### 我们的实现
+
+- ConnPool 管线化连接池：`server/upstream/pool/tcp.go`
+- `DefaultTCPPoolIdleTimeout = 60s`（客户端侧，减少重连）
+
+---
+
 ## RFC 7828 — EDNS TCP Keepalive
 
 **EDNS0 选项，协商 TCP/DoT 连接的保活超时。**
@@ -779,6 +827,355 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 ### 我们的实现
 
 - `edns/edns.go:ApplyToMessage()` 支持 tcpKeepaliveTimeout 参数 ✓
+
+---
+
+## RFC 7858 — DNS over TLS (DoT)
+
+**通过 TLS 加密传输 DNS 查询，防止窃听和篡改。**
+
+### 关键常量
+
+- 端口: **853**
+- ALPN: **`"dot"`**
+- 消息帧: 2 字节长度前缀（同 TCP）
+
+### 协议流程
+
+```
+Client → TLS 握手 (ALPN="dot") → Server
+Client ⇄ [2字节长度][DNS消息] ⇄ Server  (TLS 加密通道内)
+连接关闭 → TLS close_notify
+```
+
+### 我们的实现
+
+- `DefaultTLSPort = "853"`
+- 服务端：`server/protocol/tls/tls.go`
+- 客户端：`server/upstream/tls/tls.go`（管线化连接池）
+
+---
+
+## RFC 7871 — EDNS Client Subnet (ECS)
+
+**允许递归解析器向权威服务器传递客户端子网信息（用于 CDN 定位）。**
+
+### 关键常量
+
+| 参数          | RFC 推荐        | 我们的值 |
+| ------------- | --------------- | -------- |
+| IPv4 前缀长度 | **/24**         | `/24` ✓  |
+| IPv6 前缀长度 | **/56**         | `/56` ✓  |
+| SCOPE 默认    | **0**（不可用） | `0` ✓    |
+
+### 关键要求
+
+- **MUST**: ECS 选项仅用于递归→权威方向（不发送给客户端）
+- **SHOULD**: IPv6 使用 /56（允许站点内子网聚合）
+- SCOPE=0 表示"响应未应用 ECS"
+
+### 我们的实现
+
+- `edns/ecs.go`: `DefaultECSv4Len=24`, `DefaultECSv6Len=56`, `DefaultECSScope=0`
+- ECS 选项格式: FAMILY(2) + SOURCE PREFIX-LENGTH(1) + SCOPE PREFIX-LENGTH(1) + ADDRESS(变长)
+- 缓存按 ECS 地址最长前缀匹配分桶；Additional/Authority Section 记录不绑定网络
+- Birthday Attack 缓解：响应 ECS 必须回显查询的 FAMILY/ADDRESS/SOURCE PREFIX（不匹配 → 丢弃）
+- 收到 REFUSED 时 MUST 去除 ECS 重试
+
+---
+
+## RFC 7873/9018 — DNS Cookies
+
+**轻量级无状态 DNS 事务认证机制，防止放大攻击和缓存投毒。**
+
+### 关键常量（RFC 9018）
+
+| 参数            | 值            | 说明                    |
+| --------------- | ------------- | ----------------------- |
+| Client Cookie   | **8** 字节    | 客户端生成（随机数）    |
+| Server Cookie   | **8–32** 字节 | 服务端 SipHash-2-4 生成 |
+| Secret 轮换间隔 | **30 分钟**   | 定期更换防止长期泄露    |
+| Cookie 有效期   | **1 小时**    | 超过后客户端需更新      |
+| 续期阈值        | **30 分钟**   | 提前提示客户端续期      |
+| 未来容忍        | **5 分钟**    | 容忍时钟偏差            |
+
+### 协议流程（RFC 9018 §4.3）
+
+```
+客户端首次查询 → Client Cookie (8B 随机)
+服务端 → BADCOOKIE + 有效 Server Cookie
+客户端后续查询 → Client Cookie + Server Cookie
+服务端验证 → CookieValid / CookieValidRenew / CookieExpired / CookieFuture
+```
+
+### 序列号运算（RFC 1982）
+
+- 使用 32 位序列号空间
+- 比较：在 2^31 窗口内判定先后
+- 减法：模运算避免溢出
+
+### 我们的实现
+
+- `edns/cookie.go`: `compare1982()`, `subtract1982()` 实现序列号运算 ✓
+- `DefaultCookieSecretRotationInterval = 24h`（RFC 7873 §7.1 默认 1 天）✓
+- Cookie 生命周期常量：1h/30min/5min（硬编码，匹配 RFC 9018 §4.3）✓
+- `buildBadCookieResponse()`：使用 `RcodeBadCookie(23)` ✓
+- ✓ `rfc9018MAC()`：IPv4 使用 4 字节，IPv6 使用 16 字节（RFC 9018 §4.4 防替换攻击）
+- ✓ Reserved bytes：接收值包含在 hash 计算中（生成时为零，验证时用接收值）
+
+---
+
+## RFC 7958 — DNSSEC Trust Anchor Publication
+
+**根信任锚（root-anchors.xml）的发布格式与获取方式（ICANN 发布、RFC 8145 信任锚传送）。**
+
+### 我们的实现
+
+- 根信任锚静态加载（`named.root`/`root-anchors.xml`）✓；RFC 5011 自动化未实现（见 5011/9077 条目）
+
+---
+
+## RFC 8080 — EdDSA for DNSSEC
+
+**算法 15（ED25519）/16（ED448）：EdDSA 签名，DNSSEC 的最优现代算法。**
+
+### 我们的实现
+
+- 验证器支持 ED25519(15)/ED448(16) ✓
+
+---
+
+## RFC 8094 — DNS over DTLS
+
+**通过 DTLS（UDP 上的 TLS）加密传输 DNS。**
+
+### 关键常量
+
+- 端口: **853**
+- 空闲超时: 建议 **几秒到几十秒**（无硬性值）
+- 消息帧: **DTLS 记录本身提供分帧**，无需额外长度前缀
+
+### 关键要求
+
+- **MUST**: 空闲超时后发送 DTLS fatal alert 并销毁 DTLS 状态
+- DTLS 1.2+ 必须支持
+- DTLS 记录层已提供数据报边界，不需要内层长度前缀
+- 响应过大（>PMTU）：服务器 **MUST** 设置 TC 位并返回截断响应
+- **客户端识别到 DTLS 超时/失败后应回退到 DoT**（§5）：大响应超过 PMTU 时服务器设 TC，客户端在 Strict 模式下 MUST 回退到 DoT
+
+### 协议流程
+
+```
+Client → DTLS 握手 (UDP) → Server
+Client ⇄ DTLS 记录 [DNS消息] ⇄ Server  (UDP 数据报)
+空闲超时 → Server 发送 fatal alert → 关闭
+```
+
+### 我们的实现
+
+- 端口 **8853**（非标准，避免与 DoT 853 冲突）
+- `DefaultDTLSIdleTimeout = 30s`
+- ✓ 空闲超时正确处理：timeout → return（关闭连接，发送 fatal alert）
+- ✓ DTLS 失败时自动 fallback 到 DoT（RFC 8094 §3.3 PMTU 场景）
+
+---
+
+## RFC 8198 — Aggressive NSEC Caching
+
+**利用缓存的 NSEC/NSEC3 范围推导否定回答。**
+
+- ⚠ **已知差距**：miekg/dns 提供 NSEC/NSEC3 数据但不提供覆盖判断。需自行实现范围比较 + RRSIG 附带 + 通配符处理。之前尝试过但边界条件问题多，暂不实现
+
+---
+
+## RFC 8310 — DoT/DTLS Privacy Profiles
+
+**定义了 Strict 和 Opportunistic 两种隐私配置模式。**
+
+### 两种 Profile
+
+| 要求       | Strict                | Opportunistic      |
+| ---------- | --------------------- | ------------------ |
+| 加密       | MUST                  | SHOULD             |
+| 证书验证   | MUST (SPKI pin 或 CA) | MAY                |
+| 回退到明文 | MUST NOT              | 允许（加密失败后） |
+| 认证域名   | MUST                  | MAY                |
+
+### 关键要求
+
+- **MUST**: 实现 Raw Public Keys (RFC 7250)
+- **SHOULD**: 实现 TLS False Start (RFC 7918)
+- **SHOULD**: 实现 Cached Info Extension (RFC 7924)
+- **MUST**: TLS 1.2+，禁用压缩，支持会话复用
+
+### 我们的实现
+
+- ✓ `PrivacyProfile` 配置字段：`"strict"`（默认，PKIX 验证）和 `"opportunistic"`（允许 `SkipTLSVerify`）
+- ✓ 默认为 Strict Privacy（RFC 8310 §6）：TLS + PKIX 证书验证
+- TLS 1.3 服务端 / TLS 1.2+ 客户端 ✓
+- 会话缓存已实现 ✓
+
+---
+
+## RFC 8427 — Representing DNS Messages in JSON
+
+**DNS 消息（或其组成部分）的通用 JSON 表示格式，用于数据交换（查询日志、被动 DNS、消息组装）。**
+
+### 关键成员（均可选，profile 可自定义必需项）
+
+- 消息级: `ID`、`QR`、`Opcode`、`AA/TC/RD/RA/AD/CD`、`RCODE`、`QDCOUNT/ANCOUNT/NSCOUNT/ARCOUNT`（整数）、`QNAME/QTYPE/QCLASS`、`QTYPEname/QCLASSname`、`questionRRs/answerRRs/authorityRRs/additionalRRs`（数组）
+- 记录级: `NAME`、`TYPE`、`CLASS`、`TTL`、`RDLENGTH`、`RDATAHEX`（base16）、`rrSet`（列表）、`compressedNAME`（isCompressed/length）
+- 常用 RDATA 具名成员: `rdataA`、`rdataAAAA`、`rdataCNAME/DNAME/NS/PTR`、`rdataTXT`，及 `rdataCDNSKEY/rdataDNSKEY/rdataMX/rdataNSEC/rdataNSEC3/rdataRRSIG/rdataSRV/rdataTLSA` 等（RFC 显示格式的字符串）
+- 原始字节: `messageOctetsHEX/headerOctetsHEX/questionOctetsHEX/answerOctetsHEX/authorityOctetsHEX/additionalOctetsHEX`、`rrOctetsHEX`
+- 附加: `dateString`（RFC 3339）、`dateSeconds`（可小数）、`comment`
+- 查询-响应配对: `{"queryMessage": {...}, "responseMessage": {...}}`
+- 流式: JSON Text Sequences（RFC 7464）
+
+### 关键要求
+
+- 名称限制在 U+0000–U+007F；`HEX` 后缀成员用大写 base16；名称一律非压缩表示
+- 同一数据允许多种成员重复表示（可能不一致——读者不得假设一致性）
+- 明确允许描述畸形消息（用于攻击日志分析）
+- Media Type: `application/dns+json`
+
+### 我们的实现
+
+- ⚪ **参考级**：纯数据交换格式，无协议交互，ZJDNS 无明确的集成面（Google 的 `/json` DoH 格式非此标准）。miekg/dns 已提供 `dns.MarshalJSON/UnmarshalJSON` + `dnsjson` 子包，需要时可调用
+
+---
+
+## RFC 8446 — TLS 1.3
+
+**TLS 协议的当前版本，废弃不安全的旧算法，强制前向安全性。**
+
+### 关键要点
+
+- 移除 RSA 密钥交换、RC4、3DES、CBC 模式
+- 仅保留 AEAD 密码套件（AES-GCM、Chacha20-Poly1305）
+- 0-RTT 握手（通过 `pre_shared_key` 扩展）
+- 强制 Perfect Forward Secrecy
+
+### 我们的实现
+
+- 服务端：`MinVersion = eTLS.VersionTLS13` ✓
+- 客户端：`MinVersion = eTLS.VersionTLS12`（允许 TLS 1.2 兼容）
+
+---
+
+## RFC 8467/7830 — EDNS Padding
+
+**DNS 响应的填充策略，防止流量分析推断查询内容。**
+
+### 关键常量
+
+| 参数       | 值                | 说明                  |
+| ---------- | ----------------- | --------------------- |
+| 请求块大小 | **128**           | 查询填充到 128 的倍数 |
+| 响应块大小 | **468**           | 响应填充到 468 的倍数 |
+| 客户端退出 | `+nopadding` 标记 | 通过 OPT 选项禁用填充 |
+
+### 我们的实现
+
+- `DefaultPaddingRequestBlockSize = 128` ✓
+- `DefaultPaddingResponseBlockSize = 468` ✓
+- `edns/padding.go:HasPaddingOption()` 检测客户端退出请求 ✓
+
+---
+
+## RFC 8482 — Minimal-Sized Responses to DNS Queries That Have QTYPE=ANY
+
+**对 ANY 查询返回最小化响应（空 ANSWER + HINFO 或最小记录），避免 ANY 被滥用放大。**
+
+### 关键要求
+
+- 权威对 ANY 查询：可以返回最小响应（HINFO）替代完整区域数据
+- 解析器不必转发 ANY（RFC 8482 建议权威直接响应）
+
+### 我们的实现
+
+- ✓ ANY 查询由 Any 中间件（`middleware/any.go`，位于 Zone 之后）应答 `HINFO "RFC8482" ""`（TTL 3600）；zone 规则优先
+- ✓ NXNAME(128) 查询在 Validation 中间件拒绝（REFUSED + EDE 30），不转发（RFC 9824 §3.5）
+
+---
+
+## RFC 8484 — DNS over HTTPS (DoH)
+
+**通过 HTTPS 传输 DNS 查询。**
+
+### 关键常量
+
+- 端口: **443**
+- Content-Type: **`application/dns-message`**
+- 路径: **`/dns-query`**（推荐但非强制）
+- 方法: **POST** + GET（服务端 **MUST** 两者都实现；GET 使用 Base64url 无填充编码）
+- DoH 使用 **UDP 线格式**（无 2 字节长度前缀），与 DoT 的 TCP 线格式不同
+- **MUST**: DoH 服务器忽略 DNS 请求中的 EDNS UDP 负载大小
+- 最大消息: **65535** 字节（RFC 8484 §6）
+
+### 协议流程
+
+```
+POST /dns-query HTTP/2
+Content-Type: application/dns-message
+Accept: application/dns-message
+Body: [DNS 线格式消息]
+
+→ 200 OK
+Content-Type: application/dns-message
+Body: [DNS 线格式消息]
+```
+
+### 我们的实现
+
+- `DefaultHTTPSPort = "443"`，`DefaultHTTP3Port = "443"`
+- `DefaultQueryPath = "/dns-query"`
+- `DefaultDOHMaxRequestSize = 8192`
+- 服务端：`server/protocol/tls/https.go`（HTTP/2+HTTP/3）
+- 客户端：`server/upstream/tls/https.go`（连接池 + 会话复用）
+
+---
+
+## RFC 8499 — DNS Terminology
+
+**DNS 标准术语参考。** ✓
+
+---
+
+## RFC 8767 — Serving Stale Data
+
+**通过提供过期缓存数据来提高 DNS 可用性（当权威服务器不可达时）。**
+
+### 关键常量
+
+- TTL 上限（入站记录）: **SHOULD ≤ 604,800 秒（7 天）** — §4
+- Stale 保留期: 建议 **1–3 天** — §6
+- 客户端等待超时: **SHOULD 短于查询超时** — §5.2
+
+### 协议流程
+
+```
+查询到达 → 缓存命中（已过期）
+  → 后台刷新（异步查询权威）
+  → 立即返回过期数据（stale-while-revalidate）
+  → 刷新成功 → 更新缓存
+  → 刷新失败 → 保留过期数据直到超过 stale 保留期
+```
+
+### 我们的实现
+
+- `DefaultStaleMaxAge = 3 * 86400`（3 天，匹配 RFC 8767 §6 建议 1–3 天）
+- `DefaultServeExpiredClientTimeout = 600ms`
+- ✓ 入站记录 TTL 上限 `DefaultMaxCacheableTTL = 7 * 86400`（`minTTL()` 中 clamp）
+
+---
+
+## RFC 8777 — AMTRELAY Record
+
+**AMTRELAY RR（260）：AMT（Automatic Multicast Tunneling）中继发现，更新 RFC 7450。反向 IP zone 发布。**
+
+### 我们的实现
+
+- miekg/dns 类型声明（未实现 pack/unpack）；ZJDNS 仅透传 ✓
 
 ---
 
@@ -818,6 +1215,70 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
+## RFC 8976 — Message Digest for DNS Zones (ZONEMD)
+
+**ZONEMD RR（63）：区域数据静态摘要（SHA-384 等），防区域数据篡改（配合 DNSSEC 或独立）。**
+
+### 关键点
+
+- RDATA: serial、scheme、hash algorithm、digest
+- 验证器/辅助服务器可校验区域传输完整性
+
+### 我们的实现
+
+- miekg/dns 类型支持；解析器不校验（权威/辅助侧特性）✓
+
+---
+
+## RFC 9000 — QUIC
+
+**UDP 上的多路复用安全传输协议（QUIC v1）。**
+
+### 关键常量
+
+- 空闲超时: **30s**（默认）
+- Keep-Alive: **20s**（防中间盒超时）
+- 地址验证 Token 缓存: 128 条目（LRU）
+
+### 我们的实现
+
+- `DefaultQUICServerIdleTimeout = 30s` ✓
+- `DefaultQUICClientIdleTimeout = 60s`
+- `DefaultQUICKeepAlive = 20s` ✓
+- `DefaultQUICAddrCacheTTL = 30min`
+- 地址验证器：`server/protocol/tls/addr_validator.go` — LRU cache, 128 entries ✓
+
+---
+
+## RFC 9103 — DNS Zone Transfer over TLS (XoT)
+
+**通过 TLS 加密 AXFR/IXFR 区域传输，更新 RFC 1995/5936/7766。**
+
+### 关键常量
+
+- 端口: **853**（同 DoT）
+- ALPN: **`"dot"`**
+
+### 关键要求
+
+- **MUST**: 仅使用 **TLS 1.3+**
+- **MUST**: ALPN `"dot"` 在 TLS 握手中
+- **MUST**: 客户端通过 Strict Privacy + ADN 认证服务器
+- **MUST**: 服务端验证客户端（mTLS 或 IP ACL + TSIG/SIG(0)）
+- **MUST**: 单连接支持多个并发 IXFR/AXFR
+- **MUST**: 最后一个 AXoT 响应的 SOA 与第一个相同
+- **MUST**: Secondary 容忍填充过的 AXoT 响应（包括"空"填充）
+- **MUST**: 整个传输组 XoT 策略一致
+- **SHOULD**: XoT 连接上对非 XFR 流量返回 REFUSED + EDE 21
+- **SHOULD**: 使用 edns-tcp-keepalive 维持持久连接
+
+### 我们的实现
+
+- XoT 是 zone transfer 加密机制，非通用 DoT 运维指南
+- ZJDNS 不实现 zone transfer（不是权威服务器），此 RFC 仅供参考
+
+---
+
 ## RFC 9114 — HTTP/3
 
 **QUIC 上的 HTTP 协议，DoH3 的基础传输层。**
@@ -833,42 +1294,314 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## TLCP/DTLCP — 国密标准
+## RFC 9156 — QNAME Minimisation
 
-**中国国家标准：基于 SM2/SM3/SM4 的 TLS/DTLS 等价协议。**
-
-### 标准引用
-
-| 标准            | 内容                            |
-| --------------- | ------------------------------- |
-| GB/T 38636-2020 | TLCP 协议规范                   |
-| GM/T 0024-2014  | SSL VPN 技术规范（SM 密码套件） |
-| GM/T 0128-2023  | DTLCP（DTLS over SM）           |
+**通过逐步暴露查询名的最小标签数来增强 DNS 隐私。**
 
 ### 关键常量
 
-| 端口     | 值   | 说明                   |
-| -------- | ---- | ---------------------- |
-| TLCP DoT | 9853 | 自定义（非 IANA 注册） |
-| TLCP DoH | 9443 | 自定义                 |
-| DTLCP    | 9853 | 自定义                 |
+- 最大迭代数 `MAX_MINIMISE_COUNT`: 推荐 **10**
+- 逐一标签阶段 `MINIMISE_ONE_LAB`: 推荐 **4**
 
-### 帧格式
+### 算法（§2.3）
 
-- DoT/DTLCP 均使用 2 字节长度前缀（继承自 RFC 8094/1035 模式）
-
-### 已知限制
-
-- gotlcp 库不支持 `net.Listen("udp")`：使用 `net.ListenUDP` + 自定义 listener
-- DTLCP 同样受 PMTU 限制（UDP），失败时自动 fallback 到 TLCP
-- 共享 UDP socket 同一时间仅一个连接（gotlcp 限制）
-- 证书：SM2 密钥对（签名+加密）与 TLCP 共用
+```
+第 1–4 次迭代: 每次多加 1 个标签（逐一暴露）
+第 5–10 次迭代: 按比例分配剩余标签
+  perStep = labelsLeft / remainingSteps
+  remainder = labelsLeft % remainingSteps
+  最后 remainder 次迭代各多加 1 个标签
+超过 10 次: 暴露全部剩余标签
+```
 
 ### 我们的实现
 
-- `server/protocol/tlcp/`：DoT + DoH + DTLCP 服务端
-- `server/upstream/tlcp/`：DoT + DoH + DTLCP 客户端
-- `gotlcp` 库提供 SM2/SM3/SM4 密码学基础
+- `DefaultQnameMinimiseCount = 10`，`DefaultMinimiseOneLabel = 4` ✓
+- `qname_minimise.go:labelsToAdd()` 精确实现比例分配算法 ✓
+
+---
+
+## RFC 9250 — DNS over QUIC (DoQ)
+
+**通过 QUIC 传输 DNS，利用 QUIC 的 0-RTT 和多路复用能力。**
+
+### 关键常量
+
+- 端口: **853**
+- ALPN: **`"doq"`**
+- 流映射: **每个查询一个双向流**
+
+### 关键要求
+
+- **MUST**: DNS Message ID 设为 **0**
+- **MUST**: 发送 STREAM FIN 标记查询结束
+- **MUST NOT**: 在 DoQ 连接上发送 edns-tcp-keepalive (RFC 7828)
+- **MUST**: 每流一个查询（多查询 → `DOQ_PROTOCOL_ERROR`）
+- **MUST**: 非零 Message ID → `DOQ_PROTOCOL_ERROR`
+
+### 协议流程
+
+```
+Client → QUIC 握手 (ALPN="doq") → Server
+Client → STREAM[0]: [2字节长度][DNS消息(ID=0)] → FIN → Server
+Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
+```
+
+### 我们的实现
+
+- `DefaultQUICPort = "853"`，ALPN `"doq"` ✓
+- 客户端：`server/upstream/tls/quic.go` — 正确设置 `msg.ID = 0`
+- ✓ 服务端验证 Message ID = 0（非零 → `DOQ_PROTOCOL_ERROR`）
+- ✓ 全部 7 个 DoQ 错误码已定义（`QUICCode*`）
+
+---
+
+## RFC 9460 — Service Binding and Parameter Specification (SVCB and HTTPS)
+
+**SVCB（64）/HTTPS（65）RR：服务绑定 + 参数（alpn、port、ech、dohpath…），替代 SRV 的更优方案。**
+
+### 关键点
+
+- `Priority`（0 = alias mode）、`TargetName`、`SvcParams`（key=value 列表）
+- AliasMode 与 ServiceMode 的解析规则；HTTPS = SVCB 的子集语义
+- DoH/DoT 端点发现（9461/9462）、ECH 配置传递
+
+### 我们的实现
+
+- 上游查询/zone 规则可配置 SVCB/HTTPS 记录（miekg/dns 类型）；DDR 场景使用 `dohpath` 等参数 ✓
+
+---
+
+## RFC 9461 — Service Binding Mapping for DNS Servers (SVCB for DNS)
+
+**SVCB/HTTPS 记录在 DNS 服务器发现上的映射：如何用 SVCB 参数描述 DoH/DoT/DoQ 端点。**
+
+- 定义 `alpn`、`port`、`dohpath` 等参数在 DNS 服务场景的语义（与 9462 DDR 配合）
+- DoQ 的 `alpn="doq"`、DoT 的 `alpn="dot"`
+
+### 我们的实现
+
+- 与 9462 一并支持（DDR 的 SVCB 应答）✓
+
+---
+
+## RFC 9462 — Discovery of Designated Resolvers (DDR)
+
+**客户端通过 `_dns.resolver.arpa` 的 SVCB/HTTPS 记录发现加密 DNS 解析器（DoH/DoT/DoQ）。**
+
+### 关键点
+
+- QNAME: `_dns.resolver.arpa`（Special-Use，不递归解析）
+- SVCB 参数: `alpn`、`port`、`dohpath`、`ech`；服务端应答须 AA=1 且不转发
+- 加密传输必须验证（TLS 证书/ECH），防降级攻击
+- 定义 `resolver.arpa` 作为解析器信息查询点（与 RFC 9606 RESINFO 配合）
+
+### 我们的实现
+
+- 已实现（`config/ddr.go`）：DoH/DoT 端点经 SVCB 公布；9606 RESINFO 计划在其上延伸
+
+---
+
+## RFC 9567 — DNS Error Reporting
+
+**通过 EDNS0 Report-Channel 选项（OPTION-CODE 0x12）+ 构造的 QNAME，把验证失败/错误上报给权威运营者。**
+
+### 协议流程
+
+```
+权威响应 → 携带 EDNS0 Report-Channel 选项（agent domain，非请求触发）
+验证失败 → 解析器构造报告查询:
+  QNAME = "_er.<QTYPE>.<失败QNAME>.<EDE码>._er.<agent-domain>"
+  QTYPE = TXT
+监控 agent 收到 → 解析出 (zone, qtype, qname, EDE 码) → 通知运营者修复
+```
+
+- agent domain 为空/根时权威 MUST NOT 携带该选项
+- 报告查询可被缓存（同一问题每 TTL 一条报告）
+- RDATA 内容无规范（无指导）
+
+### 我们的实现
+
+- ⚠ **未实现**。ZJDNS 作为验证型递归解析器可选实现上报端（DNSSEC 验证失败 → 发送报告查询）；需要权威配合才有实际价值。miekg/dns 提供 `REPORTING` 选项（`CodeREPORTING=0x12`）
+
+---
+
+## RFC 9606 — DNS Resolver Information (RESINFO)
+
+**新 RR 类型 RESINFO（261），让 DNS 客户端查询递归解析器的能力信息（隐私/过滤/透明策略），用于解析器选择。**
+
+### 检索方式
+
+- QNAME = 认证域名（ADN, DDR/DNR 发现）或 Special-Use 名 **`resolver.arpa`**（RFC 9462）
+- 客户端 **MUST** 设 RD=0；响应 AA=1 才可接受（解析器本地应答，**不递归**）
+- RRset 必须恰好一条记录；无效记录客户端静默忽略
+- 解析器家族（anycast/共享 ADN）应暴露一致的 RESINFO
+
+### 格式与键（IANA 注册，未知键忽略；`temp-` 前缀供本地用）
+
+| 键 | 含义 |
+|----|------|
+| `qnamemin` | 支持 QNAME 最小化（RFC 9156）；无 `=` 时为布尔属性 |
+| `exterr` | 可返回的 EDE 码列表：单个、`-` 区间、`,` 分隔 |
+| `infourl` | https 诊断信息 URL（仅 text/html，IT 人员用） |
+
+示例: `resolver.example.net. 7200 IN RESINFO qnamemin exterr=15-17 infourl=https://resolver.example.com/guide`
+
+### 我们的实现
+
+- ✓ `config/resinfo.go`：随 DDR 一起发布（`ddr.infourl` 可选）——DDR 开启时注入 `resolver.arpa`（+ DDR 域名）的 RESINFO zone 规则，本地应答
+- 键: `qnamemin`（✓ 9156 已实现）、`exterr=3,6,7,9,15,16,17,18,21,22,23,24,30`、可选 `infourl`（`ddr.infourl` 配置）
+
+---
+
+## RFC 9660 — DNS Zone Version (ZONEVERSION)
+
+**EDNS0 选项（OPTION-CODE 0x13）：权威服务器在响应中原子性地携带区域版本（SOA SERIAL），类似 NSID 的诊断用途。**
+
+### 格式
+
+- 载荷: `Labels(1) + Type(1) + Version(变长)`；Type 0 = SOA-SERIAL（唯一定义类型），Version 为 4 字节大端序列号
+- 用于 anycast/多后端区域诊断：版本与答案原子返回
+
+### 我们的实现
+
+- ⚪ 仅供参考（权威侧特性）。ZJDNS 非权威服务器，无 SOA 序列号可报。miekg/dns 提供 `ZONEVERSION` 选项（`CodeZONEVERSION=0x13`）
+
+---
+
+## RFC 9715 — IP Fragmentation Avoidance in DNS over UDP
+
+**避免 DNS/UDP 报文 IP 分片的推荐做法（Informational，原拟 BCP）。**
+
+### 关键要求
+
+- **R1**: UDP 响应方不应使用 IPv6 分片
+- **R2**: 响应方应配置系统防止 UDP 响应分片（BSD 用 DF 位；Linux 的 IP_MTU_DISCOVER 对 UDP 有害——主流实现用 `IP_PMTUDISC_OMIT`）
+- **R3**: 响应报文大小 ≤ min(请求方 EDNS 载荷、接口 MTU、网络 MTU、**推荐上限 1400**)
+- **R4**: EMSGSIZE 时重建 ≤PMTU 的响应或设 TC 位
+- **R5**: 请求方 EDNS 载荷 ≤ min(接口 MTU、网络 MTU、**1400**)，允许更小
+- **R6**: 请求方应在防火墙丢弃**分片**的 DNS/UDP 响应（非零 FO 或 MF=1；IPv6 Fragment Header）
+- **R7**: 重复 UDP 超时后回退到替代传输（TCP）
+
+### 背景与常量
+
+- 最小 IPv6 MTU 1280 → 减去 IPv4/IPv6+UDP 头部 → Flag Day 2020 推荐请求方 **1232**
+- RFC 4035 要求 DNSSEC 感知服务器支持 ≥1220 字节
+- 主流实现（BIND/Unbound/Knot/PowerDNS）默认 1232，`max-udp-size` 上限 1232–4096
+- 分片攻击根源：UDP 端口 + DNS ID 各 16 位熵，且都在首片——RFC 8900 系统性脆弱性
+
+### 我们的实现
+
+- 请求端（上游）: `pool.UDPBufferSize = 1232` ✓（≤1400，符合 R5）；递归路径 `RecursiveUDPBufferSize = 4096`（DNSSEC 链需要，偏离 R5——有意的权衡，见"已知偏离"）
+- 响应端 ✓: `bridge.go` 按 `min(客户端 EDNS, DefaultMaxUDPResponseSize=1400)` 截断（R3）——超限设 TC 位 + TCP 重试，避免 IP 分片
+- 待评估: R6 分片丢弃（防火墙/系统层，非应用可做）
+
+---
+
+## RFC 9824 — Compact Denial of Existence in DNSSEC
+
+**紧凑否认证明（Compact Answers，更新 4034/4035）：权威对不存在的名字返回 NODATA + 单条匹配 QNAME 的 NSEC/NSEC3（bitmap 含 NXNAME 信号），替代 NXDOMAIN——响应更小、在线签名开销更低、防 zone 枚举。**
+
+### 关键点
+
+- 不存在名字: NODATA + 动态构造 NSEC（owner=QNAME，Next Domain=QNAME 的字典序后继即加 `\000` 前缀标签，bitmap 仅 RRSIG/NSEC/**NXNAME(128)**）；NSEC3 时 bitmap 仅 NXNAME
+- 不存在类型: NODATA + 匹配 NSEC（bitmap 列出该名字现有类型）
+- 通配符匹配: 答案 RRSIG 的 label count 等于查询名 label 数（精确匹配证明），省略 closer-match NSEC
+- 未签名委托: NSEC 的 Next Domain = owner 首标签 + `\000`（不得落入委托子域）
+- **NXNAME 是 Meta-TYPE**: 显式查询 → 权威 MUST 返回 FORMERR；解析器 MUST NOT 转发/迭代
+- 解析器无强制处理；可选实现 §5.1 "Signaled Response Code Restoration"：检测 bitmap 的 NXNAME 位 → 把紧凑 NODATA 恢复为 NXDOMAIN 语义
+- 协商: EDNS OPT 的 **CO 位**（Compact Answers OK）——解析器设置后权威才返回紧凑答案
+
+### 我们的实现
+
+- ✓ 上游查询设 CO 位（`edns/edns.go:ApplyToMessage` 请求方向，miekg 已接入 OPT）
+- ✓ 验证器 §5.1: `dnssec.HasCompactNXNAME` 检测 NSEC/NSEC3 bitmap 的 NXNAME 位 → 递归路径（`recursive.go`，仅在 NSEC 证明验证通过后）与转发路径（`forward.go`）均恢复 NXDOMAIN rcode
+- ✓ Validation 中间件拒绝 NXNAME(128) 显式查询（REFUSED + EDE 30，MUST NOT 转发）
+- ✓ 附带修复: NXDOMAIN rcode 贯通 miss 路径与缓存 wire（`cache.Set` 新增 rcode 参数）——此前 NXDOMAIN 恒被服务为 NODATA
+  4. 核对现有 `matchesNSECDenial` 对紧凑 NODATA（owner=QNAME 匹配）的处理 ✓ 已兼容
+
+---
+
+## RFC 9859 — DNS Synchronization (DSYNC RR)
+
+**扩展 DNS NOTIFY 的触发机制：新 RR 类型 DSYNC（66），父区→子区（或反之）的 NS/DS 更新通知，含 DNSSEC 启动（bootstrapping）。**
+
+### 关键点
+
+- DSYNC 是**通知**，不改变动作本身（接收方自行执行预定义动作及其安全检查）
+- 初始通知类型: 父区 NS/DS 记录更新（`notify_types` 位图）
+- 发现接收端点: DSYNC 记录发布接收方信息
+
+### 我们的实现
+
+- ⚪ 仅供参考（区同步/父区通知，非递归解析器职责）。miekg/dns 提供 `DSYNC` 类型（66）
+
+---
+
+## RFC 10029 — Multiple QTYPEs in a Single DNS Query (MQTYPE-Query/Response)
+
+**EDNS0 选项 MQTYPE-Query（20）/MQTYPE-Response（21）：客户端在查询中附加 QTYPE 列表，服务端把多类型响应合并进单个回复，解决 ANY 不可靠与单 question 限制。适用于 stub→递归 与 递归→权威 两个方向。**
+
+### 关键要求
+
+- **OPTION-DATA**: 2 字节大端 QTYPE 列表（仅 data 类型，RFC 6895 §3.1）
+- **§3.3 服务端校验**（违反 → FORMERR）: 非 QUERY opcode、入站 MQTYPE-Response、多个 MQTYPE-Query、QDCOUNT=0、主类型非 data 类型、空列表、Meta 类型、重复/与主类型重复
+- **§3.4 服务端合并**: 先按主 (QNAME, QCLASS, QTYPE) 构建响应（RCODE/flags 由此决定）→ 逐 QTx 合并 → RCODE/flags 不一致的 QTx 必须剔除（含 MQTYPE-Response 列表）→ RR 去重 → 放不下的 QTx 不合并 → **即使空列表也必须返回 MQTYPE-Response**（信号支持）→ 截断时（TC=1）不处理附加类型
+- **§3.5 客户端处理**: 响应无 MQTYPE-Response 或格式错 → 视为不支持，回退单查询
+
+### 我们的实现
+
+- ✓ 服务端（`middleware/mqtype.go`，递归模式）: §3.3 校验 + §3.4 合并（缓存优先 → singleflight 解析，RCODE/AD 一致性，RR 去重，1400 上限预算剔除，MQTYPE-Response 始终返回，QTx 结果写入缓存）
+- ✓ 转发透传: Resolution 经 context 把 MQTYPE-Query 附加到上游查询（`resolver/mqtype_ctx.go`），上游 MQTYPE-Response 经 QueryResult 透传回客户端（`cache_store.go`）
+- ⚠ 未实现: 递归→权威方向的主动 MQTYPE 合并（递归链改造，收益低，标注后续）
+
+---
+
+## DELEG RR (draft-dnsop-deleg-00)
+
+**提议的新委托 RR 类型（Provisional 65432/65433），在 NS 之外携带委托子域的能力与额外信息（可扩展）。**
+
+### 关键点
+
+- 头部新增 **DELEG OK 位**（`_DE = 1<<13`，miekg 已接入 `Msg.Delegation`）
+- 状态: draft rev-00，类型未正式分配（65432/65433 为临时值）——协议可能变化
+- 递归解析器的委托处理（zonecut）未来需理解 DELEG 引用
+
+### 我们的实现
+
+- ⚪ 观望：类型未分配、草案未稳定，暂不接入 zonecut/委托逻辑。miekg/dns 提供 `DELEG`/`DELEGPARAM` 类型与 `deleg` 子包
+
+---
+
+## DNS Stamp (draft-denis-dns-stamps-02)
+
+**DNS 服务器地址的标准化 URI 编码格式（`sdns://`）。**
+
+### 8 种协议类型
+
+| ID   | 协议               | 传输    |
+| ---- | ------------------ | ------- |
+| 0x00 | Plain DNS          | UDP/TCP |
+| 0x01 | DNSCrypt           | UDP/TCP |
+| 0x02 | DoH                | HTTPS   |
+| 0x03 | DoT                | TLS     |
+| 0x04 | DoQ                | QUIC    |
+| 0x05 | Plain DNS (DNSSEC) | UDP/TCP |
+| 0x06 | DoH (no ECS)       | HTTPS   |
+| 0x07 | DoH3               | HTTP/3  |
+
+### Stamp 格式
+
+```
+sdns://<base64(BinaryStamp)>
+BinaryStamp = [protocol:1][props:8][addr_len:1][addr:N][hashes...][path...]
+```
+
+### 我们的实现
+
+- `internal/stamp/parse.go`: 全部 8 种协议解析 ✓
+- `internal/stamp/encode.go`: 编码 ✓
+- CLI: `--dnsstamp --decode/--encode` ✓
 
 ---
 
@@ -948,59 +1681,6 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## DNS Stamp (draft-denis-dns-stamps-02)
-
-**DNS 服务器地址的标准化 URI 编码格式（`sdns://`）。**
-
-### 8 种协议类型
-
-| ID   | 协议               | 传输    |
-| ---- | ------------------ | ------- |
-| 0x00 | Plain DNS          | UDP/TCP |
-| 0x01 | DNSCrypt           | UDP/TCP |
-| 0x02 | DoH                | HTTPS   |
-| 0x03 | DoT                | TLS     |
-| 0x04 | DoQ                | QUIC    |
-| 0x05 | Plain DNS (DNSSEC) | UDP/TCP |
-| 0x06 | DoH (no ECS)       | HTTPS   |
-| 0x07 | DoH3               | HTTP/3  |
-
-### Stamp 格式
-
-```
-sdns://<base64(BinaryStamp)>
-BinaryStamp = [protocol:1][props:8][addr_len:1][addr:N][hashes...][path...]
-```
-
-### 我们的实现
-
-- `internal/stamp/parse.go`: 全部 8 种协议解析 ✓
-- `internal/stamp/encode.go`: 编码 ✓
-- CLI: `--dnsstamp --decode/--encode` ✓
-
----
-
-## RFC 6761 — 特殊域名
-
-**DNS 中具有特殊含义、不应全局解析的域名。**
-
-### 关键域名
-
-| 域名                  | 用途             |
-| --------------------- | ---------------- |
-| `localhost.`          | 回环地址         |
-| `.local`              | mDNS 本地链路    |
-| `.onion`              | Tor 隐藏服务     |
-| `test.` / `invalid.`  | 测试 / 无效域名  |
-| `10.in-addr.arpa.` 等 | 私有地址反向区域 |
-
-### 我们的实现
-
-- 未针对特殊域名做特殊处理（递归解析正常查询上游 NS）
-- 低优先级：可添加本地过滤
-
----
-
 ## SOCKS5 (RFC 1928/1929)
 
 **TCP/UDP 代理协议，用于通过防火墙/代理访问上游 DNS 服务器。**
@@ -1030,9 +1710,49 @@ Client ⇄ 数据透传 ⇄ Target
 
 ---
 
+## TLCP/DTLCP — 国密标准
+
+**中国国家标准：基于 SM2/SM3/SM4 的 TLS/DTLS 等价协议。**
+
+### 标准引用
+
+| 标准            | 内容                            |
+| --------------- | ------------------------------- |
+| GB/T 38636-2020 | TLCP 协议规范                   |
+| GM/T 0024-2014  | SSL VPN 技术规范（SM 密码套件） |
+| GM/T 0128-2023  | DTLCP（DTLS over SM）           |
+
+### 关键常量
+
+| 端口     | 值   | 说明                   |
+| -------- | ---- | ---------------------- |
+| TLCP DoT | 9853 | 自定义（非 IANA 注册） |
+| TLCP DoH | 9443 | 自定义                 |
+| DTLCP    | 9853 | 自定义                 |
+
+### 帧格式
+
+- DoT/DTLCP 均使用 2 字节长度前缀（继承自 RFC 8094/1035 模式）
+
+### 已知限制
+
+- gotlcp 库不支持 `net.Listen("udp")`：使用 `net.ListenUDP` + 自定义 listener
+- DTLCP 同样受 PMTU 限制（UDP），失败时自动 fallback 到 TLCP
+- 共享 UDP socket 同一时间仅一个连接（gotlcp 限制）
+- 证书：SM2 密钥对（签名+加密）与 TLCP 共用
+
+### 我们的实现
+
+- `server/protocol/tlcp/`：DoT + DoH + DTLCP 服务端
+- `server/upstream/tlcp/`：DoT + DoH + DTLCP 客户端
+- `gotlcp` 库提供 SM2/SM3/SM4 密码学基础
+
+---
+
 ## 已知偏离与设计权衡
 
 | 偏离                                 | RFC           | 影响              | 原因                                          |
 | ------------------------------------ | ------------- | ----------------- | --------------------------------------------- |
 | DTLS 端口 8853 非 853                | RFC 8094      | 低 — 生态广泛使用 | 避免与 DoT(853) 冲突                          |
 | DNSCrypt 查询缺少 ResolverMagic 前缀 | DNSCrypt §5.2 | 低 — 服务端用 ClientMagic 识别，查询中冗余 | 与 dnscrypt-proxy 一致；响应仍包含 ResolverMagic |
+| 递归上游查询 EDNS 载荷 4096 超 R5 推荐 1400 | RFC 9715 | 中 — 可能招致分片 | DNSSEC 签名引用/证明常超 1232，4096 是递归解析的实际需要；客户端侧仍用 1232 |

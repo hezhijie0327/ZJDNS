@@ -1179,3 +1179,79 @@ func TestVerifyRRset_SignatureNotYet(t *testing.T) {
 		t.Errorf("not-yet-valid sig should wrap ErrSignatureNotYet, got: %v", err)
 	}
 }
+
+// TestHasCompactNXNAME verifies RFC 9824 NXNAME(128) signal detection in
+// NSEC and NSEC3 type bitmaps.
+func TestHasCompactNXNAME(t *testing.T) {
+	// NSEC carrying the NXNAME bit (compact NODATA for a nonexistent name).
+	compact := &dns.Msg{
+		Ns: []dns.RR{&dns.NSEC{
+			Hdr:  dns.Header{Name: "nonexistent.example.com.", Class: dns.ClassINET, TTL: 300},
+			NSEC: rdata.NSEC{NextDomain: "\x00nonexistent.example.com.", TypeBitMap: []uint16{dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNXNAME}},
+		}},
+	}
+	if !HasCompactNXNAME(compact) {
+		t.Error("NSEC with NXNAME bit must be detected")
+	}
+
+	// NSEC3 variant.
+	compact3 := &dns.Msg{
+		Ns: []dns.RR{&dns.NSEC3{
+			Hdr:   dns.Header{Name: "0p9mhaveqvm6t7vbl5lop2u3t2rp3tom.example.com.", Class: dns.ClassINET, TTL: 300},
+			NSEC3: rdata.NSEC3{Hash: 1, Iterations: 5, Salt: "aabb", NextDomain: "0p9mhaveqvm6t7vbl5lop2u3t2rp3tom", TypeBitMap: []uint16{dns.TypeNXNAME}},
+		}},
+	}
+	if !HasCompactNXNAME(compact3) {
+		t.Error("NSEC3 with NXNAME bit must be detected")
+	}
+
+	// Ordinary NODATA (no NXNAME).
+	plain := &dns.Msg{
+		Ns: []dns.RR{&dns.NSEC{
+			Hdr:  dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
+			NSEC: rdata.NSEC{NextDomain: "zulu.example.com.", TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC}},
+		}},
+	}
+	if HasCompactNXNAME(plain) {
+		t.Error("ordinary NODATA must not be flagged as compact NXNAME")
+	}
+
+	// Empty response.
+	if HasCompactNXNAME(&dns.Msg{}) {
+		t.Error("empty response must not be flagged")
+	}
+}
+
+// TestCompactNODATA_ValidatesAsDenial verifies the compact NODATA proof shape
+// (owner = qname, NXNAME in bitmap) validates as a denial-of-existence — the
+// §5.1 rcode restoration happens at the resolver level.
+func TestCompactNODATA_ValidatesAsDenial(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	zone := "signed.example.com"
+	_, _ = genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
+	zsk, zskPriv := genTestKey(zone, dns.FlagZONE)
+
+	qname := "nonexistent.signed.example.com."
+	nsec := &dns.NSEC{
+		Hdr:  dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300},
+		NSEC: rdata.NSEC{NextDomain: "\x00" + qname, TypeBitMap: []uint16{dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNXNAME}},
+	}
+	rrsig := signRRset([]dns.RR{nsec}, zone, zskPriv, zsk.KeyTag())
+
+	// Compact NODATA: NOERROR + empty answer + matching NSEC with NXNAME.
+	response := &dns.Msg{
+		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeSuccess},
+		Ns:        []dns.RR{nsec, rrsig},
+	}
+	dnsutil.SetQuestion(response, dnsutil.Fqdn(qname), dns.TypeA)
+	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
+	if err != nil {
+		t.Errorf("compact NODATA with signed NSEC should validate: %v", err)
+	}
+	if !verified {
+		t.Error("compact NODATA should be verified")
+	}
+	if !HasCompactNXNAME(response) {
+		t.Error("compact NODATA response must carry the NXNAME signal")
+	}
+}

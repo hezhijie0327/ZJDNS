@@ -136,7 +136,7 @@ go test -bench=. -short -benchtime=500ms ./...                 # stable numbers
 go test -bench=BenchmarkServerProcessQuery -benchtime=3s ./cmd/zjdns  # integration QPS
 ```
 
-**102 benchmarks** across 21 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
+**107 benchmarks** across 21 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
 
 ```bash
 # Update baseline
@@ -225,7 +225,7 @@ zjdns/
 ├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, ...
 └── server/
     ├── handler/        ← query pipeline adapter + QueryContext
-    │   └── middleware/ ← 9 composable middleware + AssembleChain
+    │   └── middleware/ ← 11 composable middleware + AssembleChain
     ├── defense/        ← DNS anti-pollution (Detector, hopguard/poisonguard/spoofguard/splitguard)
     ├── protocol/       ← {plain,tls,tlcp,dnscrypt} server listeners
     ├── upstream/       ← {plain,tls,tlcp,dnscrypt} outbound client + pool + SOCKS5
@@ -262,17 +262,19 @@ Execution order (outermost → innermost):
 
 1. `ResponseMiddleware` — EDNS / Cookie / EDE finalisation
 2. `CacheStoreMiddleware` — cache write, request logging, latency probe
-3. `ValidationMiddleware` — domain / label / ANY-AXFR-IXFR rejection
-4. `ZoneMiddleware` — zone rule evaluation, synthetic response
-5. `EDNSMiddleware` — ECS parsing, DNS Cookie validation (RFC 7873/9018)
-6. `CacheLookupMiddleware` — fresh→serve, stale→serve+refresh, miss→delegate
-7. `PTRMiddleware` — reverse PTR lookup from cache
-8. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147)
-9. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive with singleflight dedup
+3. `MQTYPEMiddleware` — RFC 10029 multi-QTYPE merge (recursive mode); forwarding pass-through
+4. `ValidationMiddleware` — domain / label / NXNAME-AXFR-IXFR rejection (RFC 9824 §3.5)
+5. `ZoneMiddleware` — zone rule evaluation, synthetic response (runs before Any so rules win)
+6. `AnyMiddleware` — RFC 8482 minimal ANY response (HINFO "RFC8482")
+7. `EDNSMiddleware` — ECS parsing, DNS Cookie validation (RFC 7873/9018)
+8. `CacheLookupMiddleware` — fresh→serve, stale→serve+refresh, miss→delegate
+9. `PTRMiddleware` — reverse PTR lookup from cache
+10. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147)
+11. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive with singleflight dedup
 
 All layers share a mutable `QueryContext`. Any layer may short-circuit by setting `qctx.Res`.
 
-> **Note:** Names like `ResponseMiddleware`, `CacheStoreMiddleware`, etc. are descriptive labels for the pipeline. The actual Go types are simply `Response`, `CacheStore`, `Validation`, `Zone`, `EDNS`, `CacheLookup`, `PTR`, `DNS64`, and `Resolution`.
+> **Note:** Names like `ResponseMiddleware`, `CacheStoreMiddleware`, etc. are descriptive labels for the pipeline. The actual Go types are simply `Response`, `CacheStore`, `MQTYPE`, `Validation`, `Zone`, `Any`, `EDNS`, `CacheLookup`, `PTR`, `DNS64`, and `Resolution`.
 
 ### Query Routing (`server/resolver`)
 - Upstream servers queried concurrently via `errgroup`; first NOERROR wins
@@ -328,7 +330,7 @@ All logs use `zjdns/internal/log` (package-level `Default` logger). Default leve
 
 **Component filtering:** `log_level` supports `"level:comp1,comp2"` syntax (e.g. `"debug:UPSTREAM,RECURSION"`).
 
-**23 canonical prefixes:** `TLS`, `CACHE`, `DB`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `PLAIN`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `DNSCRYPT`, `TLCP`, `RULESET`, `DNS64`.
+**24 canonical prefixes:** `TLS`, `CACHE`, `DB`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `PLAIN`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `DNSCRYPT`, `TLCP`, `RULESET`, `DNS64`, `MQTYPE`.
 
 Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECURITY:`. `DOT:`/`DOQ:`/`DOH:`/`DTLS:` → `TLS:`. `DTLCP:` → `TLCP:`. `UDP:`/`TCP:` → `PLAIN:`. Hot-path logs are `Debug` only.
 

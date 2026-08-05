@@ -66,6 +66,14 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 
 	msg := handler.BuildResponseMsg(qctx.Req)
 
+	// Propagate the resolution rcode (e.g. NXDOMAIN from the authoritative
+	// server or a compact NODATA restored per RFC 9824 §5.1).  BuildResponseMsg
+	// always starts NOERROR — without this every upstream/recursive NXDOMAIN
+	// was served as NODATA, and the cached wire lost the rcode entirely.
+	if qr.Rcode != 0 && qr.Rcode != dns.RcodeSuccess {
+		msg.Rcode = qr.Rcode
+	}
+
 	// Determine DNSSEC status and EDE code.
 	var dnssecStatus string
 	var dnssecEDECode uint16
@@ -113,7 +121,7 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 		}
 
 		log.Debugf("CACHE: populating cache for %s", qname)
-		m.store.Set(qname, qtype, qclass, ecsOpt, dnssecOK, qr.Answer, qr.Authority, qr.Additional, validated)
+		m.store.Set(qname, qtype, qclass, ecsOpt, dnssecOK, qr.Answer, qr.Authority, qr.Additional, validated, qr.Rcode)
 	}
 
 	// Request log.
@@ -150,6 +158,12 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	if qctx.EDE == nil && qr.UpstreamEDE != nil {
 		qctx.EDE = &dns.EDE{InfoCode: qr.UpstreamEDE.InfoCode, ExtraText: qr.UpstreamEDE.ExtraText}
 		log.Debugf("UPSTREAM: passing through EDE %d (%s) from upstream", qr.UpstreamEDE.InfoCode, dns.ExtendedErrorToString[qr.UpstreamEDE.InfoCode])
+	}
+
+	// RFC 10029 forwarding pass-through: echo the upstream's MQTYPE-Response
+	// option, signalling which additional types were merged upstream.
+	if qr.MQResponse != nil {
+		msg.Pseudo = append(msg.Pseudo, qr.MQResponse)
 	}
 
 	return msg

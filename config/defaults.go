@@ -209,6 +209,20 @@ const (
 
 	DefaultDNS64Prefix = "64:ff9b::/96" // RFC 6052 §2.1 well-known prefix
 
+	// DefaultMaxUDPResponseSize caps UDP responses per RFC 9715 R3:
+	// the recommended maximum DNS/UDP payload (MTU 1500 − IP/UDP headers,
+	// allowing for tunnel overhead).  Larger responses are truncated (TC=1),
+	// triggering a TCP retry.
+	DefaultMaxUDPResponseSize = 1400
+
+	// DefaultRESINFOTTL is the TTL for locally-served resolver.arpa RESINFO
+	// records (RFC 9606).
+	DefaultRESINFOTTL = 3600
+
+	// DefaultHINFOTTL is the TTL for the RFC 8482 minimal ANY response
+	// HINFO record.
+	DefaultHINFOTTL = 3600
+
 	FallbackClientIP = "0.0.0.0" // fallback IP when client address is nil
 	DNSRootZone      = "."       // DNS root zone label
 )

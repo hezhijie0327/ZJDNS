@@ -436,7 +436,7 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 // needed.  Prep work (TTL calculation, wire packing, zstd compression) runs
 // outside the transaction so CPU-heavy steps can overlap across goroutines.
 func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
-	answer, authority, additional []dns.RR, validated bool,
+	answer, authority, additional []dns.RR, validated bool, rcode uint16,
 ) int64 {
 	if s.db.IsClosed() {
 		return 0
@@ -493,13 +493,15 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	dnsutil.SetReply(msg, queryMsg)
 	// The pre-packed wire is served verbatim on cache hits (both the
 	// direct-wire fast path and the Unpack path re-derive header flags from
-	// the stored wire) — complete the flags SetReply leaves unset: RA
-	// (recursion available) and AD (authenticated data for validated
-	// entries).  Without this every cache hit would serve RA=0/AD=0.
+	// the stored wire) — complete the fields SetReply leaves wrong: RA
+	// (recursion available), AD (authenticated data for validated entries)
+	// and the RCODE (SetReply always resets it to NOERROR — NXDOMAIN
+	// entries would otherwise be served as NODATA on every cache hit).
 	msg.RecursionAvailable = true
 	if validated {
 		msg.AuthenticatedData = true
 	}
+	msg.Rcode = rcode
 	msg.Answer = answer
 	msg.Ns = authority
 	msg.Extra = additional

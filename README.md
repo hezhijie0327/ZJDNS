@@ -53,6 +53,9 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 - **CNAME 追踪**：最大 16 级，防循环检测
 - **QNAME 最小化**：[RFC 9156](docs/rfc/rfc9156.txt)，默认启用
 - **并发去重**：singleflight 合并同 key 并发 miss
+- **多类型合并**：[RFC 10029](docs/rfc/rfc10029.txt) MQTYPE-Query/Response —— 单查询合并 A+AAAA 等多类型响应（递归模式本地合并，转发模式透传上游）
+- **紧凑否认**：[RFC 9824](docs/rfc/rfc9824.txt) —— 上游查询设置 CO 位，NXNAME 信号自动恢复 NXDOMAIN 语义
+- **分片避免**：[RFC 9715](docs/rfc/rfc9715.txt) —— UDP 响应 1400 字节上限，超限 TC + TCP 重试
 
 ### 全协议支持
 | 协议 | 端口 | 传输 | RFC |
@@ -68,13 +71,18 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 | DTLCP | 9853 | UDP + SM2/SM3/SM4 | GM/T 0128-2023 |
 
 ### 安全
-- **DNSSEC**：完整密码学信任链（DNSKEY→DS→RRSIG），NSEC/NSEC3 否定回答（[RFC 5155](docs/rfc/rfc5155.txt)），REVOKE 位检查（[RFC 5011](docs/rfc/rfc5011.txt)）
+- **DNSSEC**：完整密码学信任链（DNSKEY→DS→RRSIG），NSEC/NSEC3 否定回答（[RFC 5155](docs/rfc/rfc5155.txt)），REVOKE 位检查（[RFC 5011](docs/rfc/rfc5011.txt)），算法协商 DAU/DHU/N3U（[RFC 6975](docs/rfc/rfc6975.txt)）
 - **DNS 防污染**：hopguard（IP TTL 指纹）、spoofguard（UDP 多读）、poisonguard（越权检测）、splitguard（TCP 分段）
 - **DNS Cookie**：SipHash-2-4（[RFC 9018](docs/rfc/rfc9018.txt)），密钥 24h 轮换，保留历史密钥兼容慢客户端
 - **EDNS Padding**：[RFC 8467](docs/rfc/rfc8467.txt)，请求 128/响应 468 块大小，随机填充
+- **ANY 最小响应**：[RFC 8482](docs/rfc/rfc8482.txt)，QTYPE=ANY 返回 `HINFO "RFC8482"` 而非完整区域
 - **DNS64**：[RFC 6147](docs/rfc/rfc6147.txt)，AAAA 无记录时从 A 合成（默认前缀 `64:ff9b::/96`）
 - **SOCKS5 代理**：每上游可选（TCP CONNECT + UDP ASSOCIATE，[RFC 1928](docs/rfc/rfc1928.txt)/[RFC 1929](docs/rfc/rfc1929.txt)）
 - **TLS 隐私 Profile**：[RFC 8310](docs/rfc/rfc8310.txt) Strict/Opportunistic 模式可配
+
+### 解析器信息与发现
+- **DDR**：[RFC 9462](docs/rfc/rfc9462.txt)，通过 `_dns.resolver.arpa` SVCB 记录公布加密端点
+- **RESINFO**：[RFC 9606](docs/rfc/rfc9606.txt)，`resolver.arpa` 的解析器能力信息（qnamemin/exterr/infourl，随 DDR 发布）
 
 ### 缓存与数据库
 基于 SQLite WAL + mmap 的统一数据库（[九表设计](docs/ARCHITECTURE.md#db-schema)），zstd 压缩存储，缓存命中 ~0.5ms。A/AAAA 记录按延迟探测排序。异步统计写入（non-blocking channel + 后台 goroutine）。懒惰过期 + 条数上限淘汰。

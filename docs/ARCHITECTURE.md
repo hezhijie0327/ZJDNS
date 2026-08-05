@@ -11,6 +11,10 @@ The unified database (`database/`) contains nine SQLite tables (`modernc.org/sql
 CREATE TABLE version (version TEXT NOT NULL);
 
 -- DNS response cache. Uniqueness: (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok).
+-- msg_wire holds the pre-packed response (format 0x02): [0x02][2:num TTL
+-- offsets][2 each:offset][wire], where wire may be zstd-compressed above the
+-- compression threshold.  The wire carries the full response header —
+-- including the RCODE (e.g. NXDOMAIN) — so cache hits serve the exact rcode.
 CREATE TABLE entries (
     qname      TEXT NOT NULL,
     qtype      INTEGER NOT NULL,
@@ -115,7 +119,13 @@ CREATE TABLE dnscrypt_state (
 
 ### Key Patterns
 
-- **Cache hit path**: `Get()` decompresses zstd + `Msg.Unpack()` (~0.5ms).
+- **Cache hit path**: pre-packed wire (format 0x02: TTL-offset table + packed
+  response). `Get()` serves the wire directly — the Response middleware
+  patches the message ID/RD bits and bridge.go writes it without any
+  Unpack/Pack round-trip (~20ns at the middleware layer, 0 allocs). TTL
+  deduction happens in-place via the offset table; DNSSEC filtering for
+  DO=0 clients uses a wire scan (WireHasDNSSEC). Entries below the
+  compression threshold are stored uncompressed (no decompress either).
 - **RecordRequest**: All results → `query_stats` (per-day upsert, ~500 row sliding window). Non-hit events also → `query_log` (audit trail with denormalized qname/qtype/qclass, no JOIN needed).
 - **Stats aggregation**: `Stats()` uses a single scan of `query_stats` with CASE expressions (result + protocol + rcode + dnssec + poisoned distributions computed inline). ~500 rows regardless of query volume.
 - **Pruning**: `PruneQueryJournal` runs at `config.DefaultPruneInterval`, deleting `query_stats` rows past `config.DefaultQueryJournalRetention` (PK prefix seek) and `query_log` rows via batched delete (`config.DefaultPruneBatchSize` rows per iteration, using `idx_query_log_ts`). Fallback cleanup via `config.DefaultStaleMaxAge` in `evictOldest`.
@@ -236,3 +246,28 @@ Reuses SM2 certificate pair from TLCP. Wire format = DTLS (RFC 8094): 2-byte big
 
 - **ZoneStorage interface**: `Evaluator` depends on `ZoneStorage` (not concrete `*database.DB`), following the same pattern as `ruleset.RuleSetStorage`. The interface provides `Exec`, `Begin`, `QueryZoneExact`, `QueryZoneWildcard`, and `Close`.
 - **Wildcard matching**: Batch IN query with fixed 16 placeholders via `StmtZoneWildcard` prepared statement — single query replaces the old per-label N-query loop.
+- **Synthetic zone rules**: config load injects zone rules for local answers —
+  CHAOS introspection (`config/chaos.go`: id.server/hostname.bind/version.*,
+  ZJDNS.* stats & clear endpoints), DDR SVCB records (`config/ddr.go`,
+  RFC 9462), and RESINFO (`config/resinfo.go`, RFC 9606, opt-in via
+  `resolver_info`).
+
+## EDNS Extensions & RFC Support
+
+The middleware chain (see CLAUDE.md for the full 11-layer pipeline) hosts the
+recent RFC features:
+
+- **RFC 9824 Compact Denial**: upstream queries set the CO bit
+  (`edns/edns.go`); `dnssec.HasCompactNXNAME` detects the NXNAME(128) signal
+  and the resolver restores NXDOMAIN (§5.1) — recursive path only after the
+  NSEC proof validates. NXNAME queries are REFUSED at Validation.
+- **RFC 10029 MQTYPE**: `middleware/mqtype.go` (after CacheStore) validates
+  and merges additional QTYPE responses in recursive mode; forwarding mode
+  passes the option through via context (`resolver/mqtype_ctx.go`) and echoes
+  the upstream's MQTYPE-Response.
+- **RFC 8482 minimal ANY**: `middleware/any.go` (inside Zone) answers
+  QTYPE=ANY with `HINFO "RFC8482"`.
+- **RFC 6975**: upstream requests advertise DAU/DHU/N3U algorithm lists.
+- **RFC 9715**: UDP responses capped at 1400 bytes; oversized wires are
+  truncated in place by `truncateWire` (server/bridge.go) — TC=1, no
+  Unpack/Pack round-trip.

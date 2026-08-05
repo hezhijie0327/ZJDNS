@@ -42,6 +42,14 @@ func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 
 		question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
 
+		// RFC 10029 forwarding pass-through: carry the client's MQTYPE-Query
+		// option to queryUpstream so it is attached to the upstream request.
+		// Invalid options never reach here — the MQTYPE middleware FORMERRs
+		// them before Resolution runs.
+		if mq, ok, _ := findMQQUERY(qctx.Req.Pseudo); ok && mq != nil {
+			ctx = resolver.WithMQType(ctx, mq)
+		}
+
 		// Singleflight dedup: if another goroutine is already resolving the
 		// same query, wait for its result.
 		if m.pending != nil {

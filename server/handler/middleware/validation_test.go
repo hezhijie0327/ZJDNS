@@ -60,7 +60,10 @@ func TestValidation_ValidQuery(t *testing.T) {
 	}
 }
 
-func TestValidation_ANY_Rejected(t *testing.T) {
+// TestValidation_ANY_PassesThrough verifies that ANY queries are no longer
+// rejected by Validation — RFC 8482 minimal responses are synthesized by the
+// Any middleware further down the chain.
+func TestValidation_ANY_PassesThrough(t *testing.T) {
 	m := &Validation{}
 	nextCalled := false
 	h := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
@@ -71,10 +74,28 @@ func TestValidation_ANY_Rejected(t *testing.T) {
 		Req: newMsg("example.com.", &dns.ANY{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}),
 	}
 	_ = h.ServeDNS(context.Background(), qctx)
-	if nextCalled {
-		t.Error("next should not be called for ANY query")
+	if !nextCalled {
+		t.Error("next should be called for ANY query (RFC 8482 minimal response)")
 	}
-	if qctx.Res.Rcode != dns.RcodeRefused {
+}
+
+// TestValidation_NXNAME_Rejected verifies that NXNAME (128) queries are
+// rejected — RFC 9824 §3.5: a resolver MUST NOT forward or iterate NXNAME.
+func TestValidation_NXNAME_Rejected(t *testing.T) {
+	m := &Validation{}
+	nextCalled := false
+	h := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
+		nextCalled = true
+		return nil
+	}))
+	qctx := &handler.QueryContext{
+		Req: newMsg("example.com.", &dns.NXNAME{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}),
+	}
+	_ = h.ServeDNS(context.Background(), qctx)
+	if nextCalled {
+		t.Error("next should not be called for NXNAME query")
+	}
+	if qctx.Res == nil || qctx.Res.Rcode != dns.RcodeRefused {
 		t.Errorf("rcode = %d, want RcodeRefused", qctx.Res.Rcode)
 	}
 }

@@ -104,10 +104,14 @@ type DNS64Config struct {
 }
 
 // DDRSettings configures Discovery of Designated Resolvers (DDR) advertisement.
-// The server domain is in certificate.domain.
+// The server domain is in certificate.domain.  DDR also publishes RFC 9606
+// RESINFO records for resolver.arpa (+ the DDR domain).
 type DDRSettings struct {
 	IPv4 string `json:"ipv4,omitzero"`
 	IPv6 string `json:"ipv6,omitzero"`
+	// InfoURL is the optional RFC 9606 infourl key: an https diagnostic page
+	// URL advertised in the RESINFO record.
+	InfoURL string `json:"infourl,omitzero"`
 }
 
 // DatabaseSettings configures the shared SQLite database backing cache and zone.

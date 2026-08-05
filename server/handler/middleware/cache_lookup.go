@@ -261,7 +261,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(ctx context.Context, qctx *handler
 				case <-done:
 					if qr != nil && qr.Err == nil && qr.Cacheable {
 						m.store.Set(qname, qtype, qclass, ecsOpt, false, // dnssecOK — background refresh does not need DNSSEC
-							qr.Answer, qr.Authority, qr.Additional, qr.Validated)
+							qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
 					}
 				case <-rc.Done():
 				}
@@ -299,7 +299,7 @@ func (m *CacheLookup) refreshCacheEntry(qname string, qtype, qclass uint16, ecsO
 		log.Debugf("CACHE: refresh skipped for %s (type=%d) — response not cacheable", qname, qtype)
 		return nil
 	}
-	m.store.Set(qname, qtype, qclass, ecsOpt, false, qr.Answer, qr.Authority, qr.Additional, qr.Validated)
+	m.store.Set(qname, qtype, qclass, ecsOpt, false, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
 	log.Debugf("CACHE: refresh updated %s (type=%d, answer=%d)", qname, qtype, len(qr.Answer))
 	return nil
 }

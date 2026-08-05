@@ -327,10 +327,10 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			// The async latency probe below reorders them later for
 			// latency-optimized cache hits.
 			if r.cache != nil && len(ansARecords) > 0 {
-				r.cache.Set(nsName, dns.TypeA, dns.ClassINET, nil, false, ansARecords, nil, nil, false)
+				r.cache.Set(nsName, dns.TypeA, dns.ClassINET, nil, false, ansARecords, nil, nil, false, 0)
 			}
 			if r.cache != nil && len(ansAAAARecords) > 0 {
-				r.cache.Set(nsName, dns.TypeAAAA, dns.ClassINET, nil, false, ansAAAARecords, nil, nil, false)
+				r.cache.Set(nsName, dns.TypeAAAA, dns.ClassINET, nil, false, ansAAAARecords, nil, nil, false, 0)
 			}
 
 			// Accumulate records for async latency probe.

@@ -110,9 +110,13 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// trailing dot, falsely rejecting valid max-length names, and
 		// undercounts nothing — an invalid name with many labels passes a
 		// presentation check while exceeding 255 wire octets.
+		// NXNAME (128) is a Meta-TYPE signalling compact denial (RFC 9824
+		// §3.5): a resolver MUST NOT forward or iterate it — rejected here.
+		// ANY is deliberately NOT rejected: RFC 8482 minimal responses are
+		// synthesized by the Any middleware (after zone rules run).
 		wireLen := wireNameLength(qname)
 		if wireLen >= 0 && wireLen <= 255 &&
-			qtype != dns.TypeANY &&
+			qtype != dns.TypeNXNAME &&
 			qtype != dns.TypeAXFR &&
 			qtype != dns.TypeIXFR &&
 			dnsutil.IsName(qname) {

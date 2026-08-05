@@ -131,10 +131,10 @@ func (r *Recursive) cacheGlueRecords(glue map[string][]dns.RR) {
 			}
 		}
 		if len(aGlue) > 0 {
-			r.cache.Set(nsName, dns.TypeA, dns.ClassINET, nil, false, aGlue, nil, nil, false)
+			r.cache.Set(nsName, dns.TypeA, dns.ClassINET, nil, false, aGlue, nil, nil, false, 0)
 		}
 		if len(aaaaGlue) > 0 {
-			r.cache.Set(nsName, dns.TypeAAAA, dns.ClassINET, nil, false, aaaaGlue, nil, nil, false)
+			r.cache.Set(nsName, dns.TypeAAAA, dns.ClassINET, nil, false, aaaaGlue, nil, nil, false, 0)
 		}
 	}
 	for _, records := range glue {

@@ -33,6 +33,21 @@ type Handler struct {
 }
 
 // NewHandler creates a Handler with the given default ECS configuration.
+// RFC 6975 algorithm lists advertised on upstream queries.  Static slices —
+// the validator's algorithm support is fixed at build time.
+var (
+	// dauAlgorithms: DNSSEC signing algorithms the resolver can validate
+	// (RSASHA256=8, RSASHA512=10, ECDSAP256SHA256=13, ECDSAP384SHA384=14,
+	// ED25519=15, ED448=16).
+	dauAlgorithms = []uint8{8, 10, 13, 14, 15, 16}
+	// dhuAlgorithms: DS digest types the resolver can validate (SHA-1=1,
+	// SHA-256=2, SHA-384=4).
+	dhuAlgorithms = []uint8{1, 2, 4}
+	// n3uAlgorithms: NSEC3 hash algorithms understood (SHA-1=1 — the only
+	// one defined by RFC 5155).
+	n3uAlgorithms = []uint8{1}
+)
+
 func NewHandler(defaultECS config.ECSConfig) (*Handler, error) {
 	cg, err := NewCookieGenerator()
 	if err != nil {
@@ -104,6 +119,18 @@ func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnectio
 	// clear (responses are built with isRequest=false here).
 	if isRequest {
 		msg.Security = true
+		// RFC 9824 §3: the CO (Compact Answers OK) bit asks authoritative
+		// servers to return compact denial-of-existence (NODATA + NXNAME
+		// signal) instead of NXDOMAIN — smaller responses, no zone
+		// enumeration.  §5.1 restoration is handled by the resolver.
+		msg.CompactAnswers = true
+		// RFC 6975: signal which DNSSEC algorithms, DS digests and NSEC3
+		// hashes this resolver understands — authorities can skip
+		// signatures we cannot validate.
+		msg.Pseudo = append(msg.Pseudo,
+			&dns.DAU{AlgCode: dauAlgorithms},
+			&dns.DHU{AlgCode: dhuAlgorithms},
+			&dns.N3U{AlgCode: n3uAlgorithms})
 	}
 
 	if ecs != nil {

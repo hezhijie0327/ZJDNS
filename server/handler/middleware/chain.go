@@ -57,7 +57,8 @@ type Dependencies struct {
 //
 //	Response      — EDNS / cookie / EDE application
 //	CacheStore    — cache write + request logging + latency probe
-//	Validation    — domain length / label / ANY-AXFR-IXFR
+//	Validation    — domain length / label / NXNAME-AXFR-IXFR rejection
+//	Any           — RFC 8482 minimal ANY response (HINFO)
 //	Zone          — zone rule evaluation (short-circuit on match)
 //	EDNS          — ECS + cookie parsing
 //	CacheLookup   — cache lookup (short-circuit on hit)
@@ -116,6 +117,11 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 		config: deps.Config,
 	}).Wrap(h)
 
+	// RFC 8482 minimal ANY response — wrapped INSIDE Zone (earlier Wrap call
+	// = inner layer), so operator-defined zone rules for ANY queries run
+	// first and take precedence; only unmatched ANY queries reach Any.
+	h = (&Any{}).Wrap(h)
+
 	// Zone rule evaluation (short-circuit on match). The evaluator is
 	// always wired by server.New, but guard for tests and embedded use.
 	if deps.ZoneEvaluator != nil && deps.ZoneEvaluator.HasRules() {
@@ -128,6 +134,15 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 
 	// Request validation — reject malformed queries early.
 	h = (&Validation{}).Wrap(h)
+
+	// RFC 10029 MQTYPE-Query: merges additional QTYPE responses into the
+	// primary reply (recursive mode).  In forwarding mode the option is
+	// passed through to the upstream by Resolution.
+	h = (&MQTYPE{
+		store:    deps.Cache,
+		resolver: deps.Resolver,
+		pending:  deps.PendingReqs,
+	}).Wrap(h)
 
 	// Cache storage: runs after resolution, writes to cache + starts probes.
 	h = (&CacheStore{

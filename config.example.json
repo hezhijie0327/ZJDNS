@@ -41,7 +41,8 @@
       "dnssec_enforce": true,
       "ddr": {
         "ipv4": "127.0.0.1",
-        "ipv6": "::1"
+        "ipv6": "::1",
+        "infourl": "https://example.com/dns-help"
       },
       "ecs_subnet": {
         "ipv4": "auto",

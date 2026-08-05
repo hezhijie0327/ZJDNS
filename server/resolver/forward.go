@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"zjdns/config"
@@ -19,6 +20,20 @@ import (
 	"codeberg.org/miekg/dns"
 	"golang.org/x/sync/errgroup"
 )
+
+// captureMQResponse extracts the RFC 10029 MQTYPE-Response option from an
+// upstream response for forwarding pass-through to the client.
+func captureMQResponse(resp *dns.Msg) *dns.MQRESPONSE {
+	if resp == nil {
+		return nil
+	}
+	for _, rr := range resp.Pseudo {
+		if mqr, ok := rr.(*dns.MQRESPONSE); ok {
+			return &dns.MQRESPONSE{Types: slices.Clone(mqr.Types)}
+		}
+	}
+	return nil
+}
 
 // captureUpstreamEDE extracts the EDE option from an upstream response for
 // passthrough to downstream clients. Upstream resolvers attach EDE codes
@@ -108,6 +123,12 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 					server.Protocol != config.ProtoDNSCrypt &&
 					server.Protocol != config.ProtoDNSCryptTCP
 				msg := r.buildMsg(question, ecs, true, isSecure)
+				// RFC 10029 forwarding pass-through: attach the client's
+				// MQTYPE-Query option so the upstream resolver can merge the
+				// additional types itself.
+				if mq := MQTypeFromContext(groupCtx); mq != nil {
+					msg.Pseudo = append(msg.Pseudo, mq)
+				}
 				queryResult := r.queryClient.ExecuteQuery(groupCtx, msg, server)
 				pool.DefaultMessage.Put(msg)
 
@@ -270,8 +291,18 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 		log.Debugf("UPSTREAM: DNSSEC validation result=%t for %s via %s", queryResult.Validated, question.Name, server.Address)
 		ecsResponse := r.edns.ParseFromDNS(queryResult.Response)
 
+		// RFC 9824 §5.1: the upstream may answer with a compact NODATA
+		// (NOERROR + NSEC/NSEC3 NXNAME signal) for a nonexistent name — we
+		// set the CO bit on upstream queries, so restore the NXDOMAIN
+		// semantic before serving.
+		rcode := uint16(dns.RcodeSuccess)
+		if dnssec.HasCompactNXNAME(queryResult.Response) {
+			log.Debugf("UPSTREAM: compact NODATA with NXNAME signal for %s via %s — restoring NXDOMAIN", question.Name, server.Address)
+			rcode = dns.RcodeNameError
+		}
+
 		select {
-		case resultChan <- QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Cacheable: !server.SkipCache, ECS: ecsResponse, Server: serverDesc, UpstreamEDE: upstreamEDE}:
+		case resultChan <- QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Cacheable: !server.SkipCache, ECS: ecsResponse, Server: serverDesc, UpstreamEDE: upstreamEDE, MQResponse: captureMQResponse(queryResult.Response), Rcode: rcode}:
 			remaining := activeConnections.Load() - 1
 			if remaining > 0 {
 				log.Debugf("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
@@ -290,9 +321,11 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 			Additional:  queryResult.Response.Extra,
 			Validated:   false,
 			Cacheable:   !server.SkipCache,
+			Rcode:       dns.RcodeNameError, // was 0 — NXDOMAIN served as NODATA
 			ECS:         r.edns.ParseFromDNS(queryResult.Response),
 			Server:      serverDesc,
 			UpstreamEDE: upstreamEDE,
+			MQResponse:  captureMQResponse(queryResult.Response),
 		})
 		pool.DefaultMessage.Put(queryResult.Response)
 	default:

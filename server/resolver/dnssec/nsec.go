@@ -65,6 +65,27 @@ func (c *CryptoValidator) verifyNSECRecord(nsec *dns.NSEC, rrsigs []*dns.RRSIG, 
 	return false
 }
 
+// HasCompactNXNAME reports whether the response carries the RFC 9824 NXNAME
+// signal in any NSEC/NSEC3 type bitmap: the authority returned a compact
+// NODATA (NOERROR, empty answer) for a name that does not exist.  Per §5.1
+// ("Signaled Response Code Restoration") the resolver should restore the
+// NXDOMAIN semantic for such responses.
+func HasCompactNXNAME(response *dns.Msg) bool {
+	for _, rr := range response.Ns {
+		switch nsec := rr.(type) {
+		case *dns.NSEC:
+			if slices.Contains(nsec.TypeBitMap, dns.TypeNXNAME) {
+				return true
+			}
+		case *dns.NSEC3:
+			if slices.Contains(nsec.TypeBitMap, dns.TypeNXNAME) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // matchesNSECDenial checks whether an NSEC record proves the requested denial.
 func matchesNSECDenial(nsec *dns.NSEC, normalizedQname string, qtype uint16, denialType string) bool {
 	switch denialType {
