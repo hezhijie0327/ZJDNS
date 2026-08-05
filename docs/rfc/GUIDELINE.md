@@ -1553,7 +1553,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 - ✓ 服务端（`middleware/mqtype.go`，递归模式）: §3.3 校验 + §3.4 合并（缓存优先 → singleflight 解析，RCODE/AD 一致性，RR 去重，1400 上限预算剔除，MQTYPE-Response 始终返回，QTx 结果写入缓存）
 - ✓ 转发透传: Resolution 经 context 把 MQTYPE-Query 附加到上游查询（`resolver/mqtype_ctx.go`），上游 MQTYPE-Response 经 QueryResult 透传回客户端（`cache_store.go`）
-- ⚠ 未实现: 递归→权威方向的主动 MQTYPE 合并（递归链改造，收益低，标注后续）
+- ✓ 递归→权威方向: zone cut 处 DS 查询携带 MQTYPE-Query(NS)，合并响应一次取回 DS+NS（`resolveZoneCut`/`resolveChildNameservers`，省一次 RTT/委托级）；权威不支持时回退独立 NS 查询（RFC 6891 忽略选项 + RFC 10029 §3.5）
 
 ---
 

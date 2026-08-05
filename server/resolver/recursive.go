@@ -103,7 +103,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 	// Root-domain query (normalizedQname is empty for the root zone ".").
 	if normalizedQname == "." {
-		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, question, nil, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
 		if verdict == defense.VerdictPoisoned {
 			poisonSeen = true
 			// A successful-but-poisoned UDP response for the root zone must
@@ -159,7 +159,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			authoritativeForceTCP = r.probeTLDForPoison(ctx, tldServers, qname)
 		}
 
-		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, ecs, authoritativeForceTCP, currentDomain, r.resolver.validator.Poisonguard)
+		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, nil, ecs, authoritativeForceTCP, currentDomain, r.resolver.validator.Poisonguard)
 
 		// ── Single TCP fallback decision point ──────────────────────
 		// If any response at this delegation level was flagged as

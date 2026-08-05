@@ -21,7 +21,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector defense.Detector) (*dns.Msg, defense.Verdict, error) {
+func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question Question, mqt []uint16, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector defense.Detector) (*dns.Msg, defense.Verdict, error) {
 	if len(nameservers) == 0 {
 		return nil, defense.VerdictClean, errors.New("no nameservers")
 	}
@@ -42,6 +42,12 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 	baseMsg := r.resolver.buildMsg(question, ecs, false, false)
 	baseMsg.UDPSize = pool.RecursiveUDPBufferSize
+	// RFC 10029: request additional types in the same authority query (e.g.
+	// NS alongside DS at a zone cut).  Authorities that do not support
+	// MQTYPE ignore the option (RFC 6891) and the caller falls back.
+	if len(mqt) > 0 {
+		baseMsg.Pseudo = append(baseMsg.Pseudo, &dns.MQQUERY{Types: mqt})
+	}
 
 	for _, ns := range nameservers {
 		nsAddr := ns

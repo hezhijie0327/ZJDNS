@@ -102,7 +102,7 @@ func isApexSOANODATA(response *dns.Msg, queryName string) bool {
 // established and the caller should keep exposing labels.
 func (r *Recursive) advanceApexZoneCut(ctx context.Context, queryName string, nameservers []string, currentDomain string, ecs *edns.ECSOption, chain *dnssecChain, depth int, forceTCP bool, qname string) (nextNS []string, nextZone string, ok bool) {
 	nsQuestion := Question{Name: dnsutil.Fqdn(queryName), Qtype: dns.TypeNS, Qclass: dns.ClassINET}
-	nsResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, nsQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+	nsResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, nsQuestion, nil, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
 	if err != nil || nsResp == nil {
 		log.Debugf("RECURSION: NS query for zone-cut candidate %s failed: %v", queryName, err)
 		return nil, "", false

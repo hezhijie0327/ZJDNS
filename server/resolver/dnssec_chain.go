@@ -195,7 +195,7 @@ func (r *Recursive) verifyNoDSInParent(ctx context.Context, nameservers []string
 	}
 
 	dsQuestion := Question{Name: dnsutil.Fqdn(childZone), Qtype: dns.TypeDS, Qclass: dns.ClassINET}
-	resp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dsQuestion, nil, false, currentDomain, r.resolver.validator.Poisonguard)
+	resp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dsQuestion, nil, nil, false, currentDomain, r.resolver.validator.Poisonguard)
 	if err != nil || resp == nil {
 		log.Debugf("SECURITY: DS query for %s failed: %v", childZone, err)
 		return false, false
@@ -251,7 +251,7 @@ func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string,
 
 	// Query the zone's authoritative nameservers for DNSKEY records
 	dnskeyQuestion := Question{Name: dnsutil.Fqdn(zone), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
-	dnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, nil, false, zone, r.resolver.validator.Poisonguard)
+	dnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, nil, nil, false, zone, r.resolver.validator.Poisonguard)
 	if err != nil {
 		log.Debugf("SECURITY: DNSKEY query failed for %s: %v", zone, err)
 		return
@@ -381,7 +381,7 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 
 	// Query the authoritative nameservers explicitly for DNSKEY + RRSIG
 	dnskeyQuestion := Question{Name: dnsutil.Fqdn(currentDomain), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
-	dnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+	dnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, nil, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
 	if err != nil {
 		log.Debugf("SECURITY: DNSKEY query failed for %s: %v", currentDomain, err)
 		chain.lastEDECode = dns.ExtendedErrorNetworkError
@@ -499,7 +499,7 @@ func (r *Recursive) validateOrRetry(ctx context.Context, response *dns.Msg, name
 func (r *Recursive) tryRRSIGRetry(ctx context.Context, response *dns.Msg, nameservers []string, question Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, verifiedKeys []*dns.DNSKEY) bool {
 	retryCtx, retryCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
 	defer retryCancel()
-	retryResp, _, retryErr := r.queryNameserversConcurrent(retryCtx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+	retryResp, _, retryErr := r.queryNameserversConcurrent(retryCtx, nameservers, question, nil, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
 	if retryErr != nil || retryResp == nil {
 		log.Debugf("SECURITY: RRSIG retry failed for %s", question.Name)
 		return false
@@ -545,7 +545,7 @@ func (r *Recursive) verifyOfflineKSK(ctx context.Context, nameservers []string, 
 // records and checking that they match the parent DS (RFC 7344 §3.1).
 func (r *Recursive) verifyViaCDS(ctx context.Context, nameservers []string, zone string, chain *dnssecChain) bool {
 	cdsQ := Question{Name: dnsutil.Fqdn(zone), Qtype: dns.TypeCDS, Qclass: dns.ClassINET}
-	cdsResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, cdsQ, nil, false, zone, r.resolver.validator.Poisonguard)
+	cdsResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, cdsQ, nil, nil, false, zone, r.resolver.validator.Poisonguard)
 	if err != nil || cdsResp == nil {
 		log.Debugf("SECURITY: CDS query failed for %s: %v", zone, err)
 		return false
@@ -574,7 +574,7 @@ func (r *Recursive) verifyViaCDS(ctx context.Context, nameservers []string, zone
 // DS is the effective authentication.
 func (r *Recursive) verifyViaCDNSKEY(ctx context.Context, nameservers []string, zone string, chain *dnssecChain) bool {
 	cdnskeyQ := Question{Name: dnsutil.Fqdn(zone), Qtype: dns.TypeCDNSKEY, Qclass: dns.ClassINET}
-	cdnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, cdnskeyQ, nil, false, zone, r.resolver.validator.Poisonguard)
+	cdnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, cdnskeyQ, nil, nil, false, zone, r.resolver.validator.Poisonguard)
 	if err != nil || cdnskeyResp == nil {
 		log.Debugf("SECURITY: CDNSKEY query failed for %s: %v", zone, err)
 		return false
