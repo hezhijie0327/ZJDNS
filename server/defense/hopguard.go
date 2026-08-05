@@ -37,7 +37,7 @@ type serverState struct {
 	trusted     map[uint8]int // trusted TTLs → count snapshot
 	samples     int           // total responses observed
 	armed       bool          // true once minimum samples reached
-	lastRebuild time.Time     // time-based rebuild fallback
+	lastRebuild int64         // time-based rebuild fallback (log.NowUnixNano())
 }
 
 const (
@@ -45,9 +45,12 @@ const (
 	// international upstreams — stable single-path connections exhibit ≤±1 variation.
 	// Anycast PoPs or load-balanced servers that rewrite TTL may need a wider window;
 	// make this configurable per-upstream if false rejections occur in practice.
-	hopGuardCacheCapacity   = 256             // LRU cache capacity for server states
-	hopGuardMinSamples      = 32              // samples needed before arming
-	hopGuardRebuildInterval = 5 * time.Minute // time-based rebuild fallback
+	hopGuardCacheCapacity = 256 // LRU cache capacity for server states
+	hopGuardMinSamples    = 32  // samples needed before arming
+	// hopGuardRebuildIntervalNanos is the time-based rebuild fallback in
+	// log.NowUnixNano() granularity — precomputed so the per-Feed check does
+	// no Duration conversion.
+	hopGuardRebuildIntervalNanos = int64(5 * time.Minute)
 )
 
 // NewHopGuard creates a HopGuard with LRU cache.
@@ -107,7 +110,7 @@ func (h *HopGuard) Feed(serverIP string, observed uint8) {
 		st = &serverState{
 			histogram:   make(map[uint8]int, 16),
 			trusted:     make(map[uint8]int, 4),
-			lastRebuild: time.Now(),
+			lastRebuild: log.NowUnixNano(),
 		}
 		actual, loaded := h.states.LoadOrStore(serverIP, st)
 		if loaded {
@@ -125,8 +128,8 @@ func (h *HopGuard) Feed(serverIP string, observed uint8) {
 		// Time-based decay: on low-traffic upstreams the sample-based
 		// rebuild never fires, so a routing change (anycast reroute, PoP
 		// shift) leaves the stale baseline in force indefinitely.
-		if time.Since(st.lastRebuild) > hopGuardRebuildInterval {
-			st.lastRebuild = time.Now()
+		if log.NowUnixNano()-st.lastRebuild > hopGuardRebuildIntervalNanos {
+			st.lastRebuild = log.NowUnixNano()
 			rebuildTrusted(st)
 		}
 		if st.samples%hopGuardMinSamples == 0 {

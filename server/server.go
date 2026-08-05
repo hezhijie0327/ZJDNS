@@ -12,7 +12,6 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"sync"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/database"
@@ -56,12 +55,11 @@ type Server struct {
 	pprofServers   []*http.Server
 	shutdown       chan struct{}
 	tcpSem         chan struct{}
-	tcpWriteMu     sync.Map
-	// tcpMu serializes tcpWriteMu entry lifecycle: the request path does
-	// LoadOrStore + in-flight ref under the lock, the sweep does the refs==0
-	// check + Delete under the same lock. This closes the check-then-delete
-	// TOCTOU that would otherwise detach a writeMu from the map mid-request.
-	tcpMu           sync.Mutex
+	// tcpWriteShards is the per-connection TCP write-serialization registry,
+	// sharded by client address so concurrent connections never contend on a
+	// global lock.  Each shard's mutex serializes the entry lifecycle (see
+	// tcpWriteShard in bridge.go).
+	tcpWriteShards  [tcpWriteShardCount]tcpWriteShard
 	ctx             context.Context
 	cancel          context.CancelCauseFunc
 	backgroundGroup *errgroup.Group

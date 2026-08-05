@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
@@ -26,6 +27,32 @@ type tcpWriteEntry struct {
 	refs atomic.Int64
 }
 
+// tcpWriteShard is one shard of the TCP write-serialization registry.  mu
+// serializes the entry lifecycle within the shard: the request path does
+// lookup-or-create + in-flight ref under the lock, the sweep does the
+// refs==0 check + delete under the same lock — closing the check-then-delete
+// TOCTOU that would otherwise detach a writeMu from the map mid-request.
+type tcpWriteShard struct {
+	mu      sync.Mutex
+	entries map[string]*tcpWriteEntry
+}
+
+// tcpWriteShardCount is the number of TCP write-registry shards.  Power of
+// two so shard selection is a mask.  Concurrent connections hash to different
+// shards, so a busy server never contends on a single global lock.
+const tcpWriteShardCount = 16
+
+// tcpWriteShardFor returns the shard owning addr.  FNV-1a over the address
+// string — stable so the sweep finds entries in the same shard.
+func (s *Server) tcpWriteShardFor(addr string) *tcpWriteShard {
+	var h uint64 = 14695981039346656037 // FNV-1a offset basis
+	for i := range addr {
+		h ^= uint64(addr[i])
+		h *= 1099511628211 // FNV-1a prime
+	}
+	return &s.tcpWriteShards[h&(tcpWriteShardCount-1)]
+}
+
 // handleDNSRequest is the protocol bridge: it extracts client IP, determines
 // protocol (UDP/TCP), serializes TCP writes, and delegates to the handler.
 func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
@@ -39,35 +66,37 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 
 	if _, isTCP := w.RemoteAddr().(*net.TCPAddr); isTCP {
 		addr := w.RemoteAddr().String()
-		// Entry lifecycle is serialized by tcpMu: LoadOrStore and the
-		// in-flight ref happen under the lock, and the sweep's refs==0 check
-		// + Delete share the same lock. The sweep therefore can never delete
-		// an entry between a request's LoadOrStore and its ref add — no
-		// placeholder ref is needed, and a request can never hold a writeMu
-		// detached from the map while a newer entry (with a separate writeMu)
-		// is created for the same connection, which would interleave frames
-		// on the same TCP stream.
+		// Entry lifecycle is serialized by the owning shard's mutex:
+		// lookup-or-create and the in-flight ref happen under the lock, and
+		// the sweep's refs==0 check + delete share the same lock. The sweep
+		// therefore can never delete an entry between a request's create and
+		// its ref add — no placeholder ref is needed, and a request can never
+		// hold a writeMu detached from the map while a newer entry (with a
+		// separate writeMu) is created for the same connection, which would
+		// interleave frames on the same TCP stream.
 		// NOTE: Lazy init via capacityOnce.Do means the map entry exists
 		// before channels are ready. Concurrent readers of entry.capacity or
-		// entry.writeMu between the LoadOrStore and the Do closure would see
+		// entry.writeMu between the create and the Do closure would see
 		// nil channels, causing a nil-send hang. This is safe because the
 		// entry is only read after the Do completes within the same request
 		// goroutine -- the first request creates the entry synchronously and
 		// all subsequent requests find a fully-initialized one.
-		s.tcpMu.Lock()
-		entryI, _ := s.tcpWriteMu.LoadOrStore(addr, &tcpWriteEntry{})
-		entry, ok := entryI.(*tcpWriteEntry)
+		shard := s.tcpWriteShardFor(addr)
+		shard.mu.Lock()
+		entry, ok := shard.entries[addr]
 		if !ok {
-			s.tcpMu.Unlock()
-			log.Warnf("SERVER: unexpected type in tcpWriteMu for %s: %T", addr, entryI)
-			return
+			entry = &tcpWriteEntry{}
+			if shard.entries == nil {
+				shard.entries = make(map[string]*tcpWriteEntry)
+			}
+			shard.entries[addr] = entry
 		}
 		// In-flight refcount: incremented under the lock so the sweep can
 		// never delete an entry a handler goroutine still holds (the
 		// goroutine releases it on exit; the synchronous SERVFAIL path
 		// releases it via defer before returning).
 		entry.refs.Add(1)
-		s.tcpMu.Unlock()
+		shard.mu.Unlock()
 
 		entry.capacityOnce.Do(func() {
 			entry.capacity = make(chan struct{}, config.DefaultMaxPipe)
@@ -157,11 +186,15 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 				entry.lastAccess.Store(log.NowUnixNano())
 
 				// Pack before acquiring writeMu — keeps the lock
-				// critical section I/O-only and brief (P2).
-				if err := packSafe(response); err != nil {
-					log.Debugf("SERVER: TCP pack error for %s: %v", addr, err)
-					pool.DefaultMessage.Put(response)
-					return
+				// critical section I/O-only and brief (P2).  Pre-packed
+				// responses (cache hits without EDNS modification) already
+				// carry Data and skip the pack.
+				if len(response.Data) == 0 {
+					if err := packSafe(response); err != nil {
+						log.Debugf("SERVER: TCP pack error for %s: %v", addr, err)
+						pool.DefaultMessage.Put(response)
+						return
+					}
 				}
 
 				writeTimer := time.NewTimer(config.DefaultDNSQueryTimeout)
@@ -176,10 +209,13 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 					pool.DefaultMessage.Put(response)
 					return
 				}
-				// Use WriteTo, not w.Write(response.Data).
-				// WriteTo adds the 2-byte TCP length prefix per RFC 1035 §4.2.2
-				// and handles the connected-UDP WriteMsgUDP path.
-				if _, err := response.WriteTo(w); err != nil {
+				// Write the RFC 1035 §4.2.2 length prefix + payload in one
+				// frame.  Msg.WriteTo would allocate a fresh 2+len frame per
+				// response; preallocate once instead.
+				frame := make([]byte, zdnsutil.DNSFramePrefixLen+len(response.Data))
+				binary.BigEndian.PutUint16(frame, uint16(len(response.Data))) //nolint:gosec // G115: TCP frame length — protocol-bounded uint16
+				copy(frame[zdnsutil.DNSFramePrefixLen:], response.Data)
+				if _, err := w.Write(frame); err != nil {
 					log.Debugf("SERVER: TCP write error for %s: %v", addr, err)
 				}
 				pool.DefaultMessage.Put(response)
@@ -192,16 +228,32 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 
 	response := s.handler.ServeDNS(req, clientIP, false, config.ProtoUDP)
 	if response != nil {
-		if err := packSafe(response); err != nil {
-			log.Debugf("SERVER: UDP pack error for %s: %v", w.RemoteAddr().String(), err)
-			pool.DefaultMessage.Put(response)
-			return
+		// Pre-packed responses (cache hits without EDNS modification) already
+		// carry Data and skip the pack.
+		if len(response.Data) == 0 {
+			if err := packSafe(response); err != nil {
+				log.Debugf("SERVER: UDP pack error for %s: %v", w.RemoteAddr().String(), err)
+				pool.DefaultMessage.Put(response)
+				return
+			}
 		}
 
 		// RFC 2181 §9: if the response exceeds the client's EDNS buffer,
-		// truncate and set TC so the client retries over TCP.
+		// truncate and set TC so the client retries over TCP.  Use the real
+		// wire length — Msg.Len() computes the uncompressed size from RR
+		// fields, which are nil for pre-packed responses.
 		udpSize := max(req.UDPSize, dns.MinMsgSize)
-		if response.Len() > int(udpSize) {
+		if len(response.Data) > int(udpSize) {
+			// Pre-packed wire: unpack so Truncate can operate on the RR
+			// sections instead of producing an empty message.
+			if len(response.Answer) == 0 {
+				if err := response.Unpack(); err != nil {
+					log.Debugf("SERVER: UDP unpack for truncation failed for %s: %v", w.RemoteAddr().String(), err)
+					pool.DefaultMessage.Put(response)
+					return
+				}
+				response.Data = nil
+			}
 			// RFC 8914 §3: drop EDE options before truncating answer data.
 			response.Pseudo = dropEDE(response.Pseudo)
 			dnsutil.Truncate(response)

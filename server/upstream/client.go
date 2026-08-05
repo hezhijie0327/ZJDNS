@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 	"zjdns/config"
@@ -149,7 +148,9 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	queryCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	protocol := strings.ToLower(server.Protocol)
+	// Protocol is normalized to lowercase at registration (ConfigureServers);
+	// the per-query ToLower scan is gone from the upstream hot path.
+	protocol := server.Protocol
 
 	if protocol == config.ProtoDNSCrypt || protocol == config.ProtoDNSCryptTCP {
 		useTCP := protocol == config.ProtoDNSCryptTCP

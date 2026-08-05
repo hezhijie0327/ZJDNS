@@ -30,7 +30,11 @@ func ReadTCPMsg(conn net.Conn) (*dns.Msg, error) {
 		return nil, err
 	}
 	length := int(prefix[0])<<8 | int(prefix[1])
-	bufPtr := tcpReadBufPool.Get().(*[]byte)
+	bufPtr, ok := tcpReadBufPool.Get().(*[]byte)
+	if !ok {
+		b := make([]byte, dns.MaxMsgSize)
+		bufPtr = &b
+	}
 	defer tcpReadBufPool.Put(bufPtr)
 	buf := (*bufPtr)[:length]
 	if _, err := io.ReadFull(conn, buf); err != nil {

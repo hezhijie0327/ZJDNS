@@ -39,12 +39,13 @@ func BuildCacheEntryResponse(req *dns.Msg, entry *cache.Entry, dnssecOK, isExpir
 }
 
 // buildFromPrePacked adjusts TTLs in the pre-packed response wire and returns
-// a dns.Msg with Data already populated — bridge.go skips packSafe() for such
-// messages and serves the wire directly.
+// a dns.Msg with Data already populated — the Response middleware serves the
+// wire directly when no EDNS modification is needed (bridge.go then skips
+// packSafe for such messages).
 func buildFromPrePacked(entry *cache.Entry, isExpired bool) *dns.Msg {
-	// Copy the wire so the cached entry is not mutated.
-	wire := make([]byte, len(entry.ResponseWire))
-	copy(wire, entry.ResponseWire)
+	// The entry is per-Get memory (never shared or re-read after this call) —
+	// adjust TTLs in place instead of copying the wire.
+	wire := entry.ResponseWire
 
 	// Apply TTL deduction.
 	if isExpired {
@@ -62,6 +63,8 @@ func buildFromPrePacked(entry *cache.Entry, isExpired bool) *dns.Msg {
 			}
 		}
 	}
+	// The TTL offsets are no longer needed — return them to the pool.
+	cache.ReleaseTTLOffsets(entry.TTLOffsets)
 
 	msg := pool.DefaultMessage.Get()
 	msg.Data = wire

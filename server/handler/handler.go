@@ -6,6 +6,8 @@ package handler
 import (
 	"context"
 	"net"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"zjdns/cache"
@@ -49,6 +51,13 @@ type Handler struct {
 	prefetchCooldown  *PrefetchCooldown
 	ctx               context.Context
 }
+
+// qctxPool reuses QueryContext structs — one is allocated per query.  The
+// full-field literal in ServeDNS overwrites every pooled field, so stale
+// values can never leak into a new query.  Safe to reuse on return: all
+// middleware chain execution is synchronous, and refresh goroutines capture
+// only values (qname/qtype/ecs), never the QueryContext itself.
+var qctxPool = sync.Pool{New: func() any { return new(QueryContext) }}
 
 // NewHandler creates a Handler from the assembled middleware chain and
 // essential dependencies.
@@ -126,15 +135,20 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	}
 
 	qd := req.Question[0]
-	qctx := &QueryContext{
+	qctx := qctxPool.Get().(*QueryContext)
+	// Full-field literal: zeroes every pooled field not listed here.
+	// Qname is an already-FQDN unpacked name, so strings.ToLower is exactly
+	// dnsutil.Canonical minus the always-allocating strings.Map.
+	*qctx = QueryContext{
 		Req:       req,
 		ClientIP:  clientIP,
 		IsSecure:  isSecure,
 		Protocol:  protocol,
 		StartTime: log.NowUnixNano(),
-		Qname:     dnsutil.Canonical(qd.Header().Name),
+		Qname:     strings.ToLower(qd.Header().Name),
 		Qtype:     dns.RRToType(qd),
 	}
+	defer qctxPool.Put(qctx)
 
 	err := h.chain.ServeDNS(h.ctx, qctx)
 

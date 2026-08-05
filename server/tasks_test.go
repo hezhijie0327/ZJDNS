@@ -1,7 +1,6 @@
 package server
 
 import (
-	"sync"
 	"testing"
 	"time"
 )
@@ -10,21 +9,28 @@ import (
 // refcount returns to 0 after a request completes, the sweep deletes stale
 // idle entries, and an in-flight entry survives a sweep pass.
 func TestTCPWriteMuRefcountAndSweep(t *testing.T) {
-	s := &Server{tcpWriteMu: sync.Map{}}
+	s := &Server{}
 	addr := "192.0.2.1:54321"
 
-	// Simulate the request-path critical section: LoadOrStore + in-flight ref
-	// under tcpMu (as in handleDNSRequest).
-	s.tcpMu.Lock()
-	entryI, _ := s.tcpWriteMu.LoadOrStore(addr, &tcpWriteEntry{})
-	entry := entryI.(*tcpWriteEntry)
+	// Simulate the request-path critical section: lookup-or-create + in-flight
+	// ref under the shard lock (as in handleDNSRequest).
+	shard := s.tcpWriteShardFor(addr)
+	shard.mu.Lock()
+	entry, ok := shard.entries[addr]
+	if !ok {
+		entry = &tcpWriteEntry{}
+		if shard.entries == nil {
+			shard.entries = make(map[string]*tcpWriteEntry)
+		}
+		shard.entries[addr] = entry
+	}
 	entry.refs.Add(1)
-	s.tcpMu.Unlock()
+	shard.mu.Unlock()
 
 	// Entry exists with one in-flight ref — sweep must not delete it even
 	// though lastAccess (0) is far below the cutoff.
 	s.sweepTCPWriteMu(time.Now().UnixNano())
-	if _, ok := s.tcpWriteMu.Load(addr); !ok {
+	if _, ok := shard.entries[addr]; !ok {
 		t.Fatal("sweep deleted an entry with in-flight refs")
 	}
 
@@ -36,24 +42,32 @@ func TestTCPWriteMuRefcountAndSweep(t *testing.T) {
 
 	// Idle entry (lastAccess 0 < cutoff) is now sweepable.
 	s.sweepTCPWriteMu(time.Now().UnixNano())
-	if _, ok := s.tcpWriteMu.Load(addr); ok {
+	if _, ok := shard.entries[addr]; ok {
 		t.Fatal("sweep did not delete an idle stale entry with refs == 0")
 	}
 
-	// A freshly LoadOrStored entry inside the same critical section is never
+	// A freshly created entry inside the same critical section is never
 	// deleted by a concurrent sweep: the ref add happens under the same lock
 	// the sweep needs for its check+delete. With a recent lastAccess and a
 	// cutoff one hour in the past the entry must survive.
-	s.tcpMu.Lock()
-	entryI, _ = s.tcpWriteMu.LoadOrStore(addr, &tcpWriteEntry{})
-	entry = entryI.(*tcpWriteEntry)
+	shard.mu.Lock()
+	entry, ok = shard.entries[addr]
+	if !ok {
+		entry = &tcpWriteEntry{}
+		if shard.entries == nil {
+			shard.entries = make(map[string]*tcpWriteEntry)
+		}
+		shard.entries[addr] = entry
+	}
 	entry.refs.Add(1)
 	entry.lastAccess.Store(time.Now().UnixNano())
-	s.tcpMu.Unlock()
+	shard.mu.Unlock()
 	entry.refs.Add(-1)
 	s.sweepTCPWriteMu(time.Now().UnixNano() - int64(time.Hour))
-	if _, ok := s.tcpWriteMu.Load(addr); !ok {
+	if _, ok := shard.entries[addr]; !ok {
 		t.Fatal("freshly-idle entry with recent lastAccess was deleted")
 	}
-	s.tcpWriteMu.Delete(addr)
+	shard.mu.Lock()
+	delete(shard.entries, addr)
+	shard.mu.Unlock()
 }

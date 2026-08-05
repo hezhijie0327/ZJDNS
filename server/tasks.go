@@ -120,36 +120,29 @@ func (s *Server) startTCPWriteMuSweep() {
 	})
 }
 
-// sweepTCPWriteMu deletes tcpWriteMu entries with no in-flight references
-// whose last access predates the cutoff.
+// sweepTCPWriteMu deletes TCP write-registry entries with no in-flight
+// references whose last access predates the cutoff.
 func (s *Server) sweepTCPWriteMu(cutoff int64) {
-	var stale []string
-	// The refs==0 check and the Delete are one critical section under
-	// tcpMu (the request path LoadOrStores + adds its in-flight ref under
-	// the same lock). Without this, a request arriving between check and
+	// The refs==0 check and the delete are one critical section per shard
+	// (the request path lookup-or-creates + adds its in-flight ref under the
+	// same shard lock). Without this, a request arriving between check and
 	// delete would hold a writeMu detached from the map while the next
 	// request created a second one — two writers interleaving
 	// length-prefixed frames on the same TCP stream.
-	s.tcpMu.Lock()
-	s.tcpWriteMu.Range(func(key, value any) bool {
-		entry, ok := value.(*tcpWriteEntry)
-		if !ok {
-			stale = append(stale, key.(string))
-			return true
+	for i := range s.tcpWriteShards {
+		shard := &s.tcpWriteShards[i]
+		shard.mu.Lock()
+		for addr, entry := range shard.entries {
+			// Only delete entries with no in-flight references.
+			if entry.refs.Load() != 0 {
+				continue
+			}
+			if entry.lastAccess.Load() < cutoff {
+				delete(shard.entries, addr)
+			}
 		}
-		// Only delete entries with no in-flight references.
-		if entry.refs.Load() != 0 {
-			return true
-		}
-		if entry.lastAccess.Load() < cutoff {
-			stale = append(stale, key.(string))
-		}
-		return true
-	})
-	for _, k := range stale {
-		s.tcpWriteMu.Delete(k)
+		shard.mu.Unlock()
 	}
-	s.tcpMu.Unlock()
 }
 
 // startQueryJournalCleanup periodically removes stale query_stats and query_log

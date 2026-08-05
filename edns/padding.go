@@ -1,6 +1,7 @@
 package edns
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"math/rand/v2"
 
@@ -54,12 +55,24 @@ func addPadding(msg *dns.Msg, isSecureConnection bool, blockSize int, clientWant
 	// needed to land on the block boundary — the >= 0 guard (not > 0) keeps it.
 	if paddingDataSize >= 0 {
 		paddingBytes := make([]byte, paddingDataSize)
-		for i := range paddingBytes {
+		// 4 bytes per rand.Uint32() call — the global ChaCha8 RNG is
+		// concurrency-safe (locked), and math/rand/v2 has no package-level
+		// Read.  Per-byte extraction would quadruple the lock traffic.
+		for i := 0; i+4 <= len(paddingBytes); i += 4 {
+			binary.BigEndian.PutUint32(paddingBytes[i:], rand.Uint32()) //nolint:gosec // math/rand acceptable for padding — non-crypto use
+		}
+		for i := len(paddingBytes) &^ 3; i < len(paddingBytes); i++ {
 			paddingBytes[i] = byte(rand.Uint32()) //nolint:gosec // math/rand acceptable for padding — non-crypto use
 		}
 		msg.Pseudo = append(msg.Pseudo, &dns.PADDING{
 			Padding: hex.EncodeToString(paddingBytes),
 		})
+		// Repack so msg.Data includes the PADDING option — bridge.go serves
+		// this wire directly (skipping its own packSafe), so the sizing pack
+		// above is the only one.
+		if err := msg.Pack(); err != nil {
+			return 0
+		}
 		return paddingDataSize
 	}
 

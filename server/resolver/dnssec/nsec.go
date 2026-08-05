@@ -437,8 +437,9 @@ func hasOptOutInProof(nsec3s []*dns.NSEC3) bool {
 // unknown types have no entry in dns.TypeToString and would otherwise
 // collapse distinct RRsets into a single "name/" key, and raw owner names
 // would not match RRSIGs that differ from the data record only in case.
+// Callers must pass the name already canonicalized (once per section).
 func nsecRRsetKey(name string, typ uint16) string {
-	return dnsutil.Canonical(name) + "/" + strconv.Itoa(int(typ))
+	return name + "/" + strconv.Itoa(int(typ))
 }
 
 // CapValidatedTTL applies the RFC 4035 §5.3.3 TTL cap to validated RRsets.
@@ -454,10 +455,22 @@ func nsecRRsetKey(name string, typ uint16) string {
 func CapValidatedTTL(answer, authority, additional []dns.RR) {
 	now := uint32(log.NowUnix()) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
 	for _, sections := range [][]dns.RR{answer, authority, additional} {
+		// Canonicalize each owner name once per section — dnsutil.Canonical
+		// allocates (strings.Map), and the same name is keyed twice per RRset
+		// below.
+		canonName := make(map[string]string)
+		canon := func(name string) string {
+			if c, ok := canonName[name]; ok {
+				return c
+			}
+			c := dnsutil.Canonical(name)
+			canonName[name] = c
+			return c
+		}
 		rrsigMap := map[string][]*dns.RRSIG{}
 		for _, rr := range sections {
 			if sig, ok := rr.(*dns.RRSIG); ok {
-				k := nsecRRsetKey(sig.Header().Name, sig.TypeCovered)
+				k := nsecRRsetKey(canon(sig.Header().Name), sig.TypeCovered)
 				rrsigMap[k] = append(rrsigMap[k], sig)
 			}
 		}
@@ -466,7 +479,7 @@ func CapValidatedTTL(answer, authority, additional []dns.RR) {
 				continue
 			}
 			hdr := rr.Header()
-			k := nsecRRsetKey(hdr.Name, dns.RRToType(rr))
+			k := nsecRRsetKey(canon(hdr.Name), dns.RRToType(rr))
 			sigs := rrsigMap[k]
 			if len(sigs) == 0 {
 				continue

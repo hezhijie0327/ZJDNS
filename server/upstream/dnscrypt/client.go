@@ -156,8 +156,13 @@ func (c *Client) executeOnce(
 		}
 		// Decrypt copies the payload out (XchachaOpen allocates fresh), so
 		// the pooled buffer is safe to return via defer once Decrypt ran.
-		respBuf := *respBufPool.Get().(*[]byte)
-		defer respBufPool.Put(&respBuf)
+		respBufPtr, ok := respBufPool.Get().(*[]byte)
+		if !ok {
+			b := make([]byte, dnscryptcrypto.MaxDNSUDPPacketSize)
+			respBufPtr = &b
+		}
+		respBuf := *respBufPtr
+		defer respBufPool.Put(respBufPtr)
 		n, udpErr := conn.Read(respBuf)
 		if udpErr != nil {
 			c.deleteState(stampAddr, providerName)

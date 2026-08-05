@@ -34,6 +34,19 @@ func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
 	}
 	allSigs := dnssec.CollectRRSIGs(answer, extra)
 
+	// Canonicalize each distinct owner name once — dnsutil.Canonical
+	// allocates (strings.Map), and the same name is keyed repeatedly across
+	// the two passes below.
+	canonName := make(map[string]string, len(answer))
+	canon := func(name string) string {
+		if c, ok := canonName[name]; ok {
+			return c
+		}
+		c := dnsutil.Canonical(name)
+		canonName[name] = c
+		return c
+	}
+
 	// Pass 1: decide which data RRsets survive the zone filter.  RRSIG
 	// records are skipped here — their fate is decided by the RRset they
 	// cover in pass 2.
@@ -55,7 +68,7 @@ func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
 				log.Debugf("SECURITY: dropping unsigned record %s/%s in signed %s answer", h.Name, dns.TypeToString[dns.RRToType(r)], zone)
 				continue
 			}
-			keepRRset[rrsetKey(h.Name, dns.RRToType(r))] = true
+			keepRRset[rrsetKey(canon(h.Name), dns.RRToType(r))] = true
 			continue
 		}
 		inZone := false
@@ -69,7 +82,7 @@ func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
 			}
 		}
 		if inZone {
-			keepRRset[rrsetKey(h.Name, dns.RRToType(r))] = true
+			keepRRset[rrsetKey(canon(h.Name), dns.RRToType(r))] = true
 		} else {
 			log.Debugf("SECURITY: stripping cross-zone record %s/%s from %s answer", h.Name, dns.TypeToString[dns.RRToType(r)], zone)
 		}
@@ -83,12 +96,12 @@ func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
 			continue
 		}
 		if sig, ok := r.(*dns.RRSIG); ok {
-			if keepRRset[rrsetKey(sig.Header().Name, sig.TypeCovered)] {
+			if keepRRset[rrsetKey(canon(sig.Header().Name), sig.TypeCovered)] {
 				result = append(result, r)
 			}
 			continue
 		}
-		if keepRRset[rrsetKey(r.Header().Name, dns.RRToType(r))] {
+		if keepRRset[rrsetKey(canon(r.Header().Name), dns.RRToType(r))] {
 			result = append(result, r)
 		}
 	}
@@ -99,9 +112,10 @@ func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
 // (lowercased) owner name and the numeric RR type.  Unknown types (RFC 3597,
 // e.g. TYPE1234) have no entry in dns.TypeToString and would otherwise
 // collapse distinct RRsets into a single "name/" key; raw owner names would
-// not match RRSIGs that differ from the data record only in case.
+// not match RRSIGs that differ from the data record only in case.  Callers
+// must pass the name already canonicalized (once per response).
 func rrsetKey(name string, typ uint16) string {
-	return dnsutil.Canonical(name) + "/" + strconv.Itoa(int(typ))
+	return name + "/" + strconv.Itoa(int(typ))
 }
 
 func (r *Recursive) getZoneCutSigner(response *dns.Msg, currentDomain string) string {

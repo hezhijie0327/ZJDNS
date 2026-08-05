@@ -281,7 +281,11 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 		return Result{Rcode: dns.RcodeSuccess}
 	}
 
-	qname = dnsutil.Canonical(qname)
+	// Callers pass the canonical FQDN (handler canonicalizes qctx.Qname) —
+	// Fqdn is a zero-alloc suffix check, and strings.ToLower uses the ASCII
+	// fast path (no allocation when already lowercase).  dnsutil.Canonical
+	// would re-lowercase via always-allocating strings.Map.
+	qname = strings.ToLower(dnsutil.Fqdn(qname))
 
 	// 1. Check dynamic content (Go map, not SQL).
 	if de, ok := e.dynamics[qname]; ok {

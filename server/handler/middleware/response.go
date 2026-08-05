@@ -2,7 +2,9 @@ package middleware
 
 import (
 	"context"
+	"encoding/binary"
 	"net"
+	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
@@ -19,6 +21,15 @@ type Response struct {
 	edns handler.EDNSHandler
 }
 
+// ednsState is the precomputed EDNS decision state for one response, computed
+// once per response so the pre-packed fast path and finalizeResponse share it.
+type ednsState struct {
+	ecsOpt         *edns.ECSOption
+	cookieStr      string
+	clientWantsPad bool
+	shouldAddEDNS  bool
+}
+
 var fallbackClientIP = net.ParseIP(config.FallbackClientIP) // pre-parsed to avoid per-query allocation
 
 // Wrap implements Wrapper.
@@ -30,28 +41,87 @@ func (m *Response) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return err
 		}
 
-		// Pre-packed response: unpack the pre-built wire so the normal
-		// EDNS + Pack pipeline can continue.  TTLs were already adjusted
-		// in-place by buildFromPrePacked.  Clear Data after Unpack so
-		// bridge.go calls Pack() with the EDNS options applied below.
-		// Overwrite the message ID — the pre-packed wire carries the
-		// ID from Set() time; the response must echo the client's ID.
+		st := m.ednsStateFor(qctx)
+
 		if qctx.Res.Data != nil {
+			// Pre-packed response: when no EDNS option and no zone-rewrite
+			// restore is needed, serve the wire directly — only the client's
+			// message ID must be patched in (bytes 0..1; the pre-packed wire
+			// carries the ID from cache Set() time).  In debug mode the RESULT
+			// log reads RR fields, so unpack for accurate counts.
+			// DO=1 clients always take the unpack path (shouldAddEDNS includes
+			// ClientRequestedDNSSEC — the response OPT must echo DO), so this
+			// gate only runs for DO=0 clients: the wire must be free of DNSSEC
+			// proofs (upstream queries always carry DO=1, so the raw cached
+			// wire may contain RRSIG/NSEC/NSEC3/DNSKEY/DS) — otherwise the
+			// unpack+filter path below runs.
+			if !st.shouldAddEDNS && qctx.OriginalName == "" && !log.IsDebug() &&
+				!cache.WireHasDNSSEC(qctx.Res.Data) {
+				binary.BigEndian.PutUint16(qctx.Res.Data[0:2], qctx.Req.ID)
+				// RFC 1035 §4.1.1: RD is copied from the query — the cached
+				// wire carries RD from cache Set() time.
+				if qctx.Req.RecursionDesired {
+					qctx.Res.Data[2] |= 0x01
+				} else {
+					qctx.Res.Data[2] &^= 0x01
+				}
+				return err
+			}
+			// EDNS options or a zone rewrite are needed — unpack the
+			// pre-built wire so the EDNS + Pack pipeline below can modify
+			// the message.  TTLs were already adjusted by buildFromPrePacked.
 			if err := qctx.Res.Unpack(); err != nil {
 				log.Debugf("RESPONSE: unpack pre-packed response: %v", err)
 				qctx.Res.Rcode = dns.RcodeServerFailure
 				return err
 			}
 			qctx.Res.ID = qctx.Req.ID
+			qctx.Res.RecursionDesired = qctx.Req.RecursionDesired
+			// Filter DNSSEC proofs for DO=0 clients, mirroring the miss path
+			// (ProcessRecords with dnssecOK).
+			if !qctx.ClientRequestedDNSSEC {
+				qctx.Res.Answer = cache.ProcessRecords(qctx.Res.Answer, 0, false, false)
+				qctx.Res.Ns = cache.ProcessRecords(qctx.Res.Ns, 0, false, false)
+				qctx.Res.Extra = cache.ProcessRecords(qctx.Res.Extra, 0, false, false)
+			}
 			qctx.Res.Data = nil
 		}
 
-		m.finalizeResponse(qctx)
+		m.finalizeResponse(qctx, st)
 		return err
 	})
 }
 
-func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
+// ednsStateFor computes the EDNS decision state for a response.  Shared by the
+// pre-packed fast path (deciding whether the wire can be served as-is) and
+// finalizeResponse (applying the options) so the parse work runs once.
+func (m *Response) ednsStateFor(qctx *handler.QueryContext) ednsState {
+	// Parse ECS if EDNS didn't run (early short-circuit).
+	ecsOpt := qctx.ECSOpt
+	if ecsOpt == nil && m.edns != nil {
+		ecsOpt = m.edns.ParseFromDNS(qctx.Req)
+		if ecsOpt == nil && len(qctx.Req.Question) > 0 {
+			ecsOpt = m.edns.ECSForQType(dns.RRToType(qctx.Req.Question[0]))
+		}
+	}
+
+	clientWantsPadding := qctx.ClientWantsPadding
+	if !clientWantsPadding {
+		clientWantsPadding = edns.HasPaddingOption(qctx.Req)
+	}
+
+	cookieStr := m.generateCookieStr(qctx.CookieOpt, qctx.ClientIP)
+
+	return ednsState{
+		ecsOpt:         ecsOpt,
+		cookieStr:      cookieStr,
+		clientWantsPad: clientWantsPadding,
+		shouldAddEDNS: ecsOpt != nil || qctx.ClientRequestedDNSSEC || cookieStr != "" ||
+			qctx.EDE != nil || qctx.IsSecure || qctx.TCPKeepalive > 0 || len(qctx.Req.Pseudo) > 0,
+	}
+}
+
+func (m *Response) finalizeResponse(qctx *handler.QueryContext, st ednsState) {
 	msg := qctx.Res
 	req := qctx.Req
 	if req == nil {
@@ -61,36 +131,17 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
 		return
 	}
 
-	// Parse ECS if EDNS didn't run (early short-circuit).
-	ecsOpt := qctx.ECSOpt
-	if ecsOpt == nil && m.edns != nil {
-		ecsOpt = m.edns.ParseFromDNS(req)
-		if ecsOpt == nil && len(req.Question) > 0 {
-			ecsOpt = m.edns.ECSForQType(dns.RRToType(req.Question[0]))
-		}
-	}
-
-	if ecsOpt != nil {
+	if st.ecsOpt != nil {
 		log.Debugf("EDNS: response ECS: family=%d addr=%s/%d scope=%d fromClient=%t",
-			ecsOpt.Family, ecsOpt.Address, ecsOpt.SourcePrefix, ecsOpt.ScopePrefix, qctx.ECSOpt != nil)
+			st.ecsOpt.Family, st.ecsOpt.Address, st.ecsOpt.SourcePrefix, st.ecsOpt.ScopePrefix, qctx.ECSOpt != nil)
 	}
 
-	clientWantsPadding := qctx.ClientWantsPadding
-	if !clientWantsPadding {
-		clientWantsPadding = edns.HasPaddingOption(req)
-	}
-
-	cookieStr := m.generateCookieStr(qctx.CookieOpt, qctx.ClientIP)
-
-	shouldAddEDNS := ecsOpt != nil || qctx.ClientRequestedDNSSEC || cookieStr != "" ||
-		qctx.EDE != nil || qctx.IsSecure || qctx.TCPKeepalive > 0 || len(qctx.Req.Pseudo) > 0
-
-	if shouldAddEDNS && m.edns != nil && !msgHasEDNSOptions(msg) {
+	if st.shouldAddEDNS && m.edns != nil && !msgHasEDNSOptions(msg) {
 		// Skip when the response already carries EDNS options: a BADCOOKIE
 		// response built by the EDNS middleware applied its own
 		// SUBNET/COOKIE/padding, and re-applying would duplicate options
 		// inside a single OPT (RFC 7873: at most one COOKIE per message).
-		m.edns.ApplyToMessage(msg, ecsOpt, qctx.IsSecure, cookieStr, qctx.EDE, false, clientWantsPadding, qctx.TCPKeepalive)
+		m.edns.ApplyToMessage(msg, st.ecsOpt, qctx.IsSecure, st.cookieStr, qctx.EDE, false, st.clientWantsPad, qctx.TCPKeepalive)
 	}
 
 	// Restore original domain name if zone rule rewrote it.
@@ -100,6 +151,9 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext) {
 			currentName = req.Question[0].Header().Name
 		}
 		m.restoreDomain(msg, currentName, qctx.OriginalName)
+		// restoreDomain mutates RR owner names — the pre-packed wire (when
+		// addPadding kept it) is stale; bridge.go re-packs.
+		msg.Data = nil
 	}
 }
 

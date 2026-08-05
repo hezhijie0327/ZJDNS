@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"strings"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -194,6 +195,12 @@ func (r *Resolver) ConfigureServers(servers []config.UpstreamServer) {
 		if s.Protocol == "" {
 			s.Protocol = config.ProtoUDP
 		}
+		// Normalize the protocol string once at registration — the client
+		// lowercases it per query on the upstream hot path (strings.ToLower
+		// scan per request).  Config values are lowercase (config.Proto*),
+		// so this is a no-op in practice and a safety net for hand-built
+		// configs.
+		s.Protocol = strings.ToLower(s.Protocol)
 		if s.IsRecursive() {
 			if s.Proxy != "" {
 				r.recursiveProxyURL = s.Proxy
