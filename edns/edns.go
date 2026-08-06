@@ -47,6 +47,12 @@ var (
 	// n3uAlgorithms: NSEC3 hash algorithms understood (SHA-1=1 — the only
 	// one defined by RFC 5155).
 	n3uAlgorithms = []uint8{1}
+	// staticDAU, staticDHU, staticN3U are pre-built RFC 6975 algorithm-
+	// signalling options shared across all outgoing queries to avoid
+	// per-request allocations — the algorithm lists are fixed at build time.
+	staticDAU = &dns.DAU{AlgCode: dauAlgorithms}
+	staticDHU = &dns.DHU{AlgCode: dhuAlgorithms}
+	staticN3U = &dns.N3U{AlgCode: n3uAlgorithms}
 )
 
 // NewHandler creates a Handler with the given default ECS configuration.
@@ -129,10 +135,7 @@ func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnectio
 		// RFC 6975: signal which DNSSEC algorithms, DS digests and NSEC3
 		// hashes this resolver understands — authorities can skip
 		// signatures we cannot validate.
-		msg.Pseudo = append(msg.Pseudo,
-			&dns.DAU{AlgCode: dauAlgorithms},
-			&dns.DHU{AlgCode: dhuAlgorithms},
-			&dns.N3U{AlgCode: n3uAlgorithms})
+		msg.Pseudo = append(msg.Pseudo, staticDAU, staticDHU, staticN3U)
 	}
 
 	if ecs != nil {

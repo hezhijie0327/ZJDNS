@@ -269,10 +269,10 @@ func BuildCookieResponse(clientCookie, serverCookie []byte) string {
 	if len(clientCookie) != DefaultCookieClientLen {
 		return ""
 	}
-	cookie := make([]byte, 0, len(clientCookie)+len(serverCookie))
-	cookie = append(cookie, clientCookie...)
-	cookie = append(cookie, serverCookie...)
-	return hex.EncodeToString(cookie)
+	var cookie [DefaultCookieClientLen + DefaultCookieServerLen]byte
+	n := copy(cookie[:], clientCookie)
+	copy(cookie[n:], serverCookie)
+	return hex.EncodeToString(cookie[:])
 }
 
 // ParseCookie extracts the DNS Cookie option from a DNS message.
