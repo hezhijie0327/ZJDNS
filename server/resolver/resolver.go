@@ -10,6 +10,7 @@ import (
 	"strings"
 	"zjdns/cache"
 	"zjdns/config"
+	"zjdns/database"
 	"zjdns/edns"
 	"zjdns/server/defense"
 	"zjdns/server/resolver/dnssec"
@@ -107,6 +108,7 @@ type Config struct {
 	CIDRMatcher    CIDRMatcher
 	BuildMsg       BuildQueryFunc
 	Cache          cache.Store
+	DB             *database.DB // delegation cache (zone → NS names + DS)
 	DNSSECEnforce  bool
 	Ctx            context.Context // lifecycle context propagated to Recursive for probes
 }
@@ -181,6 +183,7 @@ func New(cfg *Config) (*Resolver, error) {
 	r.recursive = &Recursive{
 		resolver: r,
 		cache:    cfg.Cache,
+		db:       cfg.DB,
 		ctx:      cfg.Ctx,
 	}
 	r.cname = &CNAME{resolver: r}

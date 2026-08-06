@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-3.11.17-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-3.11.18-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -48,10 +48,11 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 ## 核心特性
 
 ### DNS 解析
-- **递归解析**：从 IANA 根服务器逐步解析至权威服务器，完整 DNSSEC 信任链（根提示 + 延迟排序缓存）
+- **递归解析**：从 IANA 根服务器逐步解析至权威服务器，完整 DNSSEC 信任链（根提示 + 延迟排序缓存 + 委派缓存）
 - **上游转发**：主/备服务器并发查询 + 首胜策略；支持 `protocol: "recursive"` 纯递归模式
 - **CNAME 追踪**：最大 16 级，防循环检测
 - **QNAME 最小化**：[RFC 9156](docs/rfc/rfc9156.txt)，默认启用
+- **委派缓存**：zone-cut 委派记录（NS 名称 + DS）持久化到 SQLite，后续同域子域名查询直接跳过已知层级
 - **并发去重**：singleflight 合并同 key 并发 miss
 - **多类型合并**：[RFC 10029](docs/rfc/rfc10029.txt) MQTYPE-Query/Response —— 单查询合并 A+AAAA 等多类型响应（递归模式本地合并，转发模式透传上游）
 - **紧凑否认**：[RFC 9824](docs/rfc/rfc9824.txt) —— 上游查询设置 CO 位，NXNAME 信号自动恢复 NXDOMAIN 语义

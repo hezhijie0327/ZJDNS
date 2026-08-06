@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"zjdns/cache"
 	"zjdns/config"
+	"zjdns/database"
 	"zjdns/edns"
 	"zjdns/server/defense"
 	"zjdns/server/resolver"
@@ -20,6 +21,7 @@ import (
 // be injected into the middleware chain without two-phase init.
 func initResolver(
 	cfg *config.ServerConfig,
+	db *database.DB,
 	queryClient *upstream.Client,
 	cryptoValidator *dnssec.CryptoValidator,
 	poisonDetector defense.Detector,
@@ -37,6 +39,7 @@ func initResolver(
 		CIDRMatcher:    cidrMatcher,
 		BuildMsg:       buildMsg,
 		Cache:          cacheStore,
+		DB:             db,
 		DNSSECEnforce:  cfg.Server.Features.DNSSECEnforce,
 		Ctx:            backgroundCtx,
 	})
@@ -81,6 +84,8 @@ func wireZoneDynamicContent(store cache.Store, rules []config.ZoneRule, resetDNS
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("ptr") }, "flushed")
 		case dnsutil.Canonical(config.DefaultProjectName + ".latency.clear"):
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("latency") }, "flushed")
+		case dnsutil.Canonical(config.DefaultProjectName + ".delegation.clear"):
+			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("delegation") }, "flushed")
 		case dnsutil.Canonical(config.DefaultProjectName + ".querylog.clear"):
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("querylog") }, "flushed")
 		case dnsutil.Canonical(config.DefaultProjectName + ".dnscrypt.clear"):

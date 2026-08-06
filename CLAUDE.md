@@ -284,6 +284,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 
 ### Recursive Resolution
 - Root hints → TLD NS → authoritative NS walk with QNAME minimisation (RFC 9156 §2.3, max 10 iterations)
+- **Delegation cache**: zone-cut delegations (zone → NS names + verified DS) persisted in SQLite `delegations` table; subsequent queries for subdomains start from the deepest cached zone instead of root
 - NS address latency-sorted cache; DNSSEC chain-of-trust at each delegation
 - Zone cut detection, lame delegation detection, glue record validation
 
@@ -303,7 +304,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | `ServerConfig` | `config` | Top-level config; owns `ECSConfig`, `ProtocolSettings`, `CertificateSettings` |
 | `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `SkipCache`, `Match`, `Proxy`, defense flags |
 | `ProtocolSettings` | `config` | Per-protocol port/endpoint: `UDP`, `TCP`, `TLS`, `QUIC`, `HTTPS`, `HTTP3`, `TLCP`, `DTLS`, `DTLCP`, `DNSCrypt` |
-| `DB` | `database` | Unified SQLite DB; WAL mode, 13 prepared stmts |
+| `DB` | `database` | Unified SQLite DB; WAL mode, 15 prepared stmts |
 | `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Stats/Close |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL |
 | `AsyncStatsWriter` | `cache` | Background goroutine: non-blocking channel → batched SQLite writes |
@@ -312,7 +313,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | `QueryHandler` | `server/handler` | Interface: `ServeDNS(ctx, qctx) error` |
 | `Wrapper` | `server/handler` | Interface: `Wrap(next QueryHandler) QueryHandler` |
 | `Resolver` | `server/resolver` | Upstream + recursive resolution; constructed via `New(Config)` |
-| `Recursive` | `server/resolver` | Built-in recursive walk with DNSSEC validation |
+| `Recursive` | `server/resolver` | Built-in recursive walk with DNSSEC validation; delegation cache (`delegations` table) for zone-cut skipping |
 | `Client` | `server/upstream` | Outbound queries: all protocols (UDP/TCP/DoT/DoQ/DoH/DoH3/DTLS/DTLCP/TLCP/DNSCrypt/SOCKS5) |
 | `Conn` / `ConnPool` | `server/upstream/pool` | RFC 7766 pipelined TCP/DoT connection pool |
 | `Detector` | `server/defense` | DNS poison detection; `Verdict` type (Clean/Poisoned/Uncertain) |

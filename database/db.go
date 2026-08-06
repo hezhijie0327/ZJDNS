@@ -60,6 +60,10 @@ type DB struct {
 	// Latency prepared statements
 	StmtIPLatency *sql.Stmt
 
+	// Delegation cache prepared statements
+	StmtDelegationStore  *sql.Stmt
+	StmtDelegationLookup *sql.Stmt
+
 	// DNSCrypt state prepared statements
 	StmtDNSCryptLoad *sql.Stmt
 	StmtDNSCryptSave *sql.Stmt
@@ -154,6 +158,7 @@ func (db *DB) Close() error {
 		db.StmtZoneExact, db.StmtZoneWildcard, db.StmtIPLatency,
 		db.StmtRulesetDomain,
 		db.StmtDNSCryptLoad, db.StmtDNSCryptSave,
+		db.StmtDelegationStore, db.StmtDelegationLookup,
 	} {
 		if stmt != nil {
 			_ = stmt.Close()

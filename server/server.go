@@ -230,7 +230,7 @@ func (s *Server) initDNSResolver(cfg *config.ServerConfig, queryClient *upstream
 		cidrMatcher = rulesetEngine
 	}
 
-	r, err := initResolver(cfg, queryClient, cryptoValidator, poisonDetector, ednsH, cidrMatcher, cacheStore,
+	r, err := initResolver(cfg, s.db, queryClient, cryptoValidator, poisonDetector, ednsH, cidrMatcher, cacheStore,
 		func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg {
 			return handler.BuildQueryMsg(ednsH, q, ecs, rd, secure)
 		}, s.backgroundCtx)

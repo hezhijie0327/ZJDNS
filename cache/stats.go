@@ -112,7 +112,7 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 }
 
 // FlushDB truncates a single table: "stats" (query_stats), "querylog" (query_log),
-// "cache" (entries), "latency" (ip_latency),
+// "cache" (entries), "latency" (ip_latency), "delegation" (delegations),
 // "zone" (zone_entries), or "ruleset" (ruleset_entries).
 func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 	if s.db.IsClosed() {
@@ -142,6 +142,8 @@ func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 		result, err = s.db.SQ.Exec(`DELETE FROM ptr_map`)
 	case "zone":
 		result, err = s.db.SQ.Exec(`DELETE FROM zone_entries`)
+	case "delegation":
+		result, err = s.db.SQ.Exec(`DELETE FROM delegations`)
 	case "ruleset":
 		result, err = s.db.SQ.Exec(`DELETE FROM ruleset_entries`)
 	default:
@@ -155,7 +157,7 @@ func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 	return n, nil
 }
 
-// Clear truncates all tables: entries, query_stats, query_log, ip_latency.
+// Clear truncates all tables: entries, delegations, query_stats, query_log, ip_latency.
 func (s *SQLiteCache) Clear() (int64, error) {
 	n1, err := s.FlushDB("cache")
 	if err != nil {
@@ -169,11 +171,15 @@ func (s *SQLiteCache) Clear() (int64, error) {
 	if err != nil {
 		return n1 + n2, err
 	}
-	n4, err := s.FlushDB("latency")
+	n4, err := s.FlushDB("delegation")
 	if err != nil {
 		return n1 + n2 + n3, err
 	}
-	return n1 + n2 + n3 + n4, nil
+	n5, err := s.FlushDB("latency")
+	if err != nil {
+		return n1 + n2 + n3 + n4, err
+	}
+	return n1 + n2 + n3 + n4 + n5, nil
 }
 
 // Stats returns aggregated cache statistics as formatted TXT records.

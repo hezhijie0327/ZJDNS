@@ -144,6 +144,27 @@ func (db *DB) migrate() error {
 		) WITHOUT ROWID;
 		CREATE INDEX IF NOT EXISTS idx_ip_latency_probe ON ip_latency(last_probe_time);
 
+		-- ── Delegation cache ──────────────────────────────────────────────────
+		-- Resolver-internal zone-cut delegation cache. Stores the NS target
+		-- names, a small address snapshot, and optionally the verified DS
+		-- records (NULL for insecure delegations). Lookup is suffix-based:
+		-- for qname "www.baidu.com.", ancestor zones "baidu.com." and "com."
+		-- are probed, deepest fresh match wins. Survives restarts; complements
+		-- the NS-address cache (TypeA/TypeAAAA entries) and DNSKEY cache
+		-- (TypeDNSKEY entries).
+
+		CREATE TABLE IF NOT EXISTS delegations (
+			zone       TEXT NOT NULL PRIMARY KEY,  -- canonical child zone, e.g. "baidu.com."
+			parent     TEXT NOT NULL DEFAULT '',   -- delegating zone, e.g. "com."
+			ns_names   TEXT NOT NULL,              -- newline-separated canonical NS target names
+			addrs      TEXT NOT NULL DEFAULT '',   -- newline-separated "ip:port" snapshot fallback
+			ds_wire    BLOB,                       -- wire-format DS records; NULL = insecure
+			timestamp  INTEGER NOT NULL,           -- log.NowUnix() at store
+			ttl        INTEGER NOT NULL,           -- min(NS, DS) TTL, floor 10s, cap 7d
+			expires_at INTEGER NOT NULL DEFAULT 0  -- timestamp + ttl
+		);
+		CREATE INDEX IF NOT EXISTS idx_delegations_expires ON delegations(expires_at);
+
 		-- ── Ruleset entries ───────────────────────────────────────────────
 		-- Stores rule set entries loaded from config. IP entries are CIDR
 		-- strings; domain entries are TLD+1 keys.  PK is ordered (type, tag,

@@ -9,6 +9,12 @@ const (
 	// TestStmtZoneWildcardPlaceholderCount.
 	ZoneWildcardPlaceholders = 16
 
+	// DelegationLookupZones is the number of zone ? placeholders in
+	// StmtDelegationLookup's IN clause. Must match
+	// config.DefaultDelegationLookupZones (config/defaults.go) — guarded
+	// by the resolver package test TestStmtDelegationLookupZoneCount.
+	DelegationLookupZones = 16
+
 	// IPLatencyPlaceholders is the number of rdata_ip ? placeholders in
 	// StmtIPLatency's IN clause. Must match cache.maxLatencyLookupIPs
 	// (cache/store.go) — guarded by the cache package test
@@ -17,8 +23,9 @@ const (
 )
 
 var (
-	zoneWildcardPlaceholdersSQL = strings.Repeat("?,", ZoneWildcardPlaceholders-1) + "?"
-	ipLatencyPlaceholdersSQL    = strings.Repeat("?,", IPLatencyPlaceholders-1) + "?"
+	zoneWildcardPlaceholdersSQL     = strings.Repeat("?,", ZoneWildcardPlaceholders-1) + "?"
+	delegationLookupPlaceholdersSQL = strings.Repeat("?,", DelegationLookupZones-1) + "?"
+	ipLatencyPlaceholdersSQL        = strings.Repeat("?,", IPLatencyPlaceholders-1) + "?"
 )
 
 func (db *DB) prepareStatements() error {
@@ -131,6 +138,28 @@ func (db *DB) prepareStatements() error {
 	db.StmtIPLatency, err = db.SQ.Prepare(
 		"SELECT rdata_ip, latency_ms FROM ip_latency WHERE rdata_ip IN (" + //nolint:gosec // G202: parameterized placeholders, no user input
 			ipLatencyPlaceholdersSQL + ")",
+	)
+	if err != nil {
+		return err
+	}
+
+	// Delegation cache statements.
+	db.StmtDelegationStore, err = db.SQ.Prepare(
+		`INSERT OR REPLACE INTO delegations (zone, parent, ns_names, addrs, ds_wire, timestamp, ttl, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	)
+	if err != nil {
+		return err
+	}
+	// StmtDelegationLookup queries the deepest fresh delegation among ancestor
+	// zones. The IN clause has DelegationLookupZones placeholders — the caller
+	// binds unused slots to empty string. ORDER BY LENGTH(zone) DESC returns
+	// the deepest match first; LIMIT 1 picks the best candidate.
+	db.StmtDelegationLookup, err = db.SQ.Prepare(
+		"SELECT zone, parent, ns_names, addrs, ds_wire, timestamp, ttl " + //nolint:gosec // G202: parameterized placeholders, no user input
+			"FROM delegations WHERE zone IN (" +
+			delegationLookupPlaceholdersSQL + ") AND expires_at > unixepoch() " +
+			"ORDER BY LENGTH(zone) DESC LIMIT 1",
 	)
 	if err != nil {
 		return err

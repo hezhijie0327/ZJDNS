@@ -8,6 +8,7 @@ import (
 	"sync"
 	"zjdns/cache"
 	"zjdns/config"
+	"zjdns/database"
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -30,6 +31,7 @@ import (
 type Recursive struct {
 	resolver    *Resolver
 	cache       cache.Store
+	db          *database.DB    // delegation cache (zone → NS names + DS); nil in tests
 	ctx         context.Context // lifecycle context for background probes
 	spoofguard  bool            // from protocol=recursive upstream
 	splitguard  bool            // from protocol=recursive upstream
@@ -100,6 +102,15 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 	// Initialize DNSSEC trust chain with root trust anchors (when available).
 	chain := &dnssecChain{}
+
+	// Delegation cache: if a cached zone cut exists for an ancestor of the
+	// qname, start the walk from the deepest fresh zone instead of the root.
+	if record, ok := r.lookupDelegation(qname, question.Qtype); ok {
+		if err := r.applyDelegationStart(&nameservers, &currentDomain, &tldServers, chain, record); err == nil {
+			minimiseSteps = 0 // restart minimisation schedule from new zone
+			log.Debugf("RECURSION: delegation cache hit for %s — starting walk at zone=%s", question.Name, currentDomain)
+		}
+	}
 
 	// Root-domain query (normalizedQname is empty for the root zone ".").
 	if normalizedQname == "." {
@@ -289,6 +300,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		}
 
 		r.cacheGlueRecords(nsResult.glue)
+		r.storeDelegation(currentDomain, parentDomain, bestNSRecords, nsResult.addrs, chain, verdict)
 
 		pool.DefaultMessage.Put(response)
 		nameservers = nsResult.addrs

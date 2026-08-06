@@ -260,6 +260,7 @@ const (
 	DefaultNSProbeTimeout          = 5 * time.Second // timeout for NS/root latency probing
 	DefaultLatencyProbeMinInterval = 60              // min interval between probes for the same IP (seconds)
 	DefaultRootCacheTTL            = 3600            // root server cache entry TTL (seconds)
+	DefaultDelegationLookupZones   = 16              // max ancestor zones per delegation lookup
 
 	DefaultIPDetectDialTimeout  = 2 * time.Second // IP detection: per-address dial timeout
 	DefaultIPDetectTotalTimeout = 3 * time.Second // IP detection: total detection window

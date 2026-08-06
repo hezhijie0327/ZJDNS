@@ -102,7 +102,7 @@ func isApexSOANODATA(response *dns.Msg, queryName string) bool {
 // established and the caller should keep exposing labels.
 func (r *Recursive) advanceApexZoneCut(ctx context.Context, queryName string, nameservers []string, currentDomain string, ecs *edns.ECSOption, chain *dnssecChain, depth int, forceTCP bool, qname string) (nextNS []string, nextZone string, ok bool) {
 	nsQuestion := Question{Name: dnsutil.Fqdn(queryName), Qtype: dns.TypeNS, Qclass: dns.ClassINET}
-	nsResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, nsQuestion, nil, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+	nsResp, nsVerdict, err := r.queryNameserversConcurrent(ctx, nameservers, nsQuestion, nil, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
 	if err != nil || nsResp == nil {
 		log.Debugf("RECURSION: NS query for zone-cut candidate %s failed: %v", queryName, err)
 		return nil, "", false
@@ -136,6 +136,7 @@ func (r *Recursive) advanceApexZoneCut(ctx context.Context, queryName string, na
 	// keys or treat a would-be-insecure delegation as unverifiable.
 	r.updateDNSSECChain(ctx, nsResp, currentDomain, queryName, nameservers, chain)
 	r.cacheGlueRecords(nsResult.glue)
+	r.storeDelegation(dnsutil.Canonical(queryName), currentDomain, nsRecords, nsResult.addrs, chain, nsVerdict)
 	log.Debugf("RECURSION: zone=%s via authoritative-NODATA zone cut, %d NS names -> %d addresses (source=%s): %v",
 		queryName, len(nsRecords), len(nsResult.addrs), nsResult.source, nsResult.addrs)
 	return nsResult.addrs, dnsutil.Canonical(queryName), true

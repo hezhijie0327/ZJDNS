@@ -4,7 +4,7 @@ Detailed technical reference for ZJDNS. For working guidelines, see [CLAUDE.md](
 
 ## DB Schema
 
-The unified database (`database/`) contains nine SQLite tables (`modernc.org/sqlite`, WAL mode, mmap, zstd compression):
+The unified database (`database/`) contains ten SQLite tables (`modernc.org/sqlite`, WAL mode, mmap, zstd compression):
 
 ```sql
 -- Project version (singleton row). Set at build time via database.Version.
@@ -85,6 +85,24 @@ CREATE TABLE ip_latency (
 ) WITHOUT ROWID;
 CREATE INDEX idx_ip_latency_probe ON ip_latency(last_probe_time);
 
+-- Resolver-internal zone-cut delegation cache. Stores NS target names,
+-- a small address snapshot, and verified DS records (NULL = insecure)
+-- per zone. Lookup is suffix-based: for "www.baidu.com.", ancestor zones
+-- "baidu.com." and "com." are probed; deepest fresh match wins.
+-- Survives restarts; complements NS-address cache (TypeA/TypeAAAA entries)
+-- and DNSKEY cache (TypeDNSKEY entries).
+CREATE TABLE delegations (
+    zone       TEXT NOT NULL PRIMARY KEY,
+    parent     TEXT NOT NULL DEFAULT '',
+    ns_names   TEXT NOT NULL,
+    addrs      TEXT NOT NULL DEFAULT '',
+    ds_wire    BLOB,               -- wire-format DS; NULL = insecure delegation
+    timestamp  INTEGER NOT NULL,
+    ttl        INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_delegations_expires ON delegations(expires_at);
+
 -- Ruleset entries loaded from config. PK (type, tag, value) enables a prefix
 -- seek for WHERE type='domain' AND tag=?. IP entries are CIDR strings.
 CREATE TABLE ruleset_entries (
@@ -131,6 +149,7 @@ CREATE TABLE dnscrypt_state (
 - **Pruning**: `PruneQueryJournal` runs at `config.DefaultPruneInterval`, deleting `query_stats` rows past `config.DefaultQueryJournalRetention` (PK prefix seek) and `query_log` rows via batched delete (`config.DefaultPruneBatchSize` rows per iteration, using `idx_query_log_ts`). Fallback cleanup via `config.DefaultStaleMaxAge` in `evictOldest`.
 - **Eviction**: On `Set()` when count > maxEntries. Prefers past serve-stale, then oldest. `ON DELETE CASCADE` for ptr_map. Stale ip_latency + query_log rows pruned during eviction.
 - **NS latency cache**: NS/Root addresses as TypeA/TypeAAAA entries. Latency probed via `ProbeNSAddrs`, reordered by `sortAnswerByLatency` at `Get()` time.
+- **Delegation cache**: Zone-cut delegations (zone to NS names + verified DS) in `delegations` table. Populated at every delegation crossing during recursive walks; only secure (verified DS) or insecure (authenticated no-DS) delegations are stored. On subsequent queries, suffix-lookup finds the deepest fresh delegation for the qname and starts the walk from that zone instead of the root, skipping already-walked delegation levels. DNSKEYs are fetched fresh by `ensureZoneDNSKEYs` (verified against the cached DS); NS addresses are resolved from the existing TypeA/TypeAAAA cache with the stored address snapshot as a fallback.
 - **IP latency**: Per-IP keyed. `INSERT OR REPLACE` writes latency_ms + last_probe_time. All domains sharing a CDN IP reuse the same row.
 - **Dynamic queries**: `Store.Stats()` returns TXT records (overview, hits, errors, rcodes, poisoned, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.cache.clear` / `zjdns.stats.clear` / `zjdns.ptr.clear` / `zjdns.latency.clear` / `zjdns.dnscrypt.clear` (loopback-only).
 
@@ -166,6 +185,13 @@ Classifies responses by delegation level:
 - **TLD-level**: Only NS/DS sub-delegations or self-referencing A/AAAA are legitimate
 - **Authoritative-level**: Always `VerdictUncertain` — design limitation; authoritative
   servers can legitimately return any record type
+
+The delegation cache does not bypass Poisonguard: every query (including
+the authoritative query after a cache hit) still passes through
+`queryNameserversConcurrent` with the full Poisonguard detector. The TLD
+poison probe (`probeTLDForPoison`) is skipped when the cached zone is
+not a TLD (no `tldServers` to probe), but spoofguard + poisonguard +
+hopguard still protect the authoritative query.
 
 ### Spoofguard
 

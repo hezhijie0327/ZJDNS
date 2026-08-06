@@ -7,7 +7,7 @@ graph LR
     C[Clients] --> L
     subgraph ZJDNS
         L[Listeners<br/>UDP · TCP · DoT · DoH · DoH3<br/>DoQ · DTLS · TLCP · DTLCP<br/>DNSCrypt] --> MW[Middleware Chain<br/>Response · CacheStore · Validation<br/>Zone · EDNS · CacheLookup<br/>PTR · DNS64 · Resolution]
-        MW --> RES[Resolver<br/>Forwarding · Recursive<br/>QNAME Minimisation · DNSSEC]
+        MW --> RES[Resolver<br/>Forwarding · Recursive<br/>QNAME Minimisation · DNSSEC<br/>Delegation Cache]
         RES --> UP[Upstream Pool<br/>TCP Pipeline · QUIC Pool<br/>SOCKS5 Proxy]
     end
     UP --> U[Upstream DNS]
@@ -117,17 +117,10 @@ graph TD
     Q[Query] --> ECS[ECS 候选<br/>单轮 SQL：5 候选 OR 子句<br/>ORDER BY CASE 优先级]
     ECS --> SQL[SQLite Lookup<br/>StmtEntryFallback]
     SQL -->|not found| MISS[Cache Miss]
-    SQL -->|found| FMT{"msg_wire[0]==0x02<br/>且 [1]==0?"}
-    FMT -->|legacy ≤v3.11.11| LEGACY[裸 zstd / 裸 wire<br/>无 offset 表 · 原 TTL]
-    FMT -->|pre-packed| OFFSET[读 offset 表<br/>numOffsets 边界校验]
-    OFFSET --> WIRE[提取 wire]
-    LEGACY --> WIRE2[提取 wire]
-    WIRE --> ZSTD{zstd 帧?}
-    WIRE2 --> ZSTD2{zstd 帧?}
+    SQL -->|found| WIRE[提取 pre-packed wire<br/>读 offset 表 · 边界校验]
+    WIRE --> ZSTD{zstd 压缩?}
     ZSTD -->|yes| DECOMP[DecompressTo 池化解压<br/>owned 拷贝]
     ZSTD -->|no| REF[引用 row 缓冲]
-    ZSTD2 -->|yes| DECOMP
-    ZSTD2 -->|no| REF
     DECOMP --> LAT{hasLatencyData?}
     REF --> LAT
     LAT -->|yes| UNPACK[Unpack → 按延迟排序<br/>→ rebuildResponseWire]
@@ -143,7 +136,7 @@ graph TD
     classDef hit fill:#d1fae5,stroke:#10b981,color:#064e3b
     classDef miss fill:#fee2e2,stroke:#ef4444,color:#991b1b
     class Q start
-    class ECS,SQL,FMT,OFFSET,WIRE,WIRE2,ZSTD,ZSTD2,DECOMP,REF,LAT,UNPACK,EXPIRED,PREFETCH,BG,LEGACY proc
+    class ECS,SQL,WIRE,ZSTD,DECOMP,REF,LAT,UNPACK,EXPIRED,PREFETCH,BG proc
     class HIT hit
     class MISS,RETURN,STALE miss
 ```
@@ -155,7 +148,9 @@ graph TD
     Q[Query] --> CACHE{Cache Hit?}
     CACHE -->|Fresh| SERVE[Serve from Cache]
     CACHE -->|Stale| STALE[Serve Stale + Refresh]
-    CACHE -->|Miss| ROOT[Root Hints → TLD → Auth]
+    CACHE -->|Miss| DELCACHE{Delegation Cache Hit?}
+    DELCACHE -->|Hit| SKIPROOT[Skip to Zone NS]
+    DELCACHE -->|Miss| ROOT[Root Hints → TLD → Auth]
     ROOT --> QMIN[QNAME Minimisation<br/>RFC 9156 §2.3 · max 10 iterations]
     QMIN --> NS[Query NS Records]
     NS --> ADDR[Resolve NS Addresses<br/>Latency-Sorted]
@@ -171,7 +166,7 @@ graph TD
     classDef proc fill:#fef3c7,stroke:#f59e0b,color:#78350f
     classDef result fill:#d1fae5,stroke:#10b981,color:#064e3b
     class Q start
-    class CACHE,ROOT,QMIN,NS,ADDR,PROBE,VALIDATE,CNAME,FOLLOW,RETRY,FALLBACK proc
+    class CACHE,ROOT,QMIN,NS,ADDR,PROBE,VALIDATE,CNAME,FOLLOW,RETRY,FALLBACK,SKIPROOT,DELCACHE proc
     class SERVE,STALE,STORE result
 ```
 
