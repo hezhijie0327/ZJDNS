@@ -157,6 +157,16 @@ func (m *MQTYPE) merge(ctx context.Context, qctx *handler.QueryContext, mq *dns.
 		}
 		msg.Data = nil
 	}
+
+	// RFC 10029 §3.4: a truncated primary response MUST NOT be extended —
+	// the additional queries are not processed.  The MQTYPE-Response option
+	// is still returned (empty list) to signal support.
+	if msg.Truncated {
+		log.Debugf("MQTYPE: primary response truncated — skipping additional types for %s", qctx.Req.Question[0].Header().Name)
+		msg.Pseudo = append(msg.Pseudo, &dns.MQRESPONSE{})
+		return
+	}
+
 	qd := qctx.Req.Question[0]
 	qname := qd.Header().Name
 	qclass := qd.Header().Class
@@ -164,18 +174,31 @@ func (m *MQTYPE) merge(ctx context.Context, qctx *handler.QueryContext, mq *dns.
 	dnssecOK := qctx.ClientRequestedDNSSEC
 	primaryRcode := msg.Rcode
 
-	// §3.4: RCODE and flags are determined by the primary response.  The
-	// AA-bit comparison is omitted — QueryResult does not carry the
-	// authoritative flag through the recursive walk (NS/DS at a zone cut is
-	// the RFC's example; the AD and RCODE checks cover the common cases).
+	// §3.4: RCODE and flags are determined by the primary response.  The AA
+	// bit is included — a zone-rule primary (authoritative, RFC 9606) must
+	// not merge recursively-resolved (AA=0) additional data, the RFC's own
+	// NS/DS-at-a-zone-cut example.
 	primaryAD := msg.AuthenticatedData
+	primaryAA := msg.Authoritative
 
-	// Budget for merged RRs: the remaining space below the RFC 9715 UDP
-	// cap, minus the primary response size and EDNS overhead.
-	budget := config.DefaultMaxUDPResponseSize - msg.Len() - 64
+	// Budget for merged RRs: the remaining space below the client's
+	// advertised UDP size (RFC 2181 §9 clamp, matching bridge.go's
+	// truncation point), minus the primary response size and EDNS overhead.
+	// Merging against the server-side cap alone could push the wire past
+	// the client's limit and trigger a post-merge truncation that destroys
+	// the merged RRsets (§3.4: MQTYPE handling MUST NOT itself cause TC).
+	udpSize := min(max(qctx.Req.UDPSize, dns.MinMsgSize), config.DefaultMaxUDPResponseSize)
+	budget := int(udpSize) - msg.Len() - 64
 
-	completed := make([]uint16, 0, len(mq.Types))
-	for _, qt := range mq.Types {
+	// §4 / §3.4: the fixed QTx cap bounds the amplification factor — the
+	// server MAY stop processing further combinations, and unprocessed
+	// types are simply absent from the MQTYPE-Response list.
+	types := mq.Types
+	if len(types) > config.DefaultMQTypeMaxQTx {
+		types = types[:config.DefaultMQTypeMaxQTx]
+	}
+	completed := make([]uint16, 0, len(types))
+	for _, qt := range types {
 		qr := m.resolve(ctx, qname, qt, qclass, ecsOpt, dnssecOK)
 		if qr == nil || qr.Err != nil {
 			log.Debugf("MQTYPE: skipping %s %s — resolution failed", qname, dns.TypeToString[qt])
@@ -183,8 +206,8 @@ func (m *MQTYPE) merge(ctx context.Context, qctx *handler.QueryContext, mq *dns.
 		}
 		// §3.4: mismatching RCODE or flags — the additional response MUST
 		// NOT be included.
-		if qr.Rcode != primaryRcode || qr.Validated != primaryAD {
-			log.Debugf("MQTYPE: skipping %s %s — RCODE/flags mismatch (rcode=%d validated=%t)", qname, dns.TypeToString[qt], qr.Rcode, qr.Validated)
+		if qr.Rcode != primaryRcode || qr.Validated != primaryAD || qr.Authoritative != primaryAA {
+			log.Debugf("MQTYPE: skipping %s %s — RCODE/flags mismatch (rcode=%d validated=%t aa=%t)", qname, dns.TypeToString[qt], qr.Rcode, qr.Validated, qr.Authoritative)
 			continue
 		}
 
@@ -207,9 +230,20 @@ func (m *MQTYPE) merge(ctx context.Context, qctx *handler.QueryContext, mq *dns.
 
 		// §3.4: merge into the same sections a standalone query would use,
 		// deduplicating RRs.
-		msg.Answer = mergeRRs(msg.Answer, qr.Answer)
-		msg.Ns = mergeRRs(msg.Ns, qr.Authority)
-		msg.Extra = mergeRRs(msg.Extra, qr.Additional)
+		// RFC 3225 §4.4 / §3.5: a DO=0 client must not receive DNSSEC
+		// proofs — the additional RRsets are filtered exactly like the
+		// primary (mirroring the unpack path above).  The unfiltered
+		// originals still go to the cache below (raw records are stored
+		// under both DO keys; filtering happens at serve time).
+		mergeAnswer, mergeNs, mergeExtra := qr.Answer, qr.Authority, qr.Additional
+		if !dnssecOK {
+			mergeAnswer = cache.ProcessRecords(qr.Answer, 0, false, false)
+			mergeNs = cache.ProcessRecords(qr.Authority, 0, false, false)
+			mergeExtra = cache.ProcessRecords(qr.Additional, 0, false, false)
+		}
+		msg.Answer = mergeRRs(msg.Answer, mergeAnswer)
+		msg.Ns = mergeRRs(msg.Ns, mergeNs)
+		msg.Extra = mergeRRs(msg.Extra, mergeExtra)
 		completed = append(completed, qt)
 
 		// Cache the additional response so future requests (including
@@ -224,7 +258,7 @@ func (m *MQTYPE) merge(ctx context.Context, qctx *handler.QueryContext, mq *dns.
 		// empty list) to signal support.
 		msg.Pseudo = append(msg.Pseudo, &dns.MQRESPONSE{Types: completed})
 	}
-	log.Debugf("MQTYPE: merged %d/%d types for %s", len(completed), len(mq.Types), qname)
+	log.Debugf("MQTYPE: merged %d/%d types for %s", len(completed), len(types), qname)
 }
 
 // resolve performs the secondary lookup for one QTYPE: cache first, then
@@ -241,7 +275,7 @@ func (m *MQTYPE) resolve(ctx context.Context, qname string, qt, qclass uint16, e
 			cache.ReleaseTTLOffsets(entry.TTLOffsets)
 			return &resolver.QueryResult{
 				Answer: entry.Answer, Authority: entry.Authority, Additional: entry.Additional,
-				Validated: entry.Validated, Rcode: entryRcode(entry),
+				Validated: entry.Validated, Rcode: entryRcode(entry), Authoritative: entryAuthoritative(entry),
 				Cacheable: true,
 			}
 		}
@@ -298,6 +332,14 @@ func mergeRRs(dst, src []dns.RR) []dns.RR {
 // (e.g. the SOA shared by multiple NODATA answers) merge to one copy.
 func equalRR(a, b dns.RR) bool {
 	return a.String() == b.String()
+}
+
+// entryAuthoritative reads the AA flag from a pre-packed entry's wire header
+// (bit 2 of the flags byte) — the cached wire preserves the AA of the
+// response as received, needed for the RFC 10029 §3.4 flag match.
+func entryAuthoritative(entry *cache.Entry) bool {
+	wire := entry.ResponseWire
+	return len(wire) >= 4 && wire[2]&0x04 != 0
 }
 
 // entryRcode extracts the rcode from a pre-packed entry's wire header,

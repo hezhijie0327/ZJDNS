@@ -310,7 +310,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 		}
 
 		select {
-		case resultChan <- QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Cacheable: !server.SkipCache, ECS: ecsResponse, Server: serverDesc, UpstreamEDE: upstreamEDE, MQResponse: captureMQResponse(queryResult.Response), Rcode: rcode}:
+		case resultChan <- QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Authoritative: queryResult.Response.Authoritative, Cacheable: !server.SkipCache, ECS: ecsResponse, Server: serverDesc, UpstreamEDE: upstreamEDE, MQResponse: captureMQResponse(queryResult.Response), Rcode: rcode}:
 			remaining := activeConnections.Load() - 1
 			if remaining > 0 {
 				log.Debugf("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
@@ -324,16 +324,17 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 		}
 	case dns.RcodeNameError:
 		nxdomainResult.CompareAndSwap(nil, &QueryResult{
-			Answer:      queryResult.Response.Answer,
-			Authority:   queryResult.Response.Ns,
-			Additional:  queryResult.Response.Extra,
-			Validated:   false,
-			Cacheable:   !server.SkipCache,
-			Rcode:       dns.RcodeNameError, // was 0 — NXDOMAIN served as NODATA
-			ECS:         r.edns.ParseFromDNS(queryResult.Response),
-			Server:      serverDesc,
-			UpstreamEDE: upstreamEDE,
-			MQResponse:  captureMQResponse(queryResult.Response),
+			Answer:        queryResult.Response.Answer,
+			Authority:     queryResult.Response.Ns,
+			Additional:    queryResult.Response.Extra,
+			Validated:     false,
+			Authoritative: queryResult.Response.Authoritative,
+			Cacheable:     !server.SkipCache,
+			Rcode:         dns.RcodeNameError, // was 0 — NXDOMAIN served as NODATA
+			ECS:           r.edns.ParseFromDNS(queryResult.Response),
+			Server:        serverDesc,
+			UpstreamEDE:   upstreamEDE,
+			MQResponse:    captureMQResponse(queryResult.Response),
 		})
 		pool.DefaultMessage.Put(queryResult.Response)
 	default:

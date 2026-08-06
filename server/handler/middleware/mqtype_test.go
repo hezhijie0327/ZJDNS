@@ -2,7 +2,9 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
+	"strings"
 	"testing"
 	"zjdns/cache"
 	"zjdns/config"
@@ -218,6 +220,245 @@ func TestMQTYPE_Merge_SkipMismatch(t *testing.T) {
 	for _, rr := range qctx.Res.Pseudo {
 		if mqr, ok := rr.(*dns.MQRESPONSE); ok && len(mqr.Types) != 0 {
 			t.Errorf("MQRESPONSE types = %v, want empty", mqr.Types)
+		}
+	}
+}
+
+// TestMQTYPE_Merge_TruncatedPrimary verifies RFC 10029 §3.4: a truncated
+// (TC=1) primary response MUST NOT be extended — no additional types are
+// resolved, and the MQTYPE-Response option is still returned (empty list).
+func TestMQTYPE_Merge_TruncatedPrimary(t *testing.T) {
+	store := mqTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	// A resolvable AAAA — if the additional type were processed, it would
+	// merge (RCODE/AA/AD all match); its absence proves the early exit.
+	fake := &fakeMQResolver{results: map[uint16]*resolver.QueryResult{
+		dns.TypeAAAA: {Answer: []dns.RR{aaaaRecord("2001:db8::1")}, Rcode: 0, Cacheable: true},
+	}}
+	m := &MQTYPE{store: store, resolver: fake, pending: nil}
+	chain := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
+		qctx.Res = handler.BuildResponseMsg(qctx.Req)
+		qctx.Res.Answer = []dns.RR{aRecord("192.0.2.1")}
+		qctx.Res.Truncated = true // TC=1 primary
+		return nil
+	}))
+
+	qctx := &handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA)}
+	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := len(qctx.Res.Answer); got != 1 {
+		t.Errorf("answer count = %d, want 1 (additional types must not be processed for a truncated primary)", got)
+	}
+	for _, rr := range qctx.Res.Pseudo {
+		if mqr, ok := rr.(*dns.MQRESPONSE); ok && len(mqr.Types) != 0 {
+			t.Errorf("MQRESPONSE types = %v, want empty for truncated primary", mqr.Types)
+		}
+	}
+}
+
+// TestMQTYPE_Merge_BudgetClientUDPSize verifies the merge budget is clamped
+// to the client's advertised UDP size (RFC 2181 §9) — a large additional
+// RRset that fits below the server cap but not the client's limit must be
+// skipped, so the merged response never triggers a post-merge truncation.
+func TestMQTYPE_Merge_BudgetClientUDPSize(t *testing.T) {
+	store := mqTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	bigTXT := &dns.TXT{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, TXT: rdata.TXT{Txt: []string{strings.Repeat("x", 500)}}}
+	fake := &fakeMQResolver{results: map[uint16]*resolver.QueryResult{
+		dns.TypeTXT: {Answer: []dns.RR{bigTXT}, Rcode: 0, Cacheable: true},
+	}}
+	m := &MQTYPE{store: store, resolver: fake, pending: nil}
+	chain := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
+		qctx.Res = handler.BuildResponseMsg(qctx.Req)
+		qctx.Res.Answer = []dns.RR{aRecord("192.0.2.1")}
+		return nil
+	}))
+
+	cases := []struct {
+		name       string
+		udpSize    uint16
+		wantMerged bool
+	}{
+		{"client advertises 512", dns.MinMsgSize, false}, // budget ≈ 512−44−64 = 404 < ~526-byte TXT
+		{"client advertises 1232", 1232, true},           // budget ≈ 1124 ≥ TXT
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := mqQuery(t, dns.TypeTXT)
+			req.UDPSize = tc.udpSize
+			qctx := &handler.QueryContext{Req: req}
+			if err := chain.ServeDNS(context.Background(), qctx); err != nil {
+				t.Fatal(err)
+			}
+			got := len(qctx.Res.Answer)
+			want := 1
+			if tc.wantMerged {
+				want = 2
+			}
+			if got != want {
+				t.Errorf("answer count = %d, want %d (TXT %s merged)", got, want, map[bool]string{true: "must be", false: "must not be"}[tc.wantMerged])
+			}
+		})
+	}
+}
+
+// TestMQTYPE_Merge_AAFlagMismatch verifies RFC 10029 §3.4: an additional
+// response whose AA flag differs from the primary (the RFC's own NS/DS
+// zone-cut example) MUST NOT be merged.
+func TestMQTYPE_Merge_AAFlagMismatch(t *testing.T) {
+	store := mqTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	for _, tc := range []struct {
+		name   string
+		addAA  bool
+		merged bool
+	}{
+		{"primary AA=1, additional AA=0 — skipped", false, false},
+		{"primary AA=1, additional AA=1 — merged", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeMQResolver{results: map[uint16]*resolver.QueryResult{
+				dns.TypeAAAA: {Answer: []dns.RR{aaaaRecord("2001:db8::1")}, Rcode: 0, Cacheable: true, Authoritative: tc.addAA},
+			}}
+			m := &MQTYPE{store: store, resolver: fake, pending: nil}
+			chain := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
+				qctx.Res = handler.BuildResponseMsg(qctx.Req)
+				qctx.Res.Answer = []dns.RR{aRecord("192.0.2.1")}
+				qctx.Res.Authoritative = true // e.g. zone-rule primary (RFC 9606)
+				return nil
+			}))
+
+			qctx := &handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA)}
+			if err := chain.ServeDNS(context.Background(), qctx); err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if tc.merged {
+				want = 2
+			}
+			if got := len(qctx.Res.Answer); got != want {
+				t.Errorf("answer count = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+// TestMQTYPE_Merge_FiltersDNSSECForDO0 verifies RFC 3225 §4.4: a DO=0
+// client must not receive DNSSEC proofs in the merged additional RRsets
+// (the cache stores raw DO=1 records; standalone queries filter at serve
+// time — the merge must filter too).
+func TestMQTYPE_Merge_FiltersDNSSECForDO0(t *testing.T) {
+	store := mqTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	rrsig := &dns.RRSIG{
+		Hdr:   dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
+		RRSIG: rdata.RRSIG{TypeCovered: dns.TypeAAAA, Algorithm: 13, Labels: 2, OrigTTL: 300, Expiration: 4102444800, Inception: 4102444800, KeyTag: 12345, SignerName: "example.com.", Signature: "c2lnbmF0dXJl"},
+	}
+	entry := []dns.RR{aaaaRecord("2001:db8::1"), rrsig}
+	// The cache key includes the DO flag — store under both so both
+	// subtests hit the cache (Set keeps raw DO=1 records under every key).
+	store.Set("example.com.", dns.TypeAAAA, dns.ClassINET, nil, false, entry, nil, nil, false, 0)
+	store.Set("example.com.", dns.TypeAAAA, dns.ClassINET, nil, true, entry, nil, nil, false, 0)
+
+	fake := &fakeMQResolver{results: map[uint16]*resolver.QueryResult{}}
+	m := &MQTYPE{store: store, resolver: fake, pending: nil}
+	chain := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
+		qctx.Res = handler.BuildResponseMsg(qctx.Req)
+		qctx.Res.Answer = []dns.RR{aRecord("192.0.2.1")}
+		return nil
+	}))
+
+	for _, tc := range []struct {
+		name        string
+		do          bool
+		wantDNSSEC  bool
+		wantAnswers int
+	}{
+		{"DO=0 — proofs filtered", false, false, 2},
+		{"DO=1 — proofs kept", true, true, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			qctx := &handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA), ClientRequestedDNSSEC: tc.do}
+			if err := chain.ServeDNS(context.Background(), qctx); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(qctx.Res.Answer); got != tc.wantAnswers {
+				t.Errorf("answer count = %d, want %d (A + AAAA %s RRSIG)", got, tc.wantAnswers, map[bool]string{true: "+", false: "−"}[tc.wantDNSSEC])
+			}
+			foundRRSIG := false
+			for _, rr := range qctx.Res.Answer {
+				if _, isRRSIG := rr.(*dns.RRSIG); isRRSIG {
+					foundRRSIG = true
+					break
+				}
+			}
+			if foundRRSIG != tc.wantDNSSEC {
+				t.Errorf("RRSIG present in merged answer = %t, want %t", foundRRSIG, tc.wantDNSSEC)
+			}
+		})
+	}
+}
+
+// TestMQTYPE_Merge_MaxQTx verifies the fixed §4 QTx cap: only the first
+// DefaultMQTypeMaxQTx additional types are processed; the rest are absent
+// from the MQTYPE-Response list.
+func TestMQTYPE_Merge_MaxQTx(t *testing.T) {
+	store := mqTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	if config.DefaultMQTypeMaxQTx >= 5 {
+		t.Fatalf("test needs DefaultMQTypeMaxQTx < 5, got %d", config.DefaultMQTypeMaxQTx)
+	}
+	types := []uint16{dns.TypeAAAA, dns.TypeTXT, dns.TypeCNAME, dns.TypeMX, dns.TypePTR}
+	results := make(map[uint16]*resolver.QueryResult, len(types))
+	for i, qt := range types {
+		rr := dns.RR(&dns.TXT{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, TXT: rdata.TXT{Txt: []string{fmt.Sprintf("type-%d", i)}}})
+		switch qt {
+		case dns.TypeAAAA:
+			rr = aaaaRecord("2001:db8::1")
+		case dns.TypeCNAME:
+			rr = &dns.CNAME{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, CNAME: rdata.CNAME{Target: "target.example.com."}}
+		case dns.TypeMX:
+			rr = &dns.MX{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, MX: rdata.MX{Preference: 10, Mx: "mx.example.com."}}
+		case dns.TypePTR:
+			rr = &dns.PTR{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, PTR: rdata.PTR{Ptr: "target.example.com."}}
+		}
+		results[qt] = &resolver.QueryResult{Answer: []dns.RR{rr}, Rcode: 0, Cacheable: true}
+	}
+	fake := &fakeMQResolver{results: results}
+	m := &MQTYPE{store: store, resolver: fake, pending: nil}
+	chain := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
+		qctx.Res = handler.BuildResponseMsg(qctx.Req)
+		qctx.Res.Answer = []dns.RR{aRecord("192.0.2.1")}
+		return nil
+	}))
+
+	qctx := &handler.QueryContext{Req: mqQuery(t, types...)}
+	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := len(qctx.Res.Answer); got != 1+config.DefaultMQTypeMaxQTx {
+		t.Errorf("answer count = %d, want %d (primary + first %d types)", got, 1+config.DefaultMQTypeMaxQTx, config.DefaultMQTypeMaxQTx)
+	}
+	var listed []uint16
+	for _, rr := range qctx.Res.Pseudo {
+		if mqr, ok := rr.(*dns.MQRESPONSE); ok {
+			listed = mqr.Types
+		}
+	}
+	if len(listed) != config.DefaultMQTypeMaxQTx {
+		t.Fatalf("MQRESPONSE lists %d types, want %d: %v", len(listed), config.DefaultMQTypeMaxQTx, listed)
+	}
+	for i, qt := range listed {
+		if qt != types[i] {
+			t.Errorf("MQRESPONSE[%d] = %s, want %s (first N types in order)", i, dns.TypeToString[qt], dns.TypeToString[types[i]])
 		}
 	}
 }

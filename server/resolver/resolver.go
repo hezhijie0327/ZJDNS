@@ -35,19 +35,20 @@ type DNSSECError struct {
 // QueryResult bundles the return values of a DNS resolution query, replacing
 // the previous 8-return-value tuple at the public API boundary.
 type QueryResult struct {
-	Answer      []dns.RR
-	Authority   []dns.RR
-	Additional  []dns.RR
-	Rcode       uint16 // response rcode (e.g. NXDOMAIN) — default NOERROR
-	Validated   bool
-	Cacheable   bool
-	ECS         *edns.ECSOption
-	Server      string
-	Poisoned    bool
-	UpstreamEDE *dns.EDE        // EDE code captured from upstream response (per-query, no data race)
-	MQResponse  *dns.MQRESPONSE // RFC 10029 MQTYPE-Response from the upstream (forwarding pass-through)
-	DNSSECEDE   uint16          // DNSSEC EDE from recursive validation (per-query, no cross-query race)
-	Err         error
+	Answer        []dns.RR
+	Authority     []dns.RR
+	Additional    []dns.RR
+	Rcode         uint16 // response rcode (e.g. NXDOMAIN) — default NOERROR
+	Validated     bool
+	Authoritative bool // AA flag of the response (RFC 10029 §3.4 flag match)
+	Cacheable     bool
+	ECS           *edns.ECSOption
+	Server        string
+	Poisoned      bool
+	UpstreamEDE   *dns.EDE        // EDE code captured from upstream response (per-query, no data race)
+	MQResponse    *dns.MQRESPONSE // RFC 10029 MQTYPE-Response from the upstream (forwarding pass-through)
+	DNSSECEDE     uint16          // DNSSEC EDE from recursive validation (per-query, no cross-query race)
+	Err           error
 }
 
 // BuildQueryFunc is a function type that constructs a DNS query message from a
