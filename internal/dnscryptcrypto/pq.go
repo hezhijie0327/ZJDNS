@@ -42,7 +42,9 @@ var pqProfileExt = func() []byte {
 // Pre-computed SHA-256 of the PQ profile extension bytes — deterministic.
 var (
 	cachedProfileExtensionHash = sha256.Sum256(PQProfileExtension())
-	emptyTicketKeyID           [TicketKeyIDSize]byte
+	// zeroPrefix is a ClientMagicSize-1 zero array used by the PQ
+	// client-magic QUIC-collision check.
+	zeroPrefix [ClientMagicSize - 1]byte
 )
 
 // HKDFSHA256 derives outLen bytes from ikm via HKDF-SHA256 with the given salt and info.
@@ -173,6 +175,21 @@ func DerivePQKeys(classicalSk []byte) (pk, sk []byte) {
 	return pk, sk
 }
 
+// PQCertClientMagic derives the client magic for a PQ certificate from the
+// X-Wing public key, matching the official encrypted-dns-server derivation:
+// the first 8 bytes of SHA-256(pq_public_key).  A magic whose first 7 bytes
+// are zero (collides with QUIC 0-RTT, RFC 9443) or that equals PQResumeMagic
+// (would misroute resumed queries) is flipped to a safe alternative.
+func PQCertClientMagic(pqPublicKey []byte) [ClientMagicSize]byte {
+	var magic [ClientMagicSize]byte
+	h := sha256.Sum256(pqPublicKey)
+	copy(magic[:], h[:ClientMagicSize])
+	if bytes.Equal(magic[:ClientMagicSize-1], zeroPrefix[:]) || magic == PQResumeMagic {
+		magic[0] ^= 0xff
+	}
+	return magic
+}
+
 // ---------------------------------------------------------------------------
 // Ticket encryption (server-side)
 // ---------------------------------------------------------------------------
@@ -190,19 +207,17 @@ func PQSealTicket(key [XchachaKeySize]byte, keyID [TicketKeyIDSize]byte, nonce [
 	return out, nil
 }
 
-// PQOpenTicket decrypts and authenticates a ticket, trying the primary key then the previous key.
-func PQOpenTicket(key *[XchachaKeySize]byte, keyID *[TicketKeyIDSize]byte, prevKey *[XchachaKeySize]byte, prevKeyID *[TicketKeyIDSize]byte, ciphertext []byte) ([]byte, error) {
+// PQOpenTicket decrypts and authenticates a ticket.  The ticket key is
+// server-wide and derived from the provider signing key — it never rotates
+// (matching the reference encrypted-dns-server), so a single key suffices.
+func PQOpenTicket(key *[XchachaKeySize]byte, keyID *[TicketKeyIDSize]byte, ciphertext []byte) ([]byte, error) {
 	if len(ciphertext) < TicketKeyIDSize+XchachaNonceSize+TagSize {
 		return nil, ErrPQInvalidTicket
 	}
-	// Try current TK first, then previous TK for rotation overlap.
 	var tk *[XchachaKeySize]byte
-	switch {
-	case bytes.Equal(ciphertext[:TicketKeyIDSize], keyID[:]):
+	if bytes.Equal(ciphertext[:TicketKeyIDSize], keyID[:]) {
 		tk = key
-	case !bytes.Equal(prevKeyID[:], emptyTicketKeyID[:]) && bytes.Equal(ciphertext[:TicketKeyIDSize], prevKeyID[:]):
-		tk = prevKey
-	default:
+	} else {
 		return nil, ErrPQInvalidTicket
 	}
 	var nonce [XchachaNonceSize]byte

@@ -258,16 +258,15 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *dnscryptcrypto
 		return nil, nil, fmt.Errorf("parsing PQ resumed query: %w", err)
 	}
 
-	// Snapshot ticket keys under read lock — rotateKeys() writes them under
-	// write lock; a torn key/ID pair would spuriously fail PQ ticket opens.
+	// Snapshot the fixed ticket key under the read lock — the key never
+	// rotates, so the snapshot is taken for consistency with the rest of
+	// the read-lock discipline.
 	s.mu.RLock()
 	ticketKey := s.ticketKey
 	ticketKeyID := s.ticketKeyID
-	prevTicketKey := s.prevTicketKey
-	prevTicketKeyID := s.prevTicketKeyID
 	s.mu.RUnlock()
 
-	ticketPlain, err := dnscryptcrypto.PQOpenTicket(&ticketKey, &ticketKeyID, &prevTicketKey, &prevTicketKeyID, ticket)
+	ticketPlain, err := dnscryptcrypto.PQOpenTicket(&ticketKey, &ticketKeyID, ticket)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening PQ ticket: %w", err)
 	}

@@ -108,7 +108,7 @@ func TestPersistRoundTrip(t *testing.T) {
 	}
 }
 
-// TestPersistRotation verifies rotation persists the new window set and the
+// TestPersistRotation verifies renewal persists the new window set and the
 // restored server serves both windows.
 func TestPersistRotation(t *testing.T) {
 	store := &fakeStore{}
@@ -118,9 +118,10 @@ func TestPersistRotation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	srv.rotateKeys()
+	ageWindow(srv, 0, 8*time.Hour)
+	srv.updateKeys()
 	if len(srv.keys) != 2 {
-		t.Fatalf("after rotation: want 2 windows, got %d", len(srv.keys))
+		t.Fatalf("after renewal: want 2 windows, got %d", len(srv.keys))
 	}
 
 	srv2, err := New(cfg, "0", "2.dnscrypt-cert.example.com", store)
@@ -128,16 +129,16 @@ func TestPersistRotation(t *testing.T) {
 		t.Fatalf("New (restart): %v", err)
 	}
 	if len(srv2.keys) != 2 {
-		t.Fatalf("restart after rotation: want 2 windows, got %d", len(srv2.keys))
+		t.Fatalf("restart after renewal: want 2 windows, got %d", len(srv2.keys))
 	}
-	// Newest window first — serials must match the rotated order.
-	if srv2.current().Classical.Serial != srv.current().Classical.Serial {
-		t.Errorf("restart: current serial mismatch (%d ≠ %d)",
-			srv2.current().Classical.Serial, srv.current().Classical.Serial)
+	// Newest window first — NotBefore must match the renewed order.
+	if srv2.current().Classical.NotBefore != srv.current().Classical.NotBefore {
+		t.Errorf("restart: current window NotBefore mismatch (%d ≠ %d)",
+			srv2.current().Classical.NotBefore, srv.current().Classical.NotBefore)
 	}
-	if srv2.keys[1].pair.Classical.Serial != srv.keys[1].pair.Classical.Serial {
-		t.Errorf("restart: previous serial mismatch (%d ≠ %d)",
-			srv2.keys[1].pair.Classical.Serial, srv.keys[1].pair.Classical.Serial)
+	if srv2.keys[1].pair.Classical.NotBefore != srv.keys[1].pair.Classical.NotBefore {
+		t.Errorf("restart: previous window NotBefore mismatch (%d ≠ %d)",
+			srv2.keys[1].pair.Classical.NotBefore, srv.keys[1].pair.Classical.NotBefore)
 	}
 }
 
@@ -246,9 +247,9 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 
 // TestWindowsFromStateFiltersExpired verifies expired windows are dropped.
 func TestWindowsFromStateFiltersExpired(t *testing.T) {
-	now := uint32(time.Now().Unix()) //nolint:gosec // G115: DNSCrypt window timestamps — protocol-bounded uint32
+	now := dnscryptcrypto.NowUnix32()
 	windows := []windowRecord{
-		{Serial: 1, NotAfter: now - 2*uint32(config.DefaultDNSCryptKeyOverlap/time.Second)},   // expired beyond overlap
+		{Serial: 1, NotAfter: now - 1}, // expired
 		{Serial: 2, NotAfter: now + uint32(config.DefaultDNSCryptCertificateTTL/time.Second)}, // live
 	}
 	filtered := windowsFromState(windows)

@@ -4,8 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"time"
-	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
 
@@ -98,13 +96,13 @@ func encodeIdentity(sk ed25519.PrivateKey) []byte {
 	return buf
 }
 
-// windowsFromState filters persisted windows that are no longer served
-// (past NotAfter + overlap).
+// windowsFromState filters persisted windows that are no longer valid
+// (NotAfter has passed).
 func windowsFromState(windows []windowRecord) []windowRecord {
-	cutoff := uint32(time.Now().Add(-config.DefaultDNSCryptKeyOverlap).Unix()) //nolint:gosec // G115: DNSCrypt window timestamps — protocol-bounded uint32
+	now := dnscryptcrypto.NowUnix32()
 	out := windows[:0]
 	for _, w := range windows {
-		if w.NotAfter >= cutoff {
+		if w.NotAfter >= now {
 			out = append(out, w)
 		}
 	}
@@ -117,15 +115,12 @@ func windowsToKeyEntries(rc *ResolverConfig, windows []windowRecord) ([]keyEntry
 	for _, w := range windows {
 		rc.ResolverSk = dnscryptcrypto.HexEncodeKey(w.ResolverSk)
 		rc.ResolverPk = dnscryptcrypto.HexEncodeKey(w.ResolverPk)
-		pair, err := rc.NewCertPair(w.Serial, w.NotBefore, w.NotAfter)
+		pair, err := rc.NewCertPair(w.NotBefore, w.NotAfter)
 		if err != nil {
-			return nil, fmt.Errorf("recreating cert pair (serial=%d): %w", w.Serial, err)
+			return nil, fmt.Errorf("recreating cert pair (not_before=%d): %w", w.NotBefore, err)
 		}
-		entries = append(entries, keyEntry{
-			pair:      pair,
-			createdAt: time.Unix(int64(w.NotBefore), 0),
-		})
-		log.Debugf("DNSCRYPT: restored window serial=%d (not_before=%d, not_after=%d)", w.Serial, w.NotBefore, w.NotAfter)
+		entries = append(entries, keyEntry{pair: pair})
+		log.Debugf("DNSCRYPT: restored window (not_before=%d, not_after=%d)", w.NotBefore, w.NotAfter)
 	}
 	return entries, nil
 }

@@ -73,11 +73,12 @@ func GenerateResolverConfig(providerName string, privateKey ed25519.PrivateKey) 
 }
 
 // NewCert generates a signed classical X25519-XChacha20Poly1305 certificate.
-// serial and timestamps are provided by the caller to guarantee alignment with
-// the paired PQ cert.
-func (rc *ResolverConfig) NewCert(serial, notBefore, notAfter uint32) (cert *dnscryptcrypto.Certificate, err error) {
+// The serial is always 1 (matching the reference encrypted-dns-server) and
+// timestamps are provided by the caller to guarantee alignment with the
+// paired PQ cert.
+func (rc *ResolverConfig) NewCert(notBefore, notAfter uint32) (cert *dnscryptcrypto.Certificate, err error) {
 	cert = &dnscryptcrypto.Certificate{
-		Serial:    serial,
+		Serial:    1,
 		NotAfter:  notAfter,
 		NotBefore: notBefore,
 		ESVersion: dnscryptcrypto.XChacha20Poly1305,
@@ -115,9 +116,10 @@ func (rc *ResolverConfig) NewCert(serial, notBefore, notAfter uint32) (cert *dns
 }
 
 // NewPQCert generates a signed PQ X-Wing certificate deterministically derived
-// from the same X25519 seed as the classical cert.  Serial and timestamps are
-// provided by the caller to guarantee alignment.
-func (rc *ResolverConfig) NewPQCert(serial, notBefore, notAfter uint32) (cert *dnscryptcrypto.Certificate, err error) {
+// from the same X25519 seed as the classical cert.  The serial is always 1
+// (matching the reference encrypted-dns-server) and timestamps are provided
+// by the caller to guarantee alignment.
+func (rc *ResolverConfig) NewPQCert(notBefore, notAfter uint32) (cert *dnscryptcrypto.Certificate, err error) {
 	resolverSk, err := dnscryptcrypto.HexDecodeKey(rc.ResolverSk)
 	if err != nil {
 		return nil, fmt.Errorf("decoding resolver secret key: %w", err)
@@ -126,7 +128,7 @@ func (rc *ResolverConfig) NewPQCert(serial, notBefore, notAfter uint32) (cert *d
 	pk, sk := dnscryptcrypto.DerivePQKeys(resolverSk)
 
 	cert = &dnscryptcrypto.Certificate{
-		Serial:       serial,
+		Serial:       1,
 		NotAfter:     notAfter,
 		NotBefore:    notBefore,
 		ESVersion:    dnscryptcrypto.XWingPQ,
@@ -134,9 +136,10 @@ func (rc *ResolverConfig) NewPQCert(serial, notBefore, notAfter uint32) (cert *d
 		PqPrivateKey: sk,
 	}
 
-	// ClientMagic for PQ certs: bytes 72–79 of the X-Wing public key
-	// (matching the official encrypted-dns-server derivation).
-	copy(cert.ClientMagic[:], pk[72:72+dnscryptcrypto.ClientMagicSize])
+	// ClientMagic for PQ certs: first 8 bytes of SHA-256(X-Wing public key),
+	// matching the official encrypted-dns-server derivation, with QUIC/PDQ
+	// collision escape.
+	cert.ClientMagic = dnscryptcrypto.PQCertClientMagic(pk)
 
 	binCert, err := cert.MarshalBinary()
 	if err != nil {
@@ -153,15 +156,15 @@ func (rc *ResolverConfig) NewPQCert(serial, notBefore, notAfter uint32) (cert *d
 }
 
 // NewCertPair generates both classical and PQ certificates for a single key
-// window.  Both certs share the same Serial, NotBefore, and NotAfter.
-// serial and timestamps are caller-provided so persisted windows can be
+// window.  Both certs share the same Serial (always 1), NotBefore, and
+// NotAfter.  timestamps are caller-provided so persisted windows can be
 // recreated exactly; the default window is now → now+DefaultDNSCryptCertificateTTL.
-func (rc *ResolverConfig) NewCertPair(serial, notBefore, notAfter uint32) (*dnscryptcrypto.CertPair, error) {
-	classical, err := rc.NewCert(serial, notBefore, notAfter)
+func (rc *ResolverConfig) NewCertPair(notBefore, notAfter uint32) (*dnscryptcrypto.CertPair, error) {
+	classical, err := rc.NewCert(notBefore, notAfter)
 	if err != nil {
 		return nil, fmt.Errorf("classical cert: %w", err)
 	}
-	pq, err := rc.NewPQCert(serial, notBefore, notAfter)
+	pq, err := rc.NewPQCert(notBefore, notAfter)
 	if err != nil {
 		return nil, fmt.Errorf("PQ cert: %w", err)
 	}

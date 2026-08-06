@@ -1,6 +1,8 @@
 package dnscrypt
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 	"time"
 	"zjdns/config"
@@ -8,6 +10,54 @@ import (
 
 	"codeberg.org/miekg/dns"
 )
+
+// ageWindow shifts a key window's NotBefore/NotAfter back by d, simulating
+// the passage of time without invalidating the cert (NotAfter stays ahead).
+func ageWindow(srv *Server, idx int, d time.Duration) {
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	k := &srv.keys[idx]
+	nb := k.pair.Classical.NotBefore - uint32(d/time.Second) //nolint:gosec // G115: test window shift — protocol-bounded uint32
+	na := nb + uint32(config.DefaultDNSCryptCertificateTTL/time.Second)
+	k.pair.Classical.NotBefore = nb
+	k.pair.Classical.NotAfter = na
+	k.pair.PQ.NotBefore = nb
+	k.pair.PQ.NotAfter = na
+}
+
+// extractCert decodes the TXT chunks of a handshake answer back into the raw
+// certificate bytes.  The codeberg.org/miekg/dns fork encodes non-printable
+// bytes as \DDD in TXT rdata on pack and does NOT decode them on unpack, so
+// the raw wire form is recovered here (\\ stays \\ — the escapeBackslash
+// doubling of a literal backslash — and \DDD becomes the byte).
+func extractCert(t *testing.T, rr dns.RR) []byte {
+	t.Helper()
+	txt, ok := rr.(*dns.TXT)
+	if !ok {
+		t.Fatalf("expected TXT record, got %T", rr)
+	}
+	s := strings.Join(txt.Txt, "")
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' {
+			out = append(out, s[i])
+			continue
+		}
+		// \\ (escapeBackslash doubling of a literal backslash, passed through
+		// verbatim) must be folded before \DDD — matching order matters.
+		if i+1 < len(s) && s[i+1] == '\\' {
+			out = append(out, '\\')
+			i++
+			continue
+		}
+		if i+3 < len(s) && s[i+1] >= '0' && s[i+1] <= '9' &&
+			s[i+2] >= '0' && s[i+2] <= '9' && s[i+3] >= '0' && s[i+3] <= '9' {
+			out = append(out, (s[i+1]-'0')*100+(s[i+2]-'0')*10+s[i+3]-'0')
+			i += 3
+		}
+	}
+	return out
+}
 
 func TestKeyRotation(t *testing.T) {
 	certificateCfg := testCfg()
@@ -21,37 +71,29 @@ func TestKeyRotation(t *testing.T) {
 	if len(srv.keys) != 1 {
 		t.Fatalf("after New: want 1 key, got %d", len(srv.keys))
 	}
-	initialSerial := srv.current().Classical.Serial
 
-	// Simulate a 24h rotation.
-	srv.rotateKeys()
+	// Serial is always 1 (matching encrypted-dns-server).
+	if srv.current().Classical.Serial != 1 {
+		t.Errorf("serial: want 1, got %d", srv.current().Classical.Serial)
+	}
 
-	// After rotation: two key pairs (current + previous).
+	// Age the initial window 8h → the next renewal mints a second window
+	// from the seed chain.
+	ageWindow(srv, 0, 8*time.Hour)
+	srv.updateKeys()
+
 	if len(srv.keys) != 2 {
-		t.Fatalf("after rotateKeys: want 2 keys, got %d", len(srv.keys))
+		t.Fatalf("after updateKeys: want 2 keys, got %d", len(srv.keys))
 	}
 
-	// Current has newer (higher) serial than previous.
-	curr := srv.current().Classical
-	if curr.Serial < initialSerial {
-		t.Errorf("new serial (%d) should be >= old serial (%d)", curr.Serial, initialSerial)
-	}
-
-	// Verify both certs in each pair are non-nil.
-	if srv.keys[0].pair.Classical == nil || srv.keys[0].pair.PQ == nil {
-		t.Error("current pair has nil cert")
-	}
-	if srv.keys[1].pair.Classical == nil || srv.keys[1].pair.PQ == nil {
-		t.Error("previous pair has nil cert")
-	}
-
-	// Verify the previous entry's classical cert is still valid.
-	if srv.keys[1].pair.Classical.NotAfter < uint32(time.Now().Unix()) { //nolint:gosec // G115
-		t.Error("previous classical cert NotAfter is in the past")
-	}
-	// PQ cert must also be valid.
-	if srv.keys[1].pair.PQ.NotAfter < uint32(time.Now().Unix()) { //nolint:gosec // G115
-		t.Error("previous PQ cert NotAfter is in the past")
+	// Both certs in each pair are non-nil and serial stays 1.
+	for _, k := range srv.keys {
+		if k.pair.Classical == nil || k.pair.PQ == nil {
+			t.Error("cert pair has a nil cert")
+		}
+		if k.pair.Classical.Serial != 1 || k.pair.PQ.Serial != 1 {
+			t.Error("cert serial must be 1")
+		}
 	}
 
 	// Classical cert has non-zero ResolverSk.
@@ -64,16 +106,22 @@ func TestKeyRotation(t *testing.T) {
 		t.Error("current PQ cert has zero-length PqPrivateKey")
 	}
 
-	// Both certs in a pair share the same serial.
-	if srv.keys[0].pair.Classical.Serial != srv.keys[0].pair.PQ.Serial {
-		t.Error("classical and PQ certs in pair have different serials")
+	// Seed chain: the newest window's PK derives from the previous SK.
+	seed := srv.keys[1].pair.Classical.ResolverSk
+	_, wantPk, err := dnscryptcrypto.X25519KeyPairFromSeed(seed)
+	if err != nil {
+		t.Fatalf("X25519KeyPairFromSeed: %v", err)
+	}
+	if !bytes.Equal(srv.keys[0].pair.Classical.ResolverPk[:], wantPk[:]) {
+		t.Error("seed chain: new window PK does not derive from previous SK")
 	}
 
-	// Simulate purge: oldest entry should be removed after overlap period.
-	srv.keys[0].createdAt = time.Now().Add(-config.DefaultDNSCryptCertificateTTL - config.DefaultDNSCryptKeyOverlap - time.Hour)
-	srv.rotateKeys()
-	if len(srv.keys) < 2 {
-		t.Errorf("after purge rotation: want >= 2 keys, got %d", len(srv.keys))
+	// Age the oldest window past NotAfter → the next renewal purges it,
+	// leaving only the newest window.
+	ageWindow(srv, 1, 24*time.Hour)
+	srv.updateKeys()
+	if len(srv.keys) != 1 {
+		t.Errorf("after purge renewal: want 1 key (expired window dropped), got %d", len(srv.keys))
 	}
 }
 
@@ -124,10 +172,10 @@ func TestHandshakeTTL(t *testing.T) {
 	}
 	query := m.Data
 
-	certValiditySec := uint32((config.DefaultDNSCryptCertificateTTL + config.DefaultDNSCryptKeyOverlap).Seconds())
+	staticTTL := uint32(config.DefaultDNSCryptCertificateRenewal / time.Second) // 8h
 
-	// Case 1: single fresh window → 2 certs (Classical + PQ), TTL ≈ 25h.
-	// Proves TTL is certificate-validity-based, not the old static DefaultTTL=10.
+	// Case 1: single fresh window → 2 certs (Classical + PQ), static TTL = 8h
+	// (the renewal interval, matching encrypted-dns-server).
 	res, err := srv.handleHandshake(query, false)
 	if err != nil {
 		t.Fatalf("handleHandshake: %v", err)
@@ -143,21 +191,18 @@ func TestHandshakeTTL(t *testing.T) {
 	}
 
 	for _, rr := range reply.Answer {
-		ttl := rr.Header().TTL
-		if ttl <= config.DefaultTTL {
-			t.Errorf("fresh key: TTL = %d; expected > %d (cert-validity-based, not static DefaultTTL)", ttl, config.DefaultTTL)
-		}
-		if ttl > certValiditySec {
-			t.Errorf("fresh key: TTL = %d; expected <= %d (certValidity)", ttl, certValiditySec)
+		if rr.Header().TTL != staticTTL {
+			t.Errorf("TTL: want %d (static renewal interval), got %d", staticTTL, rr.Header().TTL)
 		}
 	}
 
-	// Case 2: rotate + age the old key to 23h → 4 certs (2 windows × 2 certs).
-	// New window TTL ≈ 25h, old window TTL ≈ 2h.
-	srv.rotateKeys()
-	srv.mu.Lock()
-	srv.keys[1].createdAt = time.Now().Add(-23 * time.Hour)
-	srv.mu.Unlock()
+	// Case 2: multiple internal windows (seed chain) — the handshake still
+	// returns ONLY the newest window's 2 certs, with the same static TTL.
+	ageWindow(srv, 0, 16*time.Hour)
+	srv.updateKeys()
+	if len(srv.keys) < 2 {
+		t.Fatalf("multi-window setup: want >= 2 keys, got %d", len(srv.keys))
+	}
 
 	res, err = srv.handleHandshake(query, false)
 	if err != nil {
@@ -170,56 +215,109 @@ func TestHandshakeTTL(t *testing.T) {
 		t.Fatalf("unpack reply multi-window: %v", err)
 	}
 
-	if len(reply.Answer) != 4 {
-		t.Fatalf("multi-window: want 4 answer records (2 windows × 2 certs), got %d", len(reply.Answer))
-	}
-
-	// First two records (keys[0]): Classical + PQ, fresh → ≈25h.
-	for i := range 2 {
-		ttl := reply.Answer[i].Header().TTL
-		if ttl <= config.DefaultTTL {
-			t.Errorf("multi-window fresh[%d]: TTL = %d; expected > %d", i, ttl, config.DefaultTTL)
-		}
-		if ttl > certValiditySec {
-			t.Errorf("multi-window fresh[%d]: TTL = %d; expected <= %d", i, ttl, certValiditySec)
-		}
-	}
-
-	// Last two records (keys[1]): Classical + PQ, aged 23h → ≈2h = 7200s.
-	for i := range 2 {
-		j := i + 2
-		ttl := reply.Answer[j].Header().TTL
-		if ttl < 7080 || ttl > 7320 {
-			t.Errorf("multi-window aged[%d]: TTL = %d; expected ~7200 (±120)", j, ttl)
-		}
-	}
-
-	// Case 3: old key > 25h → purged. Simulate by removing keys[1]:
-	// back to 2 certs from the single remaining window.
-	srv.mu.Lock()
-	srv.keys = srv.keys[:1]
-	srv.mu.Unlock()
-
-	res, err = srv.handleHandshake(query, false)
-	if err != nil {
-		t.Fatalf("handleHandshake after purge: %v", err)
-	}
-
-	reply = new(dns.Msg)
-	reply.Data = res
-	if err := reply.Unpack(); err != nil {
-		t.Fatalf("unpack reply after purge: %v", err)
-	}
-
 	if len(reply.Answer) != 2 {
-		t.Fatalf("after purge: want 2 answer records, got %d", len(reply.Answer))
+		t.Fatalf("multi-window: want 2 answer records (newest window only), got %d", len(reply.Answer))
+	}
+	for _, rr := range reply.Answer {
+		if rr.Header().TTL != staticTTL {
+			t.Errorf("multi-window TTL: want %d, got %d", staticTTL, rr.Header().TTL)
+		}
 	}
 
-	for _, rr := range reply.Answer {
-		ttl := rr.Header().TTL
-		if ttl <= config.DefaultTTL || ttl > certValiditySec {
-			t.Errorf("after purge: TTL = %d; expected <= %d", ttl, certValiditySec)
+	// The returned classical cert must be the NEWEST window's cert.
+	wantClassical, err := srv.keys[0].pair.Classical.MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal newest classical cert: %v", err)
+	}
+	gotClassical := extractCert(t, reply.Answer[0])
+	if !bytes.Equal(gotClassical, wantClassical) {
+		t.Error("handshake returned a stale window's classical cert")
+	}
+
+	// The returned PQ cert must be the NEWEST window's PQ cert.
+	wantPQ, err := srv.keys[0].pair.PQ.MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal newest PQ cert: %v", err)
+	}
+	gotPQ := extractCert(t, reply.Answer[1])
+	if !bytes.Equal(gotPQ, wantPQ) {
+		t.Error("handshake returned a stale window's PQ cert")
+	}
+}
+
+func TestSeedChain(t *testing.T) {
+	certificateCfg := testCfg()
+	srv, err := New(certificateCfg, "0", "2.dnscrypt-cert.example.com", nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// 16h of age → 2 missed renewals (8h, 16h) are caught up on the next
+	// updateKeys: 2 new windows + the original = 3.
+	ageWindow(srv, 0, 16*time.Hour)
+	srv.updateKeys()
+	if len(srv.keys) != 3 {
+		t.Fatalf("16h catch-up: want 3 windows, got %d", len(srv.keys))
+	}
+
+	// Chain: each window's PK derives from the previous window's SK, and
+	// windows are ordered newest-first (NotBefore strictly decreasing).
+	for i := 0; i+1 < len(srv.keys); i++ {
+		seed := srv.keys[i+1].pair.Classical.ResolverSk
+		_, wantPk, err := dnscryptcrypto.X25519KeyPairFromSeed(seed)
+		if err != nil {
+			t.Fatalf("X25519KeyPairFromSeed: %v", err)
 		}
+		if !bytes.Equal(srv.keys[i].pair.Classical.ResolverPk[:], wantPk[:]) {
+			t.Errorf("window %d PK not derived from window %d SK (chain broken)", i, i+1)
+		}
+		if srv.keys[i].pair.Classical.NotBefore <= srv.keys[i+1].pair.Classical.NotBefore {
+			t.Errorf("windows not ordered newest-first (%d vs %d)",
+				srv.keys[i].pair.Classical.NotBefore, srv.keys[i+1].pair.Classical.NotBefore)
+		}
+	}
+
+	// Windows are spaced exactly one renewal apart.
+	if srv.keys[0].pair.Classical.NotBefore-srv.keys[1].pair.Classical.NotBefore !=
+		uint32(config.DefaultDNSCryptCertificateRenewal/time.Second) {
+		t.Error("adjacent windows must be exactly one renewal interval apart")
+	}
+}
+
+func TestPurgeExpiredKeys(t *testing.T) {
+	certificateCfg := testCfg()
+	srv, err := New(certificateCfg, "0", "2.dnscrypt-cert.example.com", nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Two windows.
+	ageWindow(srv, 0, 8*time.Hour)
+	srv.updateKeys()
+	if len(srv.keys) != 2 {
+		t.Fatalf("setup: want 2 keys, got %d", len(srv.keys))
+	}
+
+	// Expire the older window → purged promptly (no overlap grace).
+	past := dnscryptcrypto.NowUnix32() - 1
+	srv.mu.Lock()
+	srv.keys[1].pair.Classical.NotAfter = past
+	srv.keys[1].pair.PQ.NotAfter = past
+	srv.mu.Unlock()
+	srv.purgeExpiredKeys()
+	if len(srv.keys) != 1 {
+		t.Fatalf("after purge: want 1 key, got %d", len(srv.keys))
+	}
+
+	// The newest entry is never purged even when itself expired — the key
+	// list must never become empty (renewal mints the fresh window).
+	srv.mu.Lock()
+	srv.keys[0].pair.Classical.NotAfter = past
+	srv.keys[0].pair.PQ.NotAfter = past
+	srv.mu.Unlock()
+	srv.purgeExpiredKeys()
+	if len(srv.keys) != 1 {
+		t.Fatalf("purge must keep the newest key: want 1 key, got %d", len(srv.keys))
 	}
 }
 

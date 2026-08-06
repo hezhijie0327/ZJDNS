@@ -308,15 +308,16 @@ const (
 // =============================================================================
 
 const (
-	DefaultDNSCryptCertificateTTL      = 24 * time.Hour
-	DefaultDNSCryptSharedKeyCacheSize  = 2048 // max cached shared keys per server
+	DefaultDNSCryptCertificateTTL      = 24 * time.Hour // cert validity period (matches ref encrypted-dns-server)
+	DefaultDNSCryptCertificateRenewal  = 8 * time.Hour  // renewal interval — a new window is minted every 8h (matches ref)
+	DefaultDNSCryptSharedKeyCacheSize  = 2048           // max cached shared keys per server
 	DefaultDNSCryptCertificateCacheTTL = 1 * time.Hour
 	DefaultDNSCryptReadTimeout         = 2 * time.Second
 	DefaultDNSCryptWriteTimeout        = 10 * time.Second // DNSCrypt TCP response write
 	DefaultDNSCryptResponseBuffer      = 512              // cert queries use no EDNS0; TC retry goes over TCP
 	DefaultDNSCryptPQTicketLifetime    = 600 * time.Second
-	DefaultDNSCryptKeyOverlap          = 1 * time.Hour
-	DefaultDNSCryptMinQueryLen         = 512 // min wire query size (matches dnscrypt-proxy InitialMinQuestionSize)
+	DefaultDNSCryptKeyPurgeInterval    = 30 * time.Second // server: safety-net sweep of expired key windows
+	DefaultDNSCryptMinQueryLen         = 512              // min wire query size (matches dnscrypt-proxy InitialMinQuestionSize)
 )
 
 // =============================================================================
