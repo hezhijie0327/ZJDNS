@@ -127,6 +127,13 @@ func (l *dtlcpListener) readFirstDatagram() ([]byte, *net.UDPAddr, error) {
 			return nil, nil, net.ErrClosed
 		}
 
+		// Clear any read deadline a previous DTLCP connection left on the
+		// shared socket (dtlcp.Conn.SetDeadline delegates to its pconn,
+		// which is this socket).  A lingering deadline makes every new
+		// client's first datagram time out — handshake failures that come
+		// and go with connection churn.
+		_ = l.udpConn.SetReadDeadline(time.Time{})
+
 		n, remoteAddr, err := l.udpConn.ReadFromUDP(l.buf)
 		if err != nil {
 			return nil, nil, err

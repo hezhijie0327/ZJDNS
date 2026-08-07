@@ -52,6 +52,10 @@ func (c *Client) ExecuteDTLCP(ctx context.Context, msg *dns.Msg, server *config.
 	if server == nil {
 		return nil, errors.New("dtlcp: nil server config")
 	}
+	// Serialise against concurrent DTLCP queries (see dtlcpMu).
+	c.dtlcpMu.Lock()
+	defer c.dtlcpMu.Unlock()
+
 	proxyDialer := c.getProxy(server)
 
 	if c.dtlcpPool != nil {

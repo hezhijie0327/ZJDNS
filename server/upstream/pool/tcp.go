@@ -99,10 +99,21 @@ func (c *Conn) SetSegmentation(segSize int) {
 // Exchange sends a DNS message over the pipelined connection and waits for
 // its matching response, keyed by the query ID. The connection is shared:
 // concurrent Exchanges on the same Conn are multiplexed (RFC 7766 §7).
-func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
+func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (response *dns.Msg, err error) {
 	if msg == nil {
 		return nil, errors.New("client: nil query message")
 	}
+	// msg.ID was rewritten to a tracking ID and Pack() captured it in
+	// msg.Data.  On failure the caller falls back to a transport that
+	// reuses msg.Data without re-Packing (miekg's Exchange) — a stale
+	// tracking-ID wire would then be sent under the restored original
+	// msg.ID, and the response check fails with an ID mismatch.  Drop the
+	// stale wire so the fallback re-Packs with the true msg.ID.
+	defer func() {
+		if err != nil {
+			msg.Data = nil
+		}
+	}()
 	select {
 	case c.capacity <- struct{}{}:
 		c.inFlight.Add(1)
@@ -122,7 +133,7 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (*dns.Msg, error) {
 	trackingID := uint16(c.nextID.Add(1) & dnsIDMask)
 	msg.ID = trackingID
 
-	err := msg.Pack()
+	err = msg.Pack()
 	msgData := msg.Data
 	msg.ID = originalID
 	if err != nil {
