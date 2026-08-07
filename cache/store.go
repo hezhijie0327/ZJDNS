@@ -864,16 +864,36 @@ func (s *SQLiteCache) PruneQueryJournal(retentionSec int64) (int64, error) {
 	batchSize := int64(config.DefaultPruneBatchSize)
 	dayCutoff := log.NowUnix()/86400 - retentionSec/86400
 
-	// query_stats: single DELETE using PK prefix seek (stat_day is leading column).
+	// query_stats and query_log: bounded deletes.  A single unbounded DELETE
+	// of the accumulated rows holds the write lock past the
+	// DefaultCacheWriteTimeout; the stuck transaction then occupies a pool
+	// connection and every subsequent SQLite write (cache flush, stats)
+	// hits busy — queries fail until the process restarts.  Each bounded
+	// batch commits quickly and a timeout only aborts the current batch
+	// (retried on the next ticker run).
 	var totalDeleted int64
-	qsResult, err := s.db.SQ.ExecContext(ctx, `DELETE FROM query_stats WHERE stat_day < ?`, dayCutoff)
-	if err != nil {
+
+	// query_stats is WITHOUT ROWID (composite PK) — no rowid to batch on.
+	// Delete one day per iteration: rows are aggregated per
+	// result×protocol×rcode×dnssec×poisoned combination, so a single day
+	// is tiny and the loop is bounded by the accumulated history.
+	var minDay int64
+	if err := s.db.SQ.QueryRow(
+		`SELECT COALESCE(MIN(stat_day), 0) FROM query_stats`,
+	).Scan(&minDay); err != nil {
 		return 0, fmt.Errorf("cleanup query_stats: %w", err)
 	}
-	qsN, _ := qsResult.RowsAffected()
-	totalDeleted += qsN
+	for day := dayCutoff - 1; day >= minDay; day-- {
+		result, err := s.db.SQ.ExecContext(
+			ctx, `DELETE FROM query_stats WHERE stat_day = ?`, day,
+		)
+		if err != nil {
+			return totalDeleted, fmt.Errorf("cleanup query_stats: %w", err)
+		}
+		n, _ := result.RowsAffected()
+		totalDeleted += n
+	}
 
-	// query_log: batched DELETE to avoid long write transactions under heavy load.
 	for {
 		result, err := s.db.SQ.ExecContext(
 			ctx,

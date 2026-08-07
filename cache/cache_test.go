@@ -1308,3 +1308,69 @@ func TestGetTypes_Miss(t *testing.T) {
 		t.Fatalf("found = %v, want [false false]", found)
 	}
 }
+
+// ── PruneQueryJournal (batched cleanup) ─────────────────────────────────────
+
+func TestPruneQueryJournal(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	// Insert one stale and one fresh row into both journal tables.
+	oldDay := log.NowUnix()/86400 - 10
+	nowDay := log.NowUnix() / 86400
+	for _, day := range []int64{oldDay, nowDay} {
+		if _, err := mc.db.SQ.Exec(
+			"INSERT INTO query_stats (stat_day, result, protocol, rcode, dnssec, poisoned, query_count, total_ms) VALUES (?, 'hit', 'udp', 0, '', 0, 1, 1)",
+			day,
+		); err != nil {
+			t.Fatalf("insert query_stats: %v", err)
+		}
+	}
+	oldTS := log.NowUnix() - 10*86400
+	nowTS := log.NowUnix()
+	for _, ts := range []int64{oldTS, nowTS} {
+		if _, err := mc.db.SQ.Exec(
+			"INSERT INTO query_log (timestamp, qname, qtype, qclass, protocol, result, rcode, response_ms, server, poisoned, dnssec) VALUES (?, 'example.com.', 1, 1, 'udp', 'hit', 0, 1, '', 0, '')",
+			ts,
+		); err != nil {
+			t.Fatalf("insert query_log: %v", err)
+		}
+	}
+
+	n, err := mc.PruneQueryJournal(2 * 86400)
+	if err != nil {
+		t.Fatalf("PruneQueryJournal: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("deleted %d rows, want 2 (one stale per table)", n)
+	}
+
+	// Stale rows gone, fresh rows kept.
+	var staleStats int
+	if err := mc.db.SQ.QueryRow(
+		"SELECT COUNT(*) FROM query_stats WHERE stat_day = ?", oldDay,
+	).Scan(&staleStats); err != nil {
+		t.Fatalf("stale stats count: %v", err)
+	}
+	if staleStats != 0 {
+		t.Errorf("stale query_stats rows = %d, want 0", staleStats)
+	}
+	var freshStats int
+	if err := mc.db.SQ.QueryRow(
+		"SELECT COUNT(*) FROM query_stats WHERE stat_day = ?", nowDay,
+	).Scan(&freshStats); err != nil {
+		t.Fatalf("fresh stats count: %v", err)
+	}
+	if freshStats != 1 {
+		t.Errorf("fresh query_stats rows = %d, want 1", freshStats)
+	}
+	var staleLog int
+	if err := mc.db.SQ.QueryRow(
+		"SELECT COUNT(*) FROM query_log WHERE timestamp < unixepoch() - 86400",
+	).Scan(&staleLog); err != nil {
+		t.Fatalf("stale log count: %v", err)
+	}
+	if staleLog != 0 {
+		t.Errorf("stale query_log rows = %d, want 0", staleLog)
+	}
+}
