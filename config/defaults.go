@@ -93,9 +93,18 @@ const (
 // =============================================================================
 
 const (
-	DefaultHTTPIdleConnTimeout   = 5 * time.Minute   // HTTP transport idle connection
-	DefaultQUICKeepAlive         = 20 * time.Second  // QUIC keep-alive period
-	DefaultQUICClientIdleTimeout = 60 * time.Second  // client QUIC idle (must exceed KeepAlive)
+	DefaultHTTPIdleConnTimeout   = 5 * time.Minute  // HTTP transport idle connection
+	DefaultQUICKeepAlive         = 20 * time.Second // QUIC keep-alive period
+	DefaultQUICClientIdleTimeout = 60 * time.Second // client QUIC idle (must exceed KeepAlive)
+
+	// DefaultQUICStreamOpenTimeout bounds how long OpenStreamSync may wait
+	// for the server's MAX_STREAMS frame.  RFC 9250 is one stream per query;
+	// when the server's stream quota is exhausted, quic-go blocks until the
+	// stream closes and the server replenishes the quota — which trails
+	// behind a 25ms ACK delay.  Waiting the full query timeout stalls the
+	// pipeline; a short budget treats "slow stream open" as an exhausted
+	// connection and the pool dials a fresh one (0-RTT resumption).
+	DefaultQUICStreamOpenTimeout = 100 * time.Millisecond
 	DefaultQUICServerIdleTimeout = 30 * time.Second  // server QUIC idle (RFC 9000 default)
 	DefaultTCPPoolIdleTimeout    = 60 * time.Second  // TCP/DoT pool connection idle
 	DefaultTLSHandshakeTimeout   = 10 * time.Second  // pre-handshake bound for DoT (an idle-connect flood must not hold shared errgroup slots)
@@ -165,11 +174,11 @@ const (
 // =============================================================================
 
 const (
-	DefaultMaxPipe                 = 16  // max in-flight queries per TCP/DoT connection
-	DefaultMaxConns                = 4   // max connections per upstream
-	DefaultMaxConcurrentNS         = 6   // max concurrent NS queries during resolution
-	DefaultMaxProbes               = 16  // max concurrent latency probes
-	DefaultMaxIncomingStreams      = 256 // QUIC max incoming streams
+	DefaultMaxPipe                 = 16    // max in-flight queries per TCP/DoT connection
+	DefaultMaxConns                = 4     // max connections per upstream
+	DefaultMaxConcurrentNS         = 6     // max concurrent NS queries during resolution
+	DefaultMaxProbes               = 16    // max concurrent latency probes
+	DefaultMaxIncomingStreams      = 65535 // QUIC max incoming streams (RFC 9250: one stream per query — 256 exhausted a client's stream quota in seconds, then every query waited on MAX_STREAMS behind quic-go's 25ms ACK delay)
 	DefaultMaxConcurrentStreams    = 64
 	DefaultCacheRefreshConcurrency = 64 // background cache refresh goroutine cap
 

@@ -147,7 +147,12 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 // doQUICQuery opens a stream on the QUIC connection and performs the DNS
 // exchange.
 func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg, timeout time.Duration) (*dns.Msg, error) {
-	stream, err := conn.OpenStreamSync(ctx)
+	// Short budget for the stream open (see DefaultQUICStreamOpenTimeout):
+	// an exhausted stream quota must not block the query for the full
+	// timeout — the pool removes the connection and dials a fresh one.
+	streamCtx, streamCancel := context.WithTimeout(ctx, config.DefaultQUICStreamOpenTimeout)
+	defer streamCancel()
+	stream, err := conn.OpenStreamSync(streamCtx)
 	if err != nil {
 		return nil, fmt.Errorf("open stream: %w", err)
 	}
