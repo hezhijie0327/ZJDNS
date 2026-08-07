@@ -4,7 +4,6 @@ package tlcp
 
 import (
 	"net/http"
-	"sync"
 	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
@@ -33,13 +32,6 @@ type Client struct {
 	// dtlcpPool multiplexes pipelined DTLCP connections per upstream, same
 	// shape as tlcpPool (DTLCP is the datagram variant of TLCP).
 	dtlcpPool *zpool.ConnPool
-
-	// dtlcpMu serialises DTLCP queries.  gotlcp servers multiplex all
-	// connections over one UDP socket (see server/protocol/tlcp/dtlcp.go's
-	// synchronous accept loop): concurrent client connections steal each
-	// other's handshake packets and fail.  A single serialised connection
-	// is stable and still pipelines ~9k QPS.
-	dtlcpMu sync.Mutex
 }
 
 // New creates a Client for TLCP and DTLCP DNS queries.
@@ -51,12 +43,7 @@ func New(getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Dura
 		dtlcpSession: dtlcp.NewLRUSessionCache(config.DefaultDTLCPSessionCacheSize),
 		httpClient:   lrumap.New[string, *http.Client](config.DefaultHTTPTLCPClientMax * 2),
 		tlcpPool:     zpool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe),
-		// DTLCP servers share one UDP socket across all connections (gotlcp
-		// limitation — see server/protocol/tlcp/dtlcp.go's synchronous
-		// accept loop).  Concurrent client connections steal each other's
-		// handshake packets from the shared socket; a single connection
-		// multiplexes cleanly (RFC 7766 pipelining).
-		dtlcpPool: zpool.NewConnPool(1, config.DefaultMaxPipe),
+		dtlcpPool:    zpool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 	}
 	c.httpClient.SetOnEvict(func(_ string, client *http.Client) {
 		client.CloseIdleConnections()

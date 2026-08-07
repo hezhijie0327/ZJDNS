@@ -1,10 +1,11 @@
 package tlcp
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,200 +18,117 @@ import (
 	"gitee.com/Trisia/gotlcp/dtlcp"
 )
 
-// dtlcpListener implements net.Listener over UDP.  It reads the first
-// datagram from each new client, creates a dtlcp.Server Conn, and feeds the
-// buffered first datagram into the handshake via a wrapper PacketConn.
+// demuxPacket is one datagram routed to a per-client queue.
+type demuxPacket struct {
+	data []byte
+	addr net.Addr
+}
+
+// demuxPacketConn routes one client's datagrams from the shared listener
+// socket.  ReadFrom drains the per-client queue (filled by the accept
+// loop's dispatch); WriteTo sends back through the shared socket so the
+// client always sees the listener's source port — gotlcp's readDatagram
+// drops datagrams from any other source address, so a per-connection
+// socket with a fresh port would never deliver responses.
+type demuxPacketConn struct {
+	shared  *net.UDPConn
+	remote  net.Addr
+	ch      chan demuxPacket
+	closed  atomic.Bool
+	dlMu    sync.Mutex
+	dlCh    chan struct{}
+	dlTimer *time.Timer
+}
+
+// dtlcpListener implements net.Listener over UDP.  The accept loop reads
+// every datagram from the shared socket and dispatches it to the owning
+// client's queue — one demuxPacketConn per remote address.  This isolates
+// each connection's reads (gotlcp connections would otherwise steal each
+// other's datagrams from the shared socket), so multiple clients can
+// handshake and query concurrently.
 type dtlcpListener struct {
 	udpConn *net.UDPConn
 	cfg     *dtlcp.Config
 	mu      sync.Mutex
-	buf     []byte
+	conns   map[string]*demuxPacketConn
 	closed  atomic.Bool
-	active  map[string]*dtlcp.Conn
-}
-
-// bufferedPacketConn wraps *net.UDPConn and returns a pre-buffered datagram
-// on the first ReadFrom call, then falls through to the underlying UDPConn.
-// This allows the dtlcp handshake to see the ClientHello that was already
-// consumed by the listener's Accept path.
-type bufferedPacketConn struct {
-	*net.UDPConn
-	buf        []byte
-	remoteAddr *net.UDPAddr
-	drained    bool
-}
-
-// dtlcpConnWrapper removes the connection from the listener's active map on close.
-type dtlcpConnWrapper struct {
-	*dtlcp.Conn
-	parent *dtlcpListener
-	key    string
 }
 
 func newDTLCPListener(udpConn *net.UDPConn, cfg *dtlcp.Config) *dtlcpListener {
 	return &dtlcpListener{
 		udpConn: udpConn,
 		cfg:     cfg,
-		buf:     make([]byte, pool.UDPBufferSize),
-		active:  make(map[string]*dtlcp.Conn),
+		conns:   make(map[string]*demuxPacketConn),
 	}
 }
 
-func (l *dtlcpListener) Accept() (net.Conn, error) {
-	packet, remoteAddr, err := l.readFirstDatagram()
-	if err != nil {
-		return nil, err
-	}
-
-	key := remoteAddr.String()
-
-	dtlcpConn, err := acceptDTLCP(l.udpConn, packet, remoteAddr, l.cfg)
-	if err != nil {
-		log.Debugf("TLCP: DTLCP handshake error from %s: %v", key, err)
-		return nil, err
-	}
-
-	l.mu.Lock()
-	l.active[key] = dtlcpConn
-	l.mu.Unlock()
-
-	return &dtlcpConnWrapper{Conn: dtlcpConn, parent: l, key: key}, nil
-}
-
-func (l *dtlcpListener) Close() error {
-	l.mu.Lock()
-	if l.closed.Load() {
-		l.mu.Unlock()
-		return nil
-	}
-	l.closed.Store(true)
-	// Collect active connections under the lock, then unlock before closing.
-	// dtlcpConnWrapper.Close() acquires parent.mu — holding it here would
-	// cause a self-deadlock. Do not nil l.active — connection handlers'
-	// deferred Close() calls delete from the map, and a nil-map delete panics.
-	active := make([]*dtlcp.Conn, 0, len(l.active))
-	for _, conn := range l.active {
-		active = append(active, conn)
-	}
-	l.mu.Unlock()
-
-	for _, conn := range active {
-		_ = conn.Close()
-	}
-	err := l.udpConn.Close()
-
-	// Connections accepted between the snapshot above and udpConn.Close()
-	// were never closed. Re-acquire the lock and close any stragglers.
-	l.mu.Lock()
-	stragglers := make([]*dtlcp.Conn, 0, len(l.active))
-	for _, conn := range l.active {
-		stragglers = append(stragglers, conn)
-	}
-	l.mu.Unlock()
-
-	for _, conn := range stragglers {
-		_ = conn.Close()
-	}
-
-	return err
-}
-
-func (l *dtlcpListener) Addr() net.Addr {
-	return l.udpConn.LocalAddr()
-}
-
-// readFirstDatagram blocks until a datagram arrives from a client that is not
-// already tracked in the active set.
-func (l *dtlcpListener) readFirstDatagram() ([]byte, *net.UDPAddr, error) {
+func (d *demuxPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	for {
-		if l.closed.Load() {
-			return nil, nil, net.ErrClosed
+		d.dlMu.Lock()
+		dl := d.dlCh
+		d.dlMu.Unlock()
+		if dl == nil {
+			pkt, ok := <-d.ch
+			if !ok {
+				return 0, nil, net.ErrClosed
+			}
+			return copy(p, pkt.data), pkt.addr, nil
 		}
-
-		// Clear any read deadline a previous DTLCP connection left on the
-		// shared socket (dtlcp.Conn.SetDeadline delegates to its pconn,
-		// which is this socket).  A lingering deadline makes every new
-		// client's first datagram time out — handshake failures that come
-		// and go with connection churn.
-		_ = l.udpConn.SetReadDeadline(time.Time{})
-
-		n, remoteAddr, err := l.udpConn.ReadFromUDP(l.buf)
-		if err != nil {
-			return nil, nil, err
+		select {
+		case pkt, ok := <-d.ch:
+			if !ok {
+				return 0, nil, net.ErrClosed
+			}
+			return copy(p, pkt.data), pkt.addr, nil
+		case <-dl:
+			// Deadline fired; a stale timer from a previous deadline may
+			// have raced a fresh packet — loop once to re-check the queue
+			// before surfacing the timeout.
+			d.dlMu.Lock()
+			still := d.dlCh == dl
+			d.dlMu.Unlock()
+			if still {
+				return 0, nil, os.ErrDeadlineExceeded
+			}
 		}
-
-		l.mu.Lock()
-		_, exists := l.active[remoteAddr.String()]
-		l.mu.Unlock()
-
-		if exists {
-			// Packet belongs to an existing connection.  The dtlcp.Conn
-			// reads directly from the shared UDP socket; discard
-			// duplicates that arrive before the Conn's first read.
-			continue
-		}
-
-		// First packet from a new client.
-		packet := make([]byte, n)
-		copy(packet, l.buf[:n])
-		return packet, remoteAddr, nil
 	}
 }
 
-func (b *bufferedPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
-	if !b.drained {
-		b.drained = true
-		n := copy(p, b.buf)
-		return n, b.remoteAddr, nil
-	}
-	return b.UDPConn.ReadFrom(p)
+func (d *demuxPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+	return d.shared.WriteTo(p, addr)
 }
 
-// Close is a no-op to prevent dtlcp.Conn.Close() from closing the shared
-// underlying UDP socket.  The socket is owned by the dtlcpListener.
-func (b *bufferedPacketConn) Close() error {
+func (d *demuxPacketConn) Close() error {
+	if d.closed.CompareAndSwap(false, true) {
+		close(d.ch)
+	}
 	return nil
 }
 
-// acceptDTLCP feeds a pre-read first datagram through dtlcp.Server and
-// completes the DTLCP handshake.  The returned Conn wraps the shared UDP
-// socket via a bufferedPacketConn that returns the first datagram on the
-// first ReadFrom, then falls through to the real socket.
-//
-// NOTE: dtlcp.Listen does not support "udp" in Go. This custom listener is
-// the workaround. Track gotlcp upstream for a fix. net.Listen("udp").
-func acceptDTLCP(udpConn *net.UDPConn, firstPacket []byte, remoteAddr *net.UDPAddr, cfg *dtlcp.Config) (*dtlcp.Conn, error) {
-	bpc := &bufferedPacketConn{
-		UDPConn:    udpConn,
-		buf:        firstPacket,
-		remoteAddr: remoteAddr,
-	}
+func (d *demuxPacketConn) LocalAddr() net.Addr  { return d.shared.LocalAddr() }
+func (d *demuxPacketConn) RemoteAddr() net.Addr { return d.remote }
 
-	// Bound the handshake: a client that sends one datagram then goes silent
-	// would otherwise block Handshake forever. The accept loop serves
-	// connections synchronously, so one stalled handshake would take down the
-	// entire DTLCP server. The deadline must be cleared on every exit path
-	// because bpc shares the listener's UDP socket.
-	if err := bpc.SetDeadline(time.Now().Add(config.DefaultDTLSIdleTimeout)); err != nil {
-		_ = bpc.Close()
-		return nil, fmt.Errorf("setting DTLCP handshake deadline: %w", err)
+func (d *demuxPacketConn) SetDeadline(t time.Time) error    { return d.SetReadDeadline(t) }
+func (d *demuxPacketConn) SetWriteDeadline(time.Time) error { return nil } // UDP writes never block
+func (d *demuxPacketConn) setReadDeadlineLocked(t time.Time) {
+	if d.dlTimer != nil {
+		d.dlTimer.Stop()
+		d.dlTimer = nil
 	}
-	defer bpc.SetDeadline(time.Time{}) //nolint:errcheck // best-effort cleanup of the shared socket
-
-	conn := dtlcp.Server(bpc, remoteAddr, cfg)
-	if err := conn.Handshake(); err != nil {
-		_ = conn.Close()
-		return nil, err
+	d.dlCh = nil
+	if t.IsZero() {
+		return
 	}
-	return conn, nil
+	ch := make(chan struct{})
+	d.dlCh = ch
+	d.dlTimer = time.AfterFunc(time.Until(t), func() { close(ch) })
 }
 
-func (w *dtlcpConnWrapper) Close() error {
-	w.parent.mu.Lock()
-	delete(w.parent.active, w.key)
-	w.parent.mu.Unlock()
-	err := w.Conn.Close()
-	return err
+func (d *demuxPacketConn) SetReadDeadline(t time.Time) error {
+	d.dlMu.Lock()
+	defer d.dlMu.Unlock()
+	d.setReadDeadlineLocked(t)
+	return nil
 }
 
 // startDTLCPServer binds UDP sockets and starts DTLCP listeners for
@@ -219,8 +137,7 @@ func (w *dtlcpConnWrapper) Close() error {
 //
 // dtlcp.Listen is not used because it calls net.Listen which does not support
 // "udp" in Go.  Instead we create a UDP socket directly and implement a
-// custom net.Listener that buffers the first datagram per client so the DTLCP
-// handshake can consume it.
+// custom listener that demultiplexes datagrams per client (see dtlcpListener).
 func (s *Server) startDTLCPServer() error {
 	addrs, err := zdnsutil.ResolveBindAddrs("udp", s.dtlcpPort)
 	if err != nil {
@@ -252,10 +169,13 @@ func (s *Server) startDTLCPServer() error {
 	return nil
 }
 
-// handleDTLCPConnections accepts DTLCP connections and dispatches them to
-// per-connection handlers.
-func (s *Server) handleDTLCPConnections(listener net.Listener) {
+// handleDTLCPConnections is the accept loop: read datagrams from the shared
+// socket, hand each to its client's queue, and start a goroutine for new
+// clients (handshake + query serving).  Never blocks on a connection.
+func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 	defer zdnsutil.HandlePanic("TLCP DTLCP accept loop")
+
+	buf := make([]byte, pool.UDPBufferSize)
 
 	for {
 		select {
@@ -264,44 +184,85 @@ func (s *Server) handleDTLCPConnections(listener net.Listener) {
 		default:
 		}
 
-		conn, err := listener.Accept()
+		n, src, err := l.udpConn.ReadFromUDP(buf)
 		if err != nil {
 			select {
 			case <-s.ctx.Done():
 				return
 			default:
-				// Back off on temporary errors: an immediately-repeating
-				// temporary failure (e.g. EMFILE) would otherwise spin the
-				// accept loop at 100% CPU. The shared retry delay also gives
-				// the condition time to clear.
-				backoff := config.DefaultAcceptRetryDelay
-				if zdnsutil.IsTemporaryError(err) {
-					log.Debugf("TLCP: DTLCP accept temporary error: %v", err)
-				} else {
-					log.Warnf("TLCP: DTLCP accept error: %v", err)
-				}
-				timer := time.NewTimer(backoff)
-				select {
-				case <-timer.C:
-				case <-s.ctx.Done():
-					timer.Stop()
-					return
-				}
-				continue
 			}
+			backoff := config.DefaultAcceptRetryDelay
+			if zdnsutil.IsTemporaryError(err) {
+				log.Debugf("TLCP: DTLCP accept temporary error: %v", err)
+			} else {
+				log.Warnf("TLCP: DTLCP accept error: %v", err)
+			}
+			timer := time.NewTimer(backoff)
+			select {
+			case <-timer.C:
+			case <-s.ctx.Done():
+				timer.Stop()
+				return
+			}
+			continue
 		}
 
-		// Set initial deadline so a slow client cannot block the accept loop
-		// indefinitely. The per-connection read loop extends this on each read.
-		_ = conn.SetDeadline(time.Now().Add(config.DefaultDTLSIdleTimeout))
+		key := src.String()
+		l.mu.Lock()
+		dc, ok := l.conns[key]
+		if !ok {
+			dc = &demuxPacketConn{
+				shared: l.udpConn,
+				remote: src,
+				ch:     make(chan demuxPacket, 32),
+			}
+			l.conns[key] = dc
+			// The connection goroutine runs under the server group so
+			// Shutdown waits for it; listener Close closes the demux
+			// queue, which unblocks its reads.
+			s.serverGroup.Go(func() error {
+				defer zdnsutil.HandlePanic("DTLCP client connection")
+				s.serveDTLCPClient(l, dc, src)
+				return nil
+			})
+		}
+		l.mu.Unlock()
 
-		// Handle synchronously — gotlcp shares the underlying UDP socket across
-		// all connections. Concurrent reads cause packet stealing between Conn
-		// instances and SetReadDeadline on one Conn affects the shared socket's
-		// Accept loop. Until gotlcp provides per-connection socket isolation,
-		// only one connection is served at a time.
-		s.handleDTLCPConnection(conn)
+		// Queue the datagram.  A full queue means the client is flooding —
+		// drop it (UDP semantics; DTLCP retransmits handshake flights).
+		cp := make([]byte, n)
+		copy(cp, buf[:n])
+		select {
+		case dc.ch <- demuxPacket{data: cp, addr: src}:
+		default:
+		}
 	}
+}
+
+// serveDTLCPClient completes the DTLCP handshake and serves queries on one
+// client connection.
+func (s *Server) serveDTLCPClient(l *dtlcpListener, dc *demuxPacketConn, src *net.UDPAddr) {
+	defer func() {
+		_ = dc.Close()
+		l.mu.Lock()
+		delete(l.conns, src.String())
+		l.mu.Unlock()
+	}()
+
+	// Bound the handshake: a client that sends one datagram then goes
+	// silent must not pin a goroutine (or its queue) forever.
+	handshakeCtx, cancel := context.WithTimeout(s.ctx, config.DefaultDTLSIdleTimeout)
+	defer cancel()
+
+	conn := dtlcp.Server(dc, src, l.cfg)
+	if err := conn.HandshakeContext(handshakeCtx); err != nil {
+		log.Debugf("TLCP: DTLCP handshake error from %s: %v", src, err)
+		return
+	}
+	log.Debugf("TLS: TLCP: DTLCP handshake from client — version=0x%x cipher=%s",
+		conn.ConnectionState().Version, dtlcp.CipherSuiteName(conn.ConnectionState().CipherSuite))
+
+	s.handleDTLCPConnection(conn)
 }
 
 // handleDTLCPConnection reads DNS-over-DTLCP queries.  Each DTLCP record
@@ -417,4 +378,29 @@ func (s *Server) sendDTLCPResponse(conn net.Conn, response *dns.Msg) bool {
 		return false
 	}
 	return true
+}
+
+// Close shuts down the listener: close every client queue (unblocking
+// connection goroutines) and the shared socket.
+func (l *dtlcpListener) Close() error {
+	l.mu.Lock()
+	if l.closed.Load() {
+		l.mu.Unlock()
+		return nil
+	}
+	l.closed.Store(true)
+	conns := make([]*demuxPacketConn, 0, len(l.conns))
+	for _, dc := range l.conns {
+		conns = append(conns, dc)
+	}
+	l.mu.Unlock()
+
+	for _, dc := range conns {
+		_ = dc.Close()
+	}
+	return l.udpConn.Close()
+}
+
+func (l *dtlcpListener) Addr() net.Addr {
+	return l.udpConn.LocalAddr()
 }

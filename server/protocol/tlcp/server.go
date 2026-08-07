@@ -40,7 +40,7 @@ type Server struct {
 	dotListeners   []net.Listener
 	dohListeners   []net.Listener
 	dohServers     []*http.Server
-	dtlcpListeners []net.Listener
+	dtlcpListeners []*dtlcpListener
 	serverGroup    *errgroup.Group
 	serverCtx      context.Context
 }
@@ -211,7 +211,7 @@ func (s *Server) Shutdown() error {
 	dotListeners := append([]net.Listener(nil), s.dotListeners...)
 	dohServers := append([]*http.Server(nil), s.dohServers...)
 	dohListeners := append([]net.Listener(nil), s.dohListeners...)
-	dtlcpListeners := append([]net.Listener(nil), s.dtlcpListeners...)
+	dtlcpListeners := append([]*dtlcpListener(nil), s.dtlcpListeners...)
 	s.listenerMu.Unlock()
 
 	for _, l := range dotListeners {
