@@ -1,18 +1,21 @@
 package cache
 
 import (
+	"database/sql"
 	"testing"
+	"time"
+	"zjdns/config"
 	"zjdns/database"
 )
 
-// testWriter creates an AsyncStatsWriter backed by an in-memory DB for testing.
-func testWriter(t *testing.T, bufSize int) (*AsyncStatsWriter, *database.DB) {
+// testWriter creates a stats BatchWriter backed by an in-memory DB for testing.
+func testWriter(t *testing.T, bufSize int) (*BatchWriter[RequestRecord], *database.DB) {
 	t.Helper()
 	db, err := database.Open("", 0, database.Options{})
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
 	}
-	w := NewAsyncStatsWriter(db, bufSize)
+	w := newStatsBatchWriter(db, bufSize)
 	t.Cleanup(func() {
 		w.Close()
 		_ = db.Close()
@@ -23,11 +26,11 @@ func testWriter(t *testing.T, bufSize int) (*AsyncStatsWriter, *database.DB) {
 func TestAsyncStatsWriter_RecordAndFlush(t *testing.T) {
 	w, db := testWriter(t, 8)
 
-	w.Record(&RequestRecord{
+	w.Enqueue(RequestRecord{
 		Qname: "example.com.", Qtype: 1, Qclass: 1,
 		Protocol: "udp", Result: "hit", Rcode: 0,
 	})
-	w.Record(&RequestRecord{
+	w.Enqueue(RequestRecord{
 		Qname: "stale.example.com.", Qtype: 1, Qclass: 1,
 		Protocol: "tcp", Result: "stale", Rcode: 0,
 	})
@@ -78,7 +81,7 @@ func TestAsyncStatsWriter_RecordAndFlush(t *testing.T) {
 func TestAsyncStatsWriter_CloseDrains(t *testing.T) {
 	w, db := testWriter(t, 8)
 
-	w.Record(&RequestRecord{
+	w.Enqueue(RequestRecord{
 		Qname: "close-test.example.com.", Qtype: 1, Qclass: 1,
 		Protocol: "udp", Result: "error", Rcode: 2,
 	})
@@ -111,10 +114,10 @@ func TestAsyncStatsWriter_CloseIdempotent(t *testing.T) {
 }
 
 func TestAsyncStatsWriter_NilSafety(t *testing.T) {
-	var w *AsyncStatsWriter
+	var w *BatchWriter[RequestRecord]
 
 	// None of these should panic.
-	w.Record(&RequestRecord{Qname: "test.", Qtype: 1, Qclass: 1, Protocol: "udp", Result: "hit", Rcode: 0})
+	w.Enqueue(RequestRecord{Qname: "test.", Qtype: 1, Qclass: 1, Protocol: "udp", Result: "hit", Rcode: 0})
 	w.Flush()
 	w.Close()
 }
@@ -124,36 +127,42 @@ func TestAsyncStatsWriter_ChannelFullDrops(t *testing.T) {
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
 	}
+	t.Cleanup(func() { _ = db.Close() })
 
-	// Create writer without starting the background goroutine so we can
-	// pre-fill the buffer and verify drop behavior deterministically.
-	w := &AsyncStatsWriter{
-		ch:       make(chan RequestRecord, 1),
-		flushSig: make(chan chan struct{}),
-		db:       db,
-		done:     make(chan struct{}),
+	// Construct a BatchWriter WITHOUT starting its goroutine so the buffer
+	// stays full deterministically: the channel is pre-filled, so the next
+	// Enqueue must drop.
+	w := &BatchWriter[RequestRecord]{
+		ch:        make(chan RequestRecord, 1),
+		flushFn:   func(tx *sql.Tx, batch []RequestRecord) error { return flushStatsRecords(tx, batch, db) },
+		db:        db.SQ,
+		flushSig:  make(chan chan struct{}),
+		done:      make(chan struct{}),
+		batchSize: 64,
+		interval:  time.Hour,
+		timeout:   config.DefaultCacheWriteTimeout,
 	}
 
-	// Pre-fill the buffer before the goroutine can consume.
+	// Pre-fill the buffer.
 	w.ch <- RequestRecord{
 		Qname: "first.example.com.", Qtype: 1, Qclass: 1,
 		Protocol: "udp", Result: "hit", Rcode: 0,
 	}
 
-	// Start the background goroutine now. The buffer is full, so the
-	// next Record call should drop.
-	go w.run()
-	t.Cleanup(func() { w.Close(); _ = db.Close() })
-
 	// Buffer is full — this record must be dropped.
-	w.Record(&RequestRecord{
+	w.Enqueue(RequestRecord{
 		Qname: "dropped.example.com.", Qtype: 1, Qclass: 1,
 		Protocol: "udp", Result: "error", Rcode: 2,
 	})
 
-	w.Flush()
+	// Only the first record is in the buffer.
+	if got := len(w.ch); got != 1 {
+		t.Fatalf("channel length = %d, want 1 (second record should have dropped)", got)
+	}
 
-	// Only the first (pre-filled) record should be present.
+	// Flush the pre-filled record and verify it landed.
+	w.flush([]RequestRecord{<-w.ch})
+
 	var hitCount int64
 	err = db.SQ.QueryRow(
 		`SELECT COALESCE(SUM(query_count), 0) FROM query_stats WHERE result='hit'`,
@@ -183,7 +192,7 @@ func TestAsyncStatsWriter_FlushGoroutineBatch(t *testing.T) {
 
 	// Send a single record — the goroutine will pick it up into its internal batch
 	// before we call Flush.  Flush Phase 2 signals the goroutine to flush its batch.
-	w.Record(&RequestRecord{
+	w.Enqueue(RequestRecord{
 		Qname: "batch.example.com.", Qtype: 1, Qclass: 1,
 		Protocol: "quic", Result: "stale", Rcode: 0,
 	})
@@ -216,7 +225,7 @@ func TestAsyncStatsWriter_EmptyRecord(t *testing.T) {
 	w, db := testWriter(t, 8)
 
 	// Record with minimal fields (like the error path in handler.go).
-	w.Record(&RequestRecord{
+	w.Enqueue(RequestRecord{
 		Result: "error", Protocol: "udp", Rcode: 2,
 	})
 

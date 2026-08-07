@@ -178,6 +178,17 @@ const (
 	DefaultMinConcurrencyLimit  = 8
 
 	DefaultAsyncStatsBufferSize = 64 // async stats writer channel capacity
+	DefaultAsyncStatsBatchSize  = 64 // stats records per flush transaction
+
+	// DefaultAsyncCacheBatchSize is the cache-entry flush threshold: entries
+	// are written to SQLite in transactions of this many rows, amortising
+	// BEGIN/COMMIT + index-seek overhead across the batch.
+	DefaultAsyncCacheBatchSize = 128
+	// DefaultAsyncCacheBufferSize caps the cache-entry write queue (full → drop).
+	DefaultAsyncCacheBufferSize = 4096
+	// DefaultCachePendingCapacity bounds the in-memory read-through layer
+	// (entries awaiting their batch commit).
+	DefaultCachePendingCapacity = 4096
 
 	DefaultTransportMax          = 64
 	DefaultQUICConfigCacheSize   = 128 // max cached QUIC configs (LRU)

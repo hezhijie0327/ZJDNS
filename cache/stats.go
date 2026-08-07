@@ -40,8 +40,8 @@ func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 	if r == nil {
 		return
 	}
-	if s.asyncWriter != nil {
-		s.asyncWriter.Record(r)
+	if s.statsWriter != nil {
+		s.statsWriter.Enqueue(*r)
 		return
 	}
 

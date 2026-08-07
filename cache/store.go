@@ -14,6 +14,7 @@ import (
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 	"zjdns/internal/pool"
 	"zjdns/internal/ttl"
 
@@ -28,7 +29,14 @@ import (
 type SQLiteCache struct {
 	db          *database.DB
 	evictCount  atomic.Int64
-	asyncWriter *AsyncStatsWriter
+	statsWriter *BatchWriter[RequestRecord]
+	cacheWriter *BatchWriter[cacheWriteItem]
+
+	// pending is the read-through layer for entries awaiting their batch
+	// commit: Set() makes an entry visible here immediately; Get() checks it
+	// before SQLite; flushCacheEntries removes it once the row lands.
+	// nil in tests that hand-construct SQLiteCache.
+	pending *lrumap.Map[string, *pendingEntry]
 
 	// optimizeDone stops the background PRAGMA optimize loop (see New).
 	optimizeDone chan struct{}
@@ -186,21 +194,30 @@ func New(db *database.DB) *SQLiteCache {
 	}
 	s := &SQLiteCache{
 		db:           db,
-		asyncWriter:  NewAsyncStatsWriter(db, config.DefaultAsyncStatsBufferSize),
 		optimizeDone: make(chan struct{}),
+		pending:      lrumap.New[string, *pendingEntry](config.DefaultCachePendingCapacity),
 	}
+	// The cache writer's closures capture s, so it is constructed after s.
+	s.statsWriter = newStatsBatchWriter(db, config.DefaultAsyncStatsBufferSize)
+	s.cacheWriter = s.newCacheBatchWriter()
 	go s.optimizeLoop()
 	return s
 }
 
-// Close shuts down the async stats writer and then closes the database.
+// Close flushes and shuts down both async writers, then closes the database.
 func (s *SQLiteCache) Close() error {
 	// optimizeDone is nil for hand-constructed caches (tests) that never
-	// started the optimize loop.
+	// started the optimize loop; the writers are nil there too.
 	if s.optimizeDone != nil {
 		close(s.optimizeDone)
 	}
-	s.asyncWriter.Close()
+	if s.cacheWriter != nil {
+		s.cacheWriter.Flush()
+		s.cacheWriter.Close()
+	}
+	if s.statsWriter != nil {
+		s.statsWriter.Close()
+	}
 	return s.db.Close()
 }
 
@@ -226,10 +243,16 @@ func (s *SQLiteCache) optimizeLoop() {
 	}
 }
 
-// Flush forces the async stats writer to write any buffered records immediately.
-// Primarily for tests that need to observe RecordRequest results synchronously.
+// Flush forces both async writers (stats records and cache entries) to write
+// buffered items immediately.  Primarily for tests that need to observe
+// RecordRequest / SQLite results synchronously.
 func (s *SQLiteCache) Flush() {
-	s.asyncWriter.Flush()
+	if s.cacheWriter != nil {
+		s.cacheWriter.Flush()
+	}
+	if s.statsWriter != nil {
+		s.statsWriter.Flush()
+	}
 }
 
 // ── Store interface ──────────────────────────────────────────────────────────
@@ -243,6 +266,17 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	}
 
 	dnssecInt := database.BoolToInt(dnssecOK)
+
+	// Pending read-through: entries awaiting their batch commit are served
+	// from memory first (exact key only — ECS fallback candidates are served
+	// from SQLite once the exact row commits).
+	if s.pending != nil {
+		ecsAddr, ecsPrefix := ecsParams(ecs)
+		if pe, ok := s.pending.Get(buildCacheKey(qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecInt)); ok {
+			return s.buildEntry(0, pe.ts, pe.ttl, database.BoolToInt(pe.validated), pe.msgWire, qname, qtype)
+		}
+	}
+
 	var id int64
 	var ts int64
 	var entryTTL int
@@ -275,6 +309,13 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		return nil, false, false
 	}
 
+	return s.buildEntry(id, ts, entryTTL, validated, msgWire, qname, qtype)
+}
+
+// buildEntry parses a stored BLOB (pre-packed or legacy) into an Entry,
+// applying latency sorting.  Shared by the SQLite and pending read-through
+// paths.  Returns (entry, found, expired); found=false on corrupt data.
+func (s *SQLiteCache) buildEntry(id, ts int64, entryTTL, validated int, msgWire []byte, qname string, qtype uint16) (*Entry, bool, bool) {
 	if len(msgWire) < 3 {
 		return nil, false, false
 	}
@@ -341,6 +382,9 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	} else {
 		// Uncompressed: wire is a slice of the fresh per-row msgWire buffer
 		// allocated by the SQLite driver — safe to keep by reference, no copy.
+		// For the pending read-through path the buffer is shared with the
+		// queued write item — callers only read ResponseWire (rebuilds
+		// allocate fresh), so aliasing is safe.
 		owned = wire
 	}
 	entry := &Entry{
@@ -586,11 +630,54 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	msgWire = append(msgWire, wire...)
 	ReleaseTTLOffsets(ttlOffsets)
 
-	// ── Transaction ──────────────────────────────────────────────────────
-	// SQLite WAL mode serializes writers, so no application-level mutex is
-	// needed for concurrent Set() calls.  The context bounds the write-lock
-	// wait: under a saturated convoy the cache write is dropped instead of
-	// hanging the query handler.
+	// ── Async write-back ─────────────────────────────────────────────────
+	// The entry is committed to SQLite in a background batched transaction
+	// (amortising BEGIN/COMMIT + index seeks across rows — one transaction
+	// per DefaultAsyncCacheBatchSize entries instead of one per entry).  It
+	// is made visible to Get() immediately through the pending read-through
+	// layer, so a re-query within the flush window still hits.  A saturated
+	// write queue drops the entry (best-effort); the query path never blocks.
+	allRRs := make([]dns.RR, 0, len(answer)+len(authority)+len(additional))
+	allRRs = append(allRRs, answer...)
+	allRRs = append(allRRs, authority...)
+	allRRs = append(allRRs, additional...)
+	recs := extractPtrRecs(allRRs)
+
+	key := buildCacheKey(qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecInt)
+	pe := &pendingEntry{msgWire: msgWire, ts: now, ttl: entryTTL, validated: validated}
+	if s.cacheWriter != nil {
+		if s.pending != nil {
+			s.pending.Set(key, pe)
+		}
+		s.cacheWriter.Enqueue(cacheWriteItem{
+			key:        key,
+			pendingPtr: pe,
+			qname:      qname,
+			qtype:      qtype,
+			qclass:     qclass,
+			ecsAddr:    ecsAddr,
+			ecsPrefix:  ecsPrefix,
+			dnssecInt:  dnssecInt,
+			now:        now,
+			ttl:        entryTTL,
+			validated:  validated,
+			msgWire:    msgWire,
+			ptrRecs:    recs,
+		})
+		return 0
+	}
+
+	// Synchronous fallback when no async writer is configured (tests that
+	// hand-construct SQLiteCache) — same semantics as RecordRequest's
+	// fallback: callers observe results immediately.
+	return s.setSync(qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecInt, now, entryTTL, validated, msgWire, recs)
+}
+
+// setSync performs the original synchronous write transaction.  Used only
+// when no async writer is configured (tests); the production path enqueues.
+func (s *SQLiteCache) setSync(qname string, qtype, qclass uint16, ecsAddr string, ecsPrefix, dnssecInt int,
+	now int64, entryTTL int, validated bool, msgWire []byte, recs []ptrRec,
+) int64 {
 	writeCtx, cancel := context.WithTimeout(context.Background(), config.DefaultCacheWriteTimeout)
 	defer cancel()
 	var entryID int64
@@ -600,11 +687,7 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 
 		// Distinguish a fresh insert from a REPLACE of an existing row:
 		// REPLACE deletes and reinserts, leaving the row count unchanged, so
-		// only new rows may increment the entry counter. (Previously the
-		// counter was incremented unconditionally, drifting above the real
-		// row count on every refresh of an expired-but-present key and
-		// evicting valid entries prematurely.) Both statements are prepared
-		// in database/stmts.go — QueryRow on raw SQL would prepare per call.
+		// only new rows may increment the entry counter.
 		var exists bool
 		txErr = tx.Stmt(s.db.StmtEntryExists).QueryRow(
 			qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
@@ -617,15 +700,13 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 				msgWire,
 			).Scan(&entryID); txErr == nil {
 
-				// Populate ptr_map for reverse (PTR) lookups — best-effort:
-				// a failure here must not abort the transaction, because the
-				// cached entry is more valuable than reverse-lookup data.
-				allRRs := make([]dns.RR, 0, len(answer)+len(authority)+len(additional))
-				allRRs = append(allRRs, answer...)
-				allRRs = append(allRRs, authority...)
-				allRRs = append(allRRs, additional...)
-				if err := insertPtrMap(tx, entryID, allRRs); err != nil {
-					log.Warnf("CACHE: insert ptr_map failed (non-fatal): %v", err)
+				if len(recs) > 0 {
+					if err := insertPtrRecs(tx, entryID, recs); err != nil {
+						// Best-effort: a failure here must not abort the
+						// transaction — the cached entry is more valuable
+						// than reverse-lookup data.
+						log.Warnf("CACHE: insert ptr_map failed (non-fatal): %v", err)
+					}
 				}
 
 				if txErr = tx.Commit(); txErr == nil {
@@ -646,9 +727,6 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 		return 0
 	}
 
-	// evictIfNeeded re-syncs the entry count from the DB via SELECT COUNT(*)
-	// before deciding whether to evict, so any TOCTOU drift from concurrent
-	// inserts is corrected.
 	s.evictIfNeeded()
 	return entryID
 }
