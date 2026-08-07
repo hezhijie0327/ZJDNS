@@ -82,8 +82,80 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 		return c.exchangeViaProxyUDP(ctx, msg, server.Address, proxyDialer)
 	}
 
+	// Pooled path: reuse connected UDP sockets (see pool/udp.go).  The
+	// multi-read path above stays per-query — its raw-socket detection loop
+	// is inherently exclusive.
+	if c.udpPool != nil {
+		if resp, err := c.executeUDPPooled(ctx, msg, server); err == nil {
+			return resp, nil
+		}
+	}
+
 	response, _, err := c.udpClient.Exchange(ctx, msg, config.ProtoUDP, server.Address)
 	return response, err
+}
+
+// executeUDPPooled sends a query over a pooled UDP socket.  The query ID is
+// rewritten to a per-socket tracking ID (demultiplexing key); the response is
+// verified against the original question before being returned — a misrouted
+// datagram (ID collision after wrap-around, or a buggy server echoing a stale
+// reply) can never be served as this query's response.
+func (c *Client) executeUDPPooled(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+	uc, err := c.udpPool.Acquire(ctx, server.Address, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(dialCtx, "udp", addr)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	originalID := msg.ID
+	trackingID := uc.NextID()
+	msg.ID = trackingID
+	packErr := msg.Pack()
+	msgData := msg.Data
+	msg.ID = originalID
+	if packErr != nil {
+		return nil, packErr
+	}
+
+	payload, err := uc.Exchange(ctx, msgData, string([]byte{byte(trackingID >> 8), byte(trackingID)})) //nolint:gosec // G115: DNS ID fits uint16
+	if err != nil {
+		if uc.IsDead() {
+			c.udpPool.Remove(uc)
+		}
+		return nil, err
+	}
+
+	response := pool.DefaultMessage.Get()
+	response.Data = payload
+	if err := response.Unpack(); err != nil {
+		pool.DefaultMessage.Put(response)
+		return nil, err
+	}
+	response.Data = nil
+	response.ID = originalID
+
+	// Question verification (RFC 7766 §7 discipline): the routing key was the
+	// ID, but a stale/duplicated datagram could carry a matching ID for a
+	// different question.
+	if !matchQuestion(response, msg) {
+		pool.DefaultMessage.Put(response)
+		return nil, errors.New("plain: pooled UDP response question mismatch")
+	}
+	return response, nil
+}
+
+// matchQuestion reports whether the response echoes the query's question.
+func matchQuestion(response, query *dns.Msg) bool {
+	if len(response.Question) != 1 || len(query.Question) != 1 {
+		return false
+	}
+	rq := response.Question[0]
+	qq := query.Question[0]
+	return dns.EqualName(rq.Header().Name, qq.Header().Name) &&
+		dns.RRToType(rq) == dns.RRToType(qq) &&
+		rq.Header().Class == qq.Header().Class
 }
 
 // executeUDPMultiRead performs the spoofguard multi-read detection loop.

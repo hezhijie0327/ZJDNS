@@ -15,6 +15,7 @@ import (
 	"zjdns/internal/lrumap"
 	"zjdns/internal/pending"
 	"zjdns/internal/pool"
+	zpool "zjdns/server/upstream/pool"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -29,6 +30,12 @@ type Client struct {
 	// stateGroup deduplicates concurrent certificate fetches per upstream —
 	// a burst of cache-miss queries must not each re-fetch (see state()).
 	stateGroup *pending.ResultGroup[string, *State]
+
+	// udpPool reuses connected UDP sockets per upstream (see pool/udp.go).
+	// Responses are routed by the client-nonce prefix echoed in the response
+	// header; decryption (nonce half check) + message-ID checks in executeOnce
+	// are the second line of defense against misrouted datagrams.
+	udpPool *zpool.UDPPool
 }
 
 // maxTCRetries bounds the DNSCrypt TC escalation loop. Each escalation
@@ -51,6 +58,14 @@ func New(getProxy func(*config.UpstreamServer) *socks5.Dialer) *Client {
 		cache:      lrumap.New[string, *State](config.DefaultTransportMax * 2),
 		getProxy:   getProxy,
 		stateGroup: pending.NewResultGroup[string, *State](),
+		udpPool: zpool.NewUDPPool(config.DefaultMaxConns, config.DefaultMaxPipe, func(payload []byte) (string, bool) {
+			// DNSCrypt response header: [resolver_magic(8)][client_nonce(24)]...
+			// The first nonce half is the client's query nonce prefix.
+			if len(payload) < dnscryptcrypto.ResolverMagicSize+dnscryptcrypto.NonceSize/2 {
+				return "", false
+			}
+			return string(payload[dnscryptcrypto.ResolverMagicSize : dnscryptcrypto.ResolverMagicSize+dnscryptcrypto.NonceSize/2]), true
+		}),
 	}
 }
 
@@ -124,29 +139,48 @@ func (c *Client) executeOnce(
 	if useTCP {
 		network = "tcp"
 	}
+	// UDP without proxy: reuse a pooled connected socket — the per-query
+	// socket()/connect()/close() syscall churn was the outbound hot path's
+	// dominant cost.  The proxy and TCP paths keep their per-query dial.
+	var pooled *zpool.UDPConn
 	var conn net.Conn
-	if proxyDialer != nil {
-		if useTCP {
-			conn, err = proxyDialer.DialContext(ctx, "tcp", state.serverAddress)
-		} else {
-			conn, err = proxyDialer.DialUDP(ctx, state.serverAddress)
+	if !useTCP && proxyDialer == nil && c.udpPool != nil {
+		pooled, err = c.udpPool.Acquire(ctx, state.serverAddress, state.serverAddress, func(dialCtx context.Context, addr string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(dialCtx, "udp", addr)
+		})
+		if err != nil {
+			return nil, false, fmt.Errorf("acquiring dnscrypt udp socket %s: %w", state.serverAddress, err)
 		}
 	} else {
-		dialer := &net.Dialer{}
-		conn, err = dialer.DialContext(ctx, network, state.serverAddress)
+		if proxyDialer != nil {
+			if useTCP {
+				conn, err = proxyDialer.DialContext(ctx, "tcp", state.serverAddress)
+			} else {
+				conn, err = proxyDialer.DialUDP(ctx, state.serverAddress)
+			}
+		} else {
+			dialer := &net.Dialer{}
+			conn, err = dialer.DialContext(ctx, network, state.serverAddress)
+		}
+		if err != nil {
+			return nil, false, fmt.Errorf("dialing dnscrypt server %s: %w", state.serverAddress, err)
+		}
+		defer func() { _ = conn.Close() }()
 	}
-	if err != nil {
-		return nil, false, fmt.Errorf("dialing dnscrypt server %s: %w", state.serverAddress, err)
-	}
-	defer func() { _ = conn.Close() }()
 
-	deadline, ok := ctx.Deadline()
-	if ok {
-		_ = conn.SetDeadline(deadline)
+	// Pooled sockets need no per-query deadline — UDPConn.Exchange bounds the
+	// wait by ctx itself.
+	if conn != nil {
+		deadline, ok := ctx.Deadline()
+		if ok {
+			_ = conn.SetDeadline(deadline)
+		}
 	}
 
 	var respPayload []byte
-	if useTCP {
+	switch {
+	case useTCP:
 		if writeErr := dnscryptcrypto.WritePrefixed(encrypted, conn); writeErr != nil {
 			return nil, false, fmt.Errorf("writing dnscrypt TCP query: %w", writeErr)
 		}
@@ -157,7 +191,19 @@ func (c *Client) executeOnce(
 			// invalidating it here would make every retry re-fetch the cert.
 			return nil, false, fmt.Errorf("reading dnscrypt TCP response: %w", err)
 		}
-	} else {
+	case pooled != nil:
+		// Pooled socket: route by the client-nonce prefix echoed in the
+		// response header.  Decrypt below re-checks the nonce half and the
+		// message ID — a misrouted datagram can never be served.
+		respPayload, err = pooled.Exchange(ctx, encrypted, string(clientNonce[:dnscryptcrypto.NonceSize/2]))
+		if err != nil {
+			if pooled.IsDead() {
+				c.udpPool.Remove(pooled)
+			}
+			// Same as TCP: a read error is not a certificate problem.
+			return nil, false, fmt.Errorf("reading dnscrypt response: %w", err)
+		}
+	default:
 		_, err = conn.Write(encrypted)
 		if err != nil {
 			return nil, false, fmt.Errorf("writing dnscrypt query: %w", err)
@@ -336,7 +382,7 @@ func (c *Client) proxyDialer(server *config.UpstreamServer) *socks5.Dialer {
 	return c.getProxy(server)
 }
 
-// Close clears the cached DNSCrypt state.
+// Close clears the cached DNSCrypt state and shuts down the UDP socket pool.
 func (c *Client) Close() {
 	if c == nil {
 		return
@@ -344,4 +390,7 @@ func (c *Client) Close() {
 	c.cacheMu.Lock()
 	c.cache = nil
 	c.cacheMu.Unlock()
+	if c.udpPool != nil {
+		c.udpPool.Shutdown()
+	}
 }
