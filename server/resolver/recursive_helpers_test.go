@@ -249,3 +249,24 @@ func TestResponseEchoesQuestion_CaseInsensitive(t *testing.T) {
 		t.Error("question names must compare case-insensitively (RFC 4343)")
 	}
 }
+
+// ── walkDedupKey ────────────────────────────────────────────────────────────
+
+func TestWalkDedupKey(t *testing.T) {
+	cases := []struct {
+		qname string
+		want  string
+	}{
+		{"www.example.com.", "example.com."},
+		{"example.com.", "example.com."},
+		{"a.b.c.example.com.", "example.com."},
+		{"ns1.example.co.uk.", "co.uk."},
+		{"com.", "com."},
+		{".", "."},
+	}
+	for _, tc := range cases {
+		if got := walkDedupKey(tc.qname); got != tc.want {
+			t.Errorf("walkDedupKey(%q) = %q, want %q", tc.qname, got, tc.want)
+		}
+	}
+}

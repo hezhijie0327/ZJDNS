@@ -11,6 +11,7 @@ import (
 	"zjdns/database"
 	"zjdns/edns"
 	"zjdns/internal/log"
+	"zjdns/internal/pending"
 	"zjdns/internal/pool"
 	"zjdns/server/defense"
 	"zjdns/server/resolver/dnssec"
@@ -44,6 +45,17 @@ type Recursive struct {
 	rootCacheMu   sync.Mutex
 	rootCache     []string
 	rootCacheTime int64 // log.NowUnix() of the cache fill
+
+	// walkGroup coalesces concurrent walks for subdomains of the same zone:
+	// while the leader walks a fresh zone (root→TLD→authoritative, populating
+	// the delegation cache), followers with the same walkDedupKey wait, then
+	// start their own walk from the now-cached zone.  nil in tests.
+	walkGroup *pending.ResultGroup[string, QueryResult]
+
+	// dnskeyGroup coalesces DNSKEY fetches per zone — concurrent walks of
+	// DIFFERENT zones still fetch the same parent DNSKEYs (e.g. the TLD's).
+	// nil in tests.
+	dnskeyGroup *pending.ResultGroup[string, struct{}]
 }
 
 // CNAME handles CNAME record chasing during DNS resolution, following the
@@ -55,10 +67,28 @@ type CNAME struct {
 	resolver *Resolver
 }
 
+// walkDedupKey returns the dedup key for a recursive walk: the qname's
+// second-level domain (last two labels).  Concurrent queries for different
+// subdomains of the same zone share one walk until the delegation cache is
+// populated; queries for distinct zones never share one.  The full qname is
+// never used as the key — identical queries are already merged by
+// handler.PendingRequests before reaching the resolver.
+func walkDedupKey(qname string) string {
+	fq := dnsutil.Fqdn(qname)
+	if fq == "." {
+		return fq
+	}
+	labels := strings.Split(fq[:len(fq)-1], ".")
+	if len(labels) <= 2 {
+		return fq
+	}
+	return strings.Join(labels[len(labels)-2:], ".") + "."
+}
+
 // cnameAliasFollowed reports whether a CNAME's owner is the target of any
 // other CNAME in the answer (i.e. it is an intermediate hop of a chain being
 // followed, not a separate alias).
-func cnameAliasFollowed(c *dns.CNAME, answer []dns.RR, currentQuestion string) bool {
+func cnameAliasFollowed(c *dns.CNAME, answer []dns.RR) bool {
 	for _, r := range answer {
 		if other, ok := r.(*dns.CNAME); ok && other != c {
 			if strings.EqualFold(dnsutil.Fqdn(other.Target), dnsutil.Fqdn(c.Header().Name)) {
@@ -349,6 +379,34 @@ func (r *Recursive) probeTLDForPoison(ctx context.Context, tldServers []string, 
 }
 
 func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOption) QueryResult {
+	// Walk dedup: concurrent queries for different subdomains of the same
+	// zone each used to walk root→TLD→authoritative independently, issuing
+	// duplicate NS/DS/DNSKEY queries to the same authorities.  The leader
+	// walks and populates the delegation cache; followers wait (bounded by
+	// their own ctx), then resolve — their walk starts from the cached zone.
+	// Internal resolutions (CNAME targets, NS addresses, TCP restarts) call
+	// recursive.resolve directly and bypass this group, so no key is ever
+	// re-entered by the same goroutine (self-deadlock impossible).
+	if g := c.resolver.recursive.walkGroup; g != nil {
+		key := walkDedupKey(question.Name)
+		v, _, leader := g.Do(ctx, key, func() (QueryResult, error) {
+			return c.resolveInner(ctx, question, ecs), nil
+		})
+		if leader {
+			return v
+		}
+		// Follower: the leader's walk populated the delegation cache for this
+		// zone (or failed — then the cache miss is re-checked and the walk
+		// starts from root as before).  Resolve normally.
+		return c.resolveInner(ctx, question, ecs)
+	}
+	return c.resolveInner(ctx, question, ecs)
+}
+
+// resolveInner performs the actual CNAME-chain resolution.  Called by
+// resolve() under the walk dedup group, and directly by internal paths that
+// must not join the group (see resolve).
+func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.ECSOption) QueryResult {
 	var allAnswers []dns.RR
 	var finalAuthority, finalAdditional []dns.RR
 	var finalECSResponse *edns.ECSOption
@@ -414,7 +472,7 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 			// synthesized multi-hop chain (CNAME1 → CNAME2 → A) would
 			// otherwise lose the intermediate CNAMEs.
 			if cname, ok := rr.(*dns.CNAME); ok {
-				if strings.EqualFold(h.Name, currentQuestion.Name) || cnameAliasFollowed(cname, qr.Answer, currentQuestion.Name) {
+				if strings.EqualFold(h.Name, currentQuestion.Name) || cnameAliasFollowed(cname, qr.Answer) {
 					allAnswers = append(allAnswers, rr)
 				}
 				continue

@@ -12,6 +12,7 @@ import (
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/edns"
+	"zjdns/internal/pending"
 	"zjdns/server/defense"
 	"zjdns/server/resolver/dnssec"
 	"zjdns/server/upstream"
@@ -182,10 +183,12 @@ func New(cfg *Config) (*Resolver, error) {
 		cache:         cfg.Cache,
 	}
 	r.recursive = &Recursive{
-		resolver: r,
-		cache:    cfg.Cache,
-		db:       cfg.DB,
-		ctx:      cfg.Ctx,
+		resolver:    r,
+		cache:       cfg.Cache,
+		db:          cfg.DB,
+		ctx:         cfg.Ctx,
+		walkGroup:   pending.NewResultGroup[string, QueryResult](),
+		dnskeyGroup: pending.NewResultGroup[string, struct{}](),
 	}
 	r.cname = &CNAME{resolver: r}
 	r.validator = &Validator{Crypto: cfg.Crypto, Poisonguard: cfg.PoisonDetector}

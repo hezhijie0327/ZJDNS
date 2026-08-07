@@ -13,11 +13,11 @@ import (
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
+	"zjdns/internal/pending"
 	"zjdns/internal/pool"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
-	"golang.org/x/sync/singleflight"
 )
 
 // Client executes encrypted DNS queries over the DNSCrypt v2 protocol.
@@ -26,9 +26,9 @@ type Client struct {
 	cache    *lrumap.Map[string, *State]
 	getProxy func(*config.UpstreamServer) *socks5.Dialer
 
-	// sf deduplicates concurrent certificate fetches per upstream — a burst
-	// of cache-miss queries must not each re-fetch (see state()).
-	sf singleflight.Group
+	// stateGroup deduplicates concurrent certificate fetches per upstream —
+	// a burst of cache-miss queries must not each re-fetch (see state()).
+	stateGroup *pending.ResultGroup[string, *State]
 }
 
 // maxTCRetries bounds the DNSCrypt TC escalation loop. Each escalation
@@ -48,8 +48,9 @@ var respBufPool = sync.Pool{
 // New creates a Client for DNSCrypt DNS queries.
 func New(getProxy func(*config.UpstreamServer) *socks5.Dialer) *Client {
 	return &Client{
-		cache:    lrumap.New[string, *State](config.DefaultTransportMax * 2),
-		getProxy: getProxy,
+		cache:      lrumap.New[string, *State](config.DefaultTransportMax * 2),
+		getProxy:   getProxy,
+		stateGroup: pending.NewResultGroup[string, *State](),
 	}
 }
 

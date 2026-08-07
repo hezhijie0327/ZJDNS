@@ -8,6 +8,7 @@ import (
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/lrumap"
+	zpool "zjdns/server/upstream/pool"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"gitee.com/Trisia/gotlcp/dtlcp"
@@ -22,6 +23,11 @@ type Client struct {
 	tlcpSessions tlcp.SessionCache
 	dtlcpSession dtlcp.SessionCache
 	httpClient   *lrumap.Map[string, *http.Client] // cached DoH-over-TLCP clients by key
+
+	// tlcpPool multiplexes pipelined TLCP connections per upstream (RFC 7766).
+	// Previously every query paid a fresh dial + TLCP handshake — a batch of
+	// N queries meant N simultaneous handshakes.  nil in tests.
+	tlcpPool *zpool.ConnPool
 }
 
 // New creates a Client for TLCP and DTLCP DNS queries.
@@ -32,6 +38,7 @@ func New(getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Dura
 		tlcpSessions: tlcp.NewLRUSessionCache(config.DefaultTLCPSessionCacheSize),
 		dtlcpSession: dtlcp.NewLRUSessionCache(config.DefaultDTLCPSessionCacheSize),
 		httpClient:   lrumap.New[string, *http.Client](config.DefaultHTTPTLCPClientMax * 2),
+		tlcpPool:     zpool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 	}
 	c.httpClient.SetOnEvict(func(_ string, client *http.Client) {
 		client.CloseIdleConnections()
@@ -39,9 +46,10 @@ func New(getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Dura
 	return c
 }
 
-// Close shuts down all cached DoH-over-TLCP HTTP clients. Idempotent.
-// The LRU map is intentionally NOT nil'd: in-flight queries read it (with
-// nil guards at the call sites) and a nil write would race those reads.
+// Close shuts down all cached DoH-over-TLCP HTTP clients and the TLCP
+// connection pool. Idempotent.  The LRU map is intentionally NOT nil'd:
+// in-flight queries read it (with nil guards at the call sites) and a nil
+// write would race those reads.
 func (c *Client) Close() {
 	if c == nil {
 		return
@@ -51,6 +59,9 @@ func (c *Client) Close() {
 			client.CloseIdleConnections()
 			return true
 		})
+	}
+	if c.tlcpPool != nil {
+		c.tlcpPool.Shutdown()
 	}
 }
 

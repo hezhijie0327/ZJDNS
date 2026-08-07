@@ -290,6 +290,42 @@ func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string,
 		return
 	}
 
+	// Dedup the fetch per zone: concurrent walks of DIFFERENT zones still
+	// fetch the same parent DNSKEYs (e.g. the TLD's) while establishing
+	// their cuts.  The leader fetches + verifies + caches; followers pick up
+	// the cached keys when they proceed.
+	if r.dnskeyGroup != nil {
+		_, _, leader := r.dnskeyGroup.Do(ctx, dnsutil.Fqdn(zone), func() (struct{}, error) {
+			// Another walk may have fetched while we queued.
+			if cached := crypto.ZoneKeys(zone); len(cached) > 0 {
+				return struct{}{}, nil
+			}
+			r.fetchZoneDNSKEYs(ctx, nameservers, zone, chain)
+			return struct{}{}, nil
+		})
+		if !leader {
+			// Follower: pick up the leader's cached keys.  When the leader
+			// failed, the chain stays empty and validation treats the zone
+			// as insecure/bogus exactly as a standalone walk would.
+			if cached := crypto.ZoneKeys(zone); len(cached) > 0 {
+				chain.zoneDNSKEYs = cached
+			}
+			return
+		}
+		return
+	}
+	r.fetchZoneDNSKEYs(ctx, nameservers, zone, chain)
+}
+
+// fetchZoneDNSKEYs queries the zone's authoritative nameservers for DNSKEY
+// records, verifies them (DS match, offline KSK, root trust anchors) and
+// caches the verified keys.  Runs under dnskeyGroup when available.
+func (r *Recursive) fetchZoneDNSKEYs(ctx context.Context, nameservers []string, zone string, chain *dnssecChain) {
+	crypto := r.resolver.validator.Crypto
+	if crypto == nil {
+		return
+	}
+
 	// Query the zone's authoritative nameservers for DNSKEY records
 	dnskeyQuestion := Question{Name: dnsutil.Fqdn(zone), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
 	dnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, nil, nil, false, zone, r.resolver.validator.Poisonguard)
