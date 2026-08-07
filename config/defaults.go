@@ -147,6 +147,14 @@ const (
 	DefaultSweepInterval         = 5 * time.Minute        // periodic cleanup sweep
 	DefaultTCPWriteMuStaleCutoff = 2 * time.Minute        // stale TCP write mutex cutoff
 
+	// DefaultCacheWriteTimeout bounds every best-effort SQLite write (cache
+	// Set, eviction, stats flush, latency).  A saturated write-lock convoy
+	// must degrade to dropped writes — never a hang of the query path.
+	DefaultCacheWriteTimeout = 5 * time.Second
+	// DefaultCacheOptimizeInterval refreshes SQLite planner statistics in the
+	// background; PRAGMA optimize previously ran inline on the Set() hot path.
+	DefaultCacheOptimizeInterval = 10 * time.Minute
+
 	DefaultCookieSecretRotationInterval = 24 * time.Hour // RFC 7873 §7.1: default lifetime 1 day
 	DefaultECSRefreshInterval           = 15 * time.Minute
 

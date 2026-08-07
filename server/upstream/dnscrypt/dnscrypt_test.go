@@ -299,11 +299,14 @@ func TestCertCacheKeyNormalisation(t *testing.T) {
 	}
 }
 
-// TestCertCacheInvalidationOnError verifies that a failed DNSCrypt query
-// invalidates the cached state, forcing the next query to re-fetch the
-// certificate.  Without this, a server cert rotation would cause every query
-// to fail for up to DefaultDNSCryptCertificateCacheTTL (1 hour).
-func TestCertCacheInvalidationOnError(t *testing.T) {
+// TestCertCacheRetainedOnTimeout verifies that a plain read timeout does NOT
+// invalidate the cached DNSCrypt state.  Timeouts are the signature of a
+// saturated (packet-dropping) server, not a certificate rotation — deleting
+// the state on timeout made every retry re-fetch the certificate, fanning a
+// saturation event into a thundering herd (each re-fetch itself dropped).
+// Rotation recovery is handled by the decrypt-failure path (deleteState on
+// decryption error) plus the server keeping old windows during overlap.
+func TestCertCacheRetainedOnTimeout(t *testing.T) {
 	_, stamp := startTestDNSCryptServer(t)
 	c := New(nil)
 	server := &config.UpstreamServer{Address: stamp, Protocol: config.ProtoDNSCrypt}
@@ -331,15 +334,12 @@ func TestCertCacheInvalidationOnError(t *testing.T) {
 		t.Fatal("state should be cached after successful query")
 	}
 
-	// 2. Corrupt clientMagic and sharedKey to simulate a cert rotation.
-	//    A wrong clientMagic causes the server to drop the query silently,
-	//    producing a read timeout on the client.
+	// 2. Corrupt the clientMagic: the server cannot match the query to any
+	//    cert window and drops it silently — the client sees a read timeout
+	//    (this is also exactly what a saturated server does to a valid query).
 	st.mu.Lock()
 	for i := range st.clientMagic {
 		st.clientMagic[i] ^= 0xFF
-	}
-	for i := range st.sharedKey {
-		st.sharedKey[i] ^= 0xFF
 	}
 	st.mu.Unlock()
 
@@ -347,25 +347,13 @@ func TestCertCacheInvalidationOnError(t *testing.T) {
 	_, err = c.Execute(ctx2, newQuery("example.com."), server, false)
 	cancel2()
 	if err == nil {
-		t.Fatal("second query should fail with corrupted state")
-	}
-	t.Logf("expected error: %v", err)
-
-	// Cache must be gone.
-	_, ok := c.cache.Get(cacheKey)
-	if ok {
-		t.Fatal("state should be invalidated after failed query")
+		t.Fatal("query with corrupted clientMagic should fail")
 	}
 
-	// 3. Third query re-fetches the certificate and succeeds.
-	ctx3, cancel3 := context.WithTimeout(context.Background(), 5*time.Second)
-	resp, err = c.Execute(ctx3, newQuery("example.com."), server, false)
-	cancel3()
-	if err != nil {
-		t.Fatalf("third query (after re-fetch): %v", err)
-	}
-	if len(resp.Answer) != 1 {
-		t.Fatalf("want 1 answer, got %d", len(resp.Answer))
+	// 3. The state must survive: the certificate is still valid and the next
+	//    query must not pay a re-fetch (the herd amplifier).
+	if _, ok := c.cache.Get(cacheKey); !ok {
+		t.Fatal("state should be retained after a read timeout")
 	}
 }
 

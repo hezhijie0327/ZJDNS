@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"database/sql"
 	"encoding/binary"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 	"zjdns/config"
 	"zjdns/database"
 	"zjdns/internal/log"
@@ -27,6 +29,9 @@ type SQLiteCache struct {
 	db          *database.DB
 	evictCount  atomic.Int64
 	asyncWriter *AsyncStatsWriter
+
+	// optimizeDone stops the background PRAGMA optimize loop (see New).
+	optimizeDone chan struct{}
 
 	// hasLatencyData gates sortAnswerByLatency: when false (no latency data has
 	// ever been written), the per-hit ip_latency query is skipped entirely,
@@ -179,16 +184,46 @@ func New(db *database.DB) *SQLiteCache {
 	if db == nil {
 		panic("cache: nil database")
 	}
-	return &SQLiteCache{
-		db:          db,
-		asyncWriter: NewAsyncStatsWriter(db, config.DefaultAsyncStatsBufferSize),
+	s := &SQLiteCache{
+		db:           db,
+		asyncWriter:  NewAsyncStatsWriter(db, config.DefaultAsyncStatsBufferSize),
+		optimizeDone: make(chan struct{}),
 	}
+	go s.optimizeLoop()
+	return s
 }
 
 // Close shuts down the async stats writer and then closes the database.
 func (s *SQLiteCache) Close() error {
+	// optimizeDone is nil for hand-constructed caches (tests) that never
+	// started the optimize loop.
+	if s.optimizeDone != nil {
+		close(s.optimizeDone)
+	}
 	s.asyncWriter.Close()
 	return s.db.Close()
+}
+
+// optimizeLoop refreshes SQLite planner statistics in the background.
+// PRAGMA optimize used to run inline in evictIfNeeded on the Set() hot path,
+// where it competed for the write lock right at the moment of peak load.
+func (s *SQLiteCache) optimizeLoop() {
+	defer zdnsutil.HandlePanic("Cache PRAGMA optimize")
+	ticker := time.NewTicker(config.DefaultCacheOptimizeInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if s.db.IsClosed() {
+				return
+			}
+			if _, err := s.db.SQ.Exec("PRAGMA optimize"); err != nil {
+				log.Debugf("CACHE: PRAGMA optimize failed: %v", err)
+			}
+		case <-s.optimizeDone:
+			return
+		}
+	}
 }
 
 // Flush forces the async stats writer to write any buffered records immediately.
@@ -553,9 +588,13 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 
 	// ── Transaction ──────────────────────────────────────────────────────
 	// SQLite WAL mode serializes writers, so no application-level mutex is
-	// needed for concurrent Set() calls.
+	// needed for concurrent Set() calls.  The context bounds the write-lock
+	// wait: under a saturated convoy the cache write is dropped instead of
+	// hanging the query handler.
+	writeCtx, cancel := context.WithTimeout(context.Background(), config.DefaultCacheWriteTimeout)
+	defer cancel()
 	var entryID int64
-	tx, txErr := s.db.SQ.Begin()
+	tx, txErr := s.db.SQ.BeginTx(writeCtx, nil)
 	if txErr == nil {
 		defer func() { _ = tx.Rollback() }()
 
@@ -646,12 +685,8 @@ func (s *SQLiteCache) evictIfNeeded() {
 		return
 	}
 
+	s.evictCount.Add(1)
 	s.evictOldest(excess)
-
-	// Throttle PRAGMA optimize to every 10th eviction to avoid per-eviction overhead.
-	if s.evictCount.Add(1)%10 == 0 {
-		_, _ = s.db.SQ.Exec("PRAGMA optimize") // _, _ = result, error: PRAGMA optimize is best-effort
-	}
 }
 
 // PruneQueryJournal removes query_stats rows with stat_day older than the
@@ -664,12 +699,14 @@ func (s *SQLiteCache) evictIfNeeded() {
 // rows per iteration) to avoid holding a write transaction open too long on
 // busy servers.
 func (s *SQLiteCache) PruneQueryJournal(retentionSec int64) (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), config.DefaultCacheWriteTimeout)
+	defer cancel()
 	batchSize := int64(config.DefaultPruneBatchSize)
 	dayCutoff := log.NowUnix()/86400 - retentionSec/86400
 
 	// query_stats: single DELETE using PK prefix seek (stat_day is leading column).
 	var totalDeleted int64
-	qsResult, err := s.db.SQ.Exec(`DELETE FROM query_stats WHERE stat_day < ?`, dayCutoff)
+	qsResult, err := s.db.SQ.ExecContext(ctx, `DELETE FROM query_stats WHERE stat_day < ?`, dayCutoff)
 	if err != nil {
 		return 0, fmt.Errorf("cleanup query_stats: %w", err)
 	}
@@ -678,7 +715,8 @@ func (s *SQLiteCache) PruneQueryJournal(retentionSec int64) (int64, error) {
 
 	// query_log: batched DELETE to avoid long write transactions under heavy load.
 	for {
-		result, err := s.db.SQ.Exec(
+		result, err := s.db.SQ.ExecContext(
+			ctx,
 			`DELETE FROM query_log WHERE rowid IN (`+
 				`SELECT rowid FROM query_log WHERE timestamp < unixepoch() - ? LIMIT ?`+
 				`)`, retentionSec, batchSize,
@@ -697,7 +735,10 @@ func (s *SQLiteCache) PruneQueryJournal(retentionSec int64) (int64, error) {
 }
 
 func (s *SQLiteCache) evictOldest(toEvict int64) {
-	tx, err := s.db.SQ.Begin()
+	// Bounded like Set(): eviction must never hang the query path.
+	ctx, cancel := context.WithTimeout(context.Background(), config.DefaultCacheWriteTimeout)
+	defer cancel()
+	tx, err := s.db.SQ.BeginTx(ctx, nil)
 	if err != nil {
 		return
 	}

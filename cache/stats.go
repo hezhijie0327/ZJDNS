@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -383,7 +384,11 @@ func (s *SQLiteCache) UpdateLatency(ip string, latencyMS int) {
 	if parsedIP.To4() != nil {
 		qtype = dns.TypeA
 	}
-	_, _ = s.db.StmtInsertLatency.Exec(ip, qtype, latencyMS) // _, _ = result, error: latency write is best-effort, not query-critical
+	// Bounded like the other cache writes: a saturated DB must not stall the
+	// latency probe that triggered this write.
+	ctx, cancel := context.WithTimeout(context.Background(), config.DefaultCacheWriteTimeout)
+	defer cancel()
+	_, _ = s.db.StmtInsertLatency.ExecContext(ctx, ip, qtype, latencyMS) // _, _ = result, error: latency write is best-effort, not query-critical
 }
 
 // LatencyLastProbe returns the last probe time for an IP. Returns (0, false)

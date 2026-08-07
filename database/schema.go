@@ -11,26 +11,14 @@ const (
 )
 
 func (db *DB) migrate() error {
-	mmapSize := db.mmapSizeMB * 1024 * 1024
-	cacheSize := -db.cacheSizeMB * 1024
-
-	// Execute each PRAGMA separately so a single failure is isolated and
-	// does not silently skip subsequent PRAGMAs.
-	for _, p := range []struct {
-		sql  string
-		name string
-	}{
-		{fmt.Sprintf("PRAGMA page_size = %d", pageSize), "page_size"},
-		{fmt.Sprintf("PRAGMA cache_size = %d", cacheSize), "cache_size"},
-		{fmt.Sprintf("PRAGMA mmap_size = %d", mmapSize), "mmap_size"},
-		{"PRAGMA temp_store = MEMORY", "temp_store"},
-		{"PRAGMA foreign_keys = ON", "foreign_keys"},
-		{fmt.Sprintf("PRAGMA wal_autocheckpoint = %d", walAutoCheckpointPages), "wal_autocheckpoint"},
-		{fmt.Sprintf("PRAGMA journal_size_limit = %d", mmapSize), "journal_size_limit"},
-	} {
-		if _, err := db.SQ.Exec(p.sql); err != nil {
-			log.Warnf("DB: PRAGMA %s failed (non-fatal): %v", p.name, err)
-		}
+	// page_size must run before any table materialises, so it stays here on
+	// the connection that creates the schema.  The remaining tunables
+	// (cache_size, mmap_size, temp_store, wal_autocheckpoint,
+	// journal_size_limit, foreign_keys) are applied per connection via
+	// _pragma= in the DSN (db.go/buildDSN) — running them once here would
+	// leave the rest of the pool on SQLite defaults.
+	if _, err := db.SQ.Exec(fmt.Sprintf("PRAGMA page_size = %d", pageSize)); err != nil {
+		log.Warnf("DB: PRAGMA page_size failed (non-fatal): %v", err)
 	}
 
 	//nolint:gosec // G202: DDL migration with constant schema version

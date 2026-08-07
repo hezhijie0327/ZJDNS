@@ -219,13 +219,14 @@ func (s *Server) ResetKeys() error {
 	s.sharedKeyCache = lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize)
 	// The PQ ticket key is fixed (derived from the signing key at startup);
 	// it is not rotated alongside cert keys.
+	serial := entries[0].pair.Classical.Serial
 	s.keys = entries
 	s.mu.Unlock()
 
 	if err := s.Save(); err != nil {
 		return fmt.Errorf("dnscrypt: persist reset state: %w", err)
 	}
-	log.Infof("DNSCRYPT: keys reset (serial=%d)", s.keys[0].pair.Classical.Serial)
+	log.Infof("DNSCRYPT: keys reset (serial=%d)", serial)
 	return nil
 }
 
@@ -422,9 +423,14 @@ func (s *Server) isStarted() bool {
 }
 
 // current returns the newest key pair (the one used for encrypting responses).
+// Returns nil when no window is active — updateKeys() briefly holds no keys
+// between purging expired windows and minting replacements.
 func (s *Server) current() *dnscryptcrypto.CertPair {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if len(s.keys) == 0 {
+		return nil
+	}
 	return s.keys[0].pair
 }
 
@@ -578,6 +584,10 @@ func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
 	// picks the cert with the highest ts_end).  Older windows remain in
 	// s.keys only for decrypting client queries that still use them.
 	s.mu.RLock()
+	if len(s.keys) == 0 {
+		s.mu.RUnlock()
+		return nil, errors.New("dnscrypt: no active key pair")
+	}
 	newest := s.keys[0]
 	s.mu.RUnlock()
 

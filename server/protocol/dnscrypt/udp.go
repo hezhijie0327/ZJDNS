@@ -105,7 +105,12 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 		select {
 		case s.workerCap <- struct{}{}:
 		default:
-			// Drop the packet instead of spawning unbounded goroutines.
+			// Worker pool saturated: process cheap work inline instead of
+			// silently dropping — a drop makes the client wait out its full
+			// query timeout, multiplying load.  A cert handshake is fast (no
+			// middleware chain); an encrypted query gets a SERVFAIL so the
+			// client recovers in one RTT.
+			s.handleSaturated(ctx, packet, addr, udpConn)
 			pool.DefaultBuffer.Put(packet)
 			continue
 		}
@@ -122,6 +127,46 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 			s.handleUDPPacket(ctx, packet, addr, udpConn)
 		})
 		s.mu.Unlock()
+	}
+}
+
+// handleSaturated processes a packet inline in the read loop when the worker
+// pool is at capacity.  It must not block meaningfully: decryption is fast
+// (shared-key cache) and the middleware chain is never invoked — the query is
+// answered SERVFAIL, the handshake served from the current cert window.
+func (s *Server) handleSaturated(ctx context.Context, b []byte, addr *net.UDPAddr, udpConn *net.UDPConn) {
+	if !s.hasClientMagic(b[:dnscryptcrypto.ClientMagicSize]) && !bytes.Equal(b[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:]) {
+		// Certificate handshake — cheap, serve it (dropping on anti-
+		// amplification violation: the client retries over TCP).
+		reply, err := s.handleHandshake(b, true)
+		if err != nil {
+			log.Debugf("DNSCRYPT: saturated handshake failed: %v", err)
+			return
+		}
+		if len(reply) <= len(b) {
+			if _, err := udpConn.WriteToUDP(reply, addr); err != nil {
+				log.Debugf("DNSCRYPT: UDP write error to %s: %v", addr, err)
+			}
+		}
+		return
+	}
+
+	m, q, err := s.decrypt(b)
+	if err != nil {
+		return
+	}
+	resp := &dns.Msg{}
+	dnsutil.SetReply(resp, m)
+	resp.Rcode = dns.RcodeServerFailure
+	rw := &udpResponseWriter{
+		conn:    udpConn,
+		addr:    addr,
+		req:     m,
+		query:   q,
+		encrypt: s.encrypt,
+	}
+	if err := rw.WriteMsg(ctx, resp); err != nil {
+		log.Debugf("DNSCRYPT: overload SERVFAIL write error to %s: %v", addr, err)
 	}
 }
 

@@ -69,7 +69,23 @@ type DB struct {
 	StmtDNSCryptSave *sql.Stmt
 }
 
-const dsnParams = "_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000&_foreign_keys=ON&_txlock=immediate"
+// buildDSN returns the connection DSN.  Tunables that must hold on every
+// pooled connection (cache_size, mmap_size, WAL checkpointing, temp_store)
+// go into _pragma= parameters: the driver executes them per connection at
+// open.  Executing them once on a single connection — the previous approach —
+// silently drifts on the rest of the pool (SQLite keeps its 2 MB cache /
+// no mmap / 1000-page autocheckpoint defaults there).
+func buildDSN(path string, opts Options) string {
+	if path == "" {
+		return ":memory:"
+	}
+	mmap := int64(opts.MMapSizeMB) * 1024 * 1024
+	return fmt.Sprintf("file:%s?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000"+
+		"&_foreign_keys=ON&_txlock=immediate"+
+		"&_pragma=temp_store(MEMORY)&_pragma=cache_size(%d)&_pragma=mmap_size(%d)"+
+		"&_pragma=wal_autocheckpoint(%d)&_pragma=journal_size_limit(%d)",
+		path, -opts.CacheSizeMB*1024, mmap, walAutoCheckpointPages, mmap)
+}
 
 // Open opens or creates the SQLite database at path. An empty path uses
 // :memory: (shared in-memory). maxEntries controls the cache eviction
@@ -85,12 +101,7 @@ func Open(path string, maxEntries int, opts Options) (*DB, error) {
 		opts.CacheSizeMB = config.DefaultCacheCacheSizeMB
 	}
 
-	var dsn string
-	if path == "" {
-		dsn = ":memory:"
-	} else {
-		dsn = "file:" + path + "?" + dsnParams
-	}
+	dsn := buildDSN(path, opts)
 
 	sqldb, err := sql.Open("sqlite", dsn)
 	if err != nil {

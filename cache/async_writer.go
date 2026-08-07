@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"sync"
 	"time"
 	"zjdns/config"
@@ -158,32 +159,54 @@ func (w *AsyncStatsWriter) run() {
 
 // flush writes a batch of records to the database.  Errors are intentionally
 // discarded — stats are best-effort and must never block or fail the query path.
-// Individual writes are used rather than a transaction to keep the background
-// goroutine simple — WAL-mode serialisation is sufficient.
+// The whole batch runs in ONE transaction: 64 records × 2 statements used to
+// pay 128 individual commits, each an fsync + write-lock acquisition competing
+// with cache Set() for the same SQLite lock.  The context bounds the write-lock
+// wait; on timeout the batch is dropped, never blocked.
 func (w *AsyncStatsWriter) flush(batch []RequestRecord) {
 	if len(batch) == 0 || w.db.IsClosed() {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), config.DefaultCacheWriteTimeout)
+	defer cancel()
+
+	tx, err := w.db.SQ.BeginTx(ctx, nil)
+	if err != nil {
+		log.Debugf("CACHE: stats flush begin failed: %v", err)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	for i := range batch {
 		r := &batch[i]
 
 		// Always upsert into query_stats (per-day aggregated counters).
 		// Error discarded — stats are best-effort and non-critical.
-		_, _ = w.db.StmtQueryStats.Exec( // _, _ = result, error: background stats write, non-critical
+		if _, err := tx.Stmt(w.db.StmtQueryStats).Exec( // error: background stats write, non-critical
 			r.Result, r.Protocol, r.Rcode, r.DNSSECStatus,
 			database.BoolToInt(r.Poisoned),
 			r.ResponseTime,
-		)
+		); err != nil {
+			log.Debugf("CACHE: stats flush aborted: %v", err)
+			return
+		}
 
 		// Non-hit results also go into query_log for the audit trail.
 		// Error discarded — stats are best-effort and non-critical.
 		if r.Result != "hit" {
-			_, _ = w.db.StmtQueryLog.Exec( // _, _ = result, error: background stats write, non-critical
+			if _, err := tx.Stmt(w.db.StmtQueryLog).Exec( // error: background stats write, non-critical
 				log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass),
 				r.Protocol, r.Result, r.Rcode, r.ResponseTime, r.Server,
 				database.BoolToInt(r.Poisoned),
 				r.DNSSECStatus,
-			)
+			); err != nil {
+				log.Debugf("CACHE: stats flush aborted: %v", err)
+				return
+			}
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Debugf("CACHE: stats flush commit failed: %v", err)
 	}
 }

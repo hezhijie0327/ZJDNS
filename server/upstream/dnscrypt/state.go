@@ -109,6 +109,36 @@ func (c *Client) state(
 	}
 	log.Debugf("UPSTREAM: DNSCrypt cert cache miss for %s", cacheKey)
 
+	// Singleflight: under a burst of new queries every miss used to re-fetch
+	// the certificate independently (2 RTTs each — UDP then TCP).  One
+	// in-flight fetch serves the whole batch; failures are not cached, so the
+	// next query retries naturally.
+	v, err, _ := c.sf.Do(cacheKey, func() (any, error) {
+		// Another goroutine may have populated the cache while we queued.
+		c.cacheMu.Lock()
+		state, ok := c.cache.Get(cacheKey)
+		c.cacheMu.Unlock()
+		if ok && time.Now().Before(state.expires) {
+			return state, nil
+		}
+		return c.fetchState(ctx, addr, providerName, publicKey, server, preferTCP)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*State), nil
+}
+
+// fetchState performs the certificate fetch and state construction for one
+// resolver.  Called from state() under a singleflight — never concurrently
+// for the same cacheKey.
+func (c *Client) fetchState(
+	ctx context.Context,
+	addr, providerName string,
+	publicKey []byte,
+	server *config.UpstreamServer,
+	preferTCP bool,
+) (*State, error) {
 	certQuery := &dns.Msg{}
 	certQuery.RecursionDesired = true
 	txtRR := new(dns.TXT)
@@ -140,7 +170,7 @@ func (c *Client) state(
 		preferPQ = *server.PQDNSCrypt
 	}
 
-	state, err = c.buildState(addr, providerName, publicKey, cert, preferPQ)
+	state, err := c.buildState(addr, providerName, publicKey, cert, preferPQ)
 	if err != nil {
 		return nil, err
 	}

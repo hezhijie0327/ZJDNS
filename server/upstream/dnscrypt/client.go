@@ -17,6 +17,7 @@ import (
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
+	"golang.org/x/sync/singleflight"
 )
 
 // Client executes encrypted DNS queries over the DNSCrypt v2 protocol.
@@ -24,6 +25,10 @@ type Client struct {
 	cacheMu  sync.Mutex
 	cache    *lrumap.Map[string, *State]
 	getProxy func(*config.UpstreamServer) *socks5.Dialer
+
+	// sf deduplicates concurrent certificate fetches per upstream — a burst
+	// of cache-miss queries must not each re-fetch (see state()).
+	sf singleflight.Group
 }
 
 // maxTCRetries bounds the DNSCrypt TC escalation loop. Each escalation
@@ -144,9 +149,11 @@ func (c *Client) executeOnce(
 		if writeErr := dnscryptcrypto.WritePrefixed(encrypted, conn); writeErr != nil {
 			return nil, false, fmt.Errorf("writing dnscrypt TCP query: %w", writeErr)
 		}
-		respPayload, err = dnscryptcrypto.ReadPrefixed(conn)
+		respPayload, err = readPrefixedWithCancel(ctx, conn)
 		if err != nil {
-			c.deleteState(stampAddr, providerName)
+			// NOT a certificate problem: a read error (timeout from a
+			// saturated server, network drop) leaves the cached state valid —
+			// invalidating it here would make every retry re-fetch the cert.
 			return nil, false, fmt.Errorf("reading dnscrypt TCP response: %w", err)
 		}
 	} else {
@@ -163,9 +170,9 @@ func (c *Client) executeOnce(
 		}
 		respBuf := *respBufPtr
 		defer respBufPool.Put(respBufPtr)
-		n, udpErr := conn.Read(respBuf)
+		n, udpErr := readUDPWithCancel(ctx, conn, respBuf)
 		if udpErr != nil {
-			c.deleteState(stampAddr, providerName)
+			// Same as TCP: a read error is not a certificate problem.
 			return nil, false, fmt.Errorf("reading dnscrypt response: %w", udpErr)
 		}
 		respPayload = respBuf[:n]
@@ -257,6 +264,54 @@ func (c *Client) executeOnce(
 	}
 
 	return response, false, nil
+}
+
+// readUDPWithCancel reads a datagram into buf, returning early when ctx is
+// cancelled.  Without this, conn.Read blocks until the deadline even after
+// the resolver fan-out cancels this query (first-wins), stranding a goroutine
+// + socket per query until the full timeout.  On cancellation the conn is
+// closed to unblock the reader, and the caller waits for it to exit before
+// the pooled buffer may be reused.
+func readUDPWithCancel(ctx context.Context, conn net.Conn, buf []byte) (int, error) {
+	type result struct {
+		n   int
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		n, err := conn.Read(buf)
+		ch <- result{n, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.n, r.err
+	case <-ctx.Done():
+		_ = conn.Close()
+		<-ch // reader is unblocked by the close; wait so buf is not reused early
+		return 0, ctx.Err()
+	}
+}
+
+// readPrefixedWithCancel reads a length-prefixed DNSCrypt TCP frame, returning
+// early on ctx cancellation — same rationale and discipline as readUDPWithCancel.
+func readPrefixedWithCancel(ctx context.Context, conn net.Conn) ([]byte, error) {
+	type result struct {
+		data []byte
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		data, err := dnscryptcrypto.ReadPrefixed(conn)
+		ch <- result{data, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.data, r.err
+	case <-ctx.Done():
+		_ = conn.Close()
+		<-ch
+		return nil, ctx.Err()
+	}
 }
 
 // WarmUp pre-fetches the DNSCrypt certificate for the given server.
