@@ -407,7 +407,9 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			combined[nsName] = append(combined[nsName], addrsFromRRs(records)...)
 		}
 		for _, addrs := range combined {
-			go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
+			if probe.TryProbeNSAddrs(r.cache, addrs) {
+				go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
+			}
 		}
 	}
 

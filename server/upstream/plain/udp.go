@@ -69,22 +69,33 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 	proxyDialer := c.getProxy(server)
 
 	// GFW only hijacks A/AAAA — skip multi-read for other QTYPEs.
-	// HopGuard also needs multi-read: reject the GFW fake by TTL mismatch,
-	// then keep reading for the real response.
 	needMultiRead := server.Spoofguard || server.HopGuard
-	if needMultiRead && len(msg.Question) > 0 &&
+	isAQtype := len(msg.Question) > 0 &&
 		(dns.RRToType(msg.Question[0]) == dns.TypeA ||
-			dns.RRToType(msg.Question[0]) == dns.TypeAAAA) {
+			dns.RRToType(msg.Question[0]) == dns.TypeAAAA)
+
+	if isAQtype && server.HopGuard && needMultiRead {
+		// HopGuard needs TTL capture (ReadMsgUDP control messages) — the
+		// pooled socket uses Read which cannot extract TTL.  Keep the
+		// exclusive-socket multi-read path for HopGuard.
 		return c.executeUDPMultiRead(ctx, msg, server, proxyDialer)
+	}
+
+	if isAQtype && server.Spoofguard && !server.HopGuard && c.udpPool != nil {
+		// Spoofguard-only (no HopGuard): use the pooled socket in collect
+		// mode — readLoop delivers every matching packet to a buffered
+		// channel, and the spoofguard state machine runs in this goroutine.
+		if resp, err := c.executeUDPCollect(ctx, msg, server); err == nil {
+			return resp, nil
+		}
+		// Pooled collect failed — fall through to fallback.
 	}
 
 	if proxyDialer != nil {
 		return c.exchangeViaProxyUDP(ctx, msg, server.Address, proxyDialer)
 	}
 
-	// Pooled path: reuse connected UDP sockets (see pool/udp.go).  The
-	// multi-read path above stays per-query — its raw-socket detection loop
-	// is inherently exclusive.
+	// Pooled path: reuse connected UDP sockets (see pool/udp.go).
 	if c.udpPool != nil {
 		if resp, err := c.executeUDPPooled(ctx, msg, server); err == nil {
 			return resp, nil
@@ -156,6 +167,114 @@ func matchQuestion(response, query *dns.Msg) bool {
 	return dns.EqualName(rq.Header().Name, qq.Header().Name) &&
 		dns.RRToType(rq) == dns.RRToType(qq) &&
 		rq.Header().Class == qq.Header().Class
+}
+
+// executeUDPCollect sends a query over a pooled UDP socket and collects
+// multiple responses via the pool's collect mode — the spoofguard state
+// machine runs in this goroutine, reusing the pooled connection across
+// queries.  HopGuard TTL capture is unavailable on the pooled path
+// (the socket uses Read, not ReadMsgUDP); spoofguard EDNS-gate and
+// fast-authority-signal paths still work without TTL.
+func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+	uc, err := c.udpPool.Acquire(ctx, server.Address, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(dialCtx, "udp", addr)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	originalID := msg.ID
+	trackingID := uc.NextID()
+	msg.ID = trackingID
+	packErr := msg.Pack()
+	msgData := msg.Data
+	msg.ID = originalID
+	if packErr != nil {
+		return nil, packErr
+	}
+
+	matchKey := string([]byte{byte(trackingID >> 8), byte(trackingID)}) //nolint:gosec // G115: DNS ID — protocol-bounded uint16
+	collectCh, err := uc.ExchangeCollect(ctx, msgData, matchKey)
+	if err != nil {
+		if uc.IsDead() {
+			c.udpPool.Remove(uc)
+		}
+		return nil, err
+	}
+
+	maxDeadline := time.Now().Add(c.timeout)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(maxDeadline) {
+		maxDeadline = dl
+	}
+
+	var sg spoofguardState
+	for {
+		select {
+		case <-ctx.Done():
+			if sg.last != nil {
+				pool.DefaultMessage.Put(sg.last)
+			}
+			if sg.prev != nil {
+				pool.DefaultMessage.Put(sg.prev)
+			}
+			if sg.nonEDNS != nil {
+				pool.DefaultMessage.Put(sg.nonEDNS)
+			}
+			uc.ReleaseCollect(matchKey)
+			return nil, ctx.Err()
+		case packet, ok := <-collectCh:
+			if !ok {
+				uc.ReleaseCollect(matchKey)
+				if sg.last != nil {
+					return sg.last, nil
+				}
+				return nil, errors.New("pooled udp connection closed during spoofguard collect")
+			}
+			if len(packet) < 2 || uint16(packet[0])<<8|uint16(packet[1]) != trackingID {
+				continue
+			}
+			resp := sg.processPacket(packet, len(packet), msg.UDPSize, server.Address, false, 0, true)
+			if resp != nil {
+				if sg.last != nil && sg.last != resp {
+					pool.DefaultMessage.Put(sg.last)
+				}
+				if sg.prev != nil && sg.prev != resp {
+					pool.DefaultMessage.Put(sg.prev)
+				}
+				if sg.nonEDNS != nil && sg.nonEDNS != resp {
+					pool.DefaultMessage.Put(sg.nonEDNS)
+				}
+				resp.ID = originalID
+				uc.ReleaseCollect(matchKey)
+				return resp, nil
+			}
+		case <-time.After(config.DefaultSpoofguardPollInterval):
+			now := time.Now()
+			if sg.last != nil && now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
+				resp := sg.pickBest()
+				resp.ID = originalID
+				uc.ReleaseCollect(matchKey)
+				return resp, nil
+			}
+			if sg.last == nil && sg.nonEDNS != nil && now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
+				resp := sg.pickBest()
+				resp.ID = originalID
+				uc.ReleaseCollect(matchKey)
+				return resp, nil
+			}
+			if now.After(maxDeadline) {
+				resp := sg.pickBest()
+				if resp == nil {
+					uc.ReleaseCollect(matchKey)
+					return nil, errors.New("no UDP response received")
+				}
+				resp.ID = originalID
+				uc.ReleaseCollect(matchKey)
+				return resp, nil
+			}
+		}
+	}
 }
 
 // executeUDPMultiRead performs the spoofguard multi-read detection loop.

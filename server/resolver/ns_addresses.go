@@ -105,7 +105,11 @@ func (r *Recursive) getRootServers() []string {
 		if len(cached) == 0 {
 			// Cold start for this name: write + probe + read back.
 			cacheRootHint(r.cache, name, addrs)
-			go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
+			if probe.TryProbeNSAddrs(r.cache, addrs) {
+				if probe.TryProbeNSAddrs(r.cache, addrs) {
+					go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
+				}
+			}
 			cached = r.lookupNSAddrsFromCache(name, nil)
 		}
 		all = append(all, cached...)
@@ -226,7 +230,11 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) [
 		if refreshEntry != nil {
 			refreshEntry()
 		}
-		go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
+		if probe.TryProbeNSAddrs(r.cache, addrs) {
+			if probe.TryProbeNSAddrs(r.cache, addrs) {
+				go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
+			}
+		}
 	}
 
 	return addrs

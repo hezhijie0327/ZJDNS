@@ -139,6 +139,8 @@ func (r *Recursive) cacheGlueRecords(glue map[string][]dns.RR) {
 	}
 	for _, records := range glue {
 		addrs := addrsFromRRs(records)
-		go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
+		if probe.TryProbeNSAddrs(r.cache, addrs) {
+			go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
+		}
 	}
 }

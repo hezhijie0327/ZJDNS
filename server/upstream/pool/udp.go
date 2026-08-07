@@ -31,7 +31,8 @@ import (
 
 // udpPending is one in-flight query awaiting its response.
 type udpPending struct {
-	resultCh chan []byte // raw response payload (ownership transferred)
+	resultCh  chan []byte // raw response payload (ownership transferred)
+	collectCh chan []byte // buffered multi-packet channel for collect mode
 }
 
 // UDPConn is a connected UDP socket shared by concurrent queries.
@@ -145,6 +146,80 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 	}
 }
 
+// ExchangeCollect is like Exchange but the caller receives every response
+// matching matchKey — the inflight entry is NOT deleted after the first
+// packet.  The caller must call ReleaseCollect when done to clean up.
+// collectCh is buffered at 4 slots (2 EDNS candidates + non-EDNS fallback +
+// one overflow); packets beyond that are silently dropped.
+func (c *UDPConn) ExchangeCollect(ctx context.Context, payload []byte, matchKey string) (<-chan []byte, error) {
+	select {
+	case c.capacity <- struct{}{}:
+		c.inFlight.Add(1)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	if c.closed.Load() {
+		c.inFlight.Add(-1)
+		<-c.capacity
+		return nil, fmt.Errorf("udp client: connection to %s is closed", c.addr)
+	}
+
+	collectCh := make(chan []byte, 4)
+	c.mu.Lock()
+	if c.closed.Load() {
+		c.mu.Unlock()
+		c.inFlight.Add(-1)
+		<-c.capacity
+		return nil, fmt.Errorf("udp client: connection to %s closed before write", c.addr)
+	}
+	if _, dup := c.inflight[matchKey]; dup {
+		c.mu.Unlock()
+		c.inFlight.Add(-1)
+		<-c.capacity
+		return nil, fmt.Errorf("udp client: match key collision on %s", c.addr)
+	}
+	c.inflight[matchKey] = &udpPending{collectCh: collectCh}
+	c.mu.Unlock()
+
+	// Serialise writes.
+	c.writeMu.Lock()
+	_, err := c.conn.Write(payload)
+	c.writeMu.Unlock()
+	if err != nil {
+		c.close()
+		c.mu.Lock()
+		delete(c.inflight, matchKey)
+		c.mu.Unlock()
+		drainCollectCh(collectCh)
+		c.inFlight.Add(-1)
+		<-c.capacity
+		return nil, fmt.Errorf("udp client: write to %s: %w", c.addr, err)
+	}
+	return collectCh, nil
+}
+
+// ReleaseCollect unregisters matchKey and releases the capacity slot held by
+// an ExchangeCollect caller.
+func (c *UDPConn) ReleaseCollect(matchKey string) {
+	c.mu.Lock()
+	delete(c.inflight, matchKey)
+	c.mu.Unlock()
+	c.inFlight.Add(-1)
+	<-c.capacity
+}
+
+// drainCollectCh empties a collect channel without blocking.
+func drainCollectCh(ch <-chan []byte) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
 // readLoop reads datagrams, routes them by the extracted match key and
 // transfers buffer ownership to the waiting caller.  Idle connections
 // (nothing in flight past idleTimeout) are closed for recycling.
@@ -186,6 +261,18 @@ func (c *UDPConn) readLoop() {
 		// unpacks asynchronously and owns the returned slice.
 		packet := make([]byte, n)
 		copy(packet, buf[:n])
+
+		// Collect mode: deliver every matching packet; the caller runs a
+		// multi-read loop (spoofguard) and calls ReleaseCollect to clean up.
+		if p.collectCh != nil {
+			select {
+			case p.collectCh <- packet:
+			default:
+				// collectCh full (4 candidates already queued) — drop.
+			}
+			continue
+		}
+
 		select {
 		case p.resultCh <- packet:
 		default:

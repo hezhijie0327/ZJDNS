@@ -174,6 +174,42 @@ func (p *Prober) probeAndReorder(ctx context.Context, qname string, answer []dns
 
 // --- NS probe helpers ---
 
+// TryProbeNSAddrs performs lightweight synchronous pre-checks to decide
+// whether a background latency probe is worth spawning.  It filters out
+// single-address sets, all-private IPs, and IPs that were all recently
+// probed — the most common reasons a ProbeNSAddrs goroutine would exit
+// immediately.  Callers should only spawn a goroutine when this returns true.
+//
+// The nsPending singleflight dedup is still handled inside ProbeNSAddrs;
+// this gate only eliminates obviously-wasted goroutine spawns.
+func TryProbeNSAddrs(cache CacheSetter, addrs []string) bool {
+	if cache == nil || len(addrs) <= 1 {
+		return false
+	}
+
+	// Count public IPs — ProbeNSAddrs skips loopback + private.
+	needProbe := 0
+	now := log.NowUnix()
+	for _, addr := range addrs {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			continue
+		}
+		ip := net.ParseIP(strings.Trim(host, "[]"))
+		if ip == nil || ip.IsLoopback() || ip.IsPrivate() {
+			continue
+		}
+		lastProbe, ok := cache.LatencyLastProbe(ip.String())
+		if !ok || now-lastProbe >= int64(config.DefaultLatencyProbeMinInterval) {
+			needProbe++
+			if needProbe > 1 {
+				return true // enough unprobed IPs — probe is worth spawning
+			}
+		}
+	}
+	return false
+}
+
 // ProbeNSAddrs probes the given "ip:port" addresses and stores latency values
 // in ip_latency. Does NOT write cache entries — the caller is responsible for
 // that. Used by the resolver for NS/Root addresses.
