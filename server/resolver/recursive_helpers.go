@@ -260,7 +260,7 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 			Answer:    answer,
 			Authority: auth, Additional: extra,
 			Validated: *validated, ECS: ecsResponse, Server: config.ProtoRecursive,
-			MQResponse: mqResp,
+			DNSSECEDE: chain.lastEDECode, MQResponse: mqResp,
 		}
 	}
 
@@ -290,7 +290,7 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 		Answer:    answer,
 		Authority: auth, Additional: extra,
 		Validated: *validated, ECS: ecsResponse, Server: config.ProtoRecursive,
-		MQResponse: mqResp,
+		DNSSECEDE: chain.lastEDECode, MQResponse: mqResp,
 	}
 }
 

@@ -247,8 +247,9 @@ func (m *MQTYPE) merge(ctx context.Context, qctx *handler.QueryContext, mq *dns.
 		completed = append(completed, qt)
 
 		// Cache the additional response so future requests (including
-		// CacheLookup for the same QTYPE) hit the warm cache.
-		if qr.Cacheable {
+		// CacheLookup for the same QTYPE) hit the warm cache.  Bogus
+		// validation results are never cached (see dnssecCacheable).
+		if qr.Cacheable && dnssecCacheable(qr.DNSSECEDE) {
 			m.store.Set(qname, qt, qclass, ecsOpt, dnssecOK, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
 		}
 	}

@@ -264,7 +264,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(qctx *handler.QueryContext, qname 
 				}
 				select {
 				case <-done:
-					if qr != nil && qr.Err == nil && qr.Cacheable {
+					if qr != nil && qr.Err == nil && qr.Cacheable && dnssecCacheable(qr.DNSSECEDE) {
 						m.store.Set(qname, qtype, qclass, ecsOpt, false, // dnssecOK — background refresh does not need DNSSEC
 							qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
 					}
@@ -302,6 +302,10 @@ func (m *CacheLookup) refreshCacheEntry(qname string, qtype, qclass uint16, ecsO
 	}
 	if !qr.Cacheable {
 		log.Debugf("CACHE: refresh skipped for %s (type=%d) — response not cacheable", qname, qtype)
+		return nil
+	}
+	if !dnssecCacheable(qr.DNSSECEDE) {
+		log.Debugf("CACHE: refresh skipped for %s (type=%d) — bogus validation result", qname, qtype)
 		return nil
 	}
 	m.store.Set(qname, qtype, qclass, ecsOpt, false, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
