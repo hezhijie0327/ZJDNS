@@ -31,6 +31,11 @@ type RequestRecord struct {
 // cache lookups should depend on this interface rather than the full Store.
 type StoreReader interface {
 	Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool)
+	// GetTypes retrieves the entries for exactly two qtypes of one qname in
+	// a single query, in qtypes order.  ECS is not supported (callers never
+	// carry it); entries are matched on the empty ECS candidate.  Returns
+	// parallel slices of entry / found / expired.
+	GetTypes(qname string, qclass uint16, qtypes [2]uint16, dnssecOK bool) (entries [2]*Entry, found, expired [2]bool)
 	LatencyLastProbe(ip string) (int64, bool)
 	ReverseLookup(ip string) []LookupResult
 }

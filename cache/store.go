@@ -312,6 +312,68 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	return s.buildEntry(id, ts, entryTTL, validated, msgWire, qname, qtype)
 }
 
+// GetTypes retrieves the entries for exactly two qtypes of one qname in a
+// single query (NS A/AAAA address lookups).  ECS is not supported — entries
+// are matched on the empty ECS candidate, and the caller must pass a
+// canonical qname.  The pending read-through layer is consulted first (fresh
+// entries awaiting their batch commit); SQLite rows fill only the slots the
+// pending layer did not serve, so a pending hit is never shadowed by an
+// older committed row.
+func (s *SQLiteCache) GetTypes(qname string, qclass uint16, qtypes [2]uint16, dnssecOK bool) (entries [2]*Entry, found, expired [2]bool) {
+	if s.db.IsClosed() {
+		return entries, found, expired
+	}
+
+	dnssecInt := database.BoolToInt(dnssecOK)
+
+	if s.pending != nil {
+		for i, qt := range qtypes {
+			if pe, ok := s.pending.Get(buildCacheKey(qname, qt, qclass, "", 0, dnssecInt)); ok {
+				e, f, ex := s.buildEntry(0, pe.ts, pe.ttl, database.BoolToInt(pe.validated), pe.msgWire, qname, qt)
+				entries[i], found[i], expired[i] = e, f, ex
+			}
+		}
+	}
+
+	missing := false
+	for i := range found {
+		if !found[i] {
+			missing = true
+			break
+		}
+	}
+	if !missing {
+		return entries, found, expired
+	}
+
+	rows, err := s.db.StmtEntryBatch.Query(qname, int(qclass), dnssecInt, "", 0, int(qtypes[0]), int(qtypes[1]))
+	if err != nil {
+		log.Warnf("CACHE: two-types get failed for %s: %v", qname, err)
+		return entries, found, expired
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var qt int
+		var id int64
+		var ts int64
+		var entryTTL int
+		var validated int
+		var msgWire []byte
+		if err := rows.Scan(&qt, &id, &ts, &entryTTL, &validated, &msgWire); err != nil {
+			log.Warnf("CACHE: two-types get scan failed for %s: %v", qname, err)
+			return entries, found, expired
+		}
+		for i := range qtypes {
+			if found[i] || int(qtypes[i]) != qt {
+				continue
+			}
+			e, f, ex := s.buildEntry(id, ts, entryTTL, validated, msgWire, qname, qtypes[i])
+			entries[i], found[i], expired[i] = e, f, ex
+		}
+	}
+	return entries, found, expired
+}
+
 // buildEntry parses a stored BLOB (pre-packed or legacy) into an Entry,
 // applying latency sorting.  Shared by the SQLite and pending read-through
 // paths.  Returns (entry, found, expired); found=false on corrupt data.

@@ -45,6 +45,7 @@ type DB struct {
 	StmtEntryFallback *sql.Stmt
 	StmtEntryExists   *sql.Stmt
 	StmtEntryInsert   *sql.Stmt
+	StmtEntryBatch    *sql.Stmt
 	StmtQueryLog      *sql.Stmt
 	StmtQueryStats    *sql.Stmt
 	StmtInsertLatency *sql.Stmt
@@ -163,7 +164,7 @@ func (db *DB) Close() error {
 		return nil
 	}
 	for _, stmt := range []*sql.Stmt{
-		db.StmtEntryFallback, db.StmtEntryExists, db.StmtEntryInsert,
+		db.StmtEntryFallback, db.StmtEntryExists, db.StmtEntryInsert, db.StmtEntryBatch,
 		db.StmtQueryLog, db.StmtQueryStats,
 		db.StmtInsertLatency, db.StmtLastProbe,
 		db.StmtZoneExact, db.StmtZoneWildcard, db.StmtIPLatency,

@@ -1248,3 +1248,63 @@ func TestSet_Get_NOERRORRcode(t *testing.T) {
 		t.Errorf("wire rcode = %d, want NOERROR(0)", got)
 	}
 }
+
+// ── GetTypes (NS A/AAAA batch) ────────────────────────────────────────────────
+
+func TestGetTypes_AAndAAAA(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	a := &dns.A{Hdr: dns.Header{Name: "ns1.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+	aaaa := &dns.AAAA{Hdr: dns.Header{Name: "ns1.example.com.", Class: dns.ClassINET, TTL: 300}, AAAA: rdata.AAAA{Addr: netParseIP("2001:db8::1")}}
+	mc.Set("ns1.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{a}, nil, nil, false, 0)
+	mc.Set("ns1.example.com.", dns.TypeAAAA, dns.ClassINET, nil, false, []dns.RR{aaaa}, nil, nil, false, 0)
+
+	entries, found, expired := mc.GetTypes("ns1.example.com.", dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA}, false)
+	if !found[0] || !found[1] {
+		t.Fatalf("found = %v, want [true true]", found)
+	}
+	if expired[0] || expired[1] {
+		t.Error("entries should not be expired immediately")
+	}
+	if entries[0] == nil || entries[1] == nil {
+		t.Fatal("entries must be non-nil")
+	}
+	_ = entries[0].Unpack()
+	_ = entries[1].Unpack()
+	if len(entries[0].Answer) != 1 || len(entries[1].Answer) != 1 {
+		t.Fatalf("answers = %d/%d, want 1/1", len(entries[0].Answer), len(entries[1].Answer))
+	}
+	if _, ok := entries[0].Answer[0].(*dns.A); !ok {
+		t.Errorf("entries[0].Answer[0] = %T, want *dns.A", entries[0].Answer[0])
+	}
+	if _, ok := entries[1].Answer[0].(*dns.AAAA); !ok {
+		t.Errorf("entries[1].Answer[0] = %T, want *dns.AAAA", entries[1].Answer[0])
+	}
+}
+
+func TestGetTypes_Partial(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	a := &dns.A{Hdr: dns.Header{Name: "ns1.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
+	mc.Set("ns1.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{a}, nil, nil, false, 0)
+
+	entries, found, _ := mc.GetTypes("ns1.example.com.", dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA}, false)
+	if !found[0] || found[1] {
+		t.Fatalf("found = %v, want [true false] (AAAA not stored)", found)
+	}
+	if entries[0] == nil || entries[1] != nil {
+		t.Errorf("entries = %v, want A set / AAAA nil", entries)
+	}
+}
+
+func TestGetTypes_Miss(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	_, found, _ := mc.GetTypes("nonexistent.com.", dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA}, false)
+	if found[0] || found[1] {
+		t.Fatalf("found = %v, want [false false]", found)
+	}
+}

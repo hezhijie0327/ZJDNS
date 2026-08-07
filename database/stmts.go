@@ -60,6 +60,18 @@ func (db *DB) prepareStatements() error {
 	if err != nil {
 		return err
 	}
+	// StmtEntryBatch resolves several qtypes of one qname in a single query —
+	// NS A/AAAA address lookups never carry ECS, so a single ""/0 candidate
+	// is bound instead of the 5-way fallback OR in StmtEntryFallback.
+	db.StmtEntryBatch, err = db.SQ.Prepare(
+		`SELECT qtype, id, timestamp, ttl, validated, msg_wire FROM entries
+		 WHERE qname = ?1 AND qclass = ?2 AND dnssec_ok = ?3
+		 AND ecs_addr = ?4 AND ecs_prefix = ?5
+		 AND qtype IN (?6, ?7)`,
+	)
+	if err != nil {
+		return err
+	}
 	db.StmtEntryInsert, err = db.SQ.Prepare(
 		`INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok,
 			timestamp, ttl, expires_at, validated, msg_wire)

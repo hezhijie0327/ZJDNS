@@ -220,13 +220,31 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) [
 		return nil
 	}
 
-	aAddrs, aRefresh := lookupCachedRRs(r.cache, nsName, dns.TypeA)
-	aaaaAddrs, aaaaRefresh := lookupCachedRRs(r.cache, nsName, dns.TypeAAAA)
-	addrs := make([]string, 0, len(aAddrs)+len(aaaaAddrs))
-	addrs = append(addrs, aAddrs...)
-	addrs = append(addrs, aaaaAddrs...)
+	// One query fetches both the A and AAAA entries (NS address lookups
+	// never carry ECS).
+	entries, found, expired := r.cache.GetTypes(nsName, dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA}, false)
+	addrs := make([]string, 0, 4)
+	needsRefresh := false
+	for i, entry := range entries {
+		if !found[i] || entry == nil {
+			continue
+		}
+		_ = entry.Unpack()
+		if len(entry.Answer) == 0 {
+			continue
+		}
+		if expired[i] && !entry.CanServeExpired(config.DefaultStaleMaxAge) {
+			continue
+		}
+		for _, r := range entry.Answer {
+			if addr := rrToAddr(r); addr != "" {
+				addrs = append(addrs, addr)
+			}
+		}
+		needsRefresh = needsRefresh || expired[i] || entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent)
+	}
 
-	if (aRefresh || aaaaRefresh) && len(addrs) > 0 {
+	if needsRefresh && len(addrs) > 0 {
 		if refreshEntry != nil {
 			refreshEntry()
 		}
@@ -238,30 +256,4 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) [
 	}
 
 	return addrs
-}
-
-// lookupCachedRRs fetches cached A or AAAA records for a name and converts
-// them to "ip:port" strings. The needsRefresh return value is true when the
-// entry is expired or within the prefetch window.
-func lookupCachedRRs(store cache.Store, name string, qtype uint16) (addrs []string, needsRefresh bool) {
-	entry, found, expired := store.Get(name, qtype, dns.ClassINET, nil, false)
-	if !found || entry == nil {
-		return nil, false
-	}
-	_ = entry.Unpack()
-	if len(entry.Answer) == 0 {
-		return nil, false
-	}
-	if expired && !entry.CanServeExpired(config.DefaultStaleMaxAge) {
-		return nil, false
-	}
-
-	addrs = make([]string, 0, len(entry.Answer))
-	for _, r := range entry.Answer {
-		if addr := rrToAddr(r); addr != "" {
-			addrs = append(addrs, addr)
-		}
-	}
-	needsRefresh = expired || entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent)
-	return addrs, needsRefresh
 }

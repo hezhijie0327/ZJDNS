@@ -51,6 +51,10 @@ func (s *stubCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOptio
 	return nil, false, false
 }
 
+func (s *stubCache) GetTypes(qname string, qclass uint16, qtypes [2]uint16, dnssecOK bool) (entries [2]*cache.Entry, found, expired [2]bool) {
+	return entries, found, expired
+}
+
 func (s *stubCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
 	answer, authority, additional []dns.RR, validated bool, rcode uint16,
 ) int64 {
