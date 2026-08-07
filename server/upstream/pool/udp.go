@@ -460,8 +460,9 @@ func (p *UDPPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc
 	}
 
 	p.conns[key] = append(p.conns[key], c)
+	n := len(p.conns[key]) // captured under the lock — the log below runs unlocked
 	p.mu.Unlock()
-	log.Debugf("UDPPOOL: dialed new socket to %s (pool=%d/%d)", key, len(p.conns[key]), p.maxConns)
+	log.Debugf("UDPPOOL: dialed new socket to %s (pool=%d/%d)", key, n, p.maxConns)
 	return c, nil
 }
 

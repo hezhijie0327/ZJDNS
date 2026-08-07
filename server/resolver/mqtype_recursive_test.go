@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,11 +24,20 @@ import (
 type fakeAuthoritativeUDP struct {
 	conn       *net.UDPConn
 	addr       string
-	gotMQ      bool
-	gotTypes   []uint16
 	includeNS  bool
 	queryCount int32
+
+	mu         sync.Mutex // guards gotMQ/gotTypes/queryTypes (read-loop goroutine vs test)
+	gotMQ      bool
+	gotTypes   []uint16
 	queryTypes []uint16
+}
+
+// snapshot returns the recorded query metadata under the lock.
+func (f *fakeAuthoritativeUDP) snapshot() (gotMQ bool, gotTypes, queryTypes []uint16) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.gotMQ, f.gotTypes, f.queryTypes
 }
 
 func nsRecord(name, target string) *dns.NS {
@@ -92,13 +102,17 @@ func startFakeAuthority(t *testing.T, includeNS bool) *fakeAuthoritativeUDP {
 			}
 			atomic.AddInt32(&f.queryCount, 1)
 			if len(req.Question) > 0 {
+				f.mu.Lock()
 				f.queryTypes = append(f.queryTypes, dns.RRToType(req.Question[0]))
+				f.mu.Unlock()
 			}
 			// Record MQTYPE-Query option presence.
 			for _, rr := range req.Pseudo {
 				if mq, ok := rr.(*dns.MQQUERY); ok {
+					f.mu.Lock()
 					f.gotMQ = true
 					f.gotTypes = mq.Types
+					f.mu.Unlock()
 				}
 			}
 
@@ -154,11 +168,12 @@ func TestQueryNameserversConcurrent_MQTYPE(t *testing.T) {
 	if verdict != defense.VerdictClean {
 		t.Errorf("verdict = %v, want clean", verdict)
 	}
-	if !f.gotMQ {
+	gotMQ, gotTypes, _ := f.snapshot()
+	if !gotMQ {
 		t.Error("authority query did not carry MQTYPE-Query option")
 	}
-	if len(f.gotTypes) != 1 || f.gotTypes[0] != dns.TypeNS {
-		t.Errorf("MQTYPE list = %v, want [NS]", f.gotTypes)
+	if len(gotTypes) != 1 || gotTypes[0] != dns.TypeNS {
+		t.Errorf("MQTYPE list = %v, want [NS]", gotTypes)
 	}
 	// Merged response carries both DS (Answer) and NS (Authority).
 	ds := dnssec.FindDS(resp.Answer)
@@ -212,8 +227,9 @@ func TestResolveChildNameservers_Fallback(t *testing.T) {
 	if got := atomic.LoadInt32(&f.queryCount); got != 1 {
 		t.Fatalf("fallback issued %d queries, want 1 standalone NS query", got)
 	}
-	if len(f.queryTypes) != 1 || f.queryTypes[0] != dns.TypeNS {
-		t.Errorf("fallback query type = %v, want [NS]", f.queryTypes)
+	_, _, queryTypes := f.snapshot()
+	if len(queryTypes) != 1 || queryTypes[0] != dns.TypeNS {
+		t.Errorf("fallback query type = %v, want [NS]", queryTypes)
 	}
 }
 
@@ -278,7 +294,7 @@ func TestQueryNameserversConcurrent_NoMQTYPE(t *testing.T) {
 		context.Background(), []string{f.addr}, question, nil, nil, false, "example.com.", defense.Detector{}); err != nil {
 		t.Fatalf("query failed: %v", err)
 	}
-	if f.gotMQ {
+	if gotMQ, _, _ := f.snapshot(); gotMQ {
 		t.Error("query without MQTYPE list must not carry the option")
 	}
 }

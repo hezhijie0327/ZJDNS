@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -33,8 +34,10 @@ type fakeNSAuthority struct {
 	includeAAAA bool
 	aQueries    atomic.Int32
 	aaaaQueries atomic.Int32
-	gotMQTypes  []uint16
 	mqQueries   atomic.Int32 // queries that carried an MQTYPE-Query option
+
+	mu         sync.Mutex // guards gotMQTypes (written by the read-loop goroutine)
+	gotMQTypes []uint16
 }
 
 // stubCache satisfies cache.Store with no-op methods: getRootServers refuses
@@ -96,11 +99,15 @@ func startFakeNSAuthority(t *testing.T, respondMQ, includeAAAA bool) *fakeNSAuth
 
 			var mq *dns.MQQUERY
 			for _, rr := range req.Pseudo {
-				if m, ok := rr.(*dns.MQQUERY); ok {
-					mq = m
-					f.mqQueries.Add(1)
-					f.gotMQTypes = m.Types
+				m, ok := rr.(*dns.MQQUERY)
+				if !ok {
+					continue
 				}
+				mq = m
+				f.mqQueries.Add(1)
+				f.mu.Lock()
+				f.gotMQTypes = m.Types
+				f.mu.Unlock()
 			}
 
 			resp := new(dns.Msg)
@@ -195,8 +202,11 @@ func TestNSAddrResolution_MergedAAAA(t *testing.T) {
 	if got := f.aQueries.Load(); got != 1 {
 		t.Errorf("A queries = %d, want 1", got)
 	}
-	if !slices.Equal(f.gotMQTypes, []uint16{dns.TypeAAAA}) {
-		t.Errorf("MQTYPE-Query list = %v, want [AAAA]", f.gotMQTypes)
+	f.mu.Lock()
+	gotMQTypes := f.gotMQTypes
+	f.mu.Unlock()
+	if !slices.Equal(gotMQTypes, []uint16{dns.TypeAAAA}) {
+		t.Errorf("MQTYPE-Query list = %v, want [AAAA]", gotMQTypes)
 	}
 	if !slices.Contains(addrs, net.JoinHostPort("1.2.3.4", config.DefaultUDPPort)) {
 		t.Errorf("addrs = %v, missing A address", addrs)

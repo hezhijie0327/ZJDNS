@@ -14,6 +14,25 @@ import (
 	"codeberg.org/miekg/dns/rdata"
 )
 
+// mockUDPWriter routes responses back to the requesting client from the
+// server's own socket (same source port), which the fork's pool client
+// requires for demultiplexing.  Session() returns a session without OOB so
+// Msg.WriteTo takes the WriteMsgUDP path with nil control data.
+type mockUDPWriter struct {
+	conn   *net.UDPConn
+	remote *net.UDPAddr
+}
+
+func (w *mockUDPWriter) LocalAddr() net.Addr  { return w.conn.LocalAddr() }
+func (w *mockUDPWriter) RemoteAddr() net.Addr { return w.remote }
+func (w *mockUDPWriter) Conn() net.Conn       { return w.conn }
+func (w *mockUDPWriter) Write(p []byte) (int, error) {
+	return w.conn.WriteToUDP(p, w.remote)
+}
+func (w *mockUDPWriter) Close() error          { return nil }
+func (w *mockUDPWriter) Session() *dns.Session { return &dns.Session{Addr: w.remote} }
+func (w *mockUDPWriter) Hijack()               {}
+
 // ── isApexSOANODATA ──────────────────────────────────────────────────────────
 
 func TestIsApexSOANODATA(t *testing.T) {
@@ -198,21 +217,33 @@ func TestStripCrossZoneRecords_CaseInsensitiveKey(t *testing.T) {
 // ── Mock DNS server ──────────────────────────────────────────────────────────
 
 // startMockDNS starts an in-process UDP DNS server on an ephemeral port and
-// returns its "ip:port" address.
+// returns its "ip:port" address.  The loop is hand-rolled instead of using
+// miekg's Server: closing the packet conn must interrupt the read loop, and
+// the fork's Server.init races Shutdown when a fast test finishes before
+// ListenAndServe scheduled (no ready signal exists).
 func startMockDNS(t *testing.T, handler dns.HandlerFunc) string {
 	t.Helper()
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	srv := dns.NewServer()
-	srv.Addr = "127.0.0.1:0"
-	srv.Net = "udp"
-	srv.PacketConn = pc
-	srv.Handler = handler
-	go func() { _ = srv.ListenAndServe() }()
-	t.Cleanup(func() { srv.Shutdown(context.Background()) })
-	return pc.LocalAddr().String()
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, remote, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				return // conn closed by cleanup
+			}
+			req := new(dns.Msg)
+			req.Data = buf[:n]
+			if err := req.Unpack(); err != nil {
+				continue
+			}
+			handler.ServeDNS(context.Background(), &mockUDPWriter{conn: conn, remote: remote}, req)
+		}
+	}()
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn.LocalAddr().String()
 }
 
 // replyMsg builds an authoritative NOERROR reply to req.  The fork's server
