@@ -1,6 +1,7 @@
 package tls
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -11,14 +12,31 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
 	"github.com/pion/dtls/v3"
 	"github.com/pion/dtls/v3/pkg/protocol"
 )
 
+// dtlsStreamConn adapts a pion dtls.Conn to stream semantics for the
+// connection pool's readLoop.  pion's Read requires a buffer large enough for
+// one decrypted record and rejects small reads ("buffer is too small") — the
+// pool reads the 2-byte DNS length prefix first, which would fail on the raw
+// conn.  The bufio reader fills from the conn in large chunks and serves
+// arbitrary-size reads from its buffer.
+type dtlsStreamConn struct {
+	r *bufio.Reader
+	net.Conn
+}
+
+// Read serves reads of any size from the buffered stream.
+func (c *dtlsStreamConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
 // ExecuteDTLS performs a DNS-over-DTLS query (RFC 8094).  DNS messages are
 // framed with a 2-byte big-endian length prefix, same as DoT (RFC 7858).
+// Uses the pipelined connection pool when available (one DTLS connection
+// multiplexes many queries), falling back to a per-query dial.
 func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
 	if msg == nil {
 		return nil, errors.New("dtls: nil query message")
@@ -26,82 +44,31 @@ func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.U
 	if server == nil {
 		return nil, errors.New("dtls: nil server config")
 	}
-	tlsConfig := c.stdTLSConfig(server)
-
-	host, port, err := net.SplitHostPort(server.Address)
-	if err != nil {
-		return nil, fmt.Errorf("dtls: parse address %s: %w", server.Address, err)
-	}
-	addr := net.JoinHostPort(host, port)
-
-	var dtlsOpts []dtls.ClientOption
-	// DTLS 1.3 preferred, 1.2 fallback for older servers (RFC 9147 §4.2.2).
-	// NOTE: our own server is 1.3-only (see server/protocol/tls/dtls.go) —
-	// a dual-version [1.2,1.3] server would deadlock this client due to a
-	// pion bug (dual-stack handshake never completes). Revisit when pion
-	// ships the fix and the server widens its range.
-	dtlsOpts = append(dtlsOpts,
-		dtls.WithMinVersion(protocol.Version1_2),
-		dtls.WithMaxVersion(protocol.Version1_3),
-	)
-	if server.SkipTLSVerify {
-		dtlsOpts = append(dtlsOpts, dtls.WithInsecureSkipVerify(true))
-	}
-	if tlsConfig.ServerName != "" {
-		dtlsOpts = append(dtlsOpts, dtls.WithServerName(tlsConfig.ServerName))
-	}
-	if c.dtlsSessions != nil {
-		dtlsOpts = append(dtlsOpts, dtls.WithSessionStore(c.dtlsSessions))
-	}
-	dtlsOpts = append(dtlsOpts, dtls.WithVerifyConnection(func(state *dtls.State) error {
-		zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
-			Role:       "UPSTREAM",
-			Direction:  "DTLS negotiated for",
-			RemoteAddr: addr,
-			Cipher:     dtls.CipherSuiteName(state.CipherSuiteID),
-		})
-		return nil
-	}))
-
 	proxyDialer := c.getProxy(server)
-	var conn net.Conn
+	poolKey := transportKey(server.Address, server.ServerName, server.SkipTLSVerify, server.Proxy)
 
-	if proxyDialer != nil {
-		pconn, pErr := proxyDialer.ListenPacket(ctx)
-		if pErr != nil {
-			return nil, fmt.Errorf("dtls: proxy ListenPacket: %w", pErr)
+	if c.dtlsPool != nil {
+		pc, err := c.dtlsPool.Acquire(ctx, poolKey, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
+			return c.dialDTLSConn(dialCtx, addr, server, proxyDialer)
+		})
+		if err == nil {
+			response, err := pc.Exchange(ctx, msg)
+			if err == nil {
+				return response, nil
+			}
+			if pc.IsDead() {
+				c.dtlsPool.Remove(pc)
+			}
+			log.Debugf("UPSTREAM: pipelined DTLS query to %s failed: %v, falling back", server.Address, err)
 		}
-		udpAddr, rErr := net.ResolveUDPAddr("udp", addr)
-		if rErr != nil {
-			_ = pconn.Close()
-			return nil, fmt.Errorf("dtls: resolve %s: %w", addr, rErr)
-		}
-		conn, pErr = dtls.ClientWithOptions(pconn, udpAddr, dtlsOpts...)
-		if pErr != nil {
-			_ = pconn.Close()
-			return nil, fmt.Errorf("dtls: client %s: %w", addr, pErr)
-		}
-	} else {
-		udpAddr, rErr := net.ResolveUDPAddr("udp", addr)
-		if rErr != nil {
-			return nil, fmt.Errorf("dtls: resolve %s: %w", addr, rErr)
-		}
-		conn, rErr = dtls.DialWithOptions("udp", udpAddr, dtlsOpts...)
-		if rErr != nil {
-			return nil, fmt.Errorf("dtls: dial %s: %w", addr, rErr)
-		}
+	}
+
+	// Non-pooled fallback: manual dial + DTLS handshake + DNS exchange.
+	conn, err := c.dialDTLSConn(ctx, server.Address, server, proxyDialer)
+	if err != nil {
+		return nil, err
 	}
 	defer zdnsutil.CloseWithLog(conn, "DTLS connection", "UPSTREAM")
-
-	// Run the handshake explicitly under the caller's context: pion's
-	// implicit handshake (triggered by the first write) uses
-	// context.Background and would hang far beyond the query budget on an
-	// unresponsive server.
-	if hc, ok := conn.(interface{ HandshakeContext(context.Context) error }); ok {
-		if err := hc.HandshakeContext(ctx); err != nil {
-			return nil, fmt.Errorf("dtls: handshake %s: %w", addr, err)
-		}
-	}
 
 	// pion's read deadline defaults to never expiring — restore ctx-bound
 	// deadlines so a lost datagram cannot hang the read (and its goroutine
@@ -157,6 +124,86 @@ func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.U
 		pool.DefaultMessage.Put(response)
 		return nil, fmt.Errorf("dtls: response id mismatch: expected %d, got %d", msg.ID, response.ID)
 	}
-	log.Debugf("UPSTREAM: DTLS query to %s succeeded", addr)
+	log.Debugf("UPSTREAM: DTLS query to %s succeeded", server.Address)
 	return response, nil
+}
+
+// dialDTLSConn dials a DTLS connection and completes the handshake.  The
+// returned connection is owned by the caller (or the pool) and must be closed.
+func (c *Client) dialDTLSConn(ctx context.Context, addr string, server *config.UpstreamServer, proxyDialer *socks5.Dialer) (net.Conn, error) {
+	tlsConfig := c.stdTLSConfig(server)
+
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("dtls: parse address %s: %w", addr, err)
+	}
+	serverAddr := net.JoinHostPort(host, port)
+
+	var dtlsOpts []dtls.ClientOption
+	// DTLS 1.3 preferred, 1.2 fallback for older servers (RFC 9147 §4.2.2).
+	// NOTE: our own server is 1.3-only (see server/protocol/tls/dtls.go) —
+	// a dual-version [1.2,1.3] server would deadlock this client due to a
+	// pion bug (dual-stack handshake never completes). Revisit when pion
+	// ships the fix and the server widens its range.
+	dtlsOpts = append(dtlsOpts,
+		dtls.WithMinVersion(protocol.Version1_2),
+		dtls.WithMaxVersion(protocol.Version1_3),
+	)
+	if server.SkipTLSVerify {
+		dtlsOpts = append(dtlsOpts, dtls.WithInsecureSkipVerify(true))
+	}
+	if tlsConfig.ServerName != "" {
+		dtlsOpts = append(dtlsOpts, dtls.WithServerName(tlsConfig.ServerName))
+	}
+	if c.dtlsSessions != nil {
+		dtlsOpts = append(dtlsOpts, dtls.WithSessionStore(c.dtlsSessions))
+	}
+	dtlsOpts = append(dtlsOpts, dtls.WithVerifyConnection(func(state *dtls.State) error {
+		zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
+			Role:       "UPSTREAM",
+			Direction:  "DTLS negotiated for",
+			RemoteAddr: serverAddr,
+			Cipher:     dtls.CipherSuiteName(state.CipherSuiteID),
+		})
+		return nil
+	}))
+
+	var conn net.Conn
+	if proxyDialer != nil {
+		pconn, pErr := proxyDialer.ListenPacket(ctx)
+		if pErr != nil {
+			return nil, fmt.Errorf("dtls: proxy ListenPacket: %w", pErr)
+		}
+		udpAddr, rErr := net.ResolveUDPAddr("udp", serverAddr)
+		if rErr != nil {
+			_ = pconn.Close()
+			return nil, fmt.Errorf("dtls: resolve %s: %w", serverAddr, rErr)
+		}
+		conn, pErr = dtls.ClientWithOptions(pconn, udpAddr, dtlsOpts...)
+		if pErr != nil {
+			_ = pconn.Close()
+			return nil, fmt.Errorf("dtls: client %s: %w", serverAddr, pErr)
+		}
+	} else {
+		udpAddr, rErr := net.ResolveUDPAddr("udp", serverAddr)
+		if rErr != nil {
+			return nil, fmt.Errorf("dtls: resolve %s: %w", serverAddr, rErr)
+		}
+		conn, rErr = dtls.DialWithOptions("udp", udpAddr, dtlsOpts...)
+		if rErr != nil {
+			return nil, fmt.Errorf("dtls: dial %s: %w", serverAddr, rErr)
+		}
+	}
+
+	// Run the handshake explicitly under the caller's context: pion's
+	// implicit handshake (triggered by the first write) uses
+	// context.Background and would hang far beyond the query budget on an
+	// unresponsive server.
+	if hc, ok := conn.(interface{ HandshakeContext(context.Context) error }); ok {
+		if err := hc.HandshakeContext(ctx); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("dtls: handshake %s: %w", serverAddr, err)
+		}
+	}
+	return &dtlsStreamConn{r: bufio.NewReaderSize(conn, 65535), Conn: conn}, nil
 }

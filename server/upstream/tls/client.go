@@ -32,6 +32,7 @@ type Client struct {
 
 	dotPool  *pool.ConnPool
 	quicPool *pool.QUIC
+	dtlsPool *pool.ConnPool
 
 	sessionCache eTLS.ClientSessionCache
 
@@ -69,6 +70,7 @@ func New(
 		doh3Client:       doh3Client,
 		dotPool:          dotPool,
 		quicPool:         quicPool,
+		dtlsPool:         pool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 		sessionCache:     sessionCache,
 		quicSessionCache: quicSessionCache,
 		dtlsSessions:     dtlsSessions,
@@ -128,6 +130,9 @@ func (c *Client) Close() {
 	}
 	if c.quicPool != nil {
 		c.quicPool.Shutdown()
+	}
+	if c.dtlsPool != nil {
+		c.dtlsPool.Shutdown()
 	}
 }
 

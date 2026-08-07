@@ -11,6 +11,7 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
 	"gitee.com/Trisia/gotlcp/dtlcp"
@@ -42,6 +43,8 @@ func dialDTLCP(ctx context.Context, network, addr string, cfg *dtlcp.Config) (*d
 }
 
 // ExecuteDTLCP performs a DNS-over-DTLCP query (GM/T 0128-2023).
+// Uses the pipelined connection pool when available (one DTLCP connection
+// multiplexes many queries), falling back to a per-query dial.
 func (c *Client) ExecuteDTLCP(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
 	if msg == nil {
 		return nil, errors.New("dtlcp: nil query message")
@@ -49,39 +52,28 @@ func (c *Client) ExecuteDTLCP(ctx context.Context, msg *dns.Msg, server *config.
 	if server == nil {
 		return nil, errors.New("dtlcp: nil server config")
 	}
-
-	dtlcpConfig := c.dtlcpClientConfig(server)
-
-	host, port, err := net.SplitHostPort(server.Address)
-	if err != nil {
-		return nil, fmt.Errorf("dtlcp: parse address %s: %w", server.Address, err)
-	}
-	addr := net.JoinHostPort(host, port)
-
 	proxyDialer := c.getProxy(server)
-	var conn *dtlcp.Conn
 
-	if proxyDialer != nil {
-		pconn, pErr := proxyDialer.ListenPacket(ctx)
-		if pErr != nil {
-			return nil, fmt.Errorf("dtlcp: proxy ListenPacket: %w", pErr)
+	if c.dtlcpPool != nil {
+		pc, err := c.dtlcpPool.Acquire(ctx, tlcpPoolKey(server), server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
+			return c.dialDTLCPConn(dialCtx, addr, server, proxyDialer)
+		})
+		if err == nil {
+			response, err := pc.Exchange(ctx, msg)
+			if err == nil {
+				return response, nil
+			}
+			if pc.IsDead() {
+				c.dtlcpPool.Remove(pc)
+			}
+			log.Debugf("UPSTREAM: pipelined DTLCP query to %s failed: %v, falling back", server.Address, err)
 		}
-		remoteAddr, rErr := net.ResolveUDPAddr("udp", addr)
-		if rErr != nil {
-			_ = pconn.Close()
-			return nil, fmt.Errorf("dtlcp: resolve %s: %w", addr, rErr)
-		}
-		conn = dtlcp.Client(pconn, remoteAddr, dtlcpConfig)
-		if hErr := conn.HandshakeContext(ctx); hErr != nil {
-			_ = pconn.Close()
-			return nil, fmt.Errorf("dtlcp: handshake %s: %w", addr, hErr)
-		}
-	} else {
-		var dialErr error
-		conn, dialErr = dialDTLCP(ctx, "udp", addr, dtlcpConfig)
-		if dialErr != nil {
-			return nil, dialErr
-		}
+	}
+
+	// Non-pooled fallback: manual dial + DTLCP handshake + DNS exchange.
+	conn, err := c.dialDTLCPConn(ctx, server.Address, server, proxyDialer)
+	if err != nil {
+		return nil, err
 	}
 	defer zdnsutil.CloseWithLog(conn, "DTLCP connection", "UPSTREAM")
 
@@ -135,6 +127,37 @@ func (c *Client) ExecuteDTLCP(ctx context.Context, msg *dns.Msg, server *config.
 		return nil, fmt.Errorf("dtlcp: response id mismatch: expected %d, got %d", msg.ID, response.ID)
 	}
 
-	log.Debugf("UPSTREAM: DTLCP query to %s succeeded", addr)
+	log.Debugf("UPSTREAM: DTLCP query to %s succeeded", server.Address)
 	return response, nil
+}
+
+// dialDTLCPConn dials a DTLCP connection and completes the handshake.  The
+// returned connection is owned by the caller (or the pool) and must be closed.
+func (c *Client) dialDTLCPConn(ctx context.Context, addr string, server *config.UpstreamServer, proxyDialer *socks5.Dialer) (net.Conn, error) {
+	dtlcpConfig := c.dtlcpClientConfig(server)
+
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("dtlcp: parse address %s: %w", addr, err)
+	}
+	serverAddr := net.JoinHostPort(host, port)
+
+	if proxyDialer != nil {
+		pconn, pErr := proxyDialer.ListenPacket(ctx)
+		if pErr != nil {
+			return nil, fmt.Errorf("dtlcp: proxy ListenPacket: %w", pErr)
+		}
+		remoteAddr, rErr := net.ResolveUDPAddr("udp", serverAddr)
+		if rErr != nil {
+			_ = pconn.Close()
+			return nil, fmt.Errorf("dtlcp: resolve %s: %w", serverAddr, rErr)
+		}
+		conn := dtlcp.Client(pconn, remoteAddr, dtlcpConfig)
+		if hErr := conn.HandshakeContext(ctx); hErr != nil {
+			_ = pconn.Close()
+			return nil, fmt.Errorf("dtlcp: handshake %s: %w", serverAddr, hErr)
+		}
+		return conn, nil
+	}
+	return dialDTLCP(ctx, "udp", serverAddr, dtlcpConfig)
 }

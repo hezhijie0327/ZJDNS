@@ -28,6 +28,10 @@ type Client struct {
 	// Previously every query paid a fresh dial + TLCP handshake — a batch of
 	// N queries meant N simultaneous handshakes.  nil in tests.
 	tlcpPool *zpool.ConnPool
+
+	// dtlcpPool multiplexes pipelined DTLCP connections per upstream, same
+	// shape as tlcpPool (DTLCP is the datagram variant of TLCP).
+	dtlcpPool *zpool.ConnPool
 }
 
 // New creates a Client for TLCP and DTLCP DNS queries.
@@ -39,6 +43,7 @@ func New(getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Dura
 		dtlcpSession: dtlcp.NewLRUSessionCache(config.DefaultDTLCPSessionCacheSize),
 		httpClient:   lrumap.New[string, *http.Client](config.DefaultHTTPTLCPClientMax * 2),
 		tlcpPool:     zpool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe),
+		dtlcpPool:    zpool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe),
 	}
 	c.httpClient.SetOnEvict(func(_ string, client *http.Client) {
 		client.CloseIdleConnections()
@@ -62,6 +67,9 @@ func (c *Client) Close() {
 	}
 	if c.tlcpPool != nil {
 		c.tlcpPool.Shutdown()
+	}
+	if c.dtlcpPool != nil {
+		c.dtlcpPool.Shutdown()
 	}
 }
 

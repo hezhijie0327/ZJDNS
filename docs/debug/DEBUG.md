@@ -166,6 +166,45 @@ dig @127.0.0.1 -p 10753 www.baidu.com A +short +tcp     # TCP
 pkill -f "client-tls"
 ```
 
+### Connection Pool Tests (连接复用验证)
+
+验证每个协议只建立 **1 个连接** 服务多次查询（RFC 7766 管道化 / socket 复用），
+而不是每次查询都 dial。统计依据：pool 日志里的 "dialed" 计数应为 1、
+"falling back" 应为 0（0 次降级到每查询连接）。
+
+```bash
+# 1. 构建 + 启动全协议 server（DTLS 10434 / DTLCP 8542 / DNSCrypt 12443 等）
+go build -o /tmp/zjdns ./cmd/zjdns
+/tmp/zjdns -config docs/debug/loopback/server.json &
+sleep 3
+
+# 2. 逐个 client 配置（端口见下表），每个发 5 次查询，然后统计 pool 日志
+#    统计口径（5 次查询下应全部命中）:
+#    - ConnPool 类 (tcp/tls/dtls/tlcp/dtlcp):  "TCPPOOL: dialed new connection" = 1
+#    - UDPPool 类 (udp/dnscrypt):               "UDPPOOL: dialed new socket" = 1
+#    - DoQ (quic):                              "UPSTREAM: dialed new QUIC connection" = 1
+#    - DoH/DoH3/DoH-TLCP (http keep-alive):     lsof -nP -p <pid> 的连接数 = 1
+#    - 所有协议:                                 "falling back" = 0
+
+/tmp/zjdns -config docs/debug/loopback/client-dtls.json &
+sleep 2
+for i in 1 2 3 4 5; do dig @127.0.0.1 -p 14953 www.baidu.com A +short +time=3 +tries=1; done
+grep -c "TCPPOOL: dialed new connection" /tmp/zjdns.log   # 期望 1
+grep -c "falling back" /tmp/zjdns.log                     # 期望 0
+pkill -f "client-dtls"
+
+# DoH 系列无 pool 日志，用 lsof 数连接:
+/tmp/zjdns -config docs/debug/loopback/client-https.json &
+sleep 2
+for i in 1 2 3 4 5; do dig @127.0.0.1 -p 11853 www.baidu.com A +short +time=3 +tries=1; done
+lsof -nP -p $! | grep -c "ESTABLISHED"                    # 期望 1 (HTTP keep-alive 复用)
+pkill -f "client-https"
+```
+
+> [!NOTE]
+> 日志里的 "ERROR" 匹配多为 `rcode=NOERROR` 误匹配——统计前先 `grep -i "error" | grep -v NOERROR` 排除。
+> DTLS 的连接复用在 Windows 上无 control-message 支持（hopguard 降级），但连接池本身不受影响。
+
 ### RFC Feature Tests
 
 ```bash
