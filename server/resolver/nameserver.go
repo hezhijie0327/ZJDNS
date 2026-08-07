@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -329,7 +330,10 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 				return nil
 			}
 
-			// Cache miss: resolve A and AAAA concurrently.
+			// Cache miss: resolve A and AAAA concurrently.  The A walk
+			// bundles AAAA via RFC 10029 (one authority query instead of
+			// two walks); when the authority merges AAAA into the A
+			// response, the AAAA walk short-circuits.
 			var nsAddrs []string
 			var ansARecords []dns.RR
 			var ansAAAARecords []dns.RR
@@ -337,13 +341,56 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			var wg sync.WaitGroup
 			wg.Add(2)
 
+			aDone := make(chan struct{})
+			var aMQResp *dns.MQRESPONSE
+			var aMerged atomic.Bool // A walk merged AAAA (or proven absent)
+
+			// commitAAAARecords publishes one side's AAAA data exactly
+			// once.  When the A walk merges AAAA while a concurrently
+			// started AAAA walk is still in flight, whichever finishes
+			// first publishes; the loser's duplicate is dropped — the
+			// cache write and address list stay duplicate-free.  Only
+			// AAAA records and their RRSIGs enter the TypeAAAA cache
+			// entry; A records (and any CNAME chain) stay out.
+			var aaaaCommitted atomic.Bool
+			commitAAAARecords := func(records []dns.RR) {
+				if !aaaaCommitted.CompareAndSwap(false, true) {
+					return
+				}
+				addrMu.Lock()
+				for _, rr := range records {
+					switch r := rr.(type) {
+					case *dns.A:
+						// A records stay in the TypeA cache entry.
+					case *dns.AAAA:
+						ansAAAARecords = append(ansAAAARecords, rr)
+						nsAddrs = append(nsAddrs, net.JoinHostPort(r.AAAA.String(), config.DefaultUDPPort))
+					case *dns.RRSIG:
+						if r.TypeCovered == dns.TypeAAAA {
+							ansAAAARecords = append(ansAAAARecords, rr)
+						}
+					default:
+						// CNAME chains and glue are not AAAA data.
+					}
+				}
+				addrMu.Unlock()
+			}
+
 			go func() {
 				defer zdnsutil.HandlePanic("Resolve NS A")
 				defer wg.Done()
+				defer close(aDone)
 				if queryCtx.Err() != nil {
 					return
 				}
-				ansARecords = r.resolveNSAddrType(queryCtx, nsName, dns.TypeA, depth+1, forceTCP, &nsAddrs, &addrMu)
+				ansARecords, aMQResp = r.resolveNSAddrType(queryCtx, nsName, dns.TypeA, depth+1, forceTCP, &nsAddrs, &addrMu, []uint16{dns.TypeAAAA})
+				// §3.4: a MQTYPE-capable authority lists every completely
+				// processed QTx — AAAA present in the list means it was
+				// merged (or proven absent with an authenticated denial).
+				if aMQResp != nil && slices.Contains(aMQResp.Types, dns.TypeAAAA) {
+					commitAAAARecords(ansARecords)
+					aMerged.Store(true)
+				}
 			}()
 
 			go func() {
@@ -352,10 +399,47 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 				if queryCtx.Err() != nil {
 					return
 				}
-				ansAAAARecords = r.resolveNSAddrType(queryCtx, nsName, dns.TypeAAAA, depth+1, forceTCP, &nsAddrs, &addrMu)
+				// Non-blocking check: in real networks the A walk's round
+				// trips (tens of ms) dwarf goroutine scheduling, so by the
+				// time this goroutine runs the merge decision is usually
+				// already made — the AAAA walk is skipped entirely.  When
+				// the authority does not support MQTYPE (or A is still in
+				// flight), the walk proceeds in parallel, exactly like the
+				// pre-MQTYPE path.
+				select {
+				case <-aDone:
+					if aMQResp != nil {
+						// AAAA handled by the merged A response (or proven
+						// absent) — nothing left to resolve.
+						return
+					}
+				default:
+				}
+				var aaaaRecords []dns.RR
+				aaaaRecords, _ = r.resolveNSAddrType(queryCtx, nsName, dns.TypeAAAA, depth+1, forceTCP, &nsAddrs, &addrMu, nil)
+				if aMerged.Load() {
+					// A merged AAAA while this walk ran — its records are
+					// already committed; dropping the duplicate walk's
+					// result keeps the cache write free of duplicates.
+					return
+				}
+				commitAAAARecords(aaaaRecords)
 			}()
 
 			wg.Wait()
+
+			// A concurrently started AAAA walk may have added addresses the
+			// merged A response also carries — deduplicate before use.
+			seenAddrs := make(map[string]struct{}, len(nsAddrs))
+			uniqAddrs := nsAddrs[:0]
+			for _, addr := range nsAddrs {
+				if _, ok := seenAddrs[addr]; ok {
+					continue
+				}
+				seenAddrs[addr] = struct{}{}
+				uniqAddrs = append(uniqAddrs, addr)
+			}
+			nsAddrs = uniqAddrs
 
 			if len(nsAddrs) == 0 {
 				return nil
@@ -488,9 +572,12 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 
 // resolveNSAddrType resolves a single NS address type (A or AAAA) and appends
 // resolved addresses to nsAddrs under addrMu. For A queries, AAAA glue from
-// the Additional section is also collected. Returns the answer records for
-// subsequent caching.
-func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype uint16, depth int, forceTCP bool, nsAddrs *[]string, addrMu *sync.Mutex) (answer []dns.RR) {
+// the Additional section is also collected.  When mqt is non-empty, every
+// authority query of the walk carries an RFC 10029 MQTYPE-Query bundling
+// those types (e.g. AAAA alongside A); the merged MQTYPE-Response is returned
+// so the caller can short-circuit the companion walk.  Returns the answer
+// records for subsequent caching.
+func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype uint16, depth int, forceTCP bool, nsAddrs *[]string, addrMu *sync.Mutex, mqt []uint16) (answer []dns.RR, mqResp *dns.MQRESPONSE) {
 	var qr QueryResult
 	if r.addrGroup != nil {
 		// Dedup the full recursive walk per NS name + qtype: concurrent
@@ -498,13 +585,13 @@ func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype 
 		// registrar's shared DNS) each used to walk root→TLD→auth for it.
 		key := nsName + "/" + dns.TypeToString[qtype]
 		qr, _, _ = r.addrGroup.Do(ctx, key, func() (QueryResult, error) {
-			return r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP), nil
+			return r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP, mqt), nil
 		})
 	} else {
-		qr = r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP)
+		qr = r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP, mqt)
 	}
 	if qr.Err != nil {
-		return answer
+		return answer, nil
 	}
 	addrMu.Lock()
 	defer addrMu.Unlock()
@@ -528,5 +615,5 @@ func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype 
 			}
 		}
 	}
-	return qr.Answer
+	return qr.Answer, qr.MQResponse
 }
