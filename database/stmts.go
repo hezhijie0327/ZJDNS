@@ -43,19 +43,15 @@ func (db *DB) prepareStatements() error {
 	// single round trip (cache.Get used to run up to 5 sequential queries).
 	// The OR covers exactly the 5 candidates ecsFallbackCandidates produces
 	// (exact + 4 standard prefixes); unused slots bind a sentinel addr that
-	// can never match.  ORDER BY CASE maps each candidate slot to its
-	// specificity order — must match the candidate loop's semantics of
-	// first-match-wins.
+	// can never match.  No ORDER BY: an expression sort makes SQLite build a
+	// temporary btree per execution (16% CPU in load tests); the caller
+	// scans the (≤5) rows and picks the most specific candidate itself.
 	db.StmtEntryFallback, err = db.SQ.Prepare(
-		`SELECT id, timestamp, ttl, validated, msg_wire FROM entries
+		`SELECT ecs_prefix, id, timestamp, ttl, validated, msg_wire FROM entries
 		 WHERE qname = ?1 AND qtype = ?2 AND qclass = ?3 AND dnssec_ok = ?4
 		 AND ((ecs_addr = ?5 AND ecs_prefix = ?6) OR (ecs_addr = ?7 AND ecs_prefix = ?8) OR
 		      (ecs_addr = ?9 AND ecs_prefix = ?10) OR (ecs_addr = ?11 AND ecs_prefix = ?12) OR
-		      (ecs_addr = ?13 AND ecs_prefix = ?14))
-		 ORDER BY CASE ecs_prefix
-			WHEN ?6 THEN 0 WHEN ?8 THEN 1 WHEN ?10 THEN 2 WHEN ?12 THEN 3 WHEN ?14 THEN 4
-			ELSE 99 END
-		 LIMIT 1`,
+		      (ecs_addr = ?13 AND ecs_prefix = ?14))`,
 	)
 	if err != nil {
 		return err

@@ -2,9 +2,7 @@ package cache
 
 import (
 	"context"
-	"database/sql"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -299,12 +297,34 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 			args[idx], args[idx+1] = fallbackSentinelAddr, 0
 		}
 	}
-	err := s.db.StmtEntryFallback.QueryRow(args[:]...).Scan(&id, &ts, &entryTTL, &validated, &msgWire)
+	// Scan every matching row and keep the most specific candidate (largest
+	// ecs_prefix).  StmtEntryFallback carries no ORDER BY — an expression
+	// sort built a temporary btree per execution (~16% CPU in load tests);
+	// at most 5 rows match, so the winner is picked here.
+	rows, err := s.db.StmtEntryFallback.Query(args[:]...)
 	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			log.Warnf("CACHE: get query failed for %s (type=%d): %v", qname, qtype, err)
+		log.Warnf("CACHE: get query failed for %s (type=%d): %v", qname, qtype, err)
+		return nil, false, false
+	}
+	defer func() { _ = rows.Close() }()
+	var rid int64
+	var rts int64
+	var rttl int
+	var rval int
+	var rwire []byte
+	bestPrefix := -1
+	for rows.Next() {
+		var rowPrefix int
+		if err := rows.Scan(&rowPrefix, &rid, &rts, &rttl, &rval, &rwire); err != nil {
+			log.Warnf("CACHE: get scan failed for %s (type=%d): %v", qname, qtype, err)
 			return nil, false, false
 		}
+		if rowPrefix > bestPrefix {
+			bestPrefix = rowPrefix
+			id, ts, entryTTL, validated, msgWire = rid, rts, rttl, rval, rwire
+		}
+	}
+	if bestPrefix == -1 {
 		log.Debugf("CACHE: miss for %s (type=%d)", qname, qtype)
 		return nil, false, false
 	}
