@@ -146,6 +146,14 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 					}
 				}
 				if rcode == dns.RcodeSuccess {
+					// Reject truncated responses: a TC bit over TCP means
+					// the authoritative server could not deliver a complete
+					// answer even over a stream transport (RFC 1035 §4.2.2).
+					if result.Response.Truncated {
+						log.Debugf("RECURSION: ns=%s truncated response for %s %s — skipping", nsAddr, question.Name, dns.TypeToString[question.Qtype])
+						pool.DefaultMessage.Put(result.Response)
+						return nil
+					}
 					if r.poisonguard {
 						v := detector.Validate(currentDomain, normalizedQname, result.Response)
 						if v == defense.VerdictPoisoned {
@@ -481,7 +489,18 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 // the Additional section is also collected. Returns the answer records for
 // subsequent caching.
 func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype uint16, depth int, forceTCP bool, nsAddrs *[]string, addrMu *sync.Mutex) (answer []dns.RR) {
-	qr := r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP)
+	var qr QueryResult
+	if r.addrGroup != nil {
+		// Dedup the full recursive walk per NS name + qtype: concurrent
+		// walks for different zones that share the same NS name (e.g. a
+		// registrar's shared DNS) each used to walk root→TLD→auth for it.
+		key := nsName + "/" + dns.TypeToString[qtype]
+		qr, _, _ = r.addrGroup.Do(ctx, key, func() (QueryResult, error) {
+			return r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP), nil
+		})
+	} else {
+		qr = r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP)
+	}
 	if qr.Err != nil {
 		return answer
 	}

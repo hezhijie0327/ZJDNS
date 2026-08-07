@@ -123,7 +123,6 @@ const (
 	DefaultBackgroundShutdownTimeout = 30 * time.Second // bounded wait during shutdown (matches recursive timeout)
 	DefaultShutdownTimeout           = 15 * time.Second // graceful shutdown deadline
 
-	DefaultPendingCleanupInterval = 60 * time.Second // singleflight orphan-entry cleanup ticker
 	DefaultPendingFollowerTimeout = 60 * time.Second // singleflight follower poll timeout (after leader completion)
 )
 

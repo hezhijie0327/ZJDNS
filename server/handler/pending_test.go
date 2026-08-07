@@ -1,13 +1,13 @@
 package handler
 
 import (
+	"errors"
 	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 	"zjdns/edns"
-	"zjdns/internal/lrumap"
 	"zjdns/internal/pending"
 	"zjdns/server/resolver"
 
@@ -33,9 +33,6 @@ func TestPendingRequests_LeaderAndFollower(t *testing.T) {
 	var followerResult *resolver.QueryResult
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		// Signal that we're about to call Join.  The leader waits
-		// for this before Done() so the follower definitely finds
-		// the pending key.
 		close(followerJoined)
 		r, f := pr.Join(qname, qtype, qclass, nil, false)
 		if !f {
@@ -44,7 +41,7 @@ func TestPendingRequests_LeaderAndFollower(t *testing.T) {
 		followerResult = r
 	})
 
-	<-followerJoined // follower goroutine is about to call Join()
+	<-followerJoined
 
 	expected := &resolver.QueryResult{Server: "test-server"}
 	pr.Done(qname, qtype, qclass, nil, false, expected)
@@ -78,7 +75,7 @@ func TestPendingRequests_MultipleFollowers(t *testing.T) {
 
 	for range numFollowers {
 		wg.Go(func() {
-			entered <- struct{}{} // about to block in Join()
+			entered <- struct{}{}
 			_, f := pr.Join(qname, qtype, qclass, nil, false)
 			if !f {
 				t.Error("expected follower")
@@ -87,9 +84,6 @@ func TestPendingRequests_MultipleFollowers(t *testing.T) {
 		})
 	}
 
-	// Ensure all followers get a chance to enter Join() before Done().
-	// In production, the upstream resolution (50+ ms) provides this
-	// window naturally.
 	for range numFollowers {
 		<-entered
 	}
@@ -182,7 +176,7 @@ func TestPendingRequests_ConcurrentSameKey(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-allSpawned
-			entered <- struct{}{} // about to call Join()
+			entered <- struct{}{}
 			_, f := pr.Join(qname, dns.TypeA, qclass, nil, false)
 			if f {
 				followers.Add(1)
@@ -192,20 +186,17 @@ func TestPendingRequests_ConcurrentSameKey(t *testing.T) {
 		}()
 	}
 
-	close(allSpawned) // all goroutines surge toward Join()
+	close(allSpawned)
 
-	// Wait for all goroutines to have entered Join().
 	for range goroutines {
 		<-entered
 	}
 	time.Sleep(time.Millisecond)
 
-	// Exactly one goroutine got past the mutex without finding a key.
 	if n := leaders.Load(); n != 1 {
 		t.Errorf("expected exactly 1 leader, got %d", n)
 	}
 
-	// Leader completes — wakes all blocked followers.
 	pr.Done(qname, dns.TypeA, qclass, nil, false, &resolver.QueryResult{Server: "upstream"})
 
 	wg.Wait()
@@ -227,11 +218,10 @@ func TestPendingRequests_NilECSAndZeroECSAreSameKey(t *testing.T) {
 		t.Fatal("expected leader for nil ECS")
 	}
 
-	// Follower runs in a goroutine because it blocks until Done().
 	started := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		close(started) // about to block in Join()
+		close(started)
 		_, f := pr.Join("example.com.", dns.TypeA, qclass, zeroECS, false)
 		if !f {
 			t.Error("expected follower for zero-value ECS (same key as nil ECS)")
@@ -244,6 +234,8 @@ func TestPendingRequests_NilECSAndZeroECSAreSameKey(t *testing.T) {
 	wg.Wait()
 }
 
+// ── Refresh group tests (pending.Group, skip-follower) ──────────────────────
+
 func TestPendingRefreshes_LeaderAndFollower(t *testing.T) {
 	pr := pending.NewGroup[PendingKey]()
 
@@ -253,20 +245,16 @@ func TestPendingRefreshes_LeaderAndFollower(t *testing.T) {
 
 	key := BuildPendingKey(qname, qtype, qclass, nil, false)
 
-	// Leader.
 	if !pr.Start(key) {
 		t.Fatal("expected leader for first call")
 	}
 
-	// Follower: same key, should be rejected.
 	if pr.Start(key) {
 		t.Fatal("expected follower rejection for duplicate key")
 	}
 
-	// Leader completes.
 	pr.Done(key)
 
-	// After Done, a new call should become leader again.
 	if !pr.Start(key) {
 		t.Fatal("expected leader after Done")
 	}
@@ -305,7 +293,6 @@ func TestPendingRefreshes_ECSVariation(t *testing.T) {
 	if !pr.Start(ecsKey) {
 		t.Fatal("expected leader for ECS")
 	}
-	// nil ECS and zero-value ECS produce the same key (both have ecsAddr="").
 	if pr.Start(nilKey) {
 		t.Fatal("expected follower for nil ECS (same as empty ECS)")
 	}
@@ -406,7 +393,6 @@ func TestPendingRefreshes_DNSSECKeyIsolation(t *testing.T) {
 	if !pr.Start(keyWithDNSSEC) {
 		t.Fatal("expected leader for dnssecOK=true")
 	}
-	// Different dnssecOK — should be independent keys.
 	if !pr.Start(keyWithoutDNSSEC) {
 		t.Fatal("expected leader for dnssecOK=false (different key)")
 	}
@@ -446,72 +432,56 @@ func TestPendingRefreshes_LeaderDoneFollowerCanProceed(t *testing.T) {
 }
 
 // ── R3-M4: LRU-evicted in-flight call ─────────────────────────────────────────
-// When the pending-request LRU evicts an in-flight leader call, followers
-// must wake with an error result (→ SERVFAIL) instead of a nil result (→ the
-// query silently dropped with no response).
+// The eviction-wake semantics are tested in internal/pending (TestCallGroup_
+// EvictionWakesFollower).  Here we verify the handler layer maps the sentinel
+// error correctly.
 
-func TestPendingRequests_OnEvict_CarriesError(t *testing.T) {
-	p := NewPendingRequests()
-	call := &pendingCall{done: make(chan struct{})}
-	p.sets.OnEvict(PendingKey{}, call)
-	select {
-	case <-call.done:
-	default:
-		t.Fatal("eviction must close the done channel")
-	}
-	if call.result == nil || call.result.Err == nil {
-		t.Error("evicted call must carry an error result so followers SERVFAIL (R3-M4)")
-	}
-}
-
-func TestPendingRequests_EvictedLeader_WakesFollowerWithError(t *testing.T) {
-	// Capacity-1 registry so the second key evicts the first.
-	p := &PendingRequests{sets: lrumap.New[PendingKey, *pendingCall](1)}
-	p.sets.OnEvict = func(_ PendingKey, call *pendingCall) {
-		call.once.Do(func() {
-			call.result = &resolver.QueryResult{Err: errPendingEvicted}
-			close(call.done)
-		})
+func TestPendingRequests_EvictedErrorMapping(t *testing.T) {
+	// Verify that PendingRequests.Join maps pending.ErrEvicted → errPendingEvicted.
+	// Capacity-1 so the second key evicts the first.
+	pr := &PendingRequests{
+		cg: pending.NewCallGroup[PendingKey, *resolver.QueryResult](
+			1,
+			10*time.Second,
+			nil,
+		),
 	}
 
-	keyA := BuildPendingKey("a.example.com.", dns.TypeA, dns.ClassINET, nil, false)
-	keyB := BuildPendingKey("b.example.com.", dns.TypeA, dns.ClassINET, nil, false)
-
-	if _, follower := p.Join("a.example.com.", dns.TypeA, dns.ClassINET, nil, false); follower {
+	// Leader for key A.
+	_, follower := pr.Join("a.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if follower {
 		t.Fatal("first join must be the leader")
 	}
 
-	start := make(chan struct{})
+	// Follower for key A.
 	got := make(chan *resolver.QueryResult, 1)
 	go func() {
-		<-start
-		qr, follower := p.Join("a.example.com.", dns.TypeA, dns.ClassINET, nil, false)
-		if !follower {
+		qr, f := pr.Join("a.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+		if f {
+			got <- qr
+		} else {
 			got <- nil
-			return
 		}
-		got <- qr
 	}()
-	close(start)
-	// Give the follower time to block on the leader's done channel.
 	time.Sleep(100 * time.Millisecond)
 
-	// Filling the single slot with B evicts A's in-flight call.
-	if _, follower := p.Join("b.example.com.", dns.TypeA, dns.ClassINET, nil, false); follower {
+	// Evict key A by joining key B.
+	_, follower = pr.Join("b.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if follower {
 		t.Fatal("second join must be the leader")
 	}
-	_ = keyA
-	_ = keyB
 
 	select {
 	case qr := <-got:
 		if qr == nil {
-			t.Fatal("follower became leader instead of observing the eviction — test raced")
+			t.Fatal("follower became leader instead of observing eviction")
 		}
-		if qr.Err == nil {
-			t.Errorf("follower must wake with an error, got %v", qr)
+		if !errors.Is(qr.Err, errPendingEvicted) {
+			t.Errorf("expected errPendingEvicted, got %v", qr.Err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("follower never woke after leader eviction")
+		t.Fatal("follower never woke")
 	}
+	// Cleanup.
+	pr.Done("b.example.com.", dns.TypeA, dns.ClassINET, nil, false, &resolver.QueryResult{})
 }

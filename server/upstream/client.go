@@ -225,6 +225,15 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 				log.Debugf("UPSTREAM: TCP fallback succeeded for %s via %s", qname, server.Address)
 			} else {
 				log.Debugf("UPSTREAM: TCP fallback failed for %s via %s: %v", qname, server.Address, tcpErr)
+				// Discard the truncated UDP response — returning it as a
+				// success would serve incomplete data without a TC signal.
+				if result.Response != nil {
+					zpool.DefaultMessage.Put(result.Response)
+					result.Response = nil
+				}
+				if result.Error == nil {
+					result.Error = fmt.Errorf("tcp fallback after truncated response failed: %w", tcpErr)
+				}
 			}
 		}
 	}

@@ -466,77 +466,18 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 		return r.validateOrRetry(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain, chain.zoneDNSKEYs)
 	}
 
-	// Query the authoritative nameservers explicitly for DNSKEY + RRSIG
-	dnskeyQuestion := Question{Name: dnsutil.Fqdn(currentDomain), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
-	dnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, nil, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
-	if err != nil {
-		log.Debugf("SECURITY: DNSKEY query failed for %s: %v", currentDomain, err)
-		chain.lastEDECode = dns.ExtendedErrorNetworkError
-		return false
-	}
-	defer pool.DefaultMessage.Put(dnskeyResp)
-
-	dnskeyRecords := dnssec.FindDNSKEYs(dnskeyResp.Answer)
-	if len(dnskeyRecords) == 0 {
-		log.Debugf("SECURITY: no DNSKEY records found for %s", currentDomain)
-		chain.lastEDECode = dns.ExtendedErrorDNSKEYMissing
-		return false
-	}
-
-	allSigs := dnssec.CollectRRSIGs(dnskeyResp.Answer, dnskeyResp.Ns, dnskeyResp.Extra)
-	dnskeyRRSIGs := dnssec.FindRRSIGs(allSigs, dnsutil.Fqdn(currentDomain), dns.TypeDNSKEY)
-
-	var keysVerified bool
-	switch {
-	case len(chain.childDS) > 0:
-		// DS match AND the matched key's signature over the whole RRset
-		// (RFC 4035 §5.2) — see verifyDNSKEYWithDS.
-		if matchedKey, err := verifyDNSKEYWithDS(crypto, chain.childDS, dnskeyRecords, dnskeyRRSIGs); err == nil && matchedKey != nil {
-			keysVerified = true
-			log.Debugf("SECURITY: verified %s DNSKEY via DS from parent (key_tag=%d)", currentDomain, matchedKey.KeyTag())
-		} else {
-			log.Debugf("SECURITY: DS→DNSKEY verification failed for %s: %v (bogus delegation)", currentDomain, err)
-			switch {
-			case errors.Is(err, dnssec.ErrUnsupportedDigest):
-				chain.lastEDECode = dns.ExtendedErrorUnsupportedDSDigestType // EDE 2
-			case errors.Is(err, dnssec.ErrNoZoneKeyBit):
-				chain.lastEDECode = dns.ExtendedErrorNoZoneKeyBitSet // EDE 11
-			default:
-				chain.lastEDECode = dns.ExtendedErrorDNSBogus // EDE 6
-			}
-			return false
-		}
-	case chain.dsPresentButUnverified:
-		chain.lastEDECode = dns.ExtendedErrorDNSBogus
-		return false
-	case currentDomain == config.DNSRootZone:
-		if err := crypto.SelfVerifyDNSKEY(dnskeyRecords, dnskeyRRSIGs); err == nil {
-			// Cross-check against embedded trust anchors (RFC 7958) — a
-			// self-signature alone can be forged by a MITM of the root
-			// DNSKEY query (see ensureZoneDNSKEYs for the same check).
-			if !crypto.ContainsRootKey(dnskeyRecords) {
-				log.Debugf("SECURITY: root DNSKEY set does not match embedded trust anchors")
-				chain.lastEDECode = dns.ExtendedErrorDNSBogus
-				return false
-			}
-			keysVerified = true
-			log.Debugf("SECURITY: self-verified root DNSKEY")
-		} else {
-			log.Debugf("SECURITY: root DNSKEY self-verification failed: %v", err)
+	// Delegate to ensureZoneDNSKEYs — it fetches, verifies (DS / root
+	// trust-anchor cross-check / insecure-delegation), and caches the keys
+	// under the dnskeyGroup singleflight dedup.
+	r.ensureZoneDNSKEYs(ctx, nameservers, currentDomain, chain)
+	if len(chain.zoneDNSKEYs) == 0 {
+		if chain.lastEDECode == 0 {
 			chain.lastEDECode = dns.ExtendedErrorDNSBogus
-			return false
 		}
-	}
-
-	if !keysVerified {
-		chain.lastEDECode = dns.ExtendedErrorDNSBogus
 		return false
 	}
 
-	crypto.CacheZoneKeys(currentDomain, dnskeyRecords)
-	chain.zoneDNSKEYs = dnskeyRecords
-
-	return r.validateOrRetry(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain, dnskeyRecords)
+	return r.validateOrRetry(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain, chain.zoneDNSKEYs)
 }
 
 // validateOrRetry validates a response against verified DNSKEYs.  When RRSIGs

@@ -49,6 +49,7 @@ type QueryResult struct {
 	UpstreamEDE   *dns.EDE        // EDE code captured from upstream response (per-query, no data race)
 	MQResponse    *dns.MQRESPONSE // RFC 10029 MQTYPE-Response from the upstream (forwarding pass-through)
 	DNSSECEDE     uint16          // DNSSEC EDE from recursive validation (per-query, no cross-query race)
+	Truncated     bool            // TC bit from upstream response
 	Err           error
 }
 
@@ -189,6 +190,7 @@ func New(cfg *Config) (*Resolver, error) {
 		ctx:         cfg.Ctx,
 		walkGroup:   pending.NewResultGroup[string, QueryResult](),
 		dnskeyGroup: pending.NewResultGroup[string, struct{}](),
+		addrGroup:   pending.NewResultGroup[string, QueryResult](),
 	}
 	r.cname = &CNAME{resolver: r}
 	r.validator = &Validator{Crypto: cfg.Crypto, Poisonguard: cfg.PoisonDetector}

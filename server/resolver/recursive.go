@@ -56,6 +56,12 @@ type Recursive struct {
 	// DIFFERENT zones still fetch the same parent DNSKEYs (e.g. the TLD's).
 	// nil in tests.
 	dnskeyGroup *pending.ResultGroup[string, struct{}]
+
+	// addrGroup coalesces NS A/AAAA address resolution per nameserver —
+	// concurrent walks for different zones that share the same NS name
+	// (e.g. a registrar's shared DNS service) each used to perform a full
+	// recursive walk from root.  nil in tests.
+	addrGroup *pending.ResultGroup[string, QueryResult]
 }
 
 // CNAME handles CNAME record chasing during DNS resolution, following the
@@ -174,7 +180,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		rcode := response.Rcode
 		answer, authority, additional := response.Answer, response.Ns, response.Extra
 		pool.DefaultMessage.Put(response)
-		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Rcode: rcode, Validated: cryptoValidated, ECS: ecsResponse, Server: config.ProtoRecursive, Poisoned: poisonSeen, DNSSECEDE: chain.lastEDECode}
+		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Rcode: rcode, Validated: cryptoValidated, ECS: ecsResponse, Server: config.ProtoRecursive, Poisoned: poisonSeen, DNSSECEDE: chain.lastEDECode, Truncated: response.Truncated}
 	}
 
 	for {
