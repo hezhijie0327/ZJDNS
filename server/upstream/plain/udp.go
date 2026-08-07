@@ -69,26 +69,29 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 	proxyDialer := c.getProxy(server)
 
 	// GFW only hijacks A/AAAA — skip multi-read for other QTYPEs.
-	needMultiRead := server.Spoofguard || server.HopGuard
 	isAQtype := len(msg.Question) > 0 &&
 		(dns.RRToType(msg.Question[0]) == dns.TypeA ||
 			dns.RRToType(msg.Question[0]) == dns.TypeAAAA)
 
-	if isAQtype && server.HopGuard && needMultiRead {
-		// HopGuard needs TTL capture (ReadMsgUDP control messages) — the
-		// pooled socket uses Read which cannot extract TTL.  Keep the
-		// exclusive-socket multi-read path for HopGuard.
-		return c.executeUDPMultiRead(ctx, msg, server, proxyDialer)
-	}
-
-	if isAQtype && server.Spoofguard && !server.HopGuard && c.udpPool != nil {
-		// Spoofguard-only (no HopGuard): use the pooled socket in collect
-		// mode — readLoop delivers every matching packet to a buffered
-		// channel, and the spoofguard state machine runs in this goroutine.
-		if resp, err := c.executeUDPCollect(ctx, msg, server); err == nil {
-			return resp, nil
+	if isAQtype && (server.Spoofguard || server.HopGuard) {
+		if proxyDialer != nil {
+			// Defense over SOCKS5: the multi-read loop runs on the proxy
+			// UDP socket.  HopGuard auto-disables here — SOCKS5 forwards
+			// datagrams without IP TTL metadata.
+			return c.executeUDPMultiRead(ctx, msg, server, proxyDialer)
 		}
-		// Pooled collect failed — fall through to fallback.
+		if c.udpPool != nil {
+			// Pooled collect mode — readLoop captures the IP TTL via
+			// control messages, so both spoofguard and hopguard run over
+			// the pooled sockets.
+			if resp, err := c.executeUDPCollect(ctx, msg, server); err == nil {
+				return resp, nil
+			}
+			// Pooled collect failed — fall through to fallback.
+		} else if server.HopGuard {
+			// No pool — hopguard needs the exclusive-socket TTL capture.
+			return c.executeUDPMultiRead(ctx, msg, server, proxyDialer)
+		}
 	}
 
 	if proxyDialer != nil {
@@ -172,9 +175,9 @@ func matchQuestion(response, query *dns.Msg) bool {
 // executeUDPCollect sends a query over a pooled UDP socket and collects
 // multiple responses via the pool's collect mode — the spoofguard state
 // machine runs in this goroutine, reusing the pooled connection across
-// queries.  HopGuard TTL capture is unavailable on the pooled path
-// (the socket uses Read, not ReadMsgUDP); spoofguard EDNS-gate and
-// fast-authority-signal paths still work without TTL.
+// queries.  HopGuard TTL validation gates the same packets (the pool's
+// readLoop captures the IP TTL via control messages); when capture is
+// unavailable (e.g. Windows), HopGuard degrades to TTL-less operation.
 func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
 	uc, err := c.udpPool.Acquire(ctx, server.Address, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
 		var d net.Dialer
@@ -182,6 +185,20 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// HopGuard: the pooled socket captured TTLs in readLoop — wire the
+	// fingerprint gate here.  A nil capture (no control-message support)
+	// degrades to spoofguard-only behaviour: TTL=0 passes Validate and
+	// never becomes confident.
+	var hg *defense.HopGuard
+	if server.HopGuard {
+		hg = c.hopGuard
+		if uc.Capture() == nil {
+			if _, warned := c.hopguardWarned.LoadOrStore(server.Address, true); !warned {
+				log.Warnf("UPSTREAM: hopguard TTL/HopLimit capture not available on %s", server.Address)
+			}
+		}
 	}
 
 	originalID := msg.ID
@@ -223,7 +240,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 			}
 			uc.ReleaseCollect(matchKey)
 			return nil, ctx.Err()
-		case packet, ok := <-collectCh:
+		case pkt, ok := <-collectCh:
 			if !ok {
 				uc.ReleaseCollect(matchKey)
 				if sg.last != nil {
@@ -231,10 +248,23 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 				}
 				return nil, errors.New("pooled udp connection closed during spoofguard collect")
 			}
-			if len(packet) < 2 || uint16(packet[0])<<8|uint16(packet[1]) != trackingID {
+			// HopGuard: validate gates packet acceptance first; Feed happens
+			// only for accepted TTLs (and again on final adoption below), so
+			// GFW-injected TTLs never enter the histogram.
+			if hg != nil && !hg.Validate(server.Address, pkt.TTL) {
 				continue
 			}
-			resp := sg.processPacket(packet, len(packet), msg.UDPSize, server.Address, false, 0, true)
+			if hg != nil {
+				hg.Feed(server.Address, pkt.TTL)
+			}
+			if len(pkt.Data) < 2 || uint16(pkt.Data[0])<<8|uint16(pkt.Data[1]) != trackingID {
+				continue
+			}
+			// TTL confidence signal for spoofguard: when hopguard is armed
+			// and the TTL is trusted, ambiguous EDNS responses can be
+			// fast-accepted without waiting for a second candidate.
+			ttlConfident := hg != nil && hg.Confident(server.Address)
+			resp := sg.processPacket(pkt.Data, len(pkt.Data), msg.UDPSize, server.Address, ttlConfident, pkt.TTL, server.Spoofguard)
 			if resp != nil {
 				if sg.last != nil && sg.last != resp {
 					pool.DefaultMessage.Put(sg.last)
@@ -244,6 +274,9 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 				}
 				if sg.nonEDNS != nil && sg.nonEDNS != resp {
 					pool.DefaultMessage.Put(sg.nonEDNS)
+				}
+				if hg != nil {
+					hg.Feed(server.Address, sg.pickBestTTL())
 				}
 				resp.ID = originalID
 				uc.ReleaseCollect(matchKey)

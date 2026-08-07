@@ -26,18 +26,27 @@ import (
 	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/ipttl"
 	"zjdns/internal/log"
 )
 
+// collectPacket is one datagram delivered to a collect-mode caller, carrying
+// the IP-layer TTL/HopLimit captured by readLoop (0 when unavailable).
+type collectPacket struct {
+	Data []byte
+	TTL  uint8
+}
+
 // udpPending is one in-flight query awaiting its response.
 type udpPending struct {
-	resultCh  chan []byte // raw response payload (ownership transferred)
-	collectCh chan []byte // buffered multi-packet channel for collect mode
+	resultCh  chan []byte        // raw response payload (ownership transferred)
+	collectCh chan collectPacket // buffered multi-packet channel for collect mode
 }
 
 // UDPConn is a connected UDP socket shared by concurrent queries.
 type UDPConn struct {
 	conn      net.Conn
+	capture   *ipttl.Capture // TTL/HopLimit capture; nil when unsupported
 	addr      string
 	writeMu   sync.Mutex
 	mu        sync.RWMutex
@@ -151,7 +160,7 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 // packet.  The caller must call ReleaseCollect when done to clean up.
 // collectCh is buffered at 4 slots (2 EDNS candidates + non-EDNS fallback +
 // one overflow); packets beyond that are silently dropped.
-func (c *UDPConn) ExchangeCollect(ctx context.Context, payload []byte, matchKey string) (<-chan []byte, error) {
+func (c *UDPConn) ExchangeCollect(ctx context.Context, payload []byte, matchKey string) (<-chan collectPacket, error) {
 	select {
 	case c.capacity <- struct{}{}:
 		c.inFlight.Add(1)
@@ -165,7 +174,7 @@ func (c *UDPConn) ExchangeCollect(ctx context.Context, payload []byte, matchKey 
 		return nil, fmt.Errorf("udp client: connection to %s is closed", c.addr)
 	}
 
-	collectCh := make(chan []byte, 4)
+	collectCh := make(chan collectPacket, 4)
 	c.mu.Lock()
 	if c.closed.Load() {
 		c.mu.Unlock()
@@ -210,7 +219,7 @@ func (c *UDPConn) ReleaseCollect(matchKey string) {
 }
 
 // drainCollectCh empties a collect channel without blocking.
-func drainCollectCh(ch <-chan []byte) {
+func drainCollectCh(ch <-chan collectPacket) {
 	for {
 		select {
 		case <-ch:
@@ -231,7 +240,19 @@ func (c *UDPConn) readLoop() {
 
 	for {
 		_ = c.conn.SetReadDeadline(time.Now().Add(c.idleTimeout))
-		n, err := c.conn.Read(buf)
+		var n int
+		var ttl uint8
+		var err error
+		if c.capture != nil {
+			n, ttl, err = c.capture.ReadFrom(buf)
+			if errors.Is(err, ipttl.ErrNoControlMessage) {
+				// Datagram received without TTL metadata — keep the packet,
+				// TTL stays 0 (callers treat it as not confident).
+				err = nil
+			}
+		} else {
+			n, err = c.conn.Read(buf)
+		}
 		if err != nil {
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {
@@ -266,7 +287,7 @@ func (c *UDPConn) readLoop() {
 		// multi-read loop (spoofguard) and calls ReleaseCollect to clean up.
 		if p.collectCh != nil {
 			select {
-			case p.collectCh <- packet:
+			case p.collectCh <- collectPacket{Data: packet, TTL: ttl}:
 			default:
 				// collectCh full (4 candidates already queued) — drop.
 			}
@@ -300,6 +321,10 @@ func (c *UDPConn) close() {
 
 // IsDead reports whether the connection has been closed.
 func (c *UDPConn) IsDead() bool { return c.closed.Load() }
+
+// Capture returns the TTL/HopLimit capture wrapper, or nil when the platform
+// or socket type does not support control-message reads.
+func (c *UDPConn) Capture() *ipttl.Capture { return c.capture }
 
 // IsFull reports whether the connection has reached its in-flight cap.
 func (c *UDPConn) IsFull() bool { return c.inFlight.Load() >= c.maxPipe }
@@ -401,8 +426,16 @@ func (p *UDPPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc
 		return nil, fmt.Errorf("udp client: dial %s: %w", key, dialErr)
 	}
 
+	// TTL/HopLimit capture for the read loop — nil on platforms without
+	// control-message support (e.g. Windows) or non-UDP sockets.
+	var capture *ipttl.Capture
+	if udpConn, ok := conn.(*net.UDPConn); ok {
+		capture = ipttl.New(udpConn)
+	}
+
 	c := &UDPConn{
 		conn:        conn,
+		capture:     capture,
 		addr:        key,
 		inflight:    make(map[string]*udpPending),
 		capacity:    make(chan struct{}, p.maxPipe),
