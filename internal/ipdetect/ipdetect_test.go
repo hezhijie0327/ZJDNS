@@ -5,91 +5,62 @@ import (
 	"testing"
 )
 
-func TestDefaultTraceURL(t *testing.T) {
-	if DefaultTraceURL == "" {
-		t.Error("DefaultTraceURL should not be empty")
+// ── validateDetectedIP ───────────────────────────────────────────────────────
+
+func TestValidateDetectedIP(t *testing.T) {
+	cases := []struct {
+		ip        string
+		forceIPv6 bool
+		want      bool
+		desc      string
+	}{
+		{"192.0.2.1", false, true, "public IPv4"},
+		{"2001:db8::1", true, true, "public IPv6"},
+		{"192.0.2.1", true, false, "IPv4 rejected for IPv6 family"},
+		{"2001:db8::1", false, false, "IPv6 rejected for IPv4 family"},
+		{"10.0.0.1", false, false, "private IPv4 rejected"},
+		{"127.0.0.1", false, false, "loopback rejected"},
+		{"::1", true, false, "IPv6 loopback rejected"},
+		{"fe80::1", true, false, "link-local rejected"},
+		{"0.0.0.0", false, false, "unspecified rejected"},
+		{"not-an-ip", false, false, "unparseable rejected"},
+	}
+	for _, c := range cases {
+		got := validateDetectedIP(net.ParseIP(c.ip), c.forceIPv6)
+		if (got != nil) != c.want {
+			t.Errorf("%s (%s, v6=%v): got %v, want found=%v", c.desc, c.ip, c.forceIPv6, got, c.want)
+		}
 	}
 }
 
-func TestDetector_DefaultURL(t *testing.T) {
-	d := &Detector{}
-	if d.TraceURL != "" {
-		t.Error("zero-value Detector should have empty TraceURL")
+// ── ipFromTXT (DNS myaddr provider) ─────────────────────────────────────────
+
+func TestIPFromTXT(t *testing.T) {
+	cases := []struct {
+		txts      []string
+		forceIPv6 bool
+		want      string
+		desc      string
+	}{
+		{[]string{"192.0.2.1"}, false, "192.0.2.1", "plain IPv4"},
+		{[]string{`"2001:db8::1"`}, true, "2001:db8::1", "quoted IPv6"},
+		{[]string{`"192.129.210.214"`}, false, "192.129.210.214", "quoted IPv4 (real ns1.google.com format)"},
+		{[]string{"not-an-ip", "198.51.100.7"}, false, "198.51.100.7", "skip invalid, take valid"},
+		{[]string{"10.0.0.1", "192.0.2.1"}, false, "192.0.2.1", "skip private, take public"},
+		{[]string{"2001:db8::1"}, false, "", "v6 answer rejected for v4 family"},
+		{[]string{"junk"}, false, "", "no valid answer"},
+		{nil, false, "", "empty list"},
+	}
+	for _, c := range cases {
+		got := ipFromTXT(c.txts, c.forceIPv6)
+		gotStr := ""
+		if got != nil {
+			gotStr = got.String()
+		}
+		if gotStr != c.want {
+			t.Errorf("%s: got %q, want %q", c.desc, gotStr, c.want)
+		}
 	}
 }
 
-func TestDetector_CustomURL(t *testing.T) {
-	d := &Detector{TraceURL: "https://custom.example.com/trace"}
-	if d.TraceURL != "https://custom.example.com/trace" {
-		t.Errorf("TraceURL = %q, want custom URL", d.TraceURL)
-	}
-}
-
-func TestIPPattern_Match(t *testing.T) {
-	body := "fl=123\nh=example.com\nip=192.0.2.1\nts=1234567890"
-	matches := ipPattern.FindStringSubmatch(body)
-	if len(matches) < 2 {
-		t.Fatal("ipPattern should match")
-	}
-	if matches[1] != "192.0.2.1" {
-		t.Errorf("ip = %q, want 192.0.2.1", matches[1])
-	}
-}
-
-func TestIPPattern_IPv6Match(t *testing.T) {
-	body := "ip=2001:db8::1\nother=value"
-	matches := ipPattern.FindStringSubmatch(body)
-	if len(matches) < 2 {
-		t.Fatal("ipPattern should match IPv6")
-	}
-	if matches[1] != "2001:db8::1" {
-		t.Errorf("ip = %q, want 2001:db8::1", matches[1])
-	}
-}
-
-func TestIPPattern_NoMatch(t *testing.T) {
-	body := "fl=123\nh=example.com"
-	matches := ipPattern.FindStringSubmatch(body)
-	if matches != nil {
-		t.Error("ipPattern should not match body without ip=")
-	}
-}
-
-func TestIPPattern_Whitespace(t *testing.T) {
-	body := "ip=1.2.3.4"
-	matches := ipPattern.FindStringSubmatch(body)
-	if len(matches) < 2 {
-		t.Fatal("ipPattern should match")
-	}
-	if matches[1] != "1.2.3.4" {
-		t.Errorf("ip = %q, want 1.2.3.4", matches[1])
-	}
-}
-
-func TestParseIP_Valid(t *testing.T) {
-	ip := net.ParseIP("10.0.0.1")
-	if ip == nil {
-		t.Error("net.ParseIP should return non-nil for valid IP")
-	}
-}
-
-func TestParseIP_Invalid(t *testing.T) {
-	ip := net.ParseIP("not-an-ip")
-	if ip != nil {
-		t.Error("net.ParseIP should return nil for invalid IP")
-	}
-}
-
-func TestIPv4To4(t *testing.T) {
-	v4 := net.ParseIP("192.0.2.1")
-	if v4.To4() == nil {
-		t.Error("IPv4.To4() should return non-nil")
-	}
-}
-
-func TestIPv6To4(t *testing.T) {
-	v6 := net.ParseIP("2001:db8::1")
-	if v6.To4() != nil {
-		t.Error("IPv6.To4() should return nil")
-	}
-}
+// ── Detector provider chain ──────────────────────────────────────────────────
