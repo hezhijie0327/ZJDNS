@@ -288,10 +288,6 @@ recent RFC features:
   (`edns/edns.go`); `dnssec.HasCompactNXNAME` detects the NXNAME(128) signal
   and the resolver restores NXDOMAIN (§5.1) — recursive path only after the
   NSEC proof validates. NXNAME queries are REFUSED at Validation.
-- **RFC 10029 MQTYPE**: `middleware/mqtype.go` (after CacheStore) validates
-  and merges additional QTYPE responses in recursive mode; forwarding mode
-  passes the option through via context (`resolver/mqtype_ctx.go`) and echoes
-  the upstream's MQTYPE-Response.
 - **RFC 8482 minimal ANY**: `middleware/any.go` (inside Zone) answers
   QTYPE=ANY with `HINFO "RFC8482"`.
 - **RFC 6975**: upstream requests advertise DAU/DHU/N3U algorithm lists.

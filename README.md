@@ -54,7 +54,6 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 - **QNAME 最小化**：[RFC 9156](docs/rfc/rfc9156.txt)，默认启用
 - **委派缓存**：zone-cut 委派记录（NS 名称 + DS）持久化到 SQLite，后续同域子域名查询直接跳过已知层级
 - **并发去重**：singleflight 合并同 key 并发 miss
-- **多类型合并**：[RFC 10029](docs/rfc/rfc10029.txt) MQTYPE-Query/Response —— 单查询合并 A+AAAA 等多类型响应（递归模式本地合并，转发模式透传上游）
 - **紧凑否认**：[RFC 9824](docs/rfc/rfc9824.txt) —— 上游查询设置 CO 位，NXNAME 信号自动恢复 NXDOMAIN 语义
 - **分片避免**：[RFC 9715](docs/rfc/rfc9715.txt) —— UDP 响应 1400 字节上限，超限 TC + TCP 重试
 

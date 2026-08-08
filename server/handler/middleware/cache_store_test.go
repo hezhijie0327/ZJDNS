@@ -1,13 +1,37 @@
 package middleware
 
 import (
+	"net/netip"
 	"testing"
 	"time"
+	"zjdns/cache"
+	"zjdns/database"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/rdata"
 )
+
+func testStore(t *testing.T) cache.Store {
+	t.Helper()
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cache.New(db)
+}
+
+func testQuery(t *testing.T) *dns.Msg {
+	t.Helper()
+	req := new(dns.Msg)
+	req.Question = []dns.RR{&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}}
+	return req
+}
+
+func testARecord(ip string) *dns.A {
+	return &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr(ip)}}
+}
 
 // ── dnssecCacheable unit tests ──────────────────────────────────────────────
 
@@ -46,17 +70,17 @@ func TestDNSSECCacheable(t *testing.T) {
 // instance sharing the DB would otherwise serve the unauthenticated answer
 // from cache, bypassing the enforce gate.
 func TestCacheStore_BogusEDENotCached(t *testing.T) {
-	store := mqTestStore(t)
+	store := testStore(t)
 	defer func() { _ = store.Close() }()
 
 	qctx := &handler.QueryContext{
-		Req:       mqQuery(t),
+		Req:       testQuery(t),
 		Qname:     "example.com.",
 		Qtype:     dns.TypeA,
 		StartTime: time.Now().Unix(),
 		Protocol:  "udp",
 		ResolutionResult: &resolver.QueryResult{
-			Answer:    []dns.RR{aRecord("192.0.2.1")},
+			Answer:    []dns.RR{testARecord("192.0.2.1")},
 			Rcode:     dns.RcodeSuccess,
 			Cacheable: true,
 			DNSSECEDE: dns.ExtendedErrorDNSBogus, // EDE 6 — bogus
@@ -73,17 +97,17 @@ func TestCacheStore_BogusEDENotCached(t *testing.T) {
 // TestCacheStore_RRSIGsMissingCached verifies the inverse: EDE
 // RRSIGs-missing keeps the existing insecure treatment and stays cacheable.
 func TestCacheStore_RRSIGsMissingCached(t *testing.T) {
-	store := mqTestStore(t)
+	store := testStore(t)
 	defer func() { _ = store.Close() }()
 
 	qctx := &handler.QueryContext{
-		Req:       mqQuery(t),
+		Req:       testQuery(t),
 		Qname:     "example.com.",
 		Qtype:     dns.TypeA,
 		StartTime: time.Now().Unix(),
 		Protocol:  "udp",
 		ResolutionResult: &resolver.QueryResult{
-			Answer:    []dns.RR{aRecord("192.0.2.1")},
+			Answer:    []dns.RR{testARecord("192.0.2.1")},
 			Rcode:     dns.RcodeSuccess,
 			Cacheable: true,
 			DNSSECEDE: dns.ExtendedErrorRRSIGsMissing, // EDE 22 — insecure treatment
@@ -101,17 +125,17 @@ func TestCacheStore_RRSIGsMissingCached(t *testing.T) {
 // TestCacheStore_NoEDECached is the baseline: a clean result (secure or
 // insecure, no EDE) is cached.
 func TestCacheStore_NoEDECached(t *testing.T) {
-	store := mqTestStore(t)
+	store := testStore(t)
 	defer func() { _ = store.Close() }()
 
 	qctx := &handler.QueryContext{
-		Req:       mqQuery(t),
+		Req:       testQuery(t),
 		Qname:     "example.com.",
 		Qtype:     dns.TypeA,
 		StartTime: time.Now().Unix(),
 		Protocol:  "udp",
 		ResolutionResult: &resolver.QueryResult{
-			Answer:    []dns.RR{aRecord("192.0.2.1")},
+			Answer:    []dns.RR{testARecord("192.0.2.1")},
 			Rcode:     dns.RcodeSuccess,
 			Cacheable: true,
 			Validated: true,
@@ -130,7 +154,7 @@ func TestCacheStore_NoEDECached(t *testing.T) {
 // an earlier delegation level) must still be cached — the bogus EDE is a
 // stale artifact from intermediate DNSSEC failures that has since cleared.
 func TestCacheStore_ValidatedStickyBogusEDE(t *testing.T) {
-	store := mqTestStore(t)
+	store := testStore(t)
 	defer func() { _ = store.Close() }()
 
 	// Simulates the sticky-EDE scenario: a previous delegation level set
@@ -139,13 +163,13 @@ func TestCacheStore_ValidatedStickyBogusEDE(t *testing.T) {
 	// Verify that if it DOES happen, the response is cached (Validated
 	// takes priority over DNSSECEDE).
 	qctx := &handler.QueryContext{
-		Req:       mqQuery(t),
+		Req:       testQuery(t),
 		Qname:     "example.com.",
 		Qtype:     dns.TypeA,
 		StartTime: time.Now().Unix(),
 		Protocol:  "udp",
 		ResolutionResult: &resolver.QueryResult{
-			Answer:    []dns.RR{aRecord("192.0.2.1")},
+			Answer:    []dns.RR{testARecord("192.0.2.1")},
 			Rcode:     dns.RcodeSuccess,
 			Cacheable: true,
 			Validated: true,
@@ -164,17 +188,17 @@ func TestCacheStore_ValidatedStickyBogusEDE(t *testing.T) {
 // or insecure delegation) response IS cached — only bogus-class failures are
 // excluded.  This is the normal mode for non-DNSSEC domains.
 func TestCacheStore_UnvalidatedNoEDECached(t *testing.T) {
-	store := mqTestStore(t)
+	store := testStore(t)
 	defer func() { _ = store.Close() }()
 
 	qctx := &handler.QueryContext{
-		Req:       mqQuery(t),
+		Req:       testQuery(t),
 		Qname:     "example.com.",
 		Qtype:     dns.TypeA,
 		StartTime: time.Now().Unix(),
 		Protocol:  "udp",
 		ResolutionResult: &resolver.QueryResult{
-			Answer:    []dns.RR{aRecord("192.0.2.1")},
+			Answer:    []dns.RR{testARecord("192.0.2.1")},
 			Rcode:     dns.RcodeSuccess,
 			Cacheable: true,
 			Validated: false,
@@ -205,17 +229,17 @@ func TestCacheStore_UnvalidatedBogusEDENotCached(t *testing.T) {
 	}
 	for _, c := range codes {
 		t.Run(c.name, func(t *testing.T) {
-			store := mqTestStore(t)
+			store := testStore(t)
 			defer func() { _ = store.Close() }()
 
 			qctx := &handler.QueryContext{
-				Req:       mqQuery(t),
+				Req:       testQuery(t),
 				Qname:     "example.com.",
 				Qtype:     dns.TypeA,
 				StartTime: time.Now().Unix(),
 				Protocol:  "udp",
 				ResolutionResult: &resolver.QueryResult{
-					Answer:    []dns.RR{aRecord("192.0.2.1")},
+					Answer:    []dns.RR{testARecord("192.0.2.1")},
 					Rcode:     dns.RcodeSuccess,
 					Cacheable: true,
 					Validated: false,

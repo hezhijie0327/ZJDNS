@@ -266,19 +266,18 @@ Execution order (outermost → innermost):
 
 1. `ResponseMiddleware` — EDNS / Cookie / EDE finalisation
 2. `EDNSMiddleware` — ECS parsing, DNS Cookie validation (RFC 7873/9018)
-3. `MQTYPEMiddleware` — RFC 10029 multi-QTYPE merge (recursive mode); forwarding pass-through
-4. `CacheStoreMiddleware` — cache write, request logging, latency probe
-5. `ValidationMiddleware` — domain / label / NXNAME-AXFR-IXFR rejection (RFC 9824 §3.5)
-6. `ZoneMiddleware` — zone rule evaluation, synthetic response (runs before Any so rules win)
-7. `AnyMiddleware` — RFC 8482 minimal ANY response (HINFO "RFC8482")
-8. `CacheLookupMiddleware` — fresh→serve, stale→serve+refresh, miss→delegate
-9. `PTRMiddleware` — reverse PTR lookup from cache
-10. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147)
-11. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive with singleflight dedup
+3. `CacheStoreMiddleware` — cache write, request logging, latency probe
+4. `ValidationMiddleware` — domain / label / NXNAME-AXFR-IXFR rejection (RFC 9824 §3.5)
+5. `ZoneMiddleware` — zone rule evaluation, synthetic response (runs before Any so rules win)
+6. `AnyMiddleware` — RFC 8482 minimal ANY response (HINFO "RFC8482")
+7. `CacheLookupMiddleware` — fresh→serve, stale→serve+refresh, miss→delegate
+8. `PTRMiddleware` — reverse PTR lookup from cache
+9. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147)
+10. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive with singleflight dedup
 
 All layers share a mutable `QueryContext`. Any layer may short-circuit by setting `qctx.Res`.
 
-> **Note:** Names like `ResponseMiddleware`, `CacheStoreMiddleware`, etc. are descriptive labels for the pipeline. The actual Go types are simply `Response`, `CacheStore`, `MQTYPE`, `Validation`, `Zone`, `Any`, `EDNS`, `CacheLookup`, `PTR`, `DNS64`, and `Resolution`.
+> **Note:** Names like `ResponseMiddleware`, `CacheStoreMiddleware`, etc. are descriptive labels for the pipeline. The actual Go types are simply `Response`, `CacheStore`, `Validation`, `Zone`, `Any`, `EDNS`, `CacheLookup`, `PTR`, `DNS64`, and `Resolution`.
 
 ### Query Routing (`server/resolver`)
 - Upstream servers queried concurrently via `errgroup`; first NOERROR wins
@@ -335,7 +334,7 @@ All logs use `zjdns/internal/log` (package-level `Default` logger). Default leve
 
 **Component filtering:** `log_level` supports `"level:comp1,comp2"` syntax (e.g. `"debug:UPSTREAM,RECURSION"`).
 
-**29 canonical prefixes:** `TLS`, `CACHE`, `DB`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `PLAIN`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `DNSCRYPT`, `TLCP`, `RULESET`, `DNS64`, `MQTYPE`, `RESPONSE`, `ANY`, `IPDETECT`, `UDPPOOL`, `DOH`.
+**28 canonical prefixes:** `TLS`, `CACHE`, `DB`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `PLAIN`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `DNSCRYPT`, `TLCP`, `RULESET`, `DNS64`, `RESPONSE`, `ANY`, `IPDETECT`, `UDPPOOL`, `DOH`.
 
 Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECURITY:`. `DOT:`/`DOQ:`/`DOH:`/`DTLS:` → `TLS:`. `DTLCP:` → `TLCP:`. `UDP:`/`TCP:` → `PLAIN:`. Hot-path logs are `Debug` only.
 

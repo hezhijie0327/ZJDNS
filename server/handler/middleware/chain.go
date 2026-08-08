@@ -57,7 +57,6 @@ type Dependencies struct {
 //
 //	Response      — EDNS / cookie / EDE application
 //	EDNS          — ECS + cookie parsing (full unpack of plain transport msgs)
-//	MQTYPE        — RFC 10029 multi-QTYPE merge (recursive mode)
 //	CacheStore    — cache write + request logging + latency probe
 //	Validation    — domain length / label / NXNAME-AXFR-IXFR rejection
 //	Zone          — zone rule evaluation (short-circuit on match)
@@ -136,24 +135,9 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 		prober:   deps.Prober,
 		resolver: deps.Resolver,
 	}).Wrap(h)
-
-	// RFC 10029 MQTYPE-Query: merges additional QTYPE responses into the
-	// primary reply (recursive mode).  In forwarding mode the option is
-	// passed through to the upstream by Resolution.
-	//
-	// Positioned outside CacheStore so its post-phase runs after CacheStore
-	// has built qctx.Res from ResolutionResult (miss path — the merge was
-	// previously dead on the dominant recursive-mode path), and inside EDNS
-	// so the MQTYPE-Query option is visible in Pseudo before pre runs.
-	h = (&MQTYPE{
-		store:    deps.Cache,
-		resolver: deps.Resolver,
-		pending:  deps.PendingReqs,
-	}).Wrap(h)
-
-	// EDNS parsing + cookie validation — outside MQTYPE: EDNS.pre performs
-	// the full request unpack (plain UDP/TCP listeners deliver question-only
-	// messages), populating Pseudo before MQTYPE.pre's findMQQUERY.
+	// EDNS parsing + cookie validation: EDNS.pre performs the full
+	// request unpack (plain UDP/TCP listeners deliver question-only
+	// messages).
 	h = (&EDNS{
 		edns:   deps.EDNS,
 		config: deps.Config,

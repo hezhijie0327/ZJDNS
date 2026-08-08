@@ -1626,22 +1626,18 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 ---
 
-## RFC 10029 — Multiple QTYPEs in a Single DNS Query (MQTYPE-Query/Response)  `[RFC 10029: Proposed Standard]`  ✅
+## RFC 10029 — Multiple QTYPEs in a Single DNS Query (MQTYPE-Query/Response)  `[RFC 10029: Proposed Standard]`  ⚪
 
-**EDNS0 选项 MQTYPE-Query（20）/MQTYPE-Response（21）：客户端在查询中附加 QTYPE 列表，服务端把多类型响应合并进单个回复，解决 ANY 不可靠与单 question 限制。适用于 stub→递归 与 递归→权威 两个方向。**
+**EDNS0 选项 MQTYPE-Query（20）/MQTYPE-Response（21）：客户端在查询中附加 QTYPE 列表，服务端把多类型响应合并进单个回复。**
 
-### 关键要求
+### 我们的决定
 
-- **OPTION-DATA**: 2 字节大端 QTYPE 列表（仅 data 类型，RFC 6895 §3.1）
-- **§3.3 服务端校验**（违反 → FORMERR）: 非 QUERY opcode、入站 MQTYPE-Response、多个 MQTYPE-Query、QDCOUNT=0、主类型非 data 类型、空列表、Meta 类型、重复/与主类型重复
-- **§3.4 服务端合并**: 先按主 (QNAME, QCLASS, QTYPE) 构建响应（RCODE/flags 由此决定）→ 逐 QTx 合并 → RCODE/flags 不一致的 QTx 必须剔除（含 MQTYPE-Response 列表）→ RR 去重 → 放不下的 QTx 不合并 → **即使空列表也必须返回 MQTYPE-Response**（信号支持）→ 截断时（TC=1）不处理附加类型
-- **§3.5 客户端处理**: 响应无 MQTYPE-Response 或格式错 → 视为不支持，回退单查询
+⚠️ **不实现。** 经过完整实现后又全部移除，原因：
 
-### 我们的实现
-
-- ✓ 服务端（`middleware/mqtype.go`，递归模式）: §3.3 校验 + §3.4 合并（缓存优先 → singleflight 解析，RCODE/AD 一致性，RR 去重，1400 上限预算剔除，MQTYPE-Response 始终返回，QTx 结果写入缓存）
-- ✓ 转发透传: Resolution 经 context 把 MQTYPE-Query 附加到上游查询（`resolver/mqtype_ctx.go`），上游 MQTYPE-Response 经 QueryResult 透传回客户端（`cache_store.go`）
-- ✓ 递归→权威方向: zone cut 处 DS 查询携带 MQTYPE-Query(NS)，合并响应一次取回 DS+NS（`resolveZoneCut`/`resolveChildNameservers`，省一次 RTT/委托级）；权威不支持时回退独立 NS 查询（RFC 6891 忽略选项 + RFC 10029 §3.5）
+- **服务端合并无实际收益**: ZJDNS 的客户端不发 MQTYPE-Query；即使支持，合并逻辑增加的复杂度（缓存穿透、RCODE/flags 一致性、预算管理、RR 去重）远超省下的 RTT
+- **转发透传多余**: 客户端不发 MQTYPE-Query 时透传零作用；更糟的是 MQTYPE 中间件本身已能做合并（转发模式跳过逻辑反而绕过了自身能力）
+- **递归→权威无收益**: 权威多数不实现 MQTYPE；DS+NS 合并被 referral Authority section 里已有的 NS 记录覆盖，MQTYPE-Query(TypeNS) 纯属冗余
+- **ZJDNS↔ZJDNS 场景不需要**: 两个实例间不需要 MQTYPE 来减少 RTT——缓存预热已有同等效果
 
 ---
 

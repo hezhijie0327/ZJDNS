@@ -108,12 +108,6 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 					server.Protocol != config.ProtoDNSCrypt &&
 					server.Protocol != config.ProtoDNSCryptTCP
 				msg := r.buildMsg(question, ecs, true, isSecure)
-				// RFC 10029 forwarding pass-through: attach the client's
-				// MQTYPE-Query option so the upstream resolver can merge the
-				// additional types itself.
-				if mq := MQTypeFromContext(groupCtx); mq != nil {
-					msg.Pseudo = append(msg.Pseudo, mq)
-				}
 				queryResult := r.queryClient.ExecuteQuery(groupCtx, msg, server)
 				pool.DefaultMessage.Put(msg)
 
@@ -295,7 +289,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 		}
 
 		select {
-		case resultChan <- QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Authoritative: queryResult.Response.Authoritative, Cacheable: !server.SkipCache, ECS: ecsResponse, Server: serverDesc, UpstreamEDE: upstreamEDE, MQResponse: captureMQResponse(queryResult.Response), Truncated: queryResult.Response.Truncated, Rcode: rcode}:
+		case resultChan <- QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Authoritative: queryResult.Response.Authoritative, Cacheable: !server.SkipCache, ECS: ecsResponse, Server: serverDesc, UpstreamEDE: upstreamEDE, Truncated: queryResult.Response.Truncated, Rcode: rcode}:
 			remaining := activeConnections.Load() - 1
 			if remaining > 0 {
 				log.Debugf("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
@@ -315,11 +309,10 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 			Validated:     false,
 			Authoritative: queryResult.Response.Authoritative,
 			Cacheable:     !server.SkipCache,
-			Rcode:         dns.RcodeNameError, // was 0 — NXDOMAIN served as NODATA
+			Rcode:         dns.RcodeNameError,
 			ECS:           r.edns.ParseFromDNS(queryResult.Response),
 			Server:        serverDesc,
 			UpstreamEDE:   upstreamEDE,
-			MQResponse:    captureMQResponse(queryResult.Response),
 		})
 		pool.DefaultMessage.Put(queryResult.Response)
 	default:

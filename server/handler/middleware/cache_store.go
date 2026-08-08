@@ -182,12 +182,6 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 		log.Debugf("UPSTREAM: passing through EDE %d (%s) from upstream", qr.UpstreamEDE.InfoCode, dns.ExtendedErrorToString[qr.UpstreamEDE.InfoCode])
 	}
 
-	// RFC 10029 forwarding pass-through: echo the upstream's MQTYPE-Response
-	// option, signalling which additional types were merged upstream.
-	if qr.MQResponse != nil {
-		msg.Pseudo = append(msg.Pseudo, qr.MQResponse)
-	}
-
 	return msg
 }
 

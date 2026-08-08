@@ -6,7 +6,7 @@
 graph LR
     C[Clients] --> L
     subgraph ZJDNS
-        L[Listeners<br/>UDP · TCP · DoT · DoH · DoH3<br/>DoQ · DTLS · TLCP · DTLCP<br/>DNSCrypt] --> MW[Middleware Chain<br/>Response · EDNS · MQTYPE<br/>CacheStore · Validation · Zone<br/>Any · CacheLookup · PTR<br/>DNS64 · Resolution]
+        L[Listeners<br/>UDP · TCP · DoT · DoH · DoH3<br/>DoQ · DTLS · TLCP · DTLCP<br/>DNSCrypt] --> MW[Middleware Chain<br/>Response · EDNS · CacheStore<br/>Validation · Zone · Any<br/>CacheLookup · PTR · DNS64<br/>Resolution]
         MW --> RES[Resolver<br/>Forwarding · Recursive<br/>QNAME Minimisation · DNSSEC<br/>Delegation Cache]
         RES --> UP[Upstream Pool<br/>TCP Pipeline · QUIC Pool<br/>SOCKS5 Proxy]
     end
@@ -52,8 +52,7 @@ graph TD
 graph LR
     Q[Query] --> R[Response<br/>EDNS · Cookie · EDE<br/>Pre-packed fast path]
     R --> E[EDNS<br/>Full unpack · ECS<br/>Cookie · Padding]
-    E --> MQ[MQTYPE<br/>RFC 10029 Merge]
-    MQ --> CS[CacheStore<br/>Write · Request Log]
+    E --> CS[CacheStore<br/>Write · Request Log]
     CS --> V[Validation<br/>Domain · Label · Type<br/>Opcode · QCLASS]
     V --> Z[Zone<br/>Rules · Wildcard<br/>Bypass]
     Z --> A[Any<br/>RFC 8482 HINFO]
@@ -63,24 +62,7 @@ graph LR
     D64 --> RE[Resolution<br/>Upstream · Recursive<br/>Singleflight]
     classDef mw fill:#fef3c7,stroke:#f59e0b,color:#78350f
     class Q mw
-    class R,E,MQ,CS,V,Z,A,CL,PT,D64,RE mw
-```
-
-### MQTYPE 合并（RFC 10029）
-
-```mermaid
-graph TD
-    Q[MQTYPE-Query<br/>EDNS option 20] --> PRE{MQTYPE.pre<br/>findMQQUERY}
-    PRE -->|invalid| F[FORMERR]
-    PRE -->|none| NEXT[Pass through]
-    PRE -->|valid| POST{post: CacheStore 已构建 Res?}
-    POST -->|miss 路径| M[merge 每附加 QTYPE<br/>cache → singleflight → resolver]
-    POST -->|hit 路径| UP[pre-packed 先 Unpack<br/>→ 再 merge]
-    M --> R1{RCODE/AD 一致?}
-    R1 -->|no| SKIP[跳过该 QTYPE]
-    R1 -->|yes| ADD[合并 RR + 去重<br/>budget 上限检查]
-    ADD --> MR[MQTYPE-Response option 21<br/>completed types]
-    MR --> OUT[Response 中间件 finalize]
+    class R,E,CS,V,Z,A,CL,PT,D64,RE mw
 ```
 
 ### 缓存命中直发（pre-packed）

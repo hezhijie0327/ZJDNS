@@ -46,10 +46,9 @@ type QueryResult struct {
 	ECS           *edns.ECSOption
 	Server        string
 	Poisoned      bool
-	UpstreamEDE   *dns.EDE        // EDE code captured from upstream response (per-query, no data race)
-	MQResponse    *dns.MQRESPONSE // RFC 10029 MQTYPE-Response from the upstream (forwarding pass-through)
-	DNSSECEDE     uint16          // DNSSEC EDE from recursive validation (per-query, no cross-query race)
-	Truncated     bool            // TC bit from upstream response
+	UpstreamEDE   *dns.EDE // EDE code captured from upstream response (per-query, no data race)
+	DNSSECEDE     uint16   // DNSSEC EDE from recursive validation (per-query, no cross-query race)
+	Truncated     bool     // TC bit from upstream response
 	Err           error
 }
 

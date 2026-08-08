@@ -208,12 +208,6 @@ pkill -f "client-https"
 ### RFC Feature Tests
 
 ```bash
-# RFC 10029 MQTYPE-Query: merge additional QTYPE into one response.
-# 20 = MQTYPE-Query option code; 001c = AAAA (28).  Answer must contain A+AAAA
-# and an OPT carrying MQTYPE-Response.  Works with MQTYPE-capable upstreams
-# (e.g. AliDNS) in forwarding mode, or recursive mode.
-dig @127.0.0.1 -p 10533 +ednsopt=20:001c example.com A +short
-
 # RFC 9606 RESINFO: auto-enabled together with DDR (config/load.go shouldEnableDDR).
 dig @127.0.0.1 -p 10533 resolver.arpa TYPE261 +noall +answer   # qnamemin exterr=... infourl=...
 

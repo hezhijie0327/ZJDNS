@@ -91,8 +91,8 @@ func buildDSN(path string, opts Options) string {
 		// to ONE connection (each connection otherwise gets its own DB) —
 		// concurrent SQL (async batch writer + NS-address cache reads +
 		// latency updates) queued on the single connection, and one
-		// slow/stuck operation starved everyone forever (MQTYPE recursive
-		// hang, 2026-08).
+		// slow/stuck operation starved everyone forever (recursion hang,
+		// 2026-08).
 		return "file::memory:?cache=shared&_foreign_keys=ON&_busy_timeout=10000"
 	}
 	mmap := int64(opts.MMapSizeMB) * 1024 * 1024
@@ -134,7 +134,7 @@ func Open(path string, maxEntries int, opts Options) (*DB, error) {
 	}
 	// Shared-cache in-memory DB (buildDSN) and file DBs both use the normal
 	// pool settings — the :memory: single-connection pin was the
-	// connection-starvation root cause of the MQTYPE recursive hang.
+	// connection-starvation root cause (recursion hang, 2026-08).
 	sqldb.SetMaxOpenConns(config.DefaultCacheMaxOpenConns)
 	sqldb.SetMaxIdleConns(config.DefaultCacheMaxIdleConns)
 

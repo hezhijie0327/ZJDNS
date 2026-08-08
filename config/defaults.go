@@ -253,11 +253,6 @@ const (
 	// triggering a TCP retry.
 	DefaultMaxUDPResponseSize = 1400
 
-	// DefaultMQTypeMaxQTx caps the additional QTYPEs processed per
-	// MQTYPE-Query (RFC 10029 §4: four QTx values is the recommended limit
-	// for public DNS, bounding the amplification factor).
-	DefaultMQTypeMaxQTx = 4
-
 	// DefaultRESINFOTTL is the TTL for locally-served resolver.arpa RESINFO
 	// records (RFC 9606).
 	DefaultRESINFOTTL = 3600
