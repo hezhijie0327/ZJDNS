@@ -45,8 +45,12 @@ func (m *CacheStore) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		err := next.ServeDNS(ctx, qctx)
 
-		// Already handled by cache lookup or zone match — nothing to do.
-		if qctx.CacheServed || qctx.ZoneMatched || qctx.Res != nil {
+		// Already handled by an upstream middleware — nothing to do.
+		// Gate on Res alone: CacheServed/ZoneMatched were redundant here
+		// (both are always accompanied by Res except the records-less zone
+		// rule path, which must reach buildSuccess below or the query is
+		// silently dropped — C3).
+		if qctx.Res != nil {
 			return err
 		}
 

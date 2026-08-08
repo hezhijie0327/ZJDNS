@@ -29,10 +29,6 @@ type QueryContext struct {
 	ClientWantsPadding    bool     // true if the request included EDNS padding option
 	EDE                   *dns.EDE // EDE code set by error-producing middlewares
 
-	// ── Zone match: populated by Zone ──
-
-	ZoneMatched bool // true when a zone rule matched
-
 	// ── Cache state: populated by CacheLookup ──
 
 	CacheHit    bool // true when cache.Get found an entry (fresh or expired)
@@ -49,10 +45,8 @@ type QueryContext struct {
 
 	// ── Coordination ──
 
-	OriginalName  string // original qname before zone rewrite (set by Zone)
-	RewrittenName string // rewritten qname after zone rewrite (set by Zone)
-	TCPKeepalive  uint16
-	StartTime     int64 // log.NowUnixNano() — zero-alloc timestamp for response-time calculation
+	TCPKeepalive uint16
+	StartTime    int64 // log.NowUnixNano() — zero-alloc timestamp for response-time calculation
 
 	// ── Pre-extracted question fields (set once in ServeDNS) ──
 

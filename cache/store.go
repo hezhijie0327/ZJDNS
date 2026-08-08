@@ -629,8 +629,8 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	// previous stripOPT(zdnsutil.CloneRRs(x)) then zdnsutil.CloneRRs(x).
 	additional = cloneRRsNoOPT(additional)
 
-	// Clone records to prevent downstream mutations (e.g. restoreDomain
-	// rewriting rr.Header().Name) from corrupting the cache.
+	// Clone records to prevent downstream mutations (e.g. TTL deduction in
+	// the response path rewriting rr.Header()) from corrupting the cache.
 	answer = zdnsutil.CloneRRs(answer)
 	authority = zdnsutil.CloneRRs(authority)
 

@@ -98,8 +98,6 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			Protocol: qctx.Protocol, Result: "zone", Rcode: zoneResult.Rcode,
 		})
 
-		qctx.ZoneMatched = true
-
 		// Non-success rcode → build error response.
 		if zoneResult.Rcode != dns.RcodeSuccess {
 			log.Debugf("RESULT: %s %s | rcode=%s, blocked by zone rule", qname, dns.TypeToString[qtype], dns.RcodeToString[uint16(zoneResult.Rcode)]) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
@@ -147,16 +145,12 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return nil
 		}
 
-		// Zone rule matched but changed the domain (wildcard rewrite).
-		// qctx.RewrittenName is set so the Response middleware can restore
-		// original owner names in the response rdata sections without mutating
-		// the shared request message. Wildcard CNAME chains (where intermediate
-		// targets differ from the original query name) are not restored — this
-		// is an accepted limitation for zone rewrite.
-		if zoneResult.Domain != qname {
-			qctx.OriginalName = qname
-			qctx.RewrittenName = zoneResult.Domain
-		}
+		// Records-less rule (Rcode=0): pass through to normal resolution.
+		// The question is NOT rewritten here — the old wildcard-rewrite
+		// branch set OriginalName/RewrittenName without ever mutating the
+		// question, so the rewrite was dead code and the query was dropped
+		// (CacheStore's ZoneMatched gate skipped response construction).
+		// Records-less rules now behave as pure pass-through (C3).
 		return next.ServeDNS(ctx, qctx)
 	})
 }

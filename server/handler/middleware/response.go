@@ -14,8 +14,7 @@ import (
 )
 
 // Response is the outermost middleware.  It applies EDNS options
-// (ECS, Cookie, EDE, padding, TCP keepalive) to the final response and
-// restores the original qname if it was rewritten by a zone rule.
+// (ECS, Cookie, EDE, padding, TCP keepalive) to the final response.
 // It always runs — for short-circuited and freshly resolved responses alike.
 type Response struct {
 	edns handler.EDNSHandler
@@ -44,18 +43,18 @@ func (m *Response) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		st := m.ednsStateFor(qctx)
 
 		if qctx.Res.Data != nil {
-			// Pre-packed response: when no EDNS option and no zone-rewrite
-			// restore is needed, serve the wire directly — only the client's
-			// message ID must be patched in (bytes 0..1; the pre-packed wire
-			// carries the ID from cache Set() time).  In debug mode the RESULT
-			// log reads RR fields, so unpack for accurate counts.
+			// Pre-packed response: when no EDNS option is needed, serve the
+			// wire directly — only the client's message ID must be patched in
+			// (bytes 0..1; the pre-packed wire carries the ID from cache
+			// Set() time).  In debug mode the RESULT log reads RR fields, so
+			// unpack for accurate counts.
 			// DO=1 clients always take the unpack path (shouldAddEDNS includes
 			// ClientRequestedDNSSEC — the response OPT must echo DO), so this
 			// gate only runs for DO=0 clients: the wire must be free of DNSSEC
 			// proofs (upstream queries always carry DO=1, so the raw cached
 			// wire may contain RRSIG/NSEC/NSEC3/DNSKEY/DS) — otherwise the
 			// unpack+filter path below runs.
-			if !st.shouldAddEDNS && qctx.OriginalName == "" && !log.IsDebug() &&
+			if !st.shouldAddEDNS && !log.IsDebug() &&
 				!cache.WireHasDNSSEC(qctx.Res.Data) {
 				binary.BigEndian.PutUint16(qctx.Res.Data[0:2], qctx.Req.ID)
 				// RFC 1035 §4.1.1: RD is copied from the query — the cached
@@ -67,9 +66,9 @@ func (m *Response) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				}
 				return err
 			}
-			// EDNS options or a zone rewrite are needed — unpack the
-			// pre-built wire so the EDNS + Pack pipeline below can modify
-			// the message.  TTLs were already adjusted by buildFromPrePacked.
+			// EDNS options are needed — unpack the pre-built wire so the
+			// EDNS + Pack pipeline below can modify the message.  TTLs were
+			// already adjusted by buildFromPrePacked.
 			if err := qctx.Res.Unpack(); err != nil {
 				log.Debugf("RESPONSE: unpack pre-packed response: %v", err)
 				qctx.Res.Rcode = dns.RcodeServerFailure
@@ -136,8 +135,8 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext, st ednsState) {
 	req := qctx.Req
 	if req == nil {
 		// Defensive: the chain guarantees a request, but the Response
-		// middleware must not crash on a nil req (restoreDomain and the
-		// EDNS fallback both dereference it).
+		// middleware must not crash on a nil req (the EDNS fallback
+		// dereferences it).
 		return
 	}
 
@@ -152,18 +151,6 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext, st ednsState) {
 		// SUBNET/COOKIE/padding, and re-applying would duplicate options
 		// inside a single OPT (RFC 7873: at most one COOKIE per message).
 		m.edns.ApplyToMessage(msg, st.ecsOpt, qctx.IsSecure, st.cookieStr, qctx.EDE, false, st.clientWantsPad, qctx.TCPKeepalive)
-	}
-
-	// Restore original domain name if zone rule rewrote it.
-	if qctx.OriginalName != "" {
-		currentName := qctx.RewrittenName
-		if currentName == "" {
-			currentName = req.Question[0].Header().Name
-		}
-		m.restoreDomain(msg, currentName, qctx.OriginalName)
-		// restoreDomain mutates RR owner names — the pre-packed wire (when
-		// addPadding kept it) is stale; bridge.go re-packs.
-		msg.Data = nil
 	}
 }
 
@@ -212,33 +199,4 @@ func msgHasEDNSOptions(msg *dns.Msg) bool {
 		}
 	}
 	return false
-}
-
-// restoreDomain rewrites owner names of RRs that exactly match currentName
-// back to originalName. It is called after zone wildcard rewrites.
-//
-// Limitation: only exact owner name matches are restored. Intermediate CNAME
-// targets in a wildcard chain (e.g., *.example.com → <random>.cdn.net) are
-// not matched, so their names remain in rewritten form. This is acceptable
-// because wildcard-rewritten responses rarely contain CNAME chains, and the
-// restored original name is sufficient for client-side validation.
-func (m *Response) restoreDomain(msg *dns.Msg, currentName, originalName string) {
-	if msg == nil || dns.EqualName(currentName, originalName) {
-		return
-	}
-	for _, rr := range msg.Answer {
-		if rr != nil && dns.EqualName(rr.Header().Name, currentName) {
-			rr.Header().Name = originalName
-		}
-	}
-	for _, rr := range msg.Ns {
-		if rr != nil && dns.EqualName(rr.Header().Name, currentName) {
-			rr.Header().Name = originalName
-		}
-	}
-	for _, rr := range msg.Extra {
-		if rr != nil && dns.EqualName(rr.Header().Name, currentName) {
-			rr.Header().Name = originalName
-		}
-	}
 }

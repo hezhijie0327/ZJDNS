@@ -101,6 +101,10 @@ func (c *Client) state(
 	cacheKey := addr + "|" + providerName
 
 	c.cacheMu.Lock()
+	if c.cache == nil {
+		c.cacheMu.Unlock()
+		return nil, errors.New("dnscrypt client shutting down")
+	}
 	state, ok := c.cache.Get(cacheKey)
 	c.cacheMu.Unlock()
 	if ok && time.Now().Before(state.expires) {

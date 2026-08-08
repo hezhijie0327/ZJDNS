@@ -603,9 +603,11 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 		resp.Data = nil
 		if s.prev != nil {
 			pool.DefaultMessage.Put(s.prev)
+			s.prev = nil
 		}
 		if s.last != nil {
 			pool.DefaultMessage.Put(s.last)
+			s.last = nil
 		}
 		if s.nonEDNS != nil {
 			pool.DefaultMessage.Put(s.nonEDNS)
@@ -733,9 +735,11 @@ func (s *spoofguardState) collectEDNSCandidate(resp *dns.Msg, ttlConfident bool,
 	if ttlConfident {
 		if s.prev != nil {
 			pool.DefaultMessage.Put(s.prev)
+			s.prev = nil
 		}
 		if s.last != nil {
 			pool.DefaultMessage.Put(s.last)
+			s.last = nil
 		}
 		if s.nonEDNS != nil {
 			pool.DefaultMessage.Put(s.nonEDNS)
