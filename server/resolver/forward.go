@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"zjdns/config"
@@ -20,20 +19,6 @@ import (
 	"codeberg.org/miekg/dns"
 	"golang.org/x/sync/errgroup"
 )
-
-// captureMQResponse extracts the RFC 10029 MQTYPE-Response option from an
-// upstream response for forwarding pass-through to the client.
-func captureMQResponse(resp *dns.Msg) *dns.MQRESPONSE {
-	if resp == nil {
-		return nil
-	}
-	for _, rr := range resp.Pseudo {
-		if mqr, ok := rr.(*dns.MQRESPONSE); ok {
-			return &dns.MQRESPONSE{Types: slices.Clone(mqr.Types)}
-		}
-	}
-	return nil
-}
 
 // captureUpstreamEDE extracts the EDE option from an upstream response for
 // passthrough to downstream clients. Upstream resolvers attach EDE codes

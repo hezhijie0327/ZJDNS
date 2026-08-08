@@ -168,13 +168,8 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 	// parent's servers are authoritative for it. Never ask the child's
 	// servers — an attacker-controlled child could answer NODATA and
 	// downgrade a signed delegation to insecure.
-	// RFC 10029: request the delegation NS records alongside the DS in the
-	// same authority query — resolveChildNameservers below reuses this
-	// response (one RTT instead of two).  Authorities without MQTYPE
-	// support ignore the option and the NS lookup falls back to a separate
-	// query.
 	dsQuestion := Question{Name: dnsutil.Fqdn(childZone), Qtype: dns.TypeDS, Qclass: dns.ClassINET}
-	dsResp, _, dsErr := r.queryNameserversConcurrent(ctx, nameservers, dsQuestion, []uint16{dns.TypeNS}, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+	dsResp, _, dsErr := r.queryNameserversConcurrent(ctx, nameservers, dsQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
 	if dsErr != nil {
 		return false, fmt.Errorf("DS query for %s failed: %w", childZone, dsErr)
 	}
@@ -250,7 +245,7 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 	}
 
 	dnskeyQuestion := Question{Name: dnsutil.Fqdn(childZone), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
-	dnskeyResp, _, dnskeyErr := r.queryNameserversConcurrent(ctx, childServers, dnskeyQuestion, nil, ecs, forceTCP, childZone, r.resolver.validator.Poisonguard)
+	dnskeyResp, _, dnskeyErr := r.queryNameserversConcurrent(ctx, childServers, dnskeyQuestion, ecs, forceTCP, childZone, r.resolver.validator.Poisonguard)
 	if dnskeyErr != nil {
 		return false, fmt.Errorf("DNSKEY query for %s failed: %w", childZone, dnskeyErr)
 	}
@@ -298,18 +293,15 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 // side (which is authoritative for the delegation), then the NS names are
 // resolved to addresses like any other delegation level.
 //
-// When mergedResp is non-nil (the RFC 10029 MQTYPE-Query response that
-// carried DS+NS together), the NS records are extracted from it instead of
-// issuing a separate NS query.  The caller owns mergedResp and its pool
-// lifetime — it is never Put here.  If the authority did not support MQTYPE
-// (no NS in the merged response), a separate NS query is issued as fallback.
+// When mergedResp is non-nil and carries NS records, they are extracted
+// directly.  Otherwise a separate NS query is issued.  The caller owns
+// mergedResp and its pool lifetime — it is never Put here.
 func (r *Recursive) resolveChildNameservers(ctx context.Context, nameservers []string, childZone, currentDomain, qname string, ecs *edns.ECSOption, forceTCP bool, mergedResp *dns.Msg) []string {
 	nsRecords := extractChildNS(childZone, mergedResp)
 	if nsRecords == nil {
-		// Fallback: the merged response carried no NS (authority ignored the
-		// MQTYPE-Query option per RFC 6891) — issue the standalone NS query.
+		// Fallback: no NS in the merged response — issue a standalone NS query.
 		nsQuestion := Question{Name: dnsutil.Fqdn(childZone), Qtype: dns.TypeNS, Qclass: dns.ClassINET}
-		resp, _, err := r.queryNameserversConcurrent(ctx, nameservers, nsQuestion, nil, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard) // _ = verdict: poison already gated per-response in queryNameserversConcurrent
+		resp, _, err := r.queryNameserversConcurrent(ctx, nameservers, nsQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard) // _ = verdict: poison already gated per-response in queryNameserversConcurrent
 		if err != nil || resp == nil {
 			log.Debugf("SECURITY: NS query for child zone %s failed: %v", childZone, err)
 			return nil

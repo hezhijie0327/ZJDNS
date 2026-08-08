@@ -132,20 +132,10 @@ func findChainStep(answer []dns.RR, question Question) (nextCNAME *dns.CNAME, ha
 // resolution. At each delegation level, verified parent DNSKEYs and child DS
 // records are used to authenticate the child zone's DNSKEYs.
 // resolve walks the root→TLD→authoritative hierarchy for a single question.
-// The variadic mqt carries an RFC 10029 MQTYPE-Query list of additional
-// QTYPEs bundled into every authority query of the walk — the intermediate
-// (referral) levels ignore or omit them (§3.4 flag match), the terminal
-// authoritative query merges the extra types into one response.  Callers
-// without a bundle pass nothing (pre-MQTYPE behaviour).
-func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.ECSOption, depth int, forceTCP bool, mqt ...[]uint16) QueryResult {
+func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.ECSOption, depth int, forceTCP bool) QueryResult {
 	if depth > config.DefaultMaxRecursionDepth {
 		log.Debugf("RECURSION: depth exceeded (depth=%d, max=%d) for %s", depth, config.DefaultMaxRecursionDepth, question.Name)
 		return QueryResult{Cacheable: true, Err: fmt.Errorf("recursion depth exceeded: %d", depth)}
-	}
-
-	var mqtTypes []uint16
-	if len(mqt) > 0 {
-		mqtTypes = mqt[0]
 	}
 
 	qname := dnsutil.Fqdn(question.Name)
@@ -184,7 +174,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 	// Root-domain query (normalizedQname is empty for the root zone ".").
 	if normalizedQname == "." {
-		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, question, mqtTypes, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
 		if verdict == defense.VerdictPoisoned {
 			poisonSeen = true
 			// A successful-but-poisoned UDP response for the root zone must
@@ -195,7 +185,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 				if response != nil {
 					pool.DefaultMessage.Put(response)
 				}
-				qr := r.resolve(ctx, question, ecs, depth, true, mqtTypes)
+				qr := r.resolve(ctx, question, ecs, depth, true)
 				qr.Poisoned = true
 				return qr
 			}
@@ -203,7 +193,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		if err != nil {
 			if verdict == defense.VerdictPoisoned && !forceTCP {
 				log.Debugf("RECURSION: poisonguard triggered TCP fallback for %s (zone=.)", question.Name)
-				qr := r.resolve(ctx, question, ecs, depth, true, mqtTypes)
+				qr := r.resolve(ctx, question, ecs, depth, true)
 				qr.Poisoned = true
 				return qr
 			}
@@ -241,7 +231,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			authoritativeForceTCP = r.probeTLDForPoison(ctx, tldServers, qname)
 		}
 
-		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, mqtTypes, ecs, authoritativeForceTCP, currentDomain, r.resolver.validator.Poisonguard)
+		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, ecs, authoritativeForceTCP, currentDomain, r.resolver.validator.Poisonguard)
 
 		// ── Single TCP fallback decision point ──────────────────────
 		// If any response at this delegation level was flagged as
@@ -255,7 +245,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 				if response != nil {
 					pool.DefaultMessage.Put(response)
 				}
-				qr := r.resolve(ctx, question, ecs, depth, true, mqtTypes)
+				qr := r.resolve(ctx, question, ecs, depth, true)
 				qr.Poisoned = true
 				return qr
 			}

@@ -102,7 +102,7 @@ func isApexSOANODATA(response *dns.Msg, queryName string) bool {
 // established and the caller should keep exposing labels.
 func (r *Recursive) advanceApexZoneCut(ctx context.Context, queryName string, nameservers []string, currentDomain string, ecs *edns.ECSOption, chain *dnssecChain, depth int, forceTCP bool, qname string) (nextNS []string, nextZone string, ok bool) {
 	nsQuestion := Question{Name: dnsutil.Fqdn(queryName), Qtype: dns.TypeNS, Qclass: dns.ClassINET}
-	nsResp, nsVerdict, err := r.queryNameserversConcurrent(ctx, nameservers, nsQuestion, nil, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+	nsResp, nsVerdict, err := r.queryNameserversConcurrent(ctx, nameservers, nsQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
 	if err != nil || nsResp == nil {
 		log.Debugf("RECURSION: NS query for zone-cut candidate %s failed: %v", queryName, err)
 		return nil, "", false
@@ -223,11 +223,6 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 		return nil
 	}
 
-	// Captured before the response is returned to the pool: NS-address
-	// resolution uses the merged MQTYPE-Response to decide whether an
-	// additional AAAA walk is needed (§3.5 — absence means unsupported).
-	mqResp := captureMQResponse(response)
-
 	*validated = r.isDNSSECValid(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain)
 
 	if !*validated && chain.zoneCutDetected {
@@ -243,7 +238,7 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 				"bogus zone cut delegation for "+question.Name); err != nil {
 				log.Debugf("SECURITY: DNSSEC validation failed for %s — zone cut child has DS but RRSIG verification failed", question.Name)
 				pool.DefaultMessage.Put(response)
-				return &QueryResult{Cacheable: true, Server: config.ProtoRecursive, ECS: ecsResponse, Err: err, DNSSECEDE: chain.lastEDECode, MQResponse: mqResp}
+				return &QueryResult{Cacheable: true, Server: config.ProtoRecursive, ECS: ecsResponse, Err: err, DNSSECEDE: chain.lastEDECode}
 			}
 		} else {
 			log.Debugf("SECURITY: zone cut resolution failed for %s: %v (treating as insecure)", question.Name, cutErr)
@@ -260,7 +255,7 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 			Answer:    answer,
 			Authority: auth, Additional: extra,
 			Validated: *validated, ECS: ecsResponse, Server: config.ProtoRecursive,
-			DNSSECEDE: chain.lastEDECode, MQResponse: mqResp,
+			DNSSECEDE: chain.lastEDECode,
 		}
 	}
 
@@ -275,7 +270,7 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 				Cacheable: true,
 				Server:    config.ProtoRecursive, ECS: ecsResponse,
 				Err:       fmt.Errorf("DNSSEC validation failed: bogus delegation for %s", question.Name),
-				DNSSECEDE: chain.lastEDECode, MQResponse: mqResp,
+				DNSSECEDE: chain.lastEDECode,
 			}
 		}
 	}
@@ -290,7 +285,7 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 		Answer:    answer,
 		Authority: auth, Additional: extra,
 		Validated: *validated, ECS: ecsResponse, Server: config.ProtoRecursive,
-		DNSSECEDE: chain.lastEDECode, MQResponse: mqResp,
+		DNSSECEDE: chain.lastEDECode,
 	}
 }
 
