@@ -76,6 +76,8 @@ func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, c
 	if len(chain.zoneDNSKEYs) > 0 && len(response.Answer) > 0 {
 		validated, valErr := crypto.IsResponseValid(response, currentDomain, chain.zoneDNSKEYs)
 		if validated {
+			// Clear any EDE a previous delegation level left behind.
+			chain.lastEDECode = 0
 			return true
 		}
 		if valErr != nil {
@@ -488,6 +490,13 @@ func (r *Recursive) validateOrRetry(ctx context.Context, response *dns.Msg, name
 	crypto := r.resolver.validator.Crypto
 
 	validated, err := crypto.IsResponseValid(response, currentDomain, verifiedKeys)
+	// A previous delegation level may have left a non-zero lastEDECode
+	// (e.g. DNSBogus when the TLD's DNSKEYs were unreachable).  If THIS
+	// level validates cleanly, the stale EDE must not surface to the
+	// client — clear it before the success return below.
+	if err == nil && validated {
+		chain.lastEDECode = 0
+	}
 	if err != nil {
 		log.Debugf("SECURITY: answer RRSIG verification failed for %s: %v", question.Name, err)
 

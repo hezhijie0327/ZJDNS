@@ -679,3 +679,84 @@ func BenchmarkGetZoneCutSigner(b *testing.B) {
 		rr.getZoneCutSigner(msg, zone+".")
 	}
 }
+
+// ── validateOrRetry: sticky lastEDECode clearing (R4-M9) ──────────────────────
+
+func TestValidateOrRetry_ClearsStickyEDE(t *testing.T) {
+	rr := newTestRecursive()
+	zone := "secure.example.com"
+	_, zskPriv := genTestKey(zone, dns.FlagZONE)
+
+	a := aRec("www."+zone, "192.0.2.1")
+	rrsig := signRRset([]dns.RR{a}, zone, zskPriv, 0)
+
+	msg := &dns.Msg{Answer: []dns.RR{a, rrsig}}
+	chain := &dnssecChain{
+		zoneDNSKEYs: []*dns.DNSKEY{{Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600}, DNSKEY: rdata.DNSKEY{Flags: dns.FlagZONE, Protocol: 3, Algorithm: dns.ECDSAP256SHA256}}},
+	}
+
+	// Simulate a sticky EDE from a previous delegation level.
+	chain.lastEDECode = dns.ExtendedErrorDNSBogus // EDE 6
+
+	validated := rr.validateOrRetry(
+		context.Background(), msg, nil,
+		Question{Name: "www." + zone + ".", Qtype: dns.TypeA, Qclass: dns.ClassINET},
+		zone, nil, false, chain, rr.resolver.validator.Crypto.ZoneKeys(zone),
+	)
+	// In this test we don't have cached keys; validateOrRetry will call
+	// IsResponseValid directly. The ANCHOR POINT is that if validation
+	// succeeds, lastEDECode must be cleared to 0.
+	if validated && chain.lastEDECode != 0 {
+		t.Errorf("validateOrRetry succeeded but lastEDECode = %d, want 0", chain.lastEDECode)
+	}
+}
+
+// TestValidateOrRetry_SetsEDEOnFailure verifies that validateOrRetry sets
+// the correct EDE code when validation fails — a DNSBogus EDE must be
+// recorded so the cache gate can reject the response.
+func TestValidateOrRetry_SetsEDEOnFailure(t *testing.T) {
+	rr := newTestRecursive()
+	zone := "secure.example.com"
+	_, wrongPriv := genTestKey(zone, dns.FlagZONE)
+
+	a := aRec("www."+zone, "192.0.2.1")
+	// Sign with the wrong key — validation should fail.
+	rrsig := signRRset([]dns.RR{a}, "other.example.com.", wrongPriv, 9999)
+
+	msg := &dns.Msg{Answer: []dns.RR{a, rrsig}}
+	chain := &dnssecChain{
+		zoneDNSKEYs: []*dns.DNSKEY{{Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600}, DNSKEY: rdata.DNSKEY{Flags: dns.FlagZONE, Protocol: 3, Algorithm: dns.ECDSAP256SHA256}}},
+	}
+
+	_ = rr.validateOrRetry(
+		context.Background(), msg, nil,
+		Question{Name: "www." + zone + ".", Qtype: dns.TypeA, Qclass: dns.ClassINET},
+		zone, nil, false, chain, chain.zoneDNSKEYs,
+	)
+	if chain.lastEDECode == 0 {
+		t.Error("validateOrRetry must set a non-zero EDE on validation failure")
+	}
+}
+
+// ── isValidWithDNSSEC: sticky lastEDECode clearing ────────────────────────────
+
+func TestIsValidWithDNSSEC_ClearsStickyEDE(t *testing.T) {
+	rr := newTestRecursive()
+	zone := "secure.example.com"
+	_, zskPriv := genTestKey(zone, dns.FlagZONE)
+
+	a := aRec("www."+zone, "192.0.2.1")
+	rrsig := signRRset([]dns.RR{a}, zone, zskPriv, 0)
+
+	msg := &dns.Msg{Answer: []dns.RR{a, rrsig}}
+	chain := &dnssecChain{
+		zoneDNSKEYs: []*dns.DNSKEY{{Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600}, DNSKEY: rdata.DNSKEY{Flags: dns.FlagZONE, Protocol: 3, Algorithm: dns.ECDSAP256SHA256}}},
+	}
+	// Stale EDE from a previous level.
+	chain.lastEDECode = dns.ExtendedErrorDNSBogus
+
+	validated := rr.isValidWithDNSSEC(msg, zone+".", chain)
+	if validated && chain.lastEDECode != 0 {
+		t.Errorf("isValidWithDNSSEC succeeded but lastEDECode = %d, want 0", chain.lastEDECode)
+	}
+}

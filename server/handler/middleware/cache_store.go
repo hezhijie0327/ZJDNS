@@ -25,13 +25,18 @@ type CacheStore struct {
 	resolver handler.Resolver
 }
 
-// dnssecCacheable reports whether a resolution result carrying the given
-// DNSSEC validation EDE may be cached.  Bogus-class failures (EDE 6/7/8/1/12 —
-// anything except RRSIGs missing) must never be cached: a dnssec_enforce
-// instance reading a shared cache would otherwise serve the unauthenticated
-// answer, bypassing the enforce gate.  RRSIGs-missing keeps the existing
-// insecure treatment and stays cacheable.
-func dnssecCacheable(ede uint16) bool {
+// dnssecCacheable reports whether a resolution result may be cached.
+// A validated (AD=1) response is always cached — the trust chain has been
+// verified and a bogus EDE that leaks through is a stale artifact from an
+// earlier delegation level (sticky chain.lastEDECode), not a real failure.
+// An unvalidated response carrying a bogus-class EDE (6/7/8/1/12) must
+// never be cached: a dnssec_enforce instance reading a shared cache would
+// otherwise serve the unauthenticated answer, bypassing the enforce gate.
+// RRSIGs-missing keeps the existing insecure treatment and stays cacheable.
+func dnssecCacheable(validated bool, ede uint16) bool {
+	if validated {
+		return true
+	}
 	return ede == 0 || ede == dns.ExtendedErrorRRSIGsMissing
 }
 
@@ -125,7 +130,7 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 
 	// Cache population.  Bogus validation results are never cached — an
 	// enforce instance sharing the DB must not serve them from cache.
-	if cacheable && dnssecCacheable(qr.DNSSECEDE) {
+	if cacheable && dnssecCacheable(validated, qr.DNSSECEDE) {
 		// RFC 4035 §5.3.3: cap TTL of authenticated RRsets.
 		if validated {
 			dnssec.CapValidatedTTL(qr.Answer, qr.Authority, qr.Additional)
