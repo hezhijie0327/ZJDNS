@@ -80,9 +80,21 @@ func (s *Server) handleDOTConnections(dotListener net.Listener) {
 		// deadline once the handshake completes.
 		_ = conn.SetDeadline(time.Now().Add(config.DefaultTLSHandshakeTimeout))
 
+		// Track the conn so Shutdown can wake it (the read loop blocks in
+		// io.ReadFull with a 60s idle deadline — without this, Shutdown
+		// waits up to 60s per active connection; M-3-5).
+		s.listenerMu.Lock()
+		s.dotConns[conn] = struct{}{}
+		s.listenerMu.Unlock()
+
 		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("DoT connection handler")
-			defer func() { _ = conn.Close() }()
+			defer func() {
+				s.listenerMu.Lock()
+				delete(s.dotConns, conn)
+				s.listenerMu.Unlock()
+				_ = conn.Close()
+			}()
 			log.Debugf("TLS: DoT starting connection handler for %s", conn.RemoteAddr())
 			s.handleDOTConnection(conn)
 			return nil

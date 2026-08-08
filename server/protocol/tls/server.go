@@ -60,6 +60,7 @@ type Server struct {
 
 	listenerMu     sync.Mutex // protects all listener/conn slice fields below
 	dotListeners   []net.Listener
+	dotConns       map[net.Conn]struct{} // active DoT conns — woken on Shutdown (M-3-5)
 	doqConns       []*net.UDPConn
 	doqTransports  []*quic.Transport
 	doqListeners   []*quic.EarlyListener
@@ -166,6 +167,10 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 	tlsConfig := baseConfig.Clone()
 
 	ctx, cancel := context.WithCancelCause(context.Background())
+	// The derived context is deliberately unused: goroutines derive from
+	// s.ctx (cancelled with an error cause on Shutdown), and errgroup's
+	// first-error cancellation would cancel the whole group on any single
+	// handler error — the per-connection ctxs already handle that.
 	serverGroup, _ := errgroup.WithContext(ctx)
 	serverGroup.SetLimit(config.DefaultServerGoroutineLimit)
 
@@ -180,6 +185,7 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 		cancel:        cancel,
 		serverGroup:   serverGroup,
 		quicConnSem:   make(chan struct{}, config.DefaultServerGoroutineLimit),
+		dotConns:      make(map[net.Conn]struct{}),
 	}
 
 	s.displayCertificateInfo(&eCert)
@@ -362,6 +368,15 @@ func (s *Server) Shutdown() error {
 			zdnsutil.CloseWithLog(l, "DoT listener", "TLS")
 		}
 	}
+	// Wake active DoT connections: their read loops block in io.ReadFull
+	// with a 60s idle deadline refreshed only on success, so serverGroup.Wait
+	// below would otherwise stall up to 60s per connection. A zero deadline
+	// makes every blocked Read return a timeout immediately (M-3-5).
+	s.listenerMu.Lock()
+	for conn := range s.dotConns {
+		_ = conn.SetReadDeadline(time.Unix(1, 0))
+	}
+	s.listenerMu.Unlock()
 	for _, l := range doqListeners {
 		if l != nil {
 			zdnsutil.CloseWithLog(l, "DoQ listener", "TLS")

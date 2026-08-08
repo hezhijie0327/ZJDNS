@@ -81,7 +81,22 @@ func (s *Server) serveDOT(listener net.Listener) {
 			time.Sleep(config.DefaultAcceptRetryDelay)
 			continue
 		}
-		s.serverGroup.Go(func() error { defer zdnsutil.HandlePanic("TLCP DoT handler"); s.handleDOTConn(conn); return nil })
+		// Track the conn so Shutdown can wake it (the read loop blocks in
+		// ReadTCPMsg with a 60s idle deadline — M-3-5).
+		s.listenerMu.Lock()
+		s.dotConns[conn] = struct{}{}
+		s.listenerMu.Unlock()
+
+		s.serverGroup.Go(func() error {
+			defer zdnsutil.HandlePanic("TLCP DoT handler")
+			defer func() {
+				s.listenerMu.Lock()
+				delete(s.dotConns, conn)
+				s.listenerMu.Unlock()
+			}()
+			s.handleDOTConn(conn)
+			return nil
+		})
 	}
 }
 

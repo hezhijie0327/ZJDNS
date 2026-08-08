@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -91,6 +92,13 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 
 	msg, err := dnshttp.Request(r)
 	if err != nil {
+		// RFC 8484 §4.2.1: POST with a non-dns-message Content-Type → 415
+		// (mirrors the TLS DoH handler, tls/https.go).
+		if r.Method == http.MethodPost && r.Header.Get("Content-Type") != "" &&
+			!strings.HasPrefix(r.Header.Get("Content-Type"), dnshttp.MimeType) {
+			http.Error(w, http.StatusText(http.StatusUnsupportedMediaType), http.StatusUnsupportedMediaType)
+			return
+		}
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}

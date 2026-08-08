@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"sync"
@@ -72,14 +73,14 @@ func (d *demuxPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 			if !ok {
 				return 0, nil, net.ErrClosed
 			}
-			return copy(p, pkt.data), pkt.addr, nil
+			return d.copyPacket(p, pkt)
 		}
 		select {
 		case pkt, ok := <-d.ch:
 			if !ok {
 				return 0, nil, net.ErrClosed
 			}
-			return copy(p, pkt.data), pkt.addr, nil
+			return d.copyPacket(p, pkt)
 		case <-dl:
 			// Deadline fired; a stale timer from a previous deadline may
 			// have raced a fresh packet — loop once to re-check the queue
@@ -92,6 +93,17 @@ func (d *demuxPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 			}
 		}
 	}
+}
+
+// copyPacket copies a queued datagram into p, surfacing io.ErrShortBuffer
+// when p is too small instead of silently truncating (a truncated record
+// would be indistinguishable from network corruption and churn the
+// connection; M-3-5).
+func (d *demuxPacketConn) copyPacket(p []byte, pkt demuxPacket) (int, net.Addr, error) {
+	if len(p) < len(pkt.data) {
+		return 0, pkt.addr, io.ErrShortBuffer
+	}
+	return copy(p, pkt.data), pkt.addr, nil
 }
 
 func (d *demuxPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
@@ -175,7 +187,11 @@ func (s *Server) startDTLCPServer() error {
 func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 	defer zdnsutil.HandlePanic("TLCP DTLCP accept loop")
 
-	buf := make([]byte, pool.UDPBufferSize)
+	// SecureBufferSize, not UDPBufferSize: the dispatcher must accept any
+	// record the client can send (RFC 8094 framing allows 65535; DTLS reads
+	// 8192) — a 1232-byte buffer silently destroyed larger DTLCP datagrams
+	// at the socket read (M-3-5).
+	buf := make([]byte, pool.SecureBufferSize)
 
 	for {
 		select {
@@ -264,7 +280,7 @@ func (s *Server) serveDTLCPClient(l *dtlcpListener, dc *demuxPacketConn, src *ne
 		log.Debugf("TLCP: DTLCP handshake error from %s: %v", src, err)
 		return
 	}
-	log.Debugf("TLS: TLCP: DTLCP handshake from client — version=0x%x cipher=%s",
+	log.Debugf("TLCP: DTLCP handshake from client — version=0x%x cipher=%s",
 		conn.ConnectionState().Version, dtlcp.CipherSuiteName(conn.ConnectionState().CipherSuite))
 
 	s.handleDTLCPConnection(conn)

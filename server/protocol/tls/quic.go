@@ -279,14 +279,14 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	// Return req to the pool AFTER responding: respondQUIC packs the
 	// response, and pool.Put zeroes the message struct — an identity
 	// response (handler returned req itself) must be packed while intact.
-	if response == nil || response != req {
-		pool.DefaultMessage.Put(req)
-	}
-	// Identity guard: a handler may return the request message itself as
-	// the response — pooling the same pointer twice would let two
-	// goroutines race on it.
+	// The != guards cover every case: a handler may return the request
+	// message itself as the response — pooling the same pointer twice
+	// would let two goroutines race on it.
 	if response != nil && response != req {
 		pool.DefaultMessage.Put(response)
+	}
+	if response != req {
+		pool.DefaultMessage.Put(req)
 	}
 
 	// RFC 9250 §4.3.3: more than one query on a stream is a protocol error

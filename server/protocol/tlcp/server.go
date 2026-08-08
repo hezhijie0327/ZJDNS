@@ -38,6 +38,7 @@ type Server struct {
 	// runs Shutdown concurrently with the appends.
 	listenerMu     sync.Mutex
 	dotListeners   []net.Listener
+	dotConns       map[net.Conn]struct{} // active TLCP DoT conns — woken on Shutdown (M-3-5)
 	dohListeners   []net.Listener
 	dohServers     []*http.Server
 	dtlcpListeners []*dtlcpListener
@@ -134,6 +135,7 @@ func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, 
 		cancel:      cancel,
 		serverGroup: serverGroup,
 		serverCtx:   serverCtx,
+		dotConns:    make(map[net.Conn]struct{}),
 	}
 
 	displayCertificateInfo(&signCert)
@@ -219,6 +221,13 @@ func (s *Server) Shutdown() error {
 			zdnsutil.CloseWithLog(l, "TLCP DoT listener", "TLCP")
 		}
 	}
+	// Wake active TLCP DoT connections — their read loops block in
+	// ReadTCPMsg with a 60s idle deadline (M-3-5).
+	s.listenerMu.Lock()
+	for conn := range s.dotConns {
+		_ = conn.SetReadDeadline(time.Unix(1, 0))
+	}
+	s.listenerMu.Unlock()
 	for _, srv := range dohServers {
 		if srv != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)

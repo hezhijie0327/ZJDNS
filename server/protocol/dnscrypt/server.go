@@ -211,14 +211,17 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, 
 // valid, but clients must fetch the new certificate to reconnect.
 func (s *Server) ResetKeys() error {
 	now := dnscryptcrypto.NowUnix32()
+	// Serialized with updateKeys (renewal ticker) under s.mu — concurrent
+	// minting from the same previous produced duplicate windows (M-3-5).
+	s.mu.Lock()
 	// Passing nil previous breaks the seed chain: the reset window starts
 	// a new chain from a fresh random seed.
 	entries := s.deriveAndSign(nil, now)
 	if len(entries) == 0 {
+		s.mu.Unlock()
 		return errors.New("dnscrypt: reset: failed to generate fresh key pair")
 	}
 
-	s.mu.Lock()
 	// Clear old shared key cache before replacing to release cached keys.
 	s.sharedKeyCache.Clear()
 	s.sharedKeyCache = lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize)
@@ -463,7 +466,13 @@ func (s *Server) hasClientMagic(b []byte) bool {
 func (s *Server) updateKeys() {
 	now := dnscryptcrypto.NowUnix32()
 
+	// Window minting is serialized under s.mu: ResetKeys (CHAOS handler)
+	// and the renewal ticker can otherwise run concurrently, both deriving
+	// from the same previous and minting duplicate windows for the same
+	// tsStart (M-3-5).  deriveAndSign is ~ms-scale (signing) and runs at
+	// startup/ticker frequency — blocking decrypts briefly is acceptable.
 	s.mu.Lock()
+
 	// Purge windows past NotAfter (no overlap grace).
 	n := 0
 	for _, k := range s.keys {
@@ -477,7 +486,6 @@ func (s *Server) updateKeys() {
 	if len(s.keys) > 0 {
 		previous = s.keys[0].pair // newest-first order
 	}
-	s.mu.Unlock()
 
 	newEntries := s.deriveAndSign(previous, now)
 	if len(newEntries) == 0 && len(s.keys) == 0 {
@@ -486,22 +494,23 @@ func (s *Server) updateKeys() {
 		newEntries = s.deriveAndSign(nil, now)
 	}
 	if len(newEntries) > 0 {
-		s.mu.Lock()
 		s.keys = append(newEntries, s.keys...)
 		// Clear old shared key cache before replacing to release cached keys.
 		s.sharedKeyCache.Clear()
 		s.sharedKeyCache = lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize)
 		// The PQ ticket key is fixed (derived from the signing key at
 		// startup); it is not rotated alongside cert keys.
-		s.mu.Unlock()
 	}
+	active := len(s.keys)
+	s.mu.Unlock()
 
-	// Persist the new window set outside the lock to avoid blocking queries.
+	// Persist the new window set outside the lock: Save() takes RLock
+	// itself, and holding the write lock would deadlock.
 	if err := s.Save(); err != nil {
 		log.Warnf("DNSCRYPT: failed to persist rotated state: %v", err)
 	}
 
-	log.Debugf("DNSCRYPT: renewed certificates (active=%d)", len(s.keys))
+	log.Debugf("DNSCRYPT: renewed certificates (active=%d)", active)
 }
 
 // deriveAndSign walks the seed chain forward from previous and returns every

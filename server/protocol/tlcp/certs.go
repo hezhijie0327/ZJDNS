@@ -64,14 +64,16 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 		BasicConstraintsValid: true,
 		MaxPathLen:            1,
 	}
-	serverTemplate := func() *smx509.Certificate {
+	serverTemplate := func(caNotAfter time.Time) *smx509.Certificate {
 		return &smx509.Certificate{
 			SerialNumber: new(big.Int),
 			Subject:      pkix.Name{CommonName: config.DefaultProjectName + " TLCP"},
 			NotBefore:    time.Now(),
-			NotAfter:     time.Now().Add(config.DefaultServerCertValidity),
-			KeyUsage:     smx509.KeyUsageDigitalSignature,
-			ExtKeyUsage:  []smx509.ExtKeyUsage{smx509.ExtKeyUsageServerAuth},
+			// The leaf must never outlive its signer — clamp to the CA's
+			// expiry (mirrors tls/certs.go leafNotAfter).
+			NotAfter:    leafNotAfter(time.Now(), caNotAfter),
+			KeyUsage:    smx509.KeyUsageDigitalSignature,
+			ExtKeyUsage: []smx509.ExtKeyUsage{smx509.ExtKeyUsageServerAuth},
 		}
 	}
 
@@ -86,7 +88,7 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
 	}
 
-	signTmpl := serverTemplate()
+	signTmpl := serverTemplate(caCert.NotAfter)
 	signTmpl.SerialNumber = signSerial
 	signDER, err := smx509.CreateCertificate(rand.Reader, signTmpl, caCert, &signKey.PublicKey, caKey)
 	if err != nil {
@@ -94,7 +96,7 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 		return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
 	}
 
-	encTmpl := serverTemplate()
+	encTmpl := serverTemplate(caCert.NotAfter)
 	encTmpl.SerialNumber = encSerial
 	encDER, err := smx509.CreateCertificate(rand.Reader, encTmpl, caCert, &encKey.PublicKey, caKey)
 	if err != nil {
@@ -119,4 +121,15 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 		PrivateKey:  encKey,
 	}
 	return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
+}
+
+// leafNotAfter returns the leaf certificate's expiry: the configured server
+// validity clamped to the CA's expiry so the leaf never outlives its signer
+// (strict RFC 5280 validators reject a chain whose leaf outlives its CA).
+func leafNotAfter(now, caNotAfter time.Time) time.Time {
+	leaf := now.Add(config.DefaultServerCertValidity)
+	if caNotAfter.Before(leaf) {
+		return caNotAfter
+	}
+	return leaf
 }
