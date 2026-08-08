@@ -512,7 +512,7 @@ func (p *UDPPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc
 		capacity:    make(chan struct{}, p.maxPipe),
 		maxPipe:     int32(p.maxPipe), //nolint:gosec // G115: bounded by DefaultMaxPipe (16)
 		extractKey:  p.extractKey,
-		idleTimeout: config.DefaultTCPPoolIdleTimeout,
+		idleTimeout: config.DefaultUDPPoolIdleTimeout,
 	}
 	go c.readLoop()
 

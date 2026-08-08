@@ -118,11 +118,20 @@ const (
 	// pipeline; a short budget treats "slow stream open" as an exhausted
 	// connection and the pool dials a fresh one (0-RTT resumption).
 	DefaultQUICStreamOpenTimeout = 100 * time.Millisecond
-	DefaultQUICServerIdleTimeout = 30 * time.Second  // server QUIC idle (RFC 9000 default)
-	DefaultTCPPoolIdleTimeout    = 60 * time.Second  // TCP/DoT pool connection idle
-	DefaultTLSHandshakeTimeout   = 10 * time.Second  // pre-handshake bound for DoT (an idle-connect flood must not hold shared errgroup slots)
-	DefaultTCPKeepAlivePeriod    = 30 * time.Second  // TCP keep-alive probe interval
-	DefaultTCPIdleTimeout        = 120 * time.Second // RFC 7766 §6.2.3: plain TCP server idle timeout
+	DefaultQUICServerIdleTimeout = 30 * time.Second // server QUIC idle (RFC 9000 default)
+	DefaultTCPPoolIdleTimeout    = 60 * time.Second // TCP/DoT pool connection idle (handshake cost justifies a longer hold)
+	// DefaultUDPPoolIdleTimeout is the idle-reap window for pooled UDP
+	// sockets.  UDP dialing is a bare connect(2) — no handshake — so
+	// reconnecting is cheap and retaining idle sockets is pure cost: each
+	// conn pins a 64KB read buffer plus a socket/FD.  The recursive resolver
+	// and plain forwarders share this pool and can hold one socket per
+	// destination address (root/TLD/authoritative + forwarding upstreams);
+	// a 30s window keeps the working set small between query bursts while
+	// avoiding churn for TTL-driven re-queries of the same authorities.
+	DefaultUDPPoolIdleTimeout  = 30 * time.Second
+	DefaultTLSHandshakeTimeout = 10 * time.Second  // pre-handshake bound for DoT (an idle-connect flood must not hold shared errgroup slots)
+	DefaultTCPKeepAlivePeriod  = 30 * time.Second  // TCP keep-alive probe interval
+	DefaultTCPIdleTimeout      = 120 * time.Second // RFC 7766 §6.2.3: plain TCP server idle timeout
 
 	DefaultHTTPServerIdleTimeout  = 60 * time.Second // HTTP keep-alive idle
 	DefaultHTTPServerWriteTimeout = 10 * time.Second // HTTP response write
