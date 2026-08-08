@@ -5,10 +5,10 @@ go 1.26.4
 require (
 	codeberg.org/miekg/dns v0.6.91-0.20260805153854-f0b0c2e67934
 	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033
-	github.com/cloudflare/circl v1.6.5
+	github.com/cloudflare/circl v1.6.6-0.20260806151822-33d33c75d9a0
 	github.com/emmansun/gmsm v0.44.1
-	github.com/klauspost/compress v1.19.2-0.20260805155651-c3b3439a4819
-	github.com/pion/dtls/v3 v3.1.3-0.20260804121206-30e978167dd0
+	github.com/klauspost/compress v1.19.3-0.20260807134503-07f8bcdd5278
+	github.com/pion/dtls/v3 v3.1.3-0.20260806210612-e73780eb735c
 	github.com/quic-go/quic-go v0.61.1-0.20260803043222-2cfe6ee0b5ac
 	gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f
 	gitlab.com/go-extension/tls v0.0.0-20260715144009-d75c84d8b9d2

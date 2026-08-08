@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -56,10 +57,23 @@ func (d *Detector) IPv6() net.IP { return d.detect(true) }
 // detect is startup-only — called during server init to discover public IPs.
 // DNS first (whoami.cloudflare), HTTP trace as fallback.
 func (d *Detector) detect(forceIPv6 bool) net.IP {
+	family := "IPv4"
+	if forceIPv6 {
+		family = "IPv6"
+	}
+
 	if ip := d.detectViaDNS(forceIPv6); ip != nil {
+		log.Debugf("IPDETECT: %s -> DNS: %s", family, ip)
 		return ip
 	}
-	return d.detectViaHTTP(forceIPv6)
+	log.Debugf("IPDETECT: %s DNS failed, trying HTTP fallback", family)
+
+	if ip := d.detectViaHTTP(forceIPv6); ip != nil {
+		log.Debugf("IPDETECT: %s -> HTTP: %s", family, ip)
+		return ip
+	}
+	log.Warnf("IPDETECT: %s all methods failed", family)
+	return nil
 }
 
 // detectViaDNS queries whoami.cloudflare (class CH, type TXT) and returns
