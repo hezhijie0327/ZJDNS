@@ -26,7 +26,7 @@ func BenchmarkEvaluator_EvaluateExact(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		_ = eval.Evaluate("bench.local.", dns.TypeA, dns.ClassINET, nil)
+		_ = eval.Evaluate("bench.local.", dns.TypeA, dns.ClassINET, nil, nil)
 	}
 }
 
@@ -47,7 +47,7 @@ func BenchmarkEvaluator_EvaluateWildcard(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		_ = eval.Evaluate("sub.example.com.", dns.TypeA, dns.ClassINET, nil)
+		_ = eval.Evaluate("sub.example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	}
 }
 
@@ -68,7 +68,7 @@ func BenchmarkEvaluator_EvaluateMiss(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		_ = eval.Evaluate("no-match.local.", dns.TypeA, dns.ClassINET, nil)
+		_ = eval.Evaluate("no-match.local.", dns.TypeA, dns.ClassINET, nil, nil)
 	}
 }
 

@@ -45,7 +45,7 @@ func TestEvaluator_Evaluate_Answer(t *testing.T) {
 		t.Fatalf("LoadRules: %v", err)
 	}
 
-	result := z.Evaluate("static.example.com.", dns.TypeA, dns.ClassINET, nil)
+	result := z.Evaluate("static.example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if !result.Matched {
 		t.Fatal("expected match")
 	}
@@ -78,13 +78,13 @@ func TestEvaluator_Evaluate_NoMatch(t *testing.T) {
 	}
 
 	// Different qtype.
-	result := z.Evaluate("example.com.", dns.TypeAAAA, dns.ClassINET, nil)
+	result := z.Evaluate("example.com.", dns.TypeAAAA, dns.ClassINET, nil, nil)
 	if result.Matched {
 		t.Error("AAAA query should not match A-only rule")
 	}
 
 	// Different domain.
-	result = z.Evaluate("other.com.", dns.TypeA, dns.ClassINET, nil)
+	result = z.Evaluate("other.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if result.Matched {
 		t.Error("other.com should not match")
 	}
@@ -105,7 +105,7 @@ func TestEvaluator_Evaluate_NXDOMAIN(t *testing.T) {
 
 	// Sentinel rule matches all qtypes.
 	for _, qt := range []uint16{dns.TypeA, dns.TypeAAAA, dns.TypeMX, dns.TypeTXT} {
-		result := z.Evaluate("blocked.com.", qt, dns.ClassINET, nil)
+		result := z.Evaluate("blocked.com.", qt, dns.ClassINET, nil, nil)
 		if !result.Matched {
 			t.Errorf("qtype=%d should match sentinel rule", qt)
 		}
@@ -142,7 +142,7 @@ func TestEvaluator_Evaluate_AuthorityAndAdditional(t *testing.T) {
 		t.Fatalf("LoadRules: %v", err)
 	}
 
-	result := z.Evaluate("test.example.com.", dns.TypeA, dns.ClassINET, nil)
+	result := z.Evaluate("test.example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if !result.Matched {
 		t.Fatal("expected match")
 	}
@@ -177,7 +177,7 @@ func TestEvaluator_Evaluate_MultipleTypes(t *testing.T) {
 	}
 
 	// A query returns only A.
-	aResult := z.Evaluate("multi.example.com.", dns.TypeA, dns.ClassINET, nil)
+	aResult := z.Evaluate("multi.example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if !aResult.Matched {
 		t.Fatal("A query: expected match")
 	}
@@ -189,7 +189,7 @@ func TestEvaluator_Evaluate_MultipleTypes(t *testing.T) {
 	}
 
 	// AAAA query returns only AAAA.
-	aaaaResult := z.Evaluate("multi.example.com.", dns.TypeAAAA, dns.ClassINET, nil)
+	aaaaResult := z.Evaluate("multi.example.com.", dns.TypeAAAA, dns.ClassINET, nil, nil)
 	if !aaaaResult.Matched {
 		t.Fatal("AAAA query: expected match")
 	}
@@ -215,19 +215,19 @@ func TestEvaluator_Wildcard(t *testing.T) {
 	}
 
 	// Wildcard matches subdomains.
-	result := z.Evaluate("sub.wild.example.com.", dns.TypeA, dns.ClassINET, nil)
+	result := z.Evaluate("sub.wild.example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if !result.Matched {
 		t.Fatal("wildcard should match subdomain")
 	}
 
 	// Wildcard matches deep subdomains.
-	result = z.Evaluate("deep.sub.wild.example.com.", dns.TypeA, dns.ClassINET, nil)
+	result = z.Evaluate("deep.sub.wild.example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if !result.Matched {
 		t.Fatal("wildcard should match deep subdomain")
 	}
 
 	// Wildcard does NOT match the base domain.
-	result = z.Evaluate("wild.example.com.", dns.TypeA, dns.ClassINET, nil)
+	result = z.Evaluate("wild.example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if result.Matched {
 		t.Error("wildcard should not match base domain")
 	}
@@ -247,7 +247,7 @@ func TestEvaluator_Wildcard_TypeFilter(t *testing.T) {
 	}
 
 	// AAAA query should not match A-only wildcard.
-	result := z.Evaluate("sub.wild.example.com.", dns.TypeAAAA, dns.ClassINET, nil)
+	result := z.Evaluate("sub.wild.example.com.", dns.TypeAAAA, dns.ClassINET, nil, nil)
 	if result.Matched {
 		t.Error("AAAA query should not match A-only wildcard")
 	}
@@ -267,7 +267,7 @@ func TestEvaluator_ExactWinsOverWildcard(t *testing.T) {
 		t.Fatalf("LoadRules: %v", err)
 	}
 
-	result := z.Evaluate("specific.example.com.", dns.TypeA, dns.ClassINET, nil)
+	result := z.Evaluate("specific.example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if !result.Matched {
 		t.Fatal("expected match")
 	}
@@ -283,7 +283,7 @@ func TestEvaluator_NoRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	z := New(db)
-	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil)
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if result.Matched {
 		t.Error("empty evaluator should not match")
 	}
@@ -302,7 +302,7 @@ func TestEvaluator_CreatedAt(t *testing.T) {
 		t.Fatalf("LoadRules: %v", err)
 	}
 
-	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil)
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if result.CreatedAt == 0 {
 		t.Error("CreatedAt should be non-zero")
 	}
@@ -328,7 +328,7 @@ func TestEvaluator_RcodeOnlyWithRecords(t *testing.T) {
 	}
 
 	// A query returns REFUSED with records.
-	aResult := z.Evaluate("mixed.example.com.", dns.TypeA, dns.ClassINET, nil)
+	aResult := z.Evaluate("mixed.example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if !aResult.Matched {
 		t.Fatal("A query: expected match")
 	}
@@ -341,7 +341,7 @@ func TestEvaluator_RcodeOnlyWithRecords(t *testing.T) {
 
 	// AAAA query has no matching type, so... wait. The rule has answer records
 	// so it creates non-sentinel keys. AAAA won't match.
-	aaaaResult := z.Evaluate("mixed.example.com.", dns.TypeAAAA, dns.ClassINET, nil)
+	aaaaResult := z.Evaluate("mixed.example.com.", dns.TypeAAAA, dns.ClassINET, nil, nil)
 	if aaaaResult.Matched {
 		t.Error("AAAA query should not match (no AAAA records in rule)")
 	}
@@ -369,7 +369,7 @@ func TestEvaluator_FileImport_Basic(t *testing.T) {
 	}
 
 	// blocked.com returns NXDOMAIN for all types.
-	result := z.Evaluate("blocked.com.", dns.TypeA, dns.ClassINET, nil)
+	result := z.Evaluate("blocked.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if !result.Matched {
 		t.Fatal("blocked.com A: expected match")
 	}
@@ -378,7 +378,7 @@ func TestEvaluator_FileImport_Basic(t *testing.T) {
 	}
 
 	// custom.example.com A returns a record.
-	result = z.Evaluate("custom.example.com.", dns.TypeA, dns.ClassINET, nil)
+	result = z.Evaluate("custom.example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if !result.Matched {
 		t.Fatal("custom.example.com A: expected match")
 	}
@@ -406,7 +406,7 @@ func TestEvaluator_FileImport_Wildcard(t *testing.T) {
 		t.Fatalf("LoadRules: %v", err)
 	}
 
-	result := z.Evaluate("sub.wild.com.", dns.TypeA, dns.ClassINET, nil)
+	result := z.Evaluate("sub.wild.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if !result.Matched {
 		t.Fatal("wildcard should match subdomain")
 	}
@@ -433,7 +433,7 @@ func TestEvaluator_FileImport_Comments(t *testing.T) {
 		t.Fatalf("LoadRules: %v", err)
 	}
 
-	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil)
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if !result.Matched {
 		t.Fatal("expected match")
 	}
@@ -460,7 +460,7 @@ func TestEvaluator_FileImport_AuthorityAndAdditional(t *testing.T) {
 		t.Fatalf("LoadRules: %v", err)
 	}
 
-	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil)
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if !result.Matched {
 		t.Fatal("expected match")
 	}
@@ -494,7 +494,7 @@ func TestEvaluator_MatchTags_PositiveMatch(t *testing.T) {
 	}
 
 	// Client with "corp" tag should match the corp rule.
-	result := z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true})
+	result := z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true}, nil)
 	if !result.Matched {
 		t.Fatal("corp-tagged client: expected match")
 	}
@@ -504,7 +504,7 @@ func TestEvaluator_MatchTags_PositiveMatch(t *testing.T) {
 	}
 
 	// Client with "guest" tag should match the guest rule.
-	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"guest": true})
+	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"guest": true}, nil)
 	if !result.Matched {
 		t.Fatal("guest-tagged client: expected match")
 	}
@@ -514,7 +514,7 @@ func TestEvaluator_MatchTags_PositiveMatch(t *testing.T) {
 	}
 
 	// Client with neither tag should not match.
-	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{}, nil)
 	if result.Matched {
 		t.Error("untagged client: should not match any rule")
 	}
@@ -541,7 +541,7 @@ func TestEvaluator_MatchTags_Negate(t *testing.T) {
 	}
 
 	// Client with neither tag should match (both negations satisfied).
-	result := z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	result := z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{}, nil)
 	if !result.Matched {
 		t.Fatal("untagged client: expected match (neither corp nor guest)")
 	}
@@ -554,19 +554,19 @@ func TestEvaluator_MatchTags_Negate(t *testing.T) {
 	}
 
 	// Client with only "corp" should NOT match (!corp fails).
-	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true})
+	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true}, nil)
 	if result.Matched {
 		t.Error("corp-tagged client: should NOT match (!corp negates)")
 	}
 
 	// Client with only "guest" should NOT match (!guest fails).
-	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"guest": true})
+	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"guest": true}, nil)
 	if result.Matched {
 		t.Error("guest-tagged client: should NOT match (!guest negates)")
 	}
 
 	// Client with BOTH tags should NOT match.
-	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true, "guest": true})
+	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true, "guest": true}, nil)
 	if result.Matched {
 		t.Error("corp+guest-tagged client: should NOT match (both negations fail)")
 	}
@@ -612,7 +612,7 @@ func TestEvaluator_MatchTags_MixedSameQType(t *testing.T) {
 	}
 
 	// External client (no tags) — should match the !net_local rule → 127.0.0.1.
-	result := z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	result := z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{}, nil)
 	if !result.Matched {
 		t.Fatal("untagged client A query: expected match")
 	}
@@ -628,7 +628,7 @@ func TestEvaluator_MatchTags_MixedSameQType(t *testing.T) {
 	}
 
 	// External client — AAAA query → ::1 from !net_local rule.
-	result = z.Evaluate("vpn.example.com.", dns.TypeAAAA, dns.ClassINET, map[string]bool{})
+	result = z.Evaluate("vpn.example.com.", dns.TypeAAAA, dns.ClassINET, map[string]bool{}, nil)
 	if !result.Matched {
 		t.Fatal("untagged client AAAA query: expected match")
 	}
@@ -641,7 +641,7 @@ func TestEvaluator_MatchTags_MixedSameQType(t *testing.T) {
 	}
 
 	// Local client (net_local tag) — A query → should match net_local rule → 10.192.7.1.
-	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"net_local": true})
+	result = z.Evaluate("vpn.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"net_local": true}, nil)
 	if !result.Matched {
 		t.Fatal("local client A query: expected match (this was the bug)")
 	}
@@ -657,7 +657,7 @@ func TestEvaluator_MatchTags_MixedSameQType(t *testing.T) {
 	}
 
 	// Local client (net_local tag) — AAAA query → should match net_local rcode=3 rule.
-	result = z.Evaluate("vpn.example.com.", dns.TypeAAAA, dns.ClassINET, map[string]bool{"net_local": true})
+	result = z.Evaluate("vpn.example.com.", dns.TypeAAAA, dns.ClassINET, map[string]bool{"net_local": true}, nil)
 	if !result.Matched {
 		t.Fatal("local client AAAA query: expected match")
 	}
@@ -687,25 +687,25 @@ func TestEvaluator_MatchTags_MultiAnd(t *testing.T) {
 	}
 
 	// Has "corp" but not "guest" → should match.
-	result := z.Evaluate("internal.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true})
+	result := z.Evaluate("internal.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true}, nil)
 	if !result.Matched {
 		t.Error("corp only: expected match")
 	}
 
 	// Has "corp" AND "guest" → should NOT match (!guest fails).
-	result = z.Evaluate("internal.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true, "guest": true})
+	result = z.Evaluate("internal.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true, "guest": true}, nil)
 	if result.Matched {
 		t.Error("corp+guest: should NOT match (!guest negates)")
 	}
 
 	// Has "guest" but not "corp" → should NOT match (positive "corp" requirement fails).
-	result = z.Evaluate("internal.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"guest": true})
+	result = z.Evaluate("internal.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"guest": true}, nil)
 	if result.Matched {
 		t.Error("guest only: should NOT match (corp required)")
 	}
 
 	// Has neither → should NOT match.
-	result = z.Evaluate("internal.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	result = z.Evaluate("internal.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{}, nil)
 	if result.Matched {
 		t.Error("neither: should NOT match")
 	}
@@ -739,7 +739,7 @@ func TestEvaluator_MatchTags_Wildcard(t *testing.T) {
 	}
 
 	// Corp client matches the "corp" wildcard rule.
-	result := z.Evaluate("sub.corp.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true})
+	result := z.Evaluate("sub.corp.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true}, nil)
 	if !result.Matched {
 		t.Fatal("corp-tagged client: expected wildcard match")
 	}
@@ -749,7 +749,7 @@ func TestEvaluator_MatchTags_Wildcard(t *testing.T) {
 	}
 
 	// Non-corp client matches the "!corp" wildcard rule.
-	result = z.Evaluate("sub.corp.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	result = z.Evaluate("sub.corp.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{}, nil)
 	if !result.Matched {
 		t.Fatal("untagged client: expected wildcard match")
 	}
@@ -775,13 +775,13 @@ func TestEvaluator_MatchTags_NoTagsMatchesAll(t *testing.T) {
 	}
 
 	// Should match with no tags.
-	result := z.Evaluate("public.example.com.", dns.TypeA, dns.ClassINET, nil)
+	result := z.Evaluate("public.example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if !result.Matched {
 		t.Error("nil tags: expected match")
 	}
 
 	// Should match with some tags.
-	result = z.Evaluate("public.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true})
+	result = z.Evaluate("public.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"corp": true}, nil)
 	if !result.Matched {
 		t.Error("corp-tagged client: expected match (no match_tags on rule)")
 	}
@@ -800,7 +800,7 @@ func TestEvaluator_TTLCyclical(t *testing.T) {
 		t.Fatalf("LoadRules: %v", err)
 	}
 
-	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil)
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if !result.Matched {
 		t.Fatal("expected match")
 	}
@@ -880,7 +880,7 @@ func TestEvaluator_MatchScore_Priority(t *testing.T) {
 	}
 
 	// ── Subnet A (tag_a) — A query → 10.192.7.1 ──────────────────────────
-	result := z.Evaluate("svc.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"tag_a": true})
+	result := z.Evaluate("svc.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"tag_a": true}, nil)
 	if !result.Matched {
 		t.Fatal("tag_a A: expected match")
 	}
@@ -896,7 +896,7 @@ func TestEvaluator_MatchScore_Priority(t *testing.T) {
 	}
 
 	// ── Subnet A (tag_a) — AAAA query → NXDOMAIN ─────────────────────────
-	result = z.Evaluate("svc.example.com.", dns.TypeAAAA, dns.ClassINET, map[string]bool{"tag_a": true})
+	result = z.Evaluate("svc.example.com.", dns.TypeAAAA, dns.ClassINET, map[string]bool{"tag_a": true}, nil)
 	if !result.Matched {
 		t.Fatal("tag_a AAAA: expected match")
 	}
@@ -905,7 +905,7 @@ func TestEvaluator_MatchScore_Priority(t *testing.T) {
 	}
 
 	// ── Subnet B (tag_b) — A query → 10.192.39.1 ──────────────────────────
-	result = z.Evaluate("svc.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"tag_b": true})
+	result = z.Evaluate("svc.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"tag_b": true}, nil)
 	if !result.Matched {
 		t.Fatal("tag_b A: expected match")
 	}
@@ -921,7 +921,7 @@ func TestEvaluator_MatchScore_Priority(t *testing.T) {
 	}
 
 	// ── Subnet B (tag_b) — AAAA query → NXDOMAIN ─────────────────────────
-	result = z.Evaluate("svc.example.com.", dns.TypeAAAA, dns.ClassINET, map[string]bool{"tag_b": true})
+	result = z.Evaluate("svc.example.com.", dns.TypeAAAA, dns.ClassINET, map[string]bool{"tag_b": true}, nil)
 	if !result.Matched {
 		t.Fatal("tag_b AAAA: expected match")
 	}
@@ -930,7 +930,7 @@ func TestEvaluator_MatchScore_Priority(t *testing.T) {
 	}
 
 	// ── No tags (external) — A query → 127.0.0.1 (fallback) ──────────────
-	result = z.Evaluate("svc.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	result = z.Evaluate("svc.example.com.", dns.TypeA, dns.ClassINET, map[string]bool{}, nil)
 	if !result.Matched {
 		t.Fatal("untagged A: expected match")
 	}
@@ -946,13 +946,13 @@ func TestEvaluator_MatchScore_Priority(t *testing.T) {
 	}
 
 	// ── No tags (external) — AAAA query → no specific AAAA fallback, unmatched
-	result = z.Evaluate("svc.example.com.", dns.TypeAAAA, dns.ClassINET, map[string]bool{})
+	result = z.Evaluate("svc.example.com.", dns.TypeAAAA, dns.ClassINET, map[string]bool{}, nil)
 	if result.Matched {
 		t.Error("untagged AAAA: should not match (no AAAA fallback rule)")
 	}
 
 	// ── nil matchedTags (no tag matcher) — should behave like empty map ─────
-	result = z.Evaluate("svc.example.com.", dns.TypeA, dns.ClassINET, nil)
+	result = z.Evaluate("svc.example.com.", dns.TypeA, dns.ClassINET, nil, nil)
 	if !result.Matched {
 		t.Fatal("nil-matchedTags A: expected match (fallback)")
 	}
@@ -1008,7 +1008,7 @@ func TestEvaluator_MatchTags_SubnetPriority(t *testing.T) {
 	}
 
 	// Client in subnet B (10.192.32.0/24) → should get 10.192.39.1.
-	result := z.Evaluate("vpn.zhijie.online.", dns.TypeA, dns.ClassINET, map[string]bool{"net_10_192_32_0": true})
+	result := z.Evaluate("vpn.zhijie.online.", dns.TypeA, dns.ClassINET, map[string]bool{"net_10_192_32_0": true}, nil)
 	if !result.Matched {
 		t.Fatal("subnet B client: expected match (this is the bug)")
 	}
@@ -1024,7 +1024,7 @@ func TestEvaluator_MatchTags_SubnetPriority(t *testing.T) {
 	}
 
 	// Client in subnet A (10.192.0.0/19) → should get 10.192.7.1.
-	result = z.Evaluate("vpn.zhijie.online.", dns.TypeA, dns.ClassINET, map[string]bool{"net_10_192_0_0": true})
+	result = z.Evaluate("vpn.zhijie.online.", dns.TypeA, dns.ClassINET, map[string]bool{"net_10_192_0_0": true}, nil)
 	if !result.Matched {
 		t.Fatal("subnet A client: expected match")
 	}
@@ -1037,7 +1037,7 @@ func TestEvaluator_MatchTags_SubnetPriority(t *testing.T) {
 	}
 
 	// External client (no tags) → should get fallback 127.0.0.1.
-	result = z.Evaluate("vpn.zhijie.online.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	result = z.Evaluate("vpn.zhijie.online.", dns.TypeA, dns.ClassINET, map[string]bool{}, nil)
 	if !result.Matched {
 		t.Fatal("external client: expected fallback match")
 	}
@@ -1050,7 +1050,7 @@ func TestEvaluator_MatchTags_SubnetPriority(t *testing.T) {
 	}
 
 	// External client (nil matchedTags) → should get fallback 127.0.0.1.
-	result = z.Evaluate("vpn.zhijie.online.", dns.TypeA, dns.ClassINET, nil)
+	result = z.Evaluate("vpn.zhijie.online.", dns.TypeA, dns.ClassINET, nil, nil)
 	if !result.Matched {
 		t.Fatal("nil-matchedTags client: expected fallback match")
 	}
@@ -1080,13 +1080,13 @@ func TestEvaluator_BypassRule(t *testing.T) {
 	}
 
 	// gateway client → bypassed.
-	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true})
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true}, nil)
 	if result.Matched {
 		t.Error("gateway client: expected bypass (no match)")
 	}
 
 	// non-gateway client → matches zone rule.
-	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{}, nil)
 	if !result.Matched {
 		t.Fatal("non-gateway client: expected match")
 	}
@@ -1112,13 +1112,13 @@ func TestEvaluator_BypassRule_Negate(t *testing.T) {
 	}
 
 	// gateway client → not bypassed, matches zone rule.
-	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true})
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true}, nil)
 	if !result.Matched {
 		t.Fatal("gateway client: expected match")
 	}
 
 	// non-gateway client → bypassed.
-	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{}, nil)
 	if result.Matched {
 		t.Error("non-gateway client: expected bypass (no match)")
 	}
@@ -1138,12 +1138,12 @@ func TestEvaluator_BypassOnly(t *testing.T) {
 		t.Fatalf("LoadRules: %v", err)
 	}
 
-	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true})
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true}, nil)
 	if result.Matched {
 		t.Error("gateway client: expected bypass")
 	}
 
-	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{}, nil)
 	if result.Matched {
 		t.Error("non-gateway client: expected no match (no rules)")
 	}
@@ -1166,19 +1166,19 @@ func TestEvaluator_BypassMulti(t *testing.T) {
 	}
 
 	// gateway client → bypassed.
-	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true})
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true}, nil)
 	if result.Matched {
 		t.Error("gateway client: expected bypass")
 	}
 
 	// guest client → bypassed.
-	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"guest": true})
+	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"guest": true}, nil)
 	if result.Matched {
 		t.Error("guest client: expected bypass")
 	}
 
 	// normal client → matches zone rule.
-	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{}, nil)
 	if !result.Matched {
 		t.Fatal("normal client: expected match")
 	}
@@ -1208,13 +1208,13 @@ func TestEvaluator_BypassWithFile(t *testing.T) {
 	}
 
 	// gateway client → bypassed, skips file entries entirely.
-	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true})
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true}, nil)
 	if result.Matched {
 		t.Error("gateway client: expected bypass")
 	}
 
 	// non-gateway client → matches file entry.
-	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{}, nil)
 	if !result.Matched {
 		t.Fatal("non-gateway client: expected match from zone file")
 	}
@@ -1248,13 +1248,13 @@ func TestEvaluator_FileMatchNegate(t *testing.T) {
 	}
 
 	// gateway client → !gateway rejects → falls through.
-	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true})
+	result := z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{"gateway": true}, nil)
 	if result.Matched {
 		t.Error("gateway client: expected no match (!gateway)")
 	}
 
 	// non-gateway client → matches file entry.
-	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{})
+	result = z.Evaluate("example.com.", dns.TypeA, dns.ClassINET, map[string]bool{}, nil)
 	if !result.Matched {
 		t.Fatal("non-gateway client: expected match from zone file")
 	}

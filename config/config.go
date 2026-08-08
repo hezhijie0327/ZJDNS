@@ -1,6 +1,8 @@
 // Package config provides configuration types.
 package config
 
+import "net"
+
 // ServerConfig is the top-level configuration structure for the DNS server.
 type ServerConfig struct {
 	Server   ServerSettings   `json:"server"`
@@ -160,8 +162,9 @@ type ZoneRule struct {
 	Additional []ZoneRecord `json:"additional,omitzero"`
 
 	// DynamicContent, when set, provides a function that returns TXT record
-	// values at query time (e.g. for stats / db clear operations).
-	DynamicContent func() []string `json:"-"`
+	// values at query time (e.g. for ZJDNS.stats / ZJDNS.whoami / db clear).
+	// The client's source IP is passed for per-client data (whoami).
+	DynamicContent func(clientIP net.IP) []string `json:"-"`
 }
 
 // ZoneRecord defines a single DNS resource record for zone responses.

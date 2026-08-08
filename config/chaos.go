@@ -53,6 +53,7 @@ func addChaosRecord(cfg *ServerConfig) {
 	// discoverability (e.g. ZJDNS.stats, ZJDNS.cache.clear). This is intentional —
 	// the project name identifies the server to clients that query these CHAOS records.
 	for _, name := range []string{
+		DefaultProjectName + ".whoami",
 		DefaultProjectName + ".stats",
 		DefaultProjectName + ".stats.clear",
 		DefaultProjectName + ".cache.clear",

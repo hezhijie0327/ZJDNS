@@ -35,7 +35,7 @@ type QueryHandlerFunc func(ctx context.Context, qctx *QueryContext) error
 // chain, defined in the consumer package per the project's interface discipline.
 type ZoneEvaluator interface {
 	HasRules() bool
-	Evaluate(qname string, qtype, qclass uint16, matchedTags map[string]bool) zone.Result
+	Evaluate(qname string, qtype, qclass uint16, matchedTags map[string]bool, clientIP net.IP) zone.Result
 }
 
 // Wrapper wraps a QueryHandler, returning a new QueryHandler that adds

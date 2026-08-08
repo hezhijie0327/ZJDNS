@@ -75,7 +75,7 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 
 		log.Debugf("ZONE: evaluating rules for %s qtype=%s client=%s tags=%v", qname, dns.TypeToString[qtype], qctx.ClientIP, matchedTags)
 
-		zoneResult := m.evaluator.Evaluate(qname, qtype, qclass, matchedTags)
+		zoneResult := m.evaluator.Evaluate(qname, qtype, qclass, matchedTags, qctx.ClientIP)
 		if !zoneResult.Matched {
 			return next.ServeDNS(ctx, qctx)
 		}

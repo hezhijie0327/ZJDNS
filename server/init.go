@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"net"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/database"
@@ -52,8 +53,8 @@ func initResolver(
 
 // makeFlushFunc returns a closure that calls op() and formats the result as a
 // single-element []string suitable for DynamicContent in CHAOS zone rules.
-func makeFlushFunc(op func() (int64, error), verb string) func() []string {
-	return func() []string {
+func makeFlushFunc(op func() (int64, error), verb string) func(net.IP) []string {
+	return func(net.IP) []string {
 		n, err := op()
 		if err != nil {
 			return []string{fmt.Sprintf("error=%v", err)}
@@ -75,7 +76,14 @@ func wireZoneDynamicContent(store cache.Store, rules []config.ZoneRule, resetDNS
 		// dynamic function (R3-M19).
 		switch dnsutil.Canonical(rules[i].Name) {
 		case dnsutil.Canonical(config.DefaultProjectName + ".stats"):
-			rules[i].DynamicContent = store.Stats
+			rules[i].DynamicContent = func(net.IP) []string { return store.Stats() }
+		case dnsutil.Canonical(config.DefaultProjectName + ".whoami"):
+			rules[i].DynamicContent = func(clientIP net.IP) []string {
+				if clientIP == nil {
+					return nil
+				}
+				return []string{clientIP.String()}
+			}
 		case dnsutil.Canonical(config.DefaultProjectName + ".cache.clear"):
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("cache") }, "flushed")
 		case dnsutil.Canonical(config.DefaultProjectName + ".stats.clear"):
@@ -89,7 +97,7 @@ func wireZoneDynamicContent(store cache.Store, rules []config.ZoneRule, resetDNS
 		case dnsutil.Canonical(config.DefaultProjectName + ".querylog.clear"):
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("querylog") }, "flushed")
 		case dnsutil.Canonical(config.DefaultProjectName + ".dnscrypt.clear"):
-			rules[i].DynamicContent = func() []string {
+			rules[i].DynamicContent = func(net.IP) []string {
 				if resetDNSCrypt == nil {
 					return []string{"error=dnscrypt not enabled"}
 				}

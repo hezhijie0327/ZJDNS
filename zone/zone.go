@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,7 +51,7 @@ type Result struct {
 
 // dynamicEntry holds a dynamic content function and its record configs.
 type dynamicEntry struct {
-	fn      func() []string
+	fn      func(net.IP) []string
 	configs []config.ZoneRecord
 }
 
@@ -261,7 +262,7 @@ func (e *Evaluator) insertRow(tx *sql.Tx, qname string, qtype, qclass uint16, rc
 // Evaluate checks a query against loaded zone rules.
 // matchedTags is the set of ruleset tags the client IP/domain matched.
 // nil or empty map means no CIDR matching is active.
-func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map[string]bool) Result {
+func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map[string]bool, clientIP net.IP) Result {
 	if qclass == 0 {
 		qclass = dns.ClassINET
 	}
@@ -294,7 +295,7 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 
 	// 1. Check dynamic content (Go map, not SQL).
 	if de, ok := e.dynamics[qname]; ok {
-		return e.evalDynamic(qname, qtype, qclass, de)
+		return e.evalDynamic(qname, qtype, qclass, de, clientIP)
 	}
 
 	loadedAt := e.loadedAt.Load()
@@ -450,13 +451,13 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 	return best
 }
 
-func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicEntry) Result {
+func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicEntry, clientIP net.IP) Result {
 	var contents []string
 	if len(de.configs) == 0 {
 		// No config records — invoke the dynamic function for every
 		// query (e.g. ZJDNS.cache.clear rules that have no static
 		// answer records, only a DynamicContent function).
-		contents = de.fn()
+		contents = de.fn(clientIP)
 	} else {
 		for _, rec := range de.configs {
 			recClass := rec.Class
@@ -465,7 +466,7 @@ func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicE
 			}
 			if rec.Type == qtype && recClass == qclass {
 				if contents == nil {
-					contents = de.fn()
+					contents = de.fn(clientIP)
 				}
 				break
 			}
