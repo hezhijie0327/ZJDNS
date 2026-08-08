@@ -271,7 +271,13 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	if s.pending != nil {
 		ecsAddr, ecsPrefix := ecsParams(ecs)
 		if pe, ok := s.pending.Get(buildCacheKey(qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecInt)); ok {
-			return s.buildEntry(0, pe.ts, pe.ttl, database.BoolToInt(pe.validated), pe.msgWire, qname, qtype)
+			// pe.msgWire is shared with the queued cacheWriteItem AND with
+			// concurrent queries.  The serve path mutates the wire in place
+			// (TTL deduction, ID/RD patch, TC truncation), so handing out
+			// the raw slice would let one query corrupt another's response
+			// and commit serve-time bytes as the canonical SQLite row
+			// (H7/H10).  The pending window is short — the clone is cheap.
+			return s.buildEntry(0, pe.ts, pe.ttl, database.BoolToInt(pe.validated), slices.Clone(pe.msgWire), qname, qtype)
 		}
 	}
 
