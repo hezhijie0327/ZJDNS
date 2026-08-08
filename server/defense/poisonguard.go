@@ -1,6 +1,7 @@
 package defense
 
 import (
+	"strconv"
 	"strings"
 	"zjdns/internal/log"
 
@@ -81,6 +82,19 @@ func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 	z := dnsutil.Canonical(zone)
 	n := dnsutil.Canonical(queryName)
 
+	// DNSSEC-signed data is not GFW-forgeable: an A/AAAA RRset whose owner
+	// name carries a matching RRSIG is served by the authoritative zone, not
+	// injected.  Presence-only check — full signature validation happens in
+	// the DNSSEC chain; this exemption exists because the TLD probe has no
+	// validation context (M3).
+	hasSig := false
+	for _, rr := range response.Answer {
+		if sig, ok := rr.(*dns.RRSIG); ok && dnsutil.Canonical(sig.Hdr.Name) == n {
+			hasSig = true
+			break
+		}
+	}
+
 	for _, rr := range response.Answer {
 		if rr == nil {
 			continue // defensive: malformed responses must not panic the validator (R2)
@@ -88,15 +102,30 @@ func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 		if dnsutil.Canonical(rr.Header().Name) != n {
 			continue
 		}
-		if v := d.classify(z, n, dns.RRToType(rr)); v != VerdictClean {
+		rrtype := dns.RRToType(rr)
+		if v := d.classify(z, n, rrtype); v != VerdictClean {
+			if v == VerdictPoisoned && hasSig {
+				log.Debugf("SECURITY: poison candidate from %s: %s record for '%s' has an RRSIG — exempted (M3)",
+					zone, typeName(rrtype), queryName)
+				return VerdictClean
+			}
 			if v == VerdictPoisoned {
 				log.Debugf("SECURITY: poison detected from %s: %s record for '%s' → %s",
-					zone, dns.TypeToString[dns.RRToType(rr)], queryName, rr.String())
+					zone, typeName(rrtype), queryName, rr.String())
 			}
 			return v
 		}
 	}
 	return VerdictClean
+}
+
+// typeName returns the RR type name, falling back to the numeric value for
+// types outside the IANA table (dns.TypeToString yields "" for them).
+func typeName(rrtype uint16) string {
+	if s := dns.TypeToString[rrtype]; s != "" {
+		return s
+	}
+	return strconv.Itoa(int(rrtype))
 }
 
 // IsPoisonedByTLD checks whether a TLD or root server returned

@@ -248,25 +248,32 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 				}
 				return nil, errors.New("pooled udp connection closed during spoofguard collect")
 			}
-			// HopGuard: validate gates packet acceptance first; Feed happens
-			// only for accepted TTLs (and again on final adoption below), so
-			// GFW-injected TTLs never enter the histogram.
-			if hg != nil && !hg.Validate(server.Address, pkt.TTL) {
-				continue
-			}
-			if hg != nil {
-				hg.Feed(server.Address, pkt.TTL)
-			}
-			// Gate on 12 bytes — processPacket reads raw[6..9] for the
+			// Gate on 12 bytes first — processPacket reads raw[6..9] for the
 			// fast-signal checks; a 2-9 byte datagram with a matching ID
 			// would index out of range (H9; the multi-read path gates n<12).
+			// ID/length validation also runs BEFORE HopGuard Feed so that
+			// stray datagrams never enter the TTL histogram (M1).
 			if len(pkt.Data) < 12 || uint16(pkt.Data[0])<<8|uint16(pkt.Data[1]) != trackingID {
+				continue
+			}
+			// HopGuard: validate gates packet acceptance; Feed happens only
+			// after spoofguard accepts the response (below) — the learning
+			// phase otherwise lets a fixed-TTL flood win the mode and arm
+			// the guard on the attacker's TTL (M1).  Rejected TTLs are
+			// sampled 1-in-16 into the histogram so legitimate drift can
+			// recover (M2).
+			if hg != nil && !hg.Validate(server.Address, pkt.TTL) {
+				if hg.ShouldSampleRejected(server.Address) {
+					hg.Feed(server.Address, pkt.TTL)
+				}
 				continue
 			}
 			// TTL confidence signal for spoofguard: when hopguard is armed
 			// and the TTL is trusted, ambiguous EDNS responses can be
-			// fast-accepted without waiting for a second candidate.
-			ttlConfident := hg != nil && hg.Confident(server.Address)
+			// fast-accepted without waiting for a second candidate.  A
+			// TTL=0 read (no control message on some platforms) carries no
+			// TTL evidence — never fast-accept on it (M-low).
+			ttlConfident := hg != nil && hg.Confident(server.Address) && pkt.TTL != 0
 			resp := sg.processPacket(pkt.Data, len(pkt.Data), msg.UDPSize, server.Address, ttlConfident, pkt.TTL, server.Spoofguard)
 			if resp != nil {
 				if sg.last != nil && sg.last != resp {
@@ -278,8 +285,11 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 				if sg.nonEDNS != nil && sg.nonEDNS != resp {
 					pool.DefaultMessage.Put(sg.nonEDNS)
 				}
+				// Feed exactly once per accepted response (the adoption
+				// feed was a duplicate — every query was counted twice,
+				// halving the arming threshold; M-low).
 				if hg != nil {
-					hg.Feed(server.Address, sg.pickBestTTL())
+					hg.Feed(server.Address, pkt.TTL)
 				}
 				resp.ID = originalID
 				uc.ReleaseCollect(matchKey)
@@ -289,12 +299,18 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 			now := time.Now()
 			if sg.last != nil && now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
 				resp := sg.pickBest()
+				if hg != nil {
+					hg.Feed(server.Address, sg.pickBestTTL())
+				}
 				resp.ID = originalID
 				uc.ReleaseCollect(matchKey)
 				return resp, nil
 			}
 			if sg.last == nil && sg.nonEDNS != nil && now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
 				resp := sg.pickBest()
+				if hg != nil {
+					hg.Feed(server.Address, sg.pickBestTTL())
+				}
 				resp.ID = originalID
 				uc.ReleaseCollect(matchKey)
 				return resp, nil
@@ -304,6 +320,9 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 				if resp == nil {
 					uc.ReleaseCollect(matchKey)
 					return nil, errors.New("no UDP response received")
+				}
+				if hg != nil {
+					hg.Feed(server.Address, sg.pickBestTTL())
 				}
 				resp.ID = originalID
 				uc.ReleaseCollect(matchKey)
@@ -465,31 +484,33 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 			return nil, err
 		}
 
-		// HopGuard: validate gates packet acceptance first; Feed happens
-		// only for accepted TTLs (and again on final adoption below), so
-		// GFW-injected TTLs never enter the histogram — honoring the
-		// hopguard docstring contract "Only trusted DNS content is used
-		// for TTL learning". An unconditional Feed here would let spoofed
-		// packets with a fixed TTL become the mode and be promoted to
-		// trusted, permanently rejecting legitimate responses.
-		if hg != nil && !hg.Validate(server.Address, ttl) {
+		// ID/length validation runs BEFORE HopGuard so stray datagrams never
+		// enter the TTL histogram (M1).
+		if n < 12 || uint16(buf[0])<<8|uint16(buf[1]) != msg.ID {
 			continue
 		}
-		if hg != nil {
-			hg.Feed(server.Address, ttl)
-		}
 
-		if n < 12 || uint16(buf[0])<<8|uint16(buf[1]) != msg.ID {
+		// HopGuard: validate gates packet acceptance; Feed happens only
+		// after spoofguard accepts the response (below) — the learning
+		// phase otherwise lets a fixed-TTL flood win the mode and arm the
+		// guard on the attacker's TTL (M1).  Rejected TTLs are sampled
+		// 1-in-16 so legitimate drift can recover (M2).
+		if hg != nil && !hg.Validate(server.Address, ttl) {
+			if hg.ShouldSampleRejected(server.Address) {
+				hg.Feed(server.Address, ttl)
+			}
 			continue
 		}
 
 		// TTL confidence signal for spoofguard: when hopguard is armed
 		// and the TTL is trusted, ambiguous EDNS responses can be
-		// fast-accepted without waiting for a second candidate.
-		ttlConfident := hg != nil && hg.Confident(server.Address)
+		// fast-accepted without waiting for a second candidate.  A TTL=0
+		// read carries no TTL evidence — never fast-accept on it (M-low).
+		ttlConfident := hg != nil && hg.Confident(server.Address) && ttl != 0
 		if resp := sg.processPacket(buf[:n], n, msg.UDPSize, server.Address, ttlConfident, ttl, server.Spoofguard); resp != nil {
+			// Feed exactly once per accepted response (M-low).
 			if hg != nil {
-				hg.Feed(server.Address, sg.pickBestTTL())
+				hg.Feed(server.Address, ttl)
 			}
 			return resp, nil
 		}
