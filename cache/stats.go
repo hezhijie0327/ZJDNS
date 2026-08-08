@@ -119,6 +119,24 @@ func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 	if s.db.IsClosed() {
 		return 0, errors.New("cache closed")
 	}
+	// Flush the owning batch writer BEFORE deleting: its in-memory items
+	// would otherwise be committed after the DELETE and resurrect the rows
+	// (H2).  Drop the pending read-through layer too so Get() cannot serve
+	// entries whose rows were just deleted, and entryCount cannot be
+	// re-inflated by the flush-time counter path.
+	switch target {
+	case "stats", "querylog":
+		if s.statsWriter != nil {
+			s.statsWriter.Flush()
+		}
+	case "cache", "ptr":
+		if s.cacheWriter != nil {
+			s.cacheWriter.Flush()
+		}
+		if s.pending != nil {
+			s.pending.Clear()
+		}
+	}
 	var result sql.Result
 	var err error
 	switch target {

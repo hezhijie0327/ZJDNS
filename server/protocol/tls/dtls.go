@@ -136,8 +136,13 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 		n, err := conn.Read(buf)
 		if err != nil {
 			if errors.Is(err, io.ErrShortBuffer) {
-				log.Debugf("TLS: DTLS record too large for buffer from %s", conn.RemoteAddr())
-				continue
+				// pion/dtls does not consume the oversized record — Read
+				// returns ErrShortBuffer on every retry, and the re-armed
+				// deadline made this loop spin at 100% CPU forever.  A
+				// record larger than the buffer from a handshaked client is
+				// a protocol violation: close the connection (H4).
+				log.Debugf("TLS: closing DTLS connection: record too large for buffer from %s", conn.RemoteAddr())
+				return
 			}
 			// A read-deadline expiry means the peer went idle — close the
 			// connection instead of retrying forever (the deadline error

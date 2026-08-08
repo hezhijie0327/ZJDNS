@@ -217,16 +217,21 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 				ch:     make(chan demuxPacket, 32),
 			}
 			l.conns[key] = dc
+			l.mu.Unlock()
 			// The connection goroutine runs under the server group so
 			// Shutdown waits for it; listener Close closes the demux
-			// queue, which unblocks its reads.
+			// queue, which unblocks its reads.  Launched OUTSIDE l.mu:
+			// errgroup.Go blocks when the concurrency limit is saturated,
+			// and holding the lock there would freeze datagram dispatch
+			// for all clients and block Close()/Shutdown (H5).
 			s.serverGroup.Go(func() error {
 				defer zdnsutil.HandlePanic("DTLCP client connection")
 				s.serveDTLCPClient(l, dc, src)
 				return nil
 			})
+		} else {
+			l.mu.Unlock()
 		}
-		l.mu.Unlock()
 
 		// Queue the datagram.  A full queue means the client is flooding —
 		// drop it (UDP semantics; DTLCP retransmits handshake flights).
