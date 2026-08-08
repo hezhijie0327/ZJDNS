@@ -623,6 +623,10 @@ func (s *SQLiteCache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	// ── Prep work (parallel-safe) ─────────────────────────────────────────
 	now := log.NowUnix()
 	entryTTL := minTTL(answer, authority, additional)
+	if entryTTL <= 0 {
+		// Zero TTL (incl. RFC 2181 §8 MSB-set values) — nothing to cache.
+		return 0
+	}
 
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 	qname = dnsutil.Canonical(qname)
@@ -998,10 +1002,17 @@ func minTTL(sections ...[]dns.RR) int {
 	minT := -1
 	for _, rrs := range sections {
 		for _, rr := range rrs {
-			if rr != nil {
-				if t := int(rr.Header().TTL); t > 0 && (minT < 0 || t < minT) {
-					minT = t
-				}
+			if rr == nil {
+				continue
+			}
+			if t := rr.Header().TTL; t&0x80000000 != 0 {
+				// RFC 2181 §8: TTL values with the most significant bit set
+				// are treated as if the entire value were zero — an
+				// attacker-controlled huge TTL must not be cached for its
+				// raw value (previously capped at 7 days).
+				return 0
+			} else if t > 0 && (minT < 0 || int(t) < minT) {
+				minT = int(t)
 			}
 		}
 	}

@@ -37,11 +37,11 @@ Section 标题栏位格式：`[RFC NNNN: 状态]` `合规标记`
 | Historic | 6 |
 | Internet-Draft | 3 (DNS Stamp, DNSCrypt, DELEG) |
 | 国密标准 | 1 (TLCP/DTLCP) |
-| **总计** | **108 RFC 条目 / 95 章节**（含 2065/2537、4033/4034/4035 等合并段；89 个 RFC 编号章节 + 6 个非 RFC 章节：DELEG / DNS Stamp / DNSCrypt / SOCKS5 / TLCP / 已知偏离） |
+| **总计** | **108 RFC 条目 / 96 章节**（含 2065/2537、4033/4034/4035 等合并段；90 个 RFC 编号章节 + 6 个非 RFC 章节：DELEG / DNS Stamp / DNSCrypt / SOCKS5 / TLCP / 已知偏离） |
 
 | 合规 | 数量 |
 |------|------|
-| ✅ 合规 | 67 |
+| ✅ 合规 | 68 |
 | ⚠️ 部分合规 | 4 (RFC 5001, 5011/9077, 8198, 9567) |
 | ⚪ 参考 | 18 |
 
@@ -645,8 +645,8 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 | RFC      | 关键点                      | 引用位置             |
 | -------- | --------------------------- | -------------------- |
-| RFC 6604 | NXDOMAIN 可包含 CNAME/DNAME | `nameserver.go:78`   |
-| RFC 6840 | §5.3 放宽签名有效期检查     | `dnssec/nsec.go:139` |
+| RFC 6604 | NXDOMAIN 可包含 CNAME/DNAME | `nameserver.go:124`   |
+| RFC 6840 | §4.1 祖先委托排除           | `dnssec/nsec.go:139`  |
 | RFC 7344 | CDS/CDNSKEY 自动化信任锚    | `dnssec_chain.go`    |
 
 ---
@@ -698,7 +698,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 6761 — 特殊域名  `[RFC 6761: Proposed Standard]`  ✅
+## RFC 6761 — 特殊域名  `[RFC 6761: Proposed Standard]`  ⚠️
 
 **DNS 中具有特殊含义、不应全局解析的域名。**
 
@@ -714,7 +714,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ### 我们的实现
 
-- ✓ 已满足：特殊域名按普通名字正常解析/缓存（RFC 6761 允许解析器转发这些查询，行为合规）
+- ⚠️ 部分满足：特殊域名按普通名字正常解析/缓存，但 RFC 6761 §6.3/§6.4 要求缓存解析器 SHOULD NOT 转发 localhost/test 查询（应本地应答）；ZJDNS 无 localhost 特判，直接转发上游（行为缺口，SHOULD 级）
 - 不做本地拦截——本地过滤属于策略选择，可由 zone 规则实现
 
 ---
@@ -788,7 +788,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ### 协议要求
 
-- **MUST**: 不支持 EDNS 版本的响应 → FORMERR
+- **MUST**: 不支持 EDNS 版本的响应 → BADVERS（RFC 6891 §6.1.3）
 - **MUST**: 响应方 UDPSize 反映自身最大负载能力
 - 发送方 UDPSize 过大导致响应被截断时，应回退到较小值
 
@@ -1172,7 +1172,7 @@ Client ⇄ DTLS 记录 [DNS消息] ⇄ Server  (UDP 数据报)
 ### 我们的实现
 
 - ✓ ANY 查询由 Any 中间件（`middleware/any.go`，位于 Zone 之后）应答 `HINFO "RFC8482" ""`（TTL 3600）；zone 规则优先
-- ✓ NXNAME(128) 查询在 Validation 中间件拒绝（REFUSED + EDE 30），不转发（RFC 9824 §3.5）
+- ✓ NXNAME(128) 查询在 Validation 中间件拒绝（FORMERR + EDE 30，RFC 9824 §3.5 MUST），不转发
 
 ---
 
@@ -1325,6 +1325,16 @@ Body: [DNS 线格式消息]
 - `DefaultQUICKeepAlive = 20s` ✓
 - `DefaultQUICAddrCacheTTL = 30min`
 - 地址验证器：`server/protocol/tls/addr_validator.go` — LRU cache, 128 entries ✓
+
+---
+
+## RFC 9443 — Multiplexing Scheme Updates for QUIC  `[RFC 9443: Proposed Standard]`  ✅
+
+**QUIC 与其他 UDP 协议共享接收 socket 的首字节分路规则（更新 RFC 7983/5764）。**
+
+- 首字节范围：0-3 STUN、20-63 DTLS、64-127 TURN/QUIC（源端口消歧）、128-191 RTP、192-255 QUIC
+- 与 QUIC v2（RFC 9369）兼容；不得发送 `grease_quic_bit`（RFC 9287）
+- 引用：`internal/dnscryptcrypto/pq.go` — DNSCrypt PQ client-magic 避开 QUIC 首字节范围（RFC 9443 §2）
 
 ---
 
@@ -1594,7 +1604,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 - ✓ 上游查询设 CO 位（`edns/edns.go:ApplyToMessage` 请求方向，miekg 已接入 OPT）
 - ✓ 验证器 §5.1: `dnssec.HasCompactNXNAME` 检测 NSEC/NSEC3 bitmap 的 NXNAME 位 → 递归路径（`recursive.go`，仅在 NSEC 证明验证通过后）与转发路径（`forward.go`）均恢复 NXDOMAIN rcode
-- ✓ Validation 中间件拒绝 NXNAME(128) 显式查询（REFUSED + EDE 30，MUST NOT 转发）
+- ✓ Validation 中间件拒绝 NXNAME(128) 显式查询（FORMERR + EDE 30，RFC 9824 §3.5 MUST；AXFR/IXFR 仍 REFUSED）
 - ✓ 附带修复: NXDOMAIN rcode 贯通 miss 路径与缓存 wire（`cache.Set` 新增 rcode 参数）——此前 NXDOMAIN 恒被服务为 NODATA
   4. 核对现有 `matchesNSECDenial` 对紧凑 NODATA（owner=QNAME 匹配）的处理 ✓ 已兼容
 

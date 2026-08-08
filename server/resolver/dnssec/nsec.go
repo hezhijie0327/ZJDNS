@@ -409,7 +409,7 @@ func nsec3HashName(name string, hashAlg uint8, iterations uint16, salt string) s
 // trusted DNSKEYs and checks that they cryptographically prove the non-existence
 // of the queried name (NXDOMAIN) or type (NODATA). This prevents an attacker
 // from satisfying validation with a validly-signed NSEC from the same zone
-// that covers a different name. (RFC 4035 section 3.1.3, RFC 6840 section 5.3)
+// that covers a different name. (RFC 4035 section 5.4, RFC 6840 section 4.1)
 func (c *CryptoValidator) isDenialOfExistenceValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY, denialType string) (bool, error) {
 	authSigs := CollectRRSIGs(response.Ns, response.Extra)
 	normalizedQname := strings.ToLower(qname)

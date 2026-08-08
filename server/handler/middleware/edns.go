@@ -97,7 +97,7 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		var cookieMalformed bool
 		qctx.CookieOpt, cookieMalformed = m.edns.ParseCookie(req)
 		if cookieMalformed {
-			// RFC 7873 §5.3: a malformed client cookie is rejected with
+			// RFC 7873 §5.2.2: a malformed client cookie is rejected with
 			// FORMERR, not silently treated as absent.
 			log.Debugf("EDNS: malformed client cookie from %s", qctx.ClientIP)
 			msg := handler.BuildResponseMsg(req)
@@ -156,7 +156,7 @@ func (m *EDNS) buildBadCookieResponse(req *dns.Msg, clientIP net.IP, cookieOpt *
 	msg := handler.BuildResponseMsg(req)
 	msg.Rcode = dns.RcodeBadCookie
 	if cookieOpt == nil {
-		// RFC 7873 §5.3: nothing to echo — FORMERR. Kept separate from the
+		// RFC 7873 §5.2.2: nothing to echo — FORMERR. Kept separate from the
 		// length check: logging len(cookieOpt.ClientCookie) on the nil path
 		// would dereference a nil pointer.
 		log.Debugf("EDNS: missing client cookie from %s, returning FORMERR", clientIP)

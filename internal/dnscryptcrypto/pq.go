@@ -178,7 +178,9 @@ func DerivePQKeys(classicalSk []byte) (pk, sk []byte) {
 // PQCertClientMagic derives the client magic for a PQ certificate from the
 // X-Wing public key, matching the official encrypted-dns-server derivation:
 // the first 8 bytes of SHA-256(pq_public_key).  A magic whose first 7 bytes
-// are zero (collides with QUIC 0-RTT, RFC 9443) or that equals PQResumeMagic
+// are zero (collides with QUIC 0-RTT demultiplexing — RFC 9443 §2, which
+// assigns first-byte ranges on shared UDP sockets; the DNSCrypt spec cites
+// RFC 9000 for the same concern) or that equals PQResumeMagic
 // (would misroute resumed queries) is flipped to a safe alternative.
 func PQCertClientMagic(pqPublicKey []byte) [ClientMagicSize]byte {
 	var magic [ClientMagicSize]byte

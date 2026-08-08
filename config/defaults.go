@@ -140,9 +140,10 @@ const (
 // =============================================================================
 
 const (
-	DefaultSpoofguardCollectWindow = 500 * time.Millisecond // silence window before returning best EDNS candidate
-	DefaultSpoofguardPollInterval  = 100 * time.Millisecond // per-read poll interval
-	DefaultSplitguardMaxSegSize    = 4                      // max bytes per TCP segment (random [1,N] to avoid fingerprinting)
+	DefaultSpoofguardCollectWindow     = 500 * time.Millisecond // silence window before returning best EDNS candidate
+	DefaultSpoofguardPollInterval      = 100 * time.Millisecond // per-read poll interval
+	DefaultSplitguardMaxSegSize        = 4                      // max bytes per TCP segment (random [1,N] to avoid fingerprinting)
+	DefaultQUICSecondQueryProbeTimeout = 100 * time.Millisecond // DoQ: probe for a second query on the same stream (RFC 9250 §4.3.3)
 )
 
 // =============================================================================

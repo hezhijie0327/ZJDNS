@@ -68,7 +68,7 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return nil
 		}
 
-		// Reject non-standard opcodes (RFC 6895 §3.1).
+		// Reject non-standard opcodes (RFC 1035 §4.1.1 — opcode field).
 		if req := qctx.Req; req.Opcode != dns.OpcodeQuery {
 			log.Debugf("QUERY: rejecting non-query opcode %d with NOTIMP", req.Opcode)
 			msg := pool.DefaultMessage.Get()
@@ -95,7 +95,7 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		qtype := dns.RRToType(qd)
 
 		// Allow CHAOS class for ZJDNS introspection queries (stats, etc.).
-		// Other non-IN classes are rejected per RFC 6895 §3.1.
+		// Other non-IN classes are rejected per RFC 6895 §3.2.
 		if qd.Header().Class != dns.ClassINET && qd.Header().Class != dns.ClassCHAOS {
 			log.Debugf("QUERY: rejecting non-IN/CHAOS class %d for %s with REFUSED", qd.Header().Class, qname)
 			msg := pool.DefaultMessage.Get()
@@ -131,7 +131,13 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		}
 		msg := pool.DefaultMessage.Get()
 		dnsutil.SetReply(msg, qctx.Req)
-		msg.Rcode = dns.RcodeRefused
+		// RFC 9824 §3.5: NXNAME (Meta-TYPE 128) queries MUST be answered with
+		// FORMERR; AXFR/IXFR remain REFUSED (transfer rejection).
+		if qtype == dns.TypeNXNAME {
+			msg.Rcode = dns.RcodeFormatError
+		} else {
+			msg.Rcode = dns.RcodeRefused
+		}
 
 		if len(qname) > config.MaxDomainLength || !dnsutil.IsName(qname) {
 			// RFC 8914 §4.1: code 0 (Other) SHOULD carry ExtraText.

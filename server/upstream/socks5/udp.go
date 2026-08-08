@@ -45,7 +45,7 @@ var socks5ReadBufPool = sync.Pool{
 }
 
 // ListenPacket returns a net.PacketConn that sends and receives UDP datagrams
-// through the SOCKS5 proxy's UDP relay (RFC 1928 §6).
+// through the SOCKS5 proxy's UDP relay (RFC 1928 §7).
 //
 // Each call establishes its own independent UDP relay (TCP control connection +
 // UDP ASSOCIATE).  This avoids the shared-socket problem where one caller's
@@ -120,7 +120,7 @@ func (d *Dialer) establishUDPRelay(ctx context.Context) error {
 		return err
 	}
 
-	// RFC 1928 §6: UDP ASSOCIATE with 0.0.0.0:0 requests the proxy to allocate a relay.
+	// RFC 1928 §7: UDP ASSOCIATE with 0.0.0.0:0 requests the proxy to allocate a relay.
 	req := buildSOCKS5Request(socks5CmdUDP, "0.0.0.0", 0)
 	if _, err := ctrlConn.Write(req); err != nil {
 		_ = ctrlConn.Close()

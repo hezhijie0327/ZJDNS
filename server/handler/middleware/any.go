@@ -31,7 +31,7 @@ func (m *Any) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return next.ServeDNS(ctx, qctx)
 		}
 
-		// RFC 8482 §2.1: "RFC8482" as the CPU field, empty OS — the same
+		// RFC 8482 §4.2: "RFC8482" as the CPU field, empty OS — the same
 		// minimal response Cloudflare and BIND serve.
 		msg := handler.BuildResponseMsg(qctx.Req)
 		msg.Answer = []dns.RR{&dns.HINFO{

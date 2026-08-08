@@ -288,6 +288,17 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	if response != nil && response != req {
 		pool.DefaultMessage.Put(response)
 	}
+
+	// RFC 9250 §4.3.3: more than one query on a stream is a protocol error
+	// (SHOULD abort with DOQ_PROTOCOL_ERROR).  A well-behaved client FINs
+	// the stream after the response — a short read deadline distinguishes
+	// FIN/EOF/timeout (normal) from a second query (abort).
+	_ = stream.SetReadDeadline(time.Now().Add(config.DefaultQUICSecondQueryProbeTimeout))
+	var probe [1]byte
+	if n, err := stream.Read(probe[:]); err == nil && n > 0 {
+		log.Debugf("TLS: DoQ protocol error: multiple queries on one stream from %s", conn.RemoteAddr())
+		_ = conn.CloseWithError(doq.QUICCodeProtocolError, "multiple queries on one stream")
+	}
 }
 
 func (s *Server) respondQUIC(stream *quic.Stream, response *dns.Msg) error {

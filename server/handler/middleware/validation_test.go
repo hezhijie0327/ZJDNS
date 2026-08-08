@@ -80,7 +80,8 @@ func TestValidation_ANY_PassesThrough(t *testing.T) {
 }
 
 // TestValidation_NXNAME_Rejected verifies that NXNAME (128) queries are
-// rejected — RFC 9824 §3.5: a resolver MUST NOT forward or iterate NXNAME.
+// rejected — RFC 9824 §3.5: a resolver MUST NOT forward or iterate NXNAME
+// and MUST answer with FORMERR.
 func TestValidation_NXNAME_Rejected(t *testing.T) {
 	m := &Validation{}
 	nextCalled := false
@@ -95,8 +96,11 @@ func TestValidation_NXNAME_Rejected(t *testing.T) {
 	if nextCalled {
 		t.Error("next should not be called for NXNAME query")
 	}
-	if qctx.Res == nil || qctx.Res.Rcode != dns.RcodeRefused {
-		t.Errorf("rcode = %d, want RcodeRefused", qctx.Res.Rcode)
+	if qctx.Res == nil || qctx.Res.Rcode != dns.RcodeFormatError {
+		t.Errorf("rcode = %d, want RcodeFormatError (RFC 9824 §3.5 MUST)", qctx.Res.Rcode)
+	}
+	if qctx.EDE == nil || qctx.EDE.InfoCode != dns.ExtendedErrorInvalidQueryType {
+		t.Errorf("EDE = %+v, want EDE 30 (Invalid Query Type)", qctx.EDE)
 	}
 }
 

@@ -115,13 +115,13 @@ func loadTrustAnchorsFromFile(path string) ([]*dns.DNSKEY, error) {
 			log.Debugf("SECURITY: skipping revoked trust anchor key_tag=%d (RFC 5011 §2.1)", kd.KeyTag)
 			continue
 		}
-		// RFC 7958 §3.2: the XML KeyTag must match the reconstructed key, or
+		// RFC 7958 §2.1: the XML KeyTag must match the reconstructed key, or
 		// the file is corrupt or tampered — fail closed rather than trust it.
 		if kd.KeyTag != 0 && uint32(dnskey.KeyTag()) != kd.KeyTag {
 			log.Debugf("SECURITY: trust anchor key tag mismatch (computed=%d, xml=%d) — skipping", dnskey.KeyTag(), kd.KeyTag)
 			continue
 		}
-		// The XML digest must match the reconstructed key (RFC 7958 §3.2):
+		// The XML digest must match the reconstructed key (RFC 7958 §2.1):
 		// the digest is the integrity check the file format intends.
 		if kd.Digest != "" {
 			want, err := hex.DecodeString(strings.NewReplacer(" ", "", "\n", "", "\t", "").Replace(kd.Digest))

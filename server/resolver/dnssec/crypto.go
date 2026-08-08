@@ -104,14 +104,16 @@ func (c *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey *
 			ErrBogusSignature, rrsig.SignerName, dnskey.Header().Name)
 	}
 
-	// Check the RRSIG validity period manually (RFC 4034 §3.1.5).
+	// Check the RRSIG validity period manually (RFC 4034 §3.1.5: all
+	// comparisons MUST use RFC 1982 serial-number arithmetic — plain < / >
+	// misbehaves near the 2038/2106 32-bit wraparound).
 	// miekg/dns RRSIG.Verify() also checks this, but the manual check
 	// provides distinct sentinel errors for EDE 7/8 mapping.
 	now := uint32(log.NowUnix()) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
-	if rrsig.Expiration < now {
+	if serialLess(rrsig.Expiration, now) {
 		return fmt.Errorf("%w: RRSIG expired at %s", ErrSignatureExpired, time.Unix(int64(rrsig.Expiration), 0).UTC())
 	}
-	if rrsig.Inception > now {
+	if serialLess(now, rrsig.Inception) {
 		return fmt.Errorf("%w: RRSIG not valid until %s", ErrSignatureNotYet, time.Unix(int64(rrsig.Inception), 0).UTC())
 	}
 
@@ -363,6 +365,13 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 		return false, fmt.Errorf("%w: no answer RRset could be cryptographically verified", ErrBogusSignature)
 	}
 	return true, nil
+}
+
+// serialLess reports whether a precedes b in RFC 1982 §2 serial-number
+// arithmetic (a is before b when the forward difference b-a is less than
+// 2^31, taking wraparound into account).
+func serialLess(a, b uint32) bool {
+	return (a < b && b-a < 1<<31) || (a > b && a-b > 1<<31)
 }
 
 func groupRRset(rrs []dns.RR) map[rrsetKey][]dns.RR {
