@@ -137,14 +137,14 @@ func TestCollectBestNSMatch_NoMatchReturnsTerminal(t *testing.T) {
 
 // ── resolveNextNameservers ──────────────────────────────────────────────────
 
-// TestResolveNextNameservers_SkipsInBailiwickNoGlue guards against the
-// addrGroup circular wait: resolving ns1.example.com to enter example.com
+// TestResolveNextNameservers_SkipsInBailiwickNoGlue guards against circular
+// in-bailiwick NS resolution: resolving ns1.example.com to enter example.com
 // requires querying example.com's servers, whose addresses are exactly what
 // is being resolved.  With no cache and no glue the delegation is
-// unreachable — the walk must fail cleanly instead of deadlocking on
-// concurrent sibling-NS resolution.  r.resolver is intentionally nil here:
-// reaching resolveNSAddressesConcurrent would nil-panic, so the test proves
-// the guard fires before any NS-address walk is attempted.
+// unreachable — the walk must fail cleanly instead of recursing into itself
+// until the depth limit.  r.resolver is intentionally nil here: reaching
+// resolveNSAddressesConcurrent would nil-panic, so the test proves the guard
+// fires before any NS-address walk is attempted.
 func TestResolveNextNameservers_SkipsInBailiwickNoGlue(t *testing.T) {
 	r := newTestRecursiveWithHelpers() // cache nil, resolver nil
 	nsRecords := []*dns.NS{
@@ -298,26 +298,5 @@ func TestResponseEchoesQuestion_CaseInsensitive(t *testing.T) {
 	q := Question{Name: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
 	if !responseEchoesQuestion(resp, q) {
 		t.Error("question names must compare case-insensitively (RFC 4343)")
-	}
-}
-
-// ── walkDedupKey ────────────────────────────────────────────────────────────
-
-func TestWalkDedupKey(t *testing.T) {
-	cases := []struct {
-		qname string
-		want  string
-	}{
-		{"www.example.com.", "example.com."},
-		{"example.com.", "example.com."},
-		{"a.b.c.example.com.", "example.com."},
-		{"ns1.example.co.uk.", "co.uk."},
-		{"com.", "com."},
-		{".", "."},
-	}
-	for _, tc := range cases {
-		if got := walkDedupKey(tc.qname); got != tc.want {
-			t.Errorf("walkDedupKey(%q) = %q, want %q", tc.qname, got, tc.want)
-		}
 	}
 }

@@ -292,36 +292,16 @@ func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string,
 		return
 	}
 
-	// Dedup the fetch per zone: concurrent walks of DIFFERENT zones still
-	// fetch the same parent DNSKEYs (e.g. the TLD's) while establishing
-	// their cuts.  The leader fetches + verifies + caches; followers pick up
-	// the cached keys when they proceed.
-	if r.dnskeyGroup != nil {
-		_, _, leader := r.dnskeyGroup.Do(ctx, dnsutil.Fqdn(zone), func(workCtx context.Context) (struct{}, error) {
-			// Another walk may have fetched while we queued.
-			if cached := crypto.ZoneKeys(zone); len(cached) > 0 {
-				return struct{}{}, nil
-			}
-			r.fetchZoneDNSKEYs(workCtx, nameservers, zone, chain)
-			return struct{}{}, nil
-		})
-		if !leader {
-			// Follower: pick up the leader's cached keys.  When the leader
-			// failed, the chain stays empty and validation treats the zone
-			// as insecure/bogus exactly as a standalone walk would.
-			if cached := crypto.ZoneKeys(zone); len(cached) > 0 {
-				chain.zoneDNSKEYs = cached
-			}
-			return
-		}
-		return
-	}
+	// No singleflight dedup: each walk fetches DNSKEYs for the zones it
+	// crosses; the zone-key cache (CacheZoneKeys) deduplicates across walks
+	// once a fetch succeeds.  The dnskeyGroup promotion previously re-ran
+	// fetches without an overall deadline and amplified bottlenecks.
 	r.fetchZoneDNSKEYs(ctx, nameservers, zone, chain)
 }
 
 // fetchZoneDNSKEYs queries the zone's authoritative nameservers for DNSKEY
 // records, verifies them (DS match, offline KSK, root trust anchors) and
-// caches the verified keys.  Runs under dnskeyGroup when available.
+// caches the verified keys.
 func (r *Recursive) fetchZoneDNSKEYs(ctx context.Context, nameservers []string, zone string, chain *dnssecChain) {
 	crypto := r.resolver.validator.Crypto
 	if crypto == nil {
@@ -469,8 +449,7 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 	}
 
 	// Delegate to ensureZoneDNSKEYs — it fetches, verifies (DS / root
-	// trust-anchor cross-check / insecure-delegation), and caches the keys
-	// under the dnskeyGroup singleflight dedup.
+	// trust-anchor cross-check / insecure-delegation), and caches the keys.
 	r.ensureZoneDNSKEYs(ctx, nameservers, currentDomain, chain)
 	if len(chain.zoneDNSKEYs) == 0 {
 		// A clean insecure delegation (updateDNSSECChain verified an

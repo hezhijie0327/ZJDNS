@@ -511,18 +511,11 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 // resolved addresses to nsAddrs under addrMu. For A queries, AAAA glue from
 // the Additional section is also collected.
 func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype uint16, depth int, forceTCP bool, nsAddrs *[]string, addrMu *sync.Mutex) (answer []dns.RR) {
-	var qr QueryResult
-	if r.addrGroup != nil {
-		// Dedup the full recursive walk per NS name + qtype: concurrent
-		// walks for different zones that share the same NS name (e.g. a
-		// registrar's shared DNS) each used to walk root→TLD→auth for it.
-		key := nsName + "/" + dns.TypeToString[qtype]
-		qr, _, _ = r.addrGroup.Do(ctx, key, func(workCtx context.Context) (QueryResult, error) { // _ = verdict, _ = error: dedup follower — leader result already gated
-			return r.resolve(workCtx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP), nil
-		})
-	} else {
-		qr = r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP)
-	}
+	// No singleflight dedup per NS name: each resolution walks independently
+	// (the NS-address cache deduplicates across queries once populated).  The
+	// addrGroup promotion previously re-ran full walks without an overall
+	// deadline and amplified bottlenecks into goroutine explosions.
+	qr := r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP)
 	if qr.Err != nil {
 		return answer
 	}

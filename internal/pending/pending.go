@@ -23,6 +23,7 @@ package pending
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 	"zjdns/internal/lrumap"
@@ -161,40 +162,56 @@ func NewResultGroup[K comparable, V any]() *ResultGroup[K, V] {
 }
 
 // Do runs fn once for key.  The leader receives (val, err, true); concurrent
-// callers with the same key receive the leader's (val, err, false).  When the
-// leader is still running when a follower's ctx expires, the follower is
-// promoted and runs fn itself, returning (val, err, true).  When the internal
-// map is full the LRU entry is evicted with ErrEvicted — dedup degrades
-// gracefully.
+// callers with the same key wait for the leader's result and receive
+// (val, err, false).
 //
-// fn receives the caller's ctx as its argument.  A promoted follower's ctx is
-// already canceled (that is what triggered the promotion) — running the
-// shared work against it would fail every operation instantly (e.g. every
-// network dial in a recursive walk returns "operation was canceled").  The
-// promoted run therefore gets context.WithoutCancel(ctx): no cancellation, no
-// deadline — the caller's fn is expected to bound its own work (per-query
-// timeouts), which keeps the promoted run finite while executing real work.
+// A follower whose ctx expires while the leader is still running returns
+// ctx.Err immediately — it NEVER runs fn itself.  Running the shared work
+// from a timed-out follower (the old promotion path) multiplied the work
+// under load: every follower re-ran the full fn with a deadline-stripped
+// context, so any slow leader (slow SQLite pool, slow network) turned one
+// in-flight key into hundreds of duplicate runs with no overall deadline —
+// a goroutine explosion that also permanently leaked the dnscrypt cert
+// fetch (conn.Read with no socket deadline).  The follower's caller has
+// already exhausted its own budget; failing it is the correct, bounded
+// behaviour.
+//
+// A leader panic is contained: the entry is closed with the panic error and
+// removed so followers wake with an error and future callers become leaders
+// again; the panic is then re-raised for the caller's own recovery
+// (zdnsutil.HandlePanic).
 func (g *ResultGroup[K, V]) Do(ctx context.Context, key K, fn func(context.Context) (V, error)) (V, error, bool) {
 	call := &resultCall[V]{done: make(chan struct{})}
 	existing, loaded := g.calls.LoadOrStore(key, call)
 	if loaded {
-		// Follower: wait for the leader, or promote on ctx expiry.
+		// Follower: wait for the leader's result, bounded by our own ctx.
 		select {
 		case <-existing.done:
 			return existing.val, existing.err, false
 		case <-ctx.Done():
-			// Leader is taking too long: promote this caller to run fn
-			// itself so the wait is bounded by ctx.  ctx is canceled here —
-			// run fn against a cancellation-stripped view so the promoted
-			// work executes with a live context instead of failing every
-			// operation instantly.
-			v, err := fn(context.WithoutCancel(ctx))
-			return v, err, true
+			var zero V
+			return zero, ctx.Err(), false
 		}
 	}
 
 	// Leader.
-	val, err := fn(ctx)
+	var val V
+	var err error
+	defer func() {
+		if r := recover(); r != nil {
+			// Publish the failure to waiters and free the key BEFORE
+			// re-raising: the caller's HandlePanic logs it, and followers
+			// observe the closed entry instead of waiting forever.
+			err = fmt.Errorf("pending: leader panic for key %v: %v", key, r)
+			call.once.Do(func() {
+				call.err = err
+				close(call.done)
+			})
+			g.calls.CompareAndDelete(key, call)
+			panic(r)
+		}
+	}()
+	val, err = fn(ctx)
 	call.once.Do(func() {
 		call.val = val
 		call.err = err

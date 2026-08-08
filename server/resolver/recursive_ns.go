@@ -100,8 +100,8 @@ func (r *Recursive) resolveNextNameservers(
 	// requires querying example.com's servers — whose addresses are exactly
 	// what is being resolved (circular).  The self-name guard in
 	// resolveNSAddressesConcurrent breaks the single-NS cycle; this extends
-	// it to sibling NS names so concurrent walks for ns1/ns2 of the same
-	// zone cannot wait on each other forever through addrGroup.  Such a
+	// it to sibling NS names so walks for ns1/ns2 of the same zone terminate
+	// instead of recursing into each other until the depth limit.  Such a
 	// delegation is unreachable without glue/cache and now fails with
 	// "could not resolve nameservers" instead of deadlocking the walk.
 	zone := ""

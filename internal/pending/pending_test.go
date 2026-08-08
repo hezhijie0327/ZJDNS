@@ -244,7 +244,7 @@ func TestResultGroup_DifferentKeysIndependent(t *testing.T) {
 	}
 }
 
-func TestResultGroup_FollowerTimeoutPromotes(t *testing.T) {
+func TestResultGroup_FollowerTimeoutReturnsCtxErr(t *testing.T) {
 	g := NewResultGroup[string, int]()
 	release := make(chan struct{})
 	started := make(chan struct{})
@@ -263,26 +263,67 @@ func TestResultGroup_FollowerTimeoutPromotes(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	promotedCtxDone := make(chan error, 1)
-	v, err, leader := g.Do(ctx, "k", func(workCtx context.Context) (int, error) {
+	v, err, leader := g.Do(ctx, "k", func(context.Context) (int, error) {
 		runs.Add(1)
-		// The caller's ctx expired (that is why the promotion fired) — the
-		// promoted run must receive a LIVE context, otherwise every
-		// operation inside fails instantly with "operation was canceled".
-		promotedCtxDone <- workCtx.Err()
-		return 2, nil
+		t.Error("timed-out follower must never run fn (no promotion)")
+		return 0, nil
+	})
+	if leader {
+		t.Fatal("timed-out follower must not become leader")
+	}
+	if !errors.Is(err, ctx.Err()) {
+		t.Fatalf("timed-out follower should get ctx error, got %v", err)
+	}
+	if v != 0 {
+		t.Fatalf("timed-out follower should get zero value, got %d", v)
+	}
+	if runs.Load() != 1 {
+		t.Fatalf("fn should run once (original leader only), ran %d", runs.Load())
+	}
+}
+
+func TestResultGroup_LeaderPanicReleasesKey(t *testing.T) {
+	g := NewResultGroup[string, int]()
+	release := make(chan struct{})
+	started := make(chan struct{})
+
+	var wg sync.WaitGroup
+	var followerErr error
+	wg.Go(func() {
+		_, followerErr, _ = g.Do(context.Background(), "k", func(context.Context) (int, error) {
+			return 0, errors.New("follower must not run fn")
+		})
+	})
+
+	// Leader panics after the follower is queued (leader runs on its own
+	// goroutine — Do is synchronous and would otherwise self-deadlock the
+	// test's main goroutine on <-release).
+	go func() {
+		defer func() { _ = recover() }()
+		_, _, _ = g.Do(context.Background(), "k", func(context.Context) (int, error) {
+			close(started)
+			<-release
+			panic("boom")
+		})
+	}()
+	<-started
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	if followerErr == nil {
+		t.Fatal("follower should receive the leader's panic error, got nil")
+	}
+
+	// The key must be released: the next caller becomes leader and runs fn.
+	v, err, leader := g.Do(context.Background(), "k", func(context.Context) (int, error) {
+		return 9, nil
 	})
 	if !leader {
-		t.Fatal("timed-out follower should be promoted to leader")
+		t.Fatal("caller after leader panic should be leader")
 	}
-	if err != nil || v != 2 {
-		t.Fatalf("promoted caller should get its own result (2, nil), got (%d, %v)", v, err)
-	}
-	if runs.Load() != 2 {
-		t.Fatalf("fn should run twice (original leader + promoted), ran %d", runs.Load())
-	}
-	if got := <-promotedCtxDone; got != nil {
-		t.Fatalf("promoted fn must receive a live (uncanceled) ctx, got %v", got)
+	if err != nil || v != 9 {
+		t.Fatalf("want (9, nil) after panic recovery, got (%d, %v)", v, err)
 	}
 }
 

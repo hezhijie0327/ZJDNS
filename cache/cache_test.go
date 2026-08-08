@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 	"zjdns/config"
@@ -1417,4 +1418,60 @@ func TestGet_BoundedPoolWait(t *testing.T) {
 	if elapsed < config.DefaultCacheQueryTimeout-500*time.Millisecond {
 		t.Fatalf("Get returned too early (%v) — pool wait not bounded as expected", elapsed)
 	}
+}
+
+// TestPoolReturnsToIdleAfterLoad hammers the exact hot paths the recursive
+// resolver exercises (cache Get/GetTypes/LatencyLastProbe + async Set +
+// stats RecordRequest + UpdateLatency) under concurrency, then verifies every
+// pooled connection returns to idle.  This reproduces the production
+// connection-pool exhaustion: if any path leaks a Rows/Tx, InUse stays > 0
+// (or OpenConnections stays pinned) after quiescence.
+func TestPoolReturnsToIdleAfterLoad(t *testing.T) {
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	s := New(db)
+
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				qname := fmt.Sprintf("host%d.example.com.", j%997)
+				s.Get(qname, dns.TypeA, dns.ClassINET, nil, false)
+				s.GetTypes(qname, dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA}, false)
+				s.LatencyLastProbe("8.8.8.8")
+				s.UpdateLatency("8.8.8.8", 42)
+				rr := &dns.A{
+					Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 60},
+					A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+				}
+				s.Set(qname, dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, 0)
+				s.RecordRequest(&RequestRecord{
+					Qname: qname, Qtype: dns.TypeA, Qclass: dns.ClassINET,
+					Protocol: "udp", Result: "hit", Rcode: 0,
+				})
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Let the async writers drain their buffers.
+	s.Flush()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		st := db.SQ.Stats()
+		if st.InUse == 0 && st.OpenConnections <= config.DefaultCacheMaxOpenConns {
+			// Healthy: pool fully idle.
+			t.Logf("pool returned to idle: %+v", st)
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	st := db.SQ.Stats()
+	t.Fatalf("pool did not return to idle after load quiesced: %+v", st)
 }
