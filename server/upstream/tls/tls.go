@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"time"
 	"zjdns/config"
@@ -94,14 +95,37 @@ func (c *Client) exchangeOverTLS(ctx context.Context, msg *dns.Msg, addr string,
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = tlsConn.SetDeadline(deadline)
 	}
-	if _, err := msg.WriteTo(tlsConn); err != nil {
+
+	// Pack the message and write as a TCP frame (2-byte length prefix).
+	// WriteTo/ReadFrom require dns.ResponseWriter — *eTLS.Conn does not
+	// implement it, so we use the same raw frame I/O as the pool path.
+	if err := msg.Pack(); err != nil {
 		return nil, err
 	}
+	frame := make([]byte, 2+len(msg.Data))
+	frame[0] = byte(len(msg.Data) >> 8) //nolint:gosec // G115: DNS message ≤ 65535
+	frame[1] = byte(len(msg.Data))      //nolint:gosec // G115: DNS message ≤ 65535
+	copy(frame[2:], msg.Data)
+	if _, err := tlsConn.Write(frame); err != nil {
+		return nil, fmt.Errorf("tls: write: %w", err)
+	}
+
+	// Read the response: 2-byte length prefix + payload.
+	lenBuf := make([]byte, 2)
+	if _, err := io.ReadFull(tlsConn, lenBuf); err != nil {
+		return nil, fmt.Errorf("tls: read length: %w", err)
+	}
+	packetLen := int(lenBuf[0])<<8 | int(lenBuf[1])
+	if packetLen > dns.MaxMsgSize {
+		return nil, fmt.Errorf("tls: response too large: %d", packetLen)
+	}
+	buf := make([]byte, packetLen)
+	if _, err := io.ReadFull(tlsConn, buf); err != nil {
+		return nil, fmt.Errorf("tls: read body: %w", err)
+	}
+
 	response := pool.DefaultMessage.Get()
-	if _, err := response.ReadFrom(tlsConn); err != nil {
-		pool.DefaultMessage.Put(response)
-		return nil, err
-	}
+	response.Data = buf
 	if err := response.Unpack(); err != nil {
 		pool.DefaultMessage.Put(response)
 		return nil, err
