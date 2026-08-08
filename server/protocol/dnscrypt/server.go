@@ -64,7 +64,8 @@ type Server struct {
 	rotateCh chan struct{} // closed when rotation goroutine should stop
 
 	// workerCap limits concurrent handler goroutines to prevent unbounded
-	// goroutine creation under high load.
+	// goroutine creation under high load.  UDP per-packet + TCP per-connection
+	// handlers share the cap.
 	workerCap chan struct{}
 
 	// store persists the identity + cert windows across restarts; nil disables
@@ -180,7 +181,7 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, 
 		cancel:         cancel,
 		signingSK:      signingSK,
 		rotateCh:       make(chan struct{}),
-		workerCap:      make(chan struct{}, config.DefaultMaxConcurrentStreams),
+		workerCap:      make(chan struct{}, config.DefaultMaxDNSCryptConcurrent),
 		sharedKeyCache: lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize),
 		store:          store,
 	}

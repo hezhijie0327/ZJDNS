@@ -175,12 +175,22 @@ const (
 // =============================================================================
 
 const (
-	DefaultMaxPipe                 = 16    // max in-flight queries per TCP/DoT connection
-	DefaultMaxConns                = 4     // max connections per upstream
-	DefaultMaxConcurrentNS         = 6     // max concurrent NS queries during resolution
-	DefaultMaxProbes               = 16    // max concurrent latency probes
-	DefaultMaxIncomingStreams      = 65535 // QUIC max incoming streams (RFC 9250: one stream per query — 256 exhausted a client's stream quota in seconds, then every query waited on MAX_STREAMS behind quic-go's 25ms ACK delay)
-	DefaultMaxConcurrentStreams    = 64
+	DefaultMaxPipe              = 16    // max in-flight queries per TCP/DoT connection
+	DefaultMaxConns             = 4     // max connections per upstream
+	DefaultMaxConcurrentNS      = 6     // max concurrent NS queries during resolution
+	DefaultMaxProbes            = 16    // max concurrent latency probes
+	DefaultMaxIncomingStreams   = 65535 // QUIC max incoming streams (RFC 9250: one stream per query — 256 exhausted a client's stream quota in seconds, then every query waited on MAX_STREAMS behind quic-go's 25ms ACK delay)
+	DefaultMaxConcurrentStreams = 64    // QUIC concurrent in-flight stream limit
+	// DefaultMaxDNSCryptConcurrent bounds concurrent DNSCrypt handler
+	// goroutines (UDP per-packet, TCP per-connection).  Deliberately NOT the
+	// QUIC stream limit: DNSCrypt is UDP-first and plain-UDP processing has no
+	// concurrency cap — reusing 64 saturated the worker pool under ordinary
+	// load, diverting every further packet into the CPU-heavy saturated
+	// SERVFAIL path (decrypt + encrypt per packet) and amplifying overload
+	// into a CPU storm.  1024 matches DefaultServerGoroutineLimit: far above
+	// realistic concurrency (5900 QPS ≈ 32 in flight) while still bounded
+	// against abuse.
+	DefaultMaxDNSCryptConcurrent   = 1024
 	DefaultCacheRefreshConcurrency = 64 // background cache refresh goroutine cap
 
 	DefaultServerGoroutineLimit = 1024

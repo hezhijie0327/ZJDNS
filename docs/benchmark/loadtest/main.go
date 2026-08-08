@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,8 +55,29 @@ func main() {
 	workers := flag.Int("workers", 32, "concurrency")
 	seconds := flag.Int("seconds", 30, "duration")
 	qname := flag.String("qname", "www.bench.test.", "query name (must match a zone rule)")
+	qnames := flag.String("d", "", "file of qnames to rotate through (one per line; overrides -qname)")
 	pprofAddr := flag.String("pprof", "127.0.0.1:6061", "client pprof listen address")
 	flag.Parse()
+
+	// Optional qname rotation file: load once, workers round-robin through it.
+	var qnameList []string
+	if *qnames != "" {
+		data, err := os.ReadFile(*qnames)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "reading qname file: %v\n", err)
+			os.Exit(1)
+		}
+		for line := range strings.SplitSeq(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				qnameList = append(qnameList, line)
+			}
+		}
+		if len(qnameList) == 0 {
+			fmt.Fprintln(os.Stderr, "qname file is empty")
+			os.Exit(1)
+		}
+	}
 
 	// Validate before any defer/goroutine setup: os.Exit would skip them.
 	if *workers <= 0 {
@@ -102,6 +124,7 @@ func main() {
 	testStart := time.Now()
 	deadline := testStart.Add(time.Duration(*seconds) * time.Second)
 	var wg sync.WaitGroup
+	var qc atomic.Int64 // round-robin index over qnameList
 	for range *workers {
 		wg.Go(func() {
 			defer zdnsutil.HandlePanic("loadtest worker")
@@ -109,8 +132,12 @@ func main() {
 				if ctx.Err() != nil || time.Now().After(deadline) {
 					return
 				}
+				qn := *qname
+				if len(qnameList) > 0 {
+					qn = qnameList[int(qc.Add(1))%len(qnameList)]
+				}
 				msg := new(dns.Msg)
-				dnsutil.SetQuestion(msg, *qname, dns.TypeA)
+				dnsutil.SetQuestion(msg, qn, dns.TypeA)
 				msg.UDPSize = 1232
 
 				start := time.Now()
