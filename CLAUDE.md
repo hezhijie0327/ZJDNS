@@ -163,6 +163,10 @@ go test -bench=. -short -benchtime=500ms ./... \
 ./zjdns --probe --conn-reuse  tls://1.1.1.1:853  # RFC 1035 connection reuse
 ./zjdns --probe --idle-timeout tls://1.1.1.1:853 # server idle timeout
 
+# Load test client (all 12 protocols)
+go build -o /tmp/benchclient ./docs/benchmark/loadtest
+/tmp/benchclient -proto quic -addr 127.0.0.1:10784 -workers 32 -seconds 30
+
 # Pre-commit hook
 sh scripts/install-hook.sh                     # Linux / macOS
 pwsh scripts/install-hook.ps1                  # Windows
@@ -331,7 +335,7 @@ All logs use `zjdns/internal/log` (package-level `Default` logger). Default leve
 
 **Component filtering:** `log_level` supports `"level:comp1,comp2"` syntax (e.g. `"debug:UPSTREAM,RECURSION"`).
 
-**26 canonical prefixes:** `TLS`, `CACHE`, `DB`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `PLAIN`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `DNSCRYPT`, `TLCP`, `RULESET`, `DNS64`, `MQTYPE`, `RESPONSE`, `ANY`.
+**27 canonical prefixes:** `TLS`, `CACHE`, `DB`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `PLAIN`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `DNSCRYPT`, `TLCP`, `RULESET`, `DNS64`, `MQTYPE`, `RESPONSE`, `ANY`, `IPDETECT`.
 
 Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECURITY:`. `DOT:`/`DOQ:`/`DOH:`/`DTLS:` → `TLS:`. `DTLCP:` → `TLCP:`. `UDP:`/`TCP:` → `PLAIN:`. Hot-path logs are `Debug` only.
 
@@ -344,5 +348,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECUR
 | [docs/audit/](docs/audit/) | Per-audit detailed findings and fix plans |
 | [docs/debug/DEBUG.md](docs/debug/DEBUG.md) | Debug config, test domains, TLCP/DTLCP E2E tests |
 | [docs/benchmark/BENCHMARK.md](docs/benchmark/BENCHMARK.md) | Benchmark & E2E test guide (dnsperf, DNSCrypt, defense) |
+| [docs/benchmark/LOADTEST.md](docs/benchmark/LOADTEST.md) | 全协议压测方法指南（pprof 双端采集、瓶颈分析、已发现问题归档） |
+| [docs/benchmark/loadtest-baseline.txt](docs/benchmark/loadtest-baseline.txt) | 全协议 QPS/延迟基线数据（12 协议，每轮更新） |
 | [docs/rfc/](docs/rfc/) | Mirrored RFCs and drafts (116 total) |
 | [docs/rfc/GUIDELINE.md](docs/rfc/GUIDELINE.md) | RFC 精华指南 — 每个 RFC 的关键常量、协议流程、合规状态 |
