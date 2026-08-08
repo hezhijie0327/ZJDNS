@@ -1,52 +1,12 @@
-ZJDNS 全协议压测基准（LOADTEST baseline）
-==========================================
-
-方法：docs/benchmark/LOADTEST.md
-工具：docs/benchmark/loadtest（benchclient）+ dnsperf
-
-环境
-----
-- 平台: macOS Darwin 27.0.0, Apple Silicon (arm64)
-- Go: 1.26.5
-- 服务端: 全协议监听 + pprof, zone 规则 www.bench.test (1.2.3.4), log_level=error
-- 客户端: 32 并发, 每协议 25s 单轮
-- 日期: 2026-08-08（下午刷新，:memory: 共享缓存修复后）
-
-全协议基线（32 并发, zone 规则）
----------------------------------
-协议           ok        fail   QPS        avg     min     max
-------------   --------  -----  ---------  ------  ------  ------
-udp            185760    0      7429.2     4.31ms  0.25ms  9.31ms
-tcp            1023527   0      40940.0    0.78ms  0.04ms  45.14ms
-tls            2621228   28     104847.9   0.30ms  0.04ms  8.51ms
-quic           78973     0      3157.5     10.13ms 0.07ms  112.55ms
-https          1323101   0      52923.3    0.60ms  0.04ms  9.82ms
-http3          232614    0      9303.4     3.44ms  0.09ms  11.86ms
-dtls           154274    0      6169.9     5.19ms  0.06ms  8.49ms
-tlcp           1722071   0      68881.2    0.46ms  0.05ms  5.92ms
-http-tlcp      627193    1813   25067.7    1.27ms  0.04ms  74.74ms
-dtlcp          140857    0      5633.2     5.68ms  1.99ms  1056.48ms
-dnscrypt       185002    0      7398.9     4.32ms  0.09ms  601.78ms
-dnscrypt-tcp   417632    0      16704.7    1.91ms  0.15ms  84.59ms
-
-dnsperf 对照（zone 规则）
--------------------------
-- 1 并发:   66789 查询/10s (~6.7k QPS), 100% 完成, avg 2.23ms
-- 32 并发:  66673 查询/10s (~6.7k QPS), 100% 完成, avg 4.18ms
-
-注（2026-08-08 下午）
----------------------
-- UDP 系（udp/quic/dtls/dnscrypt/dtlcp）当前机器 ~3-7k QPS：1 并发与 32 并发
-  吞吐相同（~6.7k），为机器 UDP 处理上限（旧代码同机同样 6.7k，已用 worktree
-  d8d2c43 验证；文件 DB 同样 6.6k——与 DB 无关）——非代码回归；旧基线（上午
-  23k）为更空闲机器状态所测
-- DB 方案对比（benchclient TCP/TLS, 32 并发）：单连接 :memory:（旧）~7k
-  （连接饥饿——MQTYPE hang 根因）；shared-cache :memory:（当前）40.9k/104.8k；
-  文件 DB（WAL 多连接）29.5k/65.7k。shared-cache 内存 DB 整体最快（磁盘 IO
-  开销 > shared-cache 锁开销）；zone 微基准 +44% 为 shared-cache 锁代价，
-  换连接不饥饿
-- TCP 系（tcp/tls/https/tlcp/http-tlcp/dnscrypt-tcp）40-105k QPS，较旧基线
-  快 2-4 倍（缓存命中直发 + 连接池优化生效）
-- http-tlcp 0.6% fail（connection reset by peer）：HTTP keep-alive 连接被
-  服务端空闲关闭后客户端复用 stale 连接——连接重用现象，非服务端错误
-- tls 28 fail（0.001%）：DoT 连接建立竞争，同旧基线量级
+proto=udp        ok=199447   fail=0      qps=39883.2    avg=0.80    ms min=0.11    ms max=2.39    ms
+proto=tcp        ok=186263   fail=0      qps=37246.1    avg=0.86    ms min=0.04    ms max=335.34  ms
+proto=tls        ok=195050   fail=13     qps=39004.0    avg=0.82    ms min=0.09    ms max=4.27    ms
+proto=quic       ok=165267   fail=0      qps=33048.6    avg=0.97    ms min=0.18    ms max=206.14  ms
+proto=dtls       ok=176503   fail=0      qps=35293.9    avg=0.91    ms min=0.06    ms max=12.21   ms
+proto=tlcp       ok=182021   fail=0      qps=36398.3    avg=0.88    ms min=0.04    ms max=3.14    ms
+proto=dtlcp      ok=149457   fail=0      qps=29885.5    avg=1.07    ms min=0.05    ms max=1006.00 ms
+proto=https      ok=137910   fail=0      qps=27577.2    avg=1.16    ms min=0.18    ms max=8.45    ms
+proto=http3      ok=137643   fail=0      qps=27524.4    avg=1.16    ms min=0.23    ms max=4.99    ms
+proto=http-tlcp  ok=177692   fail=0      qps=35534.0    avg=0.90    ms min=0.10    ms max=4.62    ms
+proto=dnscrypt   ok=187901   fail=0      qps=37575.1    avg=0.85    ms min=0.13    ms max=5.21    ms
+proto=dnscrypt-tcp ok=136500   fail=0      qps=27295.9    avg=1.17    ms min=0.19    ms max=114.57  ms

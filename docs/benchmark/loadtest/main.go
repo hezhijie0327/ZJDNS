@@ -57,6 +57,7 @@ func main() {
 	qname := flag.String("qname", "www.bench.test.", "query name (must match a zone rule)")
 	qnames := flag.String("d", "", "file of qnames to rotate through (one per line; overrides -qname)")
 	pprofAddr := flag.String("pprof", "127.0.0.1:6061", "client pprof listen address")
+	outFile := flag.String("o", "", "append result line to file")
 	flag.Parse()
 
 	// Optional qname rotation file: load once, workers round-robin through it.
@@ -175,8 +176,18 @@ func main() {
 	// early Ctrl-C exit previously divided by the full configured seconds
 	// and understated QPS (M-3-6).
 	elapsed := time.Since(testStart).Seconds()
-	fmt.Printf("proto=%-10s ok=%-8d fail=%-6d qps=%-10.1f avg=%-8.2fms min=%-8.2fms max=%-8.2fms\n",
+	line := fmt.Sprintf("proto=%-10s ok=%-8d fail=%-6d qps=%-10.1f avg=%-8.2fms min=%-8.2fms max=%-8.2fms\n",
 		*proto, ok, fail, float64(ok)/elapsed,
 		float64(c.latSum.Load())/float64(max(ok, 1))/1000.0,
 		float64(c.latMin.Load())/1000.0, float64(c.latMax.Load())/1000.0)
+	fmt.Print(line)
+	if *outFile != "" {
+		f, err := os.OpenFile(*outFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "writing output file: %v\n", err)
+		} else {
+			_, _ = f.WriteString(line)
+			_ = f.Close()
+		}
+	}
 }

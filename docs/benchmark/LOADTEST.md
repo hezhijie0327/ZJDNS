@@ -85,13 +85,15 @@ go build -o /tmp/benchclient ./docs/benchmark/loadtest
 
 ```text
 用法:
-  -proto string      协议: udp tcp tls quic https http3 dtls tlcp http-tlcp dtlcp dnscrypt
+  -proto string      协议: udp tcp tls quic https http3 dtls tlcp http-tlcp dtlcp dnscrypt dnscrypt-tcp
   -addr string       服务端地址（https/http3/http-tlcp 传完整 URL）
   -servername string TLS ServerName（DNSCrypt 传 provider name）
   -public-key string DNSCrypt provider 公钥（hex）
   -workers int       并发数（默认 32）
   -seconds int       时长秒（默认 30）
   -qname string      查询名（默认 www.bench.test.，需匹配 zone 规则）
+  -d string          qname 文件（每行一个域名，轮转；覆盖 -qname）
+  -o string          结果行追加写入文件（格式同 stdout 输出）
   -pprof string      客户端 pprof 地址（默认 127.0.0.1:6061）
 ```
 
@@ -109,42 +111,44 @@ go build -o /tmp/benchclient ./docs/benchmark/loadtest
 | TLCP | `tlcp` | `127.0.0.1:10850` | |
 | HTTP-TLCP | `http-tlcp` | `https://127.0.0.1:10440/dns-query` | |
 | DTLCP | `dtlcp` | `127.0.0.1:8542` | |
-| DNSCrypt | `dnscrypt` | `127.0.0.1:12443` | `-servername 2.dnscrypt-cert.zjdns-test.local` `-public-key <公钥>` |
-| DNSCrypt-TCP | `dnscrypt-tcp` | `127.0.0.1:12443` | 同 DNSCrypt（强制 TCP 传输） |
+| DNSCrypt | `dnscrypt` | `127.0.0.1:12443` | `-servername 2.dnscrypt-cert.zjdns-test.local` `-public-key 1498ACC3...` |
+| DNSCrypt-TCP | `dnscrypt-tcp` | `127.0.0.1:12443` | 同 DNSCrypt |
 
-示例（单协议 30 秒，32 并发）：
+示例（单协议 10 秒，32 并发，结果写文件）：
 
 ```bash
-/tmp/benchclient -proto quic -addr 127.0.0.1:10784 -workers 32 -seconds 30
-# proto=quic        ok=689142  fail=1      qps=22971.4    avg=1.39    ms min=0.07    ms max=5103.06  ms
+/tmp/benchclient -proto quic -addr 127.0.0.1:10784 -workers 32 -seconds 10 -o /tmp/results.txt
+# proto=quic       ok=236487  fail=0      qps=23648.7    avg=1.35    ms min=0.18    ms max=204.45  ms
 ```
 
-一轮全协议（UDP → DNSCrypt，各 15 秒）：
+一轮全协议（各 5 秒，`-o` 写文件）：
 
 ```bash
+PK="1498ACC39ABEA9A0102FA655DA6BE74084CEF4AFC9992E43FDAE364ED156DE53"
+SN="2.dnscrypt-cert.zjdns-test.local"
+:> docs/benchmark/loadtest-baseline.txt  # truncate
 for proto in udp tcp tls quic https http3 dtls tlcp http-tlcp dtlcp dnscrypt dnscrypt-tcp; do
   case "$proto" in
-    udp)      addr="127.0.0.1:10533" ;;
-    tcp)      addr="127.0.0.1:10533" ;;
-    tls)      addr="127.0.0.1:10853" ;;
-    quic)     addr="127.0.0.1:10784" ;;
-    https)    addr="https://127.0.0.1:10443/dns-query" ;;
-    http3)    addr="https://127.0.0.1:10444/dns-query" ;;
-    dtls)     addr="127.0.0.1:10434" ;;
-    tlcp)     addr="127.0.0.1:10850" ;;
+    udp|tcp) addr="127.0.0.1:10533" ;;
+    tls)     addr="127.0.0.1:10853" ;;
+    quic)    addr="127.0.0.1:10784" ;;
+    https)   addr="https://127.0.0.1:10443/dns-query" ;;
+    http3)   addr="https://127.0.0.1:10444/dns-query" ;;
+    dtls)    addr="127.0.0.1:10434" ;;
+    tlcp)    addr="127.0.0.1:10850" ;;
     http-tlcp) addr="https://127.0.0.1:10440/dns-query" ;;
-    dtlcp)    addr="127.0.0.1:8542" ;;
+    dtlcp)   addr="127.0.0.1:8542" ;;
     dnscrypt|dnscrypt-tcp) addr="127.0.0.1:12443" ;;
   esac
-  pk=""; sn="zjdns-test.local"
-  if [ "$proto" = "dnscrypt" ]; then
-    pk="1498ACC39ABEA9A0102FA655DA6BE74084CEF4AFC9992E43FDAE364ED156DE53"
-    sn="2.dnscrypt-cert.zjdns-test.local"
-  fi
-  /tmp/benchclient -proto "$proto" -addr "$addr" -public-key "$pk" \
-    -servername "$sn" -workers 32 -seconds 15
+  args=""
+  case "$proto" in
+    dnscrypt|dnscrypt-tcp) args="-public-key $PK -servername $SN" ;;
+  esac
+  /tmp/benchclient -proto "$proto" -addr "$addr" -workers 32 -seconds 5 \
+    -o docs/benchmark/loadtest-baseline.txt $args
 done
 ```
+
 
 dnsperf 对照（UDP/TCP 高并发，客户端无法开 pprof——C 程序）：
 
