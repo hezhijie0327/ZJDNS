@@ -94,10 +94,28 @@ func (r *Recursive) resolveNextNameservers(
 	// old short-circuit dropped the remaining delegation targets whenever
 	// cache/glue covered even a subset, so resolution could fail even though
 	// the uncovered servers were reachable.
+	//
+	// In-bailiwick NS names of the zone being entered are skipped when cache
+	// and glue both miss: resolving ns1.example.com to enter example.com
+	// requires querying example.com's servers — whose addresses are exactly
+	// what is being resolved (circular).  The self-name guard in
+	// resolveNSAddressesConcurrent breaks the single-NS cycle; this extends
+	// it to sibling NS names so concurrent walks for ns1/ns2 of the same
+	// zone cannot wait on each other forever through addrGroup.  Such a
+	// delegation is unreachable without glue/cache and now fails with
+	// "could not resolve nameservers" instead of deadlocking the walk.
+	zone := ""
+	if len(bestNSRecords) > 0 {
+		zone = dnsutil.Fqdn(bestNSRecords[0].Header().Name)
+	}
 	uncovered := make([]*dns.NS, 0, len(bestNSRecords))
 	for _, ns := range bestNSRecords {
 		nsName := dnsutil.Fqdn(ns.Ns)
 		if cachedNSNames[nsName] || len(result.glue[nsName]) > 0 {
+			continue
+		}
+		if zone != "" && dnsutil.IsBelow(zone, nsName) {
+			log.Debugf("RECURSION: skipping in-bailiwick NS %s for %s (no glue/cache — circular)", nsName, zone)
 			continue
 		}
 		uncovered = append(uncovered, ns)

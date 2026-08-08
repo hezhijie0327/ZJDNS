@@ -125,7 +125,15 @@ func (c *Client) state(
 		if ok && time.Now().Before(state.expires) {
 			return state, nil
 		}
-		return c.fetchState(workCtx, addr, providerName, publicKey, server, preferTCP)
+		// Hard budget for the fetch itself: a promoted follower's workCtx is
+		// context.WithoutCancel(ctx) — no cancellation, no deadline — and
+		// fetchCertOverUDP/TCP apply their own socket deadline (cert.go),
+		// so both leader and promoted runs are always bounded.  Without this
+		// wrapper a blackholed upstream leaks one goroutine per promoted
+		// follower (each waits on conn.Read forever).
+		fetchCtx, fetchCancel := context.WithTimeout(workCtx, certFetchTimeout)
+		defer fetchCancel()
+		return c.fetchState(fetchCtx, addr, providerName, publicKey, server, preferTCP)
 	})
 	if err != nil {
 		return nil, err

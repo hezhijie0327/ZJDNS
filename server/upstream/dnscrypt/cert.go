@@ -5,11 +5,21 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 	"zjdns/config"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
 )
+
+// certFetchTimeout is the hard budget for a single certificate fetch
+// (UDP or TCP attempt).  ResultGroup promotion runs the fetch with
+// context.WithoutCancel(ctx) — no cancellation, no deadline — so relying
+// on ctx.Deadline() alone leaves conn.Read unbounded and leaks a goroutine
+// per promoted follower when the upstream never answers (blackholed UDP).
+// Every socket read therefore applies its own deadline: the earlier of this
+// budget and the caller's deadline when one exists.
+var certFetchTimeout = config.DefaultDNSQueryTimeout
 
 // FetchCert sends a plain DNS query to addr and returns the unpacked response.
 // When preferTCP is true, the query goes directly over TCP — matching
@@ -56,9 +66,11 @@ func fetchCertOverUDP(ctx context.Context, addr string, query []byte) (*dns.Msg,
 	}
 	defer func() { _ = conn.Close() }()
 
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
+	deadline := time.Now().Add(certFetchTimeout)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
+		deadline = dl
 	}
+	_ = conn.SetDeadline(deadline)
 
 	if _, err := conn.Write(query); err != nil {
 		return nil, fmt.Errorf("write: %w", err)
@@ -91,9 +103,11 @@ func fetchCertOverTCP(ctx context.Context, addr string, query []byte) (*dns.Msg,
 	}
 	defer func() { _ = conn.Close() }()
 
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
+	deadline := time.Now().Add(certFetchTimeout)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
+		deadline = dl
 	}
+	_ = conn.SetDeadline(deadline)
 
 	frame := make([]byte, 2+len(query))
 	frame[0] = byte(len(query) >> 8) //nolint:gosec // G115: DNS query bounded by MaxMsgSize (65535)

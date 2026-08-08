@@ -129,6 +129,84 @@ func TestDNSCryptUnreachableUDP(t *testing.T) {
 	t.Logf("expected error: %v", err)
 }
 
+// TestFetchCertOverUDP_NoCtxDeadline_TimesOut reproduces the goroutine leak
+// behind the production stall: a ResultGroup-promoted cert fetch runs with
+// context.WithoutCancel(ctx) — no deadline — and fetchCertOverUDP must still
+// bound its read with certFetchTimeout instead of blocking on conn.Read
+// forever.
+func TestFetchCertOverUDP_NoCtxDeadline_TimesOut(t *testing.T) {
+	old := certFetchTimeout
+	certFetchTimeout = 300 * time.Millisecond
+	defer func() { certFetchTimeout = old }()
+
+	// A UDP socket that accepts writes but never replies — blackholed upstream.
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen udp: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	addr := conn.LocalAddr().String()
+
+	start := time.Now()
+	_, err = fetchCertOverUDP(context.Background(), addr, []byte{0x12, 0x34, 0x56, 0x78}) // no deadline
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected read timeout from unresponsive UDP peer")
+	}
+	if !strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("expected i/o timeout error, got: %v", err)
+	}
+	if elapsed < 250*time.Millisecond {
+		t.Fatalf("returned too early (%v) — socket deadline not honored", elapsed)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("expected timeout within ~300ms, took %v", elapsed)
+	}
+}
+
+// TestFetchCertOverTCP_NoCtxDeadline_TimesOut covers the same promoted-run
+// pattern for the TCP cert-fetch path.
+func TestFetchCertOverTCP_NoCtxDeadline_TimesOut(t *testing.T) {
+	old := certFetchTimeout
+	certFetchTimeout = 300 * time.Millisecond
+	defer func() { certFetchTimeout = old }()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+	// Accept and hold connections open without ever responding.
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				time.Sleep(5 * time.Second)
+				_ = c.Close()
+			}(c)
+		}
+	}()
+
+	start := time.Now()
+	_, err = fetchCertOverTCP(context.Background(), l.Addr().String(), []byte{0x12, 0x34, 0x56, 0x78}) // no deadline
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected read timeout from unresponsive TCP peer")
+	}
+	if !strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("expected i/o timeout error, got: %v", err)
+	}
+	if elapsed < 250*time.Millisecond {
+		t.Fatalf("returned too early (%v) — socket deadline not honored", elapsed)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("expected timeout within ~300ms, took %v", elapsed)
+	}
+}
+
 func TestDNSCryptClassical(t *testing.T) {
 	// Test classical XChacha20 mode by disabling PQ preference.
 	_, stamp := startTestDNSCryptServer(t)

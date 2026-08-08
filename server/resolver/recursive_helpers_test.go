@@ -1,7 +1,9 @@
 package resolver
 
 import (
+	"context"
 	"net"
+	"net/netip"
 	"testing"
 	"zjdns/edns"
 
@@ -130,6 +132,55 @@ func TestCollectBestNSMatch_NoMatchReturnsTerminal(t *testing.T) {
 	}
 	if termRes == nil {
 		t.Fatal("should return terminal result when no NS match")
+	}
+}
+
+// ── resolveNextNameservers ──────────────────────────────────────────────────
+
+// TestResolveNextNameservers_SkipsInBailiwickNoGlue guards against the
+// addrGroup circular wait: resolving ns1.example.com to enter example.com
+// requires querying example.com's servers, whose addresses are exactly what
+// is being resolved.  With no cache and no glue the delegation is
+// unreachable — the walk must fail cleanly instead of deadlocking on
+// concurrent sibling-NS resolution.  r.resolver is intentionally nil here:
+// reaching resolveNSAddressesConcurrent would nil-panic, so the test proves
+// the guard fires before any NS-address walk is attempted.
+func TestResolveNextNameservers_SkipsInBailiwickNoGlue(t *testing.T) {
+	r := newTestRecursiveWithHelpers() // cache nil, resolver nil
+	nsRecords := []*dns.NS{
+		{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, NS: rdata.NS{Ns: "ns1.example.com."}},
+		{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, NS: rdata.NS{Ns: "ns2.example.com."}},
+	}
+
+	res := r.resolveNextNameservers(context.Background(), nsRecords, &dns.Msg{}, "www.example.com.", "com.", 0, false)
+	if len(res.addrs) != 0 {
+		t.Fatalf("expected no addresses for glue-less in-bailiwick NS, got %v", res.addrs)
+	}
+	if res.source != "" {
+		t.Fatalf("expected empty source, got %q", res.source)
+	}
+}
+
+// TestResolveNextNameservers_UsesInBailiwickGlue verifies the glue path still
+// serves in-bailiwick NS names — the skip guard must only apply to names with
+// neither cache nor glue.
+func TestResolveNextNameservers_UsesInBailiwickGlue(t *testing.T) {
+	r := newTestRecursiveWithHelpers()
+	nsRecords := []*dns.NS{
+		{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, NS: rdata.NS{Ns: "ns1.example.com."}},
+	}
+	resp := &dns.Msg{
+		Extra: []dns.RR{
+			&dns.A{Hdr: dns.Header{Name: "ns1.example.com.", Class: dns.ClassINET}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.1")}},
+		},
+	}
+
+	res := r.resolveNextNameservers(context.Background(), nsRecords, resp, "www.example.com.", "com.", 0, false)
+	if len(res.addrs) != 1 {
+		t.Fatalf("expected 1 glue address, got %v", res.addrs)
+	}
+	if res.source != "glue" {
+		t.Fatalf("expected source=glue, got %q", res.source)
 	}
 }
 
