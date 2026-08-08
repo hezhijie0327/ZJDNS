@@ -70,20 +70,21 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			// sits on the per-query path, and Go blocks when the refresh
 			// concurrency limit is saturated — prefetch is best-effort and
 			// must not delay the response.
-			if m.closed != nil && !m.closed() && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) &&
-				m.prefetchCooldown != nil && m.prefetchCooldown.ShouldStart(qname, log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds()) &&
+			// refreshGroup nil (test-only wiring): tryStartRefresh would mark
+			// the pending gate with no goroutine to ever release it, blocking
+			// all future refreshes for the key — skip prefetch entirely.
+			if m.refreshGroup != nil && m.closed != nil && !m.closed() && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) &&
+				m.prefetchCooldown != nil && m.prefetchCooldown.ShouldStart(qname, qtype, log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds()) &&
 				m.tryStartRefresh(qname, qtype, qclass, ecsOpt) {
-				if m.refreshGroup != nil {
-					if !m.refreshGroup.TryGo(func() error {
-						defer zdnsutil.HandlePanic("Cache refresh: prefetch fresh-hit")
-						defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
-						_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt) // error logged inside
-						return nil                                            // prevent errgroup context cancellation cascade
-					}) {
-						// Refresh concurrency saturated — undo the in-flight
-						// gate so a later refresh can start.
-						m.finishRefresh(qname, qtype, qclass, ecsOpt)
-					}
+				if !m.refreshGroup.TryGo(func() error {
+					defer zdnsutil.HandlePanic("Cache refresh: prefetch fresh-hit")
+					defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
+					_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt) // error logged inside
+					return nil                                            // prevent errgroup context cancellation cascade
+				}) {
+					// Refresh concurrency saturated — undo the in-flight
+					// gate so a later refresh can start.
+					m.finishRefresh(qname, qtype, qclass, ecsOpt)
 				}
 			}
 			return nil

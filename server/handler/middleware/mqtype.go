@@ -32,6 +32,11 @@ type MQTYPE struct {
 
 type mqtypeError string
 
+// mqtypeEDNSOverhead is the worst-case EDNS/MQTYPE-Response option overhead
+// reserved in the merge budget so the post-merge wire cannot exceed the
+// client's UDP size (RFC 10029 §3.4).
+const mqtypeEDNSOverhead = 64
+
 // mqtypeMetaTypes are the QTYPEs that must not appear in an MQTYPE-Query list
 // (RFC 6895 §3.1 data types only — Meta-TYPEs and QTYPEs are excluded).
 var mqtypeMetaTypes = map[uint16]struct{}{
@@ -188,7 +193,7 @@ func (m *MQTYPE) merge(ctx context.Context, qctx *handler.QueryContext, mq *dns.
 	// the client's limit and trigger a post-merge truncation that destroys
 	// the merged RRsets (§3.4: MQTYPE handling MUST NOT itself cause TC).
 	udpSize := min(max(qctx.Req.UDPSize, dns.MinMsgSize), config.DefaultMaxUDPResponseSize)
-	budget := int(udpSize) - msg.Len() - 64
+	budget := int(udpSize) - msg.Len() - mqtypeEDNSOverhead
 
 	// §4 / §3.4: the fixed QTx cap bounds the amplification factor — the
 	// server MAY stop processing further combinations, and unprocessed

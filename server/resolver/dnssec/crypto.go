@@ -117,7 +117,10 @@ func (c *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey *
 		return fmt.Errorf("%w: RRSIG not valid until %s", ErrSignatureNotYet, time.Unix(int64(rrsig.Inception), 0).UTC())
 	}
 
-	// Verify the cryptographic signature
+	// Verify the cryptographic signature.  Legacy SHA-1 (RRSIG algorithms
+	// 5/7, DS digest 1) is deliberately accepted for VERIFICATION: RFC 8624
+	// §3.1 deprecates SHA-1 for signers, not validators — existing zones
+	// signed before the transition must still validate.
 	if err := rrsig.Verify(dnskey, rrset, &dns.SignOption{}); err != nil {
 		if errors.Is(err, dns.ErrAlg) {
 			// EDE 1: the RRSIG uses an algorithm the library cannot verify
@@ -381,9 +384,11 @@ func groupRRset(rrs []dns.RR) map[rrsetKey][]dns.RR {
 			continue
 		}
 		h := rr.Header()
-		// DNS names from wire responses are already canonical (lowercase);
-		// no ToLower needed here — callers canonicalise before invoking.
-		key := rrsetKey{name: h.Name, rrtype: dns.RRToType(rr)}
+		// Canonicalise the owner: RFC 4343-legal mixed-case owner names
+		// (0x20 encoding) would otherwise split one RRset into two groups,
+		// both failing RRSIG verification (an RRset must be complete for
+		// verification) → false "bogus" on case-preserving servers.
+		key := rrsetKey{name: dnsutil.Canonical(h.Name), rrtype: dns.RRToType(rr)}
 		groups[key] = append(groups[key], rr)
 	}
 	return groups

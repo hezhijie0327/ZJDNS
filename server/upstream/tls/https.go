@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"syscall"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -127,11 +128,10 @@ func shouldRetryHTTP(err error) bool {
 		return true
 	}
 	// Also retry on transient operation errors (connection reset, etc.).
-	var opErr *net.OpError
-	if errors.As(err, &opErr) && opErr.Temporary() {
-		return true
-	}
-	return false
+	// net.OpError.Temporary is deprecated (Go 1.18) — check the underlying
+	// syscall errors directly.
+	return errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ETIMEDOUT)
 }
 
 func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxyURL string, tlsConfig *eTLS.Config) *http.Client {

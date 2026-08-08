@@ -19,7 +19,7 @@ type RequestRecord struct {
 	Qtype        uint16
 	Qclass       uint16
 	Protocol     string // 'udp','tcp','tls','quic','https','http3','dtls','dnscrypt','dnscrypt-tcp','tlcp','http-tlcp','dtlcp'
-	Result       string // 'hit','miss','stale','zone','error'
+	Result       string // 'hit','miss','stale','zone','error','blocked','badcookie'
 	ResponseTime int64  // milliseconds
 	Rcode        int    // DNS response code
 	Server       string // upstream server identifier

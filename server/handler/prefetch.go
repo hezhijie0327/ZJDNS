@@ -2,6 +2,7 @@ package handler
 
 import (
 	"slices"
+	"strconv"
 	"sync"
 	"zjdns/config"
 )
@@ -24,10 +25,13 @@ func NewPrefetchCooldown() *PrefetchCooldown {
 // ShouldStart reports whether a prefetch may start for the given key.
 // If allowed, the current timestamp is recorded and true is returned.
 // Subsequent calls with the same key within the cooldown window return false.
+// qtype is part of the key: an A prefetch must not suppress a concurrent
+// AAAA prefetch for the same name (M-low).
 //
 // Uses double-checked locking: the common case (key still in cooldown) only
 // acquires a read lock.  The write path falls back to an exclusive lock.
-func (pc *PrefetchCooldown) ShouldStart(key string, now, cooldownNanos int64) bool {
+func (pc *PrefetchCooldown) ShouldStart(key string, qtype uint16, now, cooldownNanos int64) bool {
+	key = key + "|" + strconv.Itoa(int(qtype))
 	// Fast path: read-only check covers the common case where a key is
 	// still within its cooldown window.
 	pc.mu.RLock()

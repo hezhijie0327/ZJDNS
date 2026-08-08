@@ -56,7 +56,7 @@ type Server struct {
 	ctx           context.Context
 	cancel        context.CancelCauseFunc
 	serverGroup   *errgroup.Group
-	quicConnSem   chan struct{} // admission cap for concurrent QUIC connections (DoQ/DoH3)
+	quicConnSem   chan struct{} // admission cap for concurrent QUIC connections (DoQ/DoH3) — half the errgroup limit so a QUIC flood cannot starve the DoT/DTLS/DoH listeners of goroutine slots (M-low)
 
 	listenerMu     sync.Mutex // protects all listener/conn slice fields below
 	dotListeners   []net.Listener
@@ -184,7 +184,7 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 		ctx:           ctx,
 		cancel:        cancel,
 		serverGroup:   serverGroup,
-		quicConnSem:   make(chan struct{}, config.DefaultServerGoroutineLimit),
+		quicConnSem:   make(chan struct{}, config.DefaultServerGoroutineLimit/2),
 		dotConns:      make(map[net.Conn]struct{}),
 	}
 

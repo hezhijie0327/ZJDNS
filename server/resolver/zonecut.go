@@ -309,7 +309,7 @@ func (r *Recursive) resolveChildNameservers(ctx context.Context, nameservers []s
 		// Fallback: the merged response carried no NS (authority ignored the
 		// MQTYPE-Query option per RFC 6891) — issue the standalone NS query.
 		nsQuestion := Question{Name: dnsutil.Fqdn(childZone), Qtype: dns.TypeNS, Qclass: dns.ClassINET}
-		resp, _, err := r.queryNameserversConcurrent(ctx, nameservers, nsQuestion, nil, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+		resp, _, err := r.queryNameserversConcurrent(ctx, nameservers, nsQuestion, nil, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard) // _ = verdict: poison already gated per-response in queryNameserversConcurrent
 		if err != nil || resp == nil {
 			log.Debugf("SECURITY: NS query for child zone %s failed: %v", childZone, err)
 			return nil

@@ -114,6 +114,8 @@ func (r *EncryptedResponse) Encrypt(
 		return nil, fmt.Errorf("generating resolver nonce: %w", err)
 	}
 
+	// Preallocate the header so the magic+nonce appends never reallocate.
+	response = make([]byte, 0, ResolverMagicSize+NonceSize)
 	response = append(response, ResolverMagic[:]...)
 	response = append(response, r.Nonce[:]...)
 
@@ -131,7 +133,7 @@ func (r *EncryptedResponse) Encrypt(
 		if maxPlaintext < len(packet)+1 {
 			return nil, ErrResponseTooLarge
 		}
-		padded, err = PadResponseWithin(packet, &sharedKey, clientNonce, maxPlaintext)
+		padded, err = PadResponse(packet, &sharedKey, clientNonce, maxPlaintext)
 		if err != nil {
 			return nil, fmt.Errorf("padding classical response: %w", err)
 		}
@@ -143,7 +145,10 @@ func (r *EncryptedResponse) Encrypt(
 		if len(packet) > MaxDNSUDPPacketSize {
 			return nil, ErrResponseTooLarge
 		}
-		padded = PadResponse(packet, &sharedKey, clientNonce)
+		padded, err = PadResponse(packet, &sharedKey, clientNonce, 0)
+		if err != nil {
+			return nil, fmt.Errorf("padding classical response: %w", err)
+		}
 	}
 
 	switch r.ESVersion {
@@ -196,7 +201,7 @@ func (r *EncryptedResponse) encryptPQResponse(
 		// the budget is roomy) the response fits with the preferred padding.
 		payload := buildPlaintext(len(r.PQControl) > 0)
 		if len(payload)+1 <= maxPlaintext {
-			padded, err := PadResponseWithin(payload, &sharedKey, clientNonce, maxPlaintext)
+			padded, err := PadResponse(payload, &sharedKey, clientNonce, maxPlaintext)
 			if err == nil {
 				switch r.ESVersion {
 				case XWingPQ:
@@ -219,7 +224,7 @@ func (r *EncryptedResponse) encryptPQResponse(
 		if len(r.PQControl) > 0 {
 			payload = buildPlaintext(false)
 			if len(payload)+1 <= maxPlaintext {
-				padded, err := PadResponseWithin(payload, &sharedKey, clientNonce, maxPlaintext)
+				padded, err := PadResponse(payload, &sharedKey, clientNonce, maxPlaintext)
 				if err == nil {
 					r.PQControl = nil // already withheld
 					switch r.ESVersion {
@@ -246,7 +251,10 @@ func (r *EncryptedResponse) encryptPQResponse(
 
 	// TCP: no budget constraint.
 	payload := buildPlaintext(len(r.PQControl) > 0)
-	padded := PadResponse(payload, &sharedKey, clientNonce)
+	padded, err := PadResponse(payload, &sharedKey, clientNonce, 0)
+	if err != nil {
+		return nil, err
+	}
 	switch r.ESVersion {
 	case XWingPQ:
 		sealed, sealErr := XchachaSeal(response, r.Nonce[:], padded, sharedKey[:])
@@ -305,9 +313,9 @@ func (r *EncryptedResponse) Decrypt(
 
 	// Strip PQ control block if present.  For resumed responses the server
 	// emits a zero-length control prefix; initial responses carry a full
-	// PQDR control block.  We only strip when controlLen is
-	// zero or the magic validates — otherwise the packet lacks the prefix
-	// the packet has no control prefix and the DNS payload starts at offset 0.
+	// PQDR control block.  We only strip when controlLen is zero or the
+	// magic validates — otherwise the packet has no control prefix and the
+	// DNS payload starts at offset 0.
 	if r.ESVersion.IsPQ() && len(packet) >= 2 {
 		controlLen := int(binary.BigEndian.Uint16(packet[0:2]))
 		if 2+controlLen <= len(packet) {

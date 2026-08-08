@@ -202,19 +202,24 @@ func (p *QUIC) Put(key string, conn *quic.Conn) {
 	p.mu.Unlock()
 }
 
-// Remove closes and removes a QUIC connection from the pool.
+// Remove closes and removes a QUIC connection from the pool.  The close runs
+// outside the lock, matching the TCP pool's close-outside-lock discipline.
 func (p *QUIC) Remove(pc *QUICConn) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	conns := p.conns[pc.addr]
+	found := false
 	for i, c := range conns {
 		if c == pc {
 			p.conns[pc.addr] = append(conns[:i], conns[i+1:]...)
 			if len(p.conns[pc.addr]) == 0 {
 				delete(p.conns, pc.addr)
 			}
-			pc.close()
-			return
+			found = true
+			break
 		}
+	}
+	p.mu.Unlock()
+	if found {
+		pc.close()
 	}
 }

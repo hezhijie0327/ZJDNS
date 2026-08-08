@@ -4,50 +4,64 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
 )
 
-// String encodes the stamp back to an sdns:// URI.
-func (s *DNSStamp) String() string {
+// MarshalStamp encodes the stamp back to an sdns:// URI, reporting an error
+// instead of emitting a sentinel string.  Use this in error-capable paths
+// (CLI); String() keeps the sentinel for the fmt.Stringer constraint.
+func (s *DNSStamp) MarshalStamp() (string, error) {
 	// Length guards: wire fields are single-byte length-prefixed and VLP
 	// elements cap at 127 bytes — the previous byte(len(x)) truncation
-	// silently produced stamps that decode to garbage. Surface the limits
-	// instead of emitting corrupted output.
+	// silently produced stamps that decode to garbage. Fail instead of
+	// emitting corrupted output.
 	if len(s.Address) > 255 || len(s.ProviderName) > 255 || len(s.Path) > 255 || len(s.PublicKey) > 255 {
-		return "sdns://error:field-exceeds-255-bytes"
+		return "", errors.New("stamp field exceeds 255-byte single-byte length prefix")
 	}
 	for _, h := range s.Hashes {
 		if len(h) > 127 {
-			return "sdns://error:hash-exceeds-127-bytes"
+			return "", errors.New("stamp hash exceeds 127-byte VLP limit")
 		}
 	}
 	for _, b := range s.BootstrapIPs {
 		if len(b) > 127 {
-			return "sdns://error:bootstrap-ip-exceeds-127-bytes"
+			return "", errors.New("stamp bootstrap IP exceeds 127-byte VLP limit")
 		}
 	}
 	switch s.Proto {
 	case ProtoPlain:
-		return s.plainString()
+		return s.plainString(), nil
 	case ProtoDNSCrypt:
-		return s.dnsCryptString()
+		return s.dnsCryptString(), nil
 	case ProtoDOH:
-		return s.encodeSecure(ProtoDOH, DefaultHTTPSPort, false)
+		return s.encodeSecure(ProtoDOH, DefaultHTTPSPort, false), nil
 	case ProtoDOT:
-		return s.encodeSecure(ProtoDOT, DefaultTLSPort, true)
+		return s.encodeSecure(ProtoDOT, DefaultTLSPort, true), nil
 	case ProtoDOQ:
-		return s.encodeSecure(ProtoDOQ, DefaultTLSPort, true)
+		return s.encodeSecure(ProtoDOQ, DefaultTLSPort, true), nil
 	case ProtoODoHTarget:
-		return s.oDohTargetString()
+		return s.oDohTargetString(), nil
 	case ProtoDNSCryptRelay:
-		return s.dnsCryptRelayString()
+		return s.dnsCryptRelayString(), nil
 	case ProtoODoHRelay:
-		return s.encodeSecure(ProtoODoHRelay, DefaultHTTPSPort, false)
+		return s.encodeSecure(ProtoODoHRelay, DefaultHTTPSPort, false), nil
 	default:
-		return "sdns://unknown-protocol"
+		return "", fmt.Errorf("stamp: unknown protocol %d", s.Proto)
 	}
+}
+
+// String encodes the stamp back to an sdns:// URI.  As a fmt.Stringer it
+// cannot return an error — encoding failures surface as "sdns://error:..."
+// sentinels; use MarshalStamp for error-capable paths.
+func (s *DNSStamp) String() string {
+	uri, err := s.MarshalStamp()
+	if err != nil {
+		return "sdns://error:" + err.Error()
+	}
+	return uri
 }
 
 func newStampHeader(proto uint8, props uint64) []byte {

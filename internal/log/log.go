@@ -205,7 +205,7 @@ func (m *Logger) Log(lvl Level, format string, args ...any) {
 
 	// Check component filter: if set, only emit messages whose prefix
 	// matches. Messages without a recognizable "PREFIX: " always pass.
-	// Static "PREFIX: ..." formats (all 23 canonical prefixes) are rejected
+	// Static "PREFIX: ..." formats (all 29 canonical prefixes) are rejected
 	// before formatting so filtered-out hot-path calls pay no Sprintf.
 	// The rendered-message check below still applies for dynamic prefixes
 	// passed as arguments (e.g. "%s: ..."), which would otherwise bypass

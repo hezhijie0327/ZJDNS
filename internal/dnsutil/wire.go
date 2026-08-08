@@ -34,17 +34,10 @@ func Compress(data []byte) []byte {
 	return zstdEncoder.EncodeAll(data, nil)
 }
 
-// Decompress decompresses data with zstd. Returns nil for empty input.
-func Decompress(data []byte) ([]byte, error) {
-	if len(data) == 0 {
-		return nil, nil
-	}
-	return zstdDecoder.DecodeAll(data, nil)
-}
-
-// DecompressTo decompresses data with zstd, using dst as the output buffer
-// when it has enough capacity (avoids allocation on the hot path, P3).
-func DecompressTo(data, dst []byte) ([]byte, error) {
+// Decompress decompresses data with zstd.  Returns nil for empty input.
+// When dst has enough capacity it is reused as the output buffer (avoids
+// allocation on the hot path, P3); pass nil to always allocate fresh.
+func Decompress(data, dst []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}

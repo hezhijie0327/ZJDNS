@@ -18,6 +18,10 @@ import (
 // response with an EDE error code.
 type Validation struct{}
 
+// maxWireNameLen is the RFC 1035 §2.3.4 wire-form name limit (255 octets
+// including the root octet).
+const maxWireNameLen = 255
+
 // wireNameLength returns the RFC 1035 §2.3.4 wire-form length (per-label
 // length octets + label octets + root octet) of a presentation-form FQDN,
 // or -1 when the name cannot be a valid wire name. Escaped octets (\DDD or
@@ -115,7 +119,7 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// ANY is deliberately NOT rejected: RFC 8482 minimal responses are
 		// synthesized by the Any middleware (after zone rules run).
 		wireLen := wireNameLength(qname)
-		if wireLen >= 0 && wireLen <= 255 &&
+		if wireLen >= 0 && wireLen <= maxWireNameLen &&
 			qtype != dns.TypeNXNAME &&
 			qtype != dns.TypeAXFR &&
 			qtype != dns.TypeIXFR &&

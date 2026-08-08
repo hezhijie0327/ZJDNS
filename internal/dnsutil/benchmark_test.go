@@ -41,18 +41,18 @@ func BenchmarkDecompress(b *testing.B) {
 	compressed := Compress(data)
 	b.ResetTimer()
 	for b.Loop() {
-		_, _ = Decompress(compressed)
+		_, _ = Decompress(compressed, nil)
 	}
 }
 
-func BenchmarkDecompressTo(b *testing.B) {
+func BenchmarkDecompressReuseBuffer(b *testing.B) {
 	data := make([]byte, 512)
 	_, _ = rand.Read(data)
 	compressed := Compress(data)
 	dst := make([]byte, 0, 1024)
 	b.ResetTimer()
 	for b.Loop() {
-		_, _ = DecompressTo(compressed, dst)
+		_, _ = Decompress(compressed, dst)
 	}
 }
 
@@ -62,7 +62,7 @@ func BenchmarkCompressDecompressRoundTrip(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		c := Compress(data)
-		_, _ = Decompress(c)
+		_, _ = Decompress(c, nil)
 	}
 }
 

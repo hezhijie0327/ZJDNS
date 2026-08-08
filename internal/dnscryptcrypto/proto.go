@@ -130,6 +130,7 @@ var (
 	ErrServerNotStarted     = errors.New("dnscrypt: server is not started")
 	ErrServerAlreadyStarted = errors.New("dnscrypt: server is already started")
 	ErrPQCertTooShort       = errors.New("dnscrypt: PQ certificate too short")
+	ErrPQKeyLength          = errors.New("dnscrypt: PQ public key has wrong length")
 	ErrPQInvalidProfileExt  = errors.New("dnscrypt: invalid PQ profile extension")
 	ErrPQInvalidTicket      = errors.New("dnscrypt: invalid PQ resumption ticket")
 	ErrPQTicketExpired      = errors.New("dnscrypt: PQ resumption ticket expired")

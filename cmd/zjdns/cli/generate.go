@@ -30,6 +30,10 @@ func generateExampleConfig() (string, error) {
 	cfg.Server.Certificate.TLS = config.TLSCertificate{
 		SelfSigned: true,
 	}
+	// Example identity key pair.  The private key is PUBLIC — anyone copying
+	// this config verbatim publishes a known DNSCrypt signing key and all
+	// clients of that server are impersonable.  Generate a fresh pair with
+	// `zjdns --generate dnscrypt` before deployment (M-low).
 	cfg.Server.Certificate.DNSCrypt = config.DNSCryptCertificate{
 		PublicKey:  "1A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074",
 		PrivateKey: "34E2546B6F4C1FCE695E0C62DD3D74D39CEA52C70A283E7615EF4B67F82178D51A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074",

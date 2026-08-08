@@ -41,6 +41,10 @@ type probeKey struct {
 	qtype uint16
 }
 
+// nsProbeTimeoutMS is the per-step timeout (milliseconds) for NS-address
+// latency probes.
+const nsProbeTimeoutMS = 100
+
 // nsPending deduplicates concurrent ProbeNSAddrs calls by sorted IP set.
 // It is deliberately global — NS latency probing is naturally cross-query
 // (the same authoritative nameservers serve many domains), so sharing a
@@ -277,9 +281,9 @@ func ProbeNSAddrs(ctx context.Context, cache CacheSetter, addrs []string) {
 // probing (ping → UDP:53 → TCP:53).
 func defaultNSProbeSteps() []config.LatencyProbeStep {
 	return []config.LatencyProbeStep{
-		{Protocol: config.ProtoPing, Timeout: 100},
-		{Protocol: config.ProtoUDP, Port: config.DefaultProbePortDNS, Timeout: 100},
-		{Protocol: config.ProtoTCP, Port: config.DefaultProbePortDNS, Timeout: 100},
+		{Protocol: config.ProtoPing, Timeout: nsProbeTimeoutMS},
+		{Protocol: config.ProtoUDP, Port: config.DefaultProbePortDNS, Timeout: nsProbeTimeoutMS},
+		{Protocol: config.ProtoTCP, Port: config.DefaultProbePortDNS, Timeout: nsProbeTimeoutMS},
 	}
 }
 

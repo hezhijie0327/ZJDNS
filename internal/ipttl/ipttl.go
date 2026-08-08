@@ -63,7 +63,8 @@ func New(conn *net.UDPConn) *Capture {
 // A missing control message is an explicit error — reporting TTL 0 would
 // poison the hopguard fingerprint.
 func (c *Capture) ReadFrom(buf []byte) (n int, ttl uint8, err error) {
-	if c.pc4 != nil {
+	switch {
+	case c.pc4 != nil:
 		var cm *ipv4.ControlMessage
 		n, cm, _, err = c.pc4.ReadFrom(buf)
 		if cm != nil {
@@ -71,7 +72,7 @@ func (c *Capture) ReadFrom(buf []byte) (n int, ttl uint8, err error) {
 		} else if err == nil {
 			err = ErrNoControlMessage
 		}
-	} else {
+	case c.pc6 != nil:
 		var cm *ipv6.ControlMessage
 		n, cm, _, err = c.pc6.ReadFrom(buf)
 		if cm != nil {
@@ -79,6 +80,10 @@ func (c *Capture) ReadFrom(buf []byte) (n int, ttl uint8, err error) {
 		} else if err == nil {
 			err = ErrNoControlMessage
 		}
+	default:
+		// Zero-value Capture (neither pc4 nor pc6) — New always wires one,
+		// but a hand-constructed Capture must not nil-deref (M-low).
+		return 0, 0, ErrNoControlMessage
 	}
 	return n, ttl, err
 }

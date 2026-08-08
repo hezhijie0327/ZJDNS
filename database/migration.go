@@ -315,9 +315,9 @@ func migrateV3_4_19(db *DB) error {
 // aging. Idempotent: uses PRAGMA table_info to check if the column already exists.
 func migrateV3_4_18(db *DB) error {
 	// Add last_hit_time to entry_hit_counters for time-based aging.
-	// Idempotent: ALTER TABLE ADD COLUMN is a no-op if column already exists
-	// (SQLite ignores duplicate column names in ALTER TABLE, but for safety
-	// we check via PRAGMA first).
+	// Idempotent: SQLite RAISES "duplicate column name" on a repeated
+	// ALTER TABLE ADD COLUMN — the PRAGMA table_info check below prevents
+	// it (the previous comment claimed a no-op, which is false).
 	var hasColumn bool
 	if err := db.SQ.QueryRow(
 		"SELECT COUNT(*) FROM pragma_table_info('entry_hit_counters') WHERE name='last_hit_time'",

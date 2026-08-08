@@ -478,7 +478,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 		})
 	}
 
-	_ = g.Wait()
+	_ = g.Wait() // _ = error: NS fan-out is best-effort — individual failures logged inside
 
 	// Fire background latency probes. Merge A+AAAA per NS name
 	// so each probe call gets both address families.
@@ -498,9 +498,21 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 	}
 
 	allMu.Lock()
-	ShuffleSlice(allAddresses)
+	// Global dedup: the same IP reached via different NS names (common with
+	// registrar shared DNS) was queried once per NS name — one query per
+	// unique address is enough (M-low).
+	seen := make(map[string]struct{}, len(allAddresses))
+	uniq := allAddresses[:0]
+	for _, addr := range allAddresses {
+		if _, dup := seen[addr]; dup {
+			continue
+		}
+		seen[addr] = struct{}{}
+		uniq = append(uniq, addr)
+	}
+	ShuffleSlice(uniq)
 	allMu.Unlock()
-	return allAddresses
+	return uniq
 }
 
 // domainNamesEqual compares two strings case-insensitively, ignoring a single
@@ -584,7 +596,7 @@ func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype 
 		// walks for different zones that share the same NS name (e.g. a
 		// registrar's shared DNS) each used to walk root→TLD→auth for it.
 		key := nsName + "/" + dns.TypeToString[qtype]
-		qr, _, _ = r.addrGroup.Do(ctx, key, func() (QueryResult, error) {
+		qr, _, _ = r.addrGroup.Do(ctx, key, func() (QueryResult, error) { // _ = verdict, _ = error: dedup follower — leader result already gated
 			return r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP, mqt), nil
 		})
 	} else {

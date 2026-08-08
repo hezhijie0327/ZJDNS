@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	// database imports config for default values (cache sizes, connection limits,
@@ -92,11 +93,16 @@ func buildDSN(path string, opts Options) string {
 	if opts.ReadOnly {
 		mode = "&mode=ro"
 	}
+	// file: URI — escape characters that would be parsed as URI delimiters
+	// (? #) or break the DSN (a raw % would corrupt later escapes).  A
+	// db_path containing them previously landed the pragmas in the path
+	// (M-low).
+	escPath := strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23", " ", "%20").Replace(path)
 	return fmt.Sprintf("file:%s?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000"+
 		"&_foreign_keys=ON&_txlock=immediate"+
 		"&_pragma=temp_store(MEMORY)&_pragma=cache_size(%d)&_pragma=mmap_size(%d)"+
 		"&_pragma=wal_autocheckpoint(%d)&_pragma=journal_size_limit(%d)%s",
-		path, -opts.CacheSizeMB*1024, mmap, walAutoCheckpointPages, mmap, mode)
+		escPath, -opts.CacheSizeMB*1024, mmap, walAutoCheckpointPages, mmap, mode)
 }
 
 // Open opens or creates the SQLite database at path. An empty path uses
@@ -150,10 +156,13 @@ func Open(path string, maxEntries int, opts Options) (*DB, error) {
 	}
 
 	// Initialize entryCount from existing rows (read-only: table may not
-	// exist on an old DB — a query error here is non-fatal).
+	// exist on an old DB — a query error here is non-fatal, the counter
+	// starts at 0 and eviction resyncs it).
 	var count int64
 	if err := db.SQ.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&count); err == nil {
 		db.entryCount.Store(count)
+	} else if !opts.ReadOnly {
+		log.Debugf("DB: entryCount seed query failed (counter starts at 0): %v", err)
 	}
 
 	if err := db.prepareStatements(); err != nil {

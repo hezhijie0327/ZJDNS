@@ -119,8 +119,8 @@ func TestPadResponse_Deterministic(t *testing.T) {
 
 	packet := []byte{0x12, 0x34, 0x01, 0x00} // fake DNS header
 
-	r1 := PadResponse(packet, &sk, cn)
-	r2 := PadResponse(packet, &sk, cn)
+	r1, _ := PadResponse(packet, &sk, cn, 0)
+	r2, _ := PadResponse(packet, &sk, cn, 0)
 
 	if len(r1) != len(r2) {
 		t.Fatalf("deterministic padding: lengths differ (%d vs %d)", len(r1), len(r2))
@@ -149,8 +149,8 @@ func TestPadResponse_DifferentInputs(t *testing.T) {
 	cn := []byte("client-nonce12")
 	packet := []byte{0x12, 0x34, 0x01, 0x00}
 
-	r1 := PadResponse(packet, &sk1, cn)
-	r2 := PadResponse(packet, &sk2, cn)
+	r1, _ := PadResponse(packet, &sk1, cn, 0)
+	r2, _ := PadResponse(packet, &sk2, cn, 0)
 
 	// Different keys SHOULD produce different padding (with overwhelming probability).
 	same := len(r1) == len(r2)
@@ -167,13 +167,13 @@ func TestPadResponse_DifferentInputs(t *testing.T) {
 	}
 }
 
-func TestPadResponseWithin_Budget(t *testing.T) {
+func TestPadResponse_Budget(t *testing.T) {
 	var sk [SharedKeySize]byte
 	cn := []byte("client-nonce12")
 	packet := make([]byte, 100)
 
 	// Budget > preferred padding → full padding.
-	r, err := PadResponseWithin(packet, &sk, cn, 500)
+	r, err := PadResponse(packet, &sk, cn, 500)
 	if err != nil {
 		t.Fatalf("PadResponseWithin: %v", err)
 	}
@@ -185,13 +185,13 @@ func TestPadResponseWithin_Budget(t *testing.T) {
 	}
 }
 
-func TestPadResponseWithin_Clamped(t *testing.T) {
+func TestPadResponse_Clamped(t *testing.T) {
 	var sk [SharedKeySize]byte
 	cn := []byte("client-nonce12")
 	packet := make([]byte, 120)
 
 	// Tight budget → padding shrinks.
-	r, err := PadResponseWithin(packet, &sk, cn, 125)
+	r, err := PadResponse(packet, &sk, cn, 125)
 	if err != nil {
 		t.Fatalf("PadResponseWithin clamped: %v", err)
 	}
@@ -203,12 +203,12 @@ func TestPadResponseWithin_Clamped(t *testing.T) {
 	}
 }
 
-func TestPadResponseWithin_NoRoom(t *testing.T) {
+func TestPadResponse_NoRoom(t *testing.T) {
 	var sk [SharedKeySize]byte
 	cn := []byte("client-nonce12")
 	packet := make([]byte, 100)
 
-	_, err := PadResponseWithin(packet, &sk, cn, 100)
+	_, err := PadResponse(packet, &sk, cn, 100)
 	if !errors.Is(err, ErrNoRoomForPadding) {
 		t.Errorf("want ErrNoRoomForPadding, got %v", err)
 	}

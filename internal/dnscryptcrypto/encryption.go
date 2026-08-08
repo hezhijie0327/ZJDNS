@@ -59,32 +59,24 @@ func PadTCP(packet []byte) (padded []byte, err error) {
 // identically padded responses — preventing padding from becoming a
 // linkable server behaviour.  Matches encrypted-dns-server's SipHash-based
 // approach (crypto.rs encrypt_into).
-func PadResponse(packet []byte, sharedKey *[SharedKeySize]byte, clientNonce []byte) []byte {
+//
+// maxLen bounds the padded size (UDP wire budgets; when the preferred size
+// does not fit the padding shrinks, down to the lone 0x80 delimiter, and
+// ErrNoRoomForPadding is returned when even that would not fit — the
+// pad7816_within() semantics).  maxLen <= 0 means unbounded (TCP path).
+func PadResponse(packet []byte, sharedKey *[SharedKeySize]byte, clientNonce []byte, maxLen int) ([]byte, error) {
 	if sharedKey == nil {
-		return packet
+		return nil, errors.New("dnscrypt: nil shared key")
+	}
+	if maxLen > 0 && len(packet) >= maxLen {
+		return nil, ErrNoRoomForPadding
 	}
 	h := sha256.Sum256(append(sharedKey[:], clientNonce...))
 	padSize := 1 + int(h[0])                     // 1–256 bytes (§5.4.5)
 	target := (len(packet) + padSize + 63) &^ 63 // next 64-byte boundary
-	packet = append(packet, 0x80)
-	packet = append(packet, make([]byte, target-len(packet))...)
-	return packet
-}
-
-// PadResponseWithin is like PadResponse but never grows the plaintext beyond
-// maxLen: when the preferred size does not fit, the padding shrinks, down to
-// the lone 0x80 delimiter.  Fails when even that one byte would not fit.
-// Ref: encrypted-dns-server pq.rs pad7816_within().
-func PadResponseWithin(packet []byte, sharedKey *[SharedKeySize]byte, clientNonce []byte, maxLen int) ([]byte, error) {
-	if sharedKey == nil {
-		return nil, errors.New("dnscrypt: nil shared key")
+	if maxLen > 0 {
+		target = min(target, maxLen)
 	}
-	if len(packet) >= maxLen {
-		return nil, ErrNoRoomForPadding
-	}
-	h := sha256.Sum256(append(sharedKey[:], clientNonce...))
-	padSize := 1 + int(h[0])
-	target := min((len(packet)+padSize+63)&^63, maxLen)
 	packet = append(packet, 0x80)
 	packet = append(packet, make([]byte, target-len(packet))...)
 	return packet, nil

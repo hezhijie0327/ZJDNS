@@ -156,6 +156,11 @@ func scanTTLOffsets(wire []byte, questionEnd int) []uint16 {
 // receive those proofs — if the wire carries any, the response takes the
 // unpack+filter path instead of being served directly.
 func WireHasDNSSEC(wire []byte) bool {
+	// buildEntry only guarantees len >= 3 — a corrupt/truncated wire must
+	// not index out of range (M-low).
+	if len(wire) < 12 {
+		return false
+	}
 	// Skip the 12-byte header + question section.
 	pos := 12
 	questions := int(binary.BigEndian.Uint16(wire[4:6]))
@@ -455,7 +460,7 @@ func (s *SQLiteCache) buildEntry(id, ts int64, entryTTL, validated int, msgWire 
 			dbuf = &b
 		}
 		var err error
-		wire, err = zdnsutil.DecompressTo(wire, *dbuf)
+		wire, err = zdnsutil.Decompress(wire, *dbuf)
 		if err != nil {
 			ReleaseTTLOffsets(offsets)
 			clear(*dbuf)

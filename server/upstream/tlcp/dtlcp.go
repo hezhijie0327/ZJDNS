@@ -91,8 +91,11 @@ func (c *Client) ExecuteDTLCP(ctx context.Context, msg *dns.Msg, server *config.
 	}
 
 	queryLen := len(msg.Data)
+	if queryLen > 0xFFFF {
+		return nil, errors.New("dtlcp: query exceeds 65535-byte length prefix")
+	}
 	req := make([]byte, 2+queryLen)
-	binary.BigEndian.PutUint16(req[:2], uint16(queryLen)) //nolint:gosec // G115: DNS query length < 65535 (UDP datagram limit)
+	binary.BigEndian.PutUint16(req[:2], uint16(queryLen)) //nolint:gosec // G115: guarded by the 0xFFFF check above
 	copy(req[2:], msg.Data)
 	if _, err := conn.Write(req); err != nil {
 		return nil, fmt.Errorf("dtlcp: write query: %w", err)

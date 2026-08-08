@@ -170,7 +170,13 @@ func New(proxyURL string, timeout time.Duration) (*Dialer, error) {
 	}
 	if u.User != nil {
 		d.username = u.User.Username()
+		// _ = error: Password() fails only for missing/percent-encoded
+		// password — an empty password is then treated as no-auth below
+		// (user@host must not advertise password auth to no-auth proxies).
 		d.password, _ = u.User.Password()
+		if d.password == "" {
+			d.username = ""
+		}
 	}
 	return d, nil
 }

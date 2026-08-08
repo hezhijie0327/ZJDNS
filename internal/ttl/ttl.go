@@ -9,6 +9,10 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
+// defaultStaleTTL is the stale-entry TTL fallback when no TTL is configured
+// (RFC 8767 §4 — stale answers should not live long).
+const defaultStaleTTL = 30
+
 // NowUnix returns the current Unix timestamp. Override in tests for
 // deterministic results.  This is an exported var so that test packages can
 // swap it without touching the hot path.
@@ -29,7 +33,7 @@ func RemainingTTL(timestamp int64, ttlSeconds int, staleTTL uint32) uint32 {
 		return uint32(remaining) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
 	}
 	if staleTTL == 0 {
-		return 30
+		return defaultStaleTTL
 	}
 	return staleTTL
 }

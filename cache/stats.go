@@ -15,8 +15,6 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// RecordRequest logs a request outcome asynchronously. The record is queued
-// into a background writer goroutine that upserts into query_stats (per-day
 // statsMetric is a single (name, count, percentage) entry for the stats TXT
 // output.  Zero-count entries are omitted by formatStatsLine.
 type statsMetric struct {

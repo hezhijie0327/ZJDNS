@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"zjdns/internal/log"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
@@ -58,7 +59,10 @@ func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				return m.resolver.Query(ctx, question, ecsOpt)
 			})
 			if qr == nil {
-				return nil
+				// Defensive: a nil QueryResult with nil error would leave
+				// ServeDNS returning nil (bridge guards it, but the error
+				// would be lost) — surface a SERVFAIL instead (M-low).
+				return errors.New("recursive resolution returned no result")
 			}
 			qctx.ResolutionResult = qr
 			qctx.Resolved = true
@@ -68,7 +72,7 @@ func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		log.Debugf("RECURSION: resolving %s %s", qname, dns.TypeToString[qtype])
 		qr := m.resolver.Query(ctx, question, ecsOpt)
 		if qr == nil {
-			return nil
+			return errors.New("recursive resolution returned no result")
 		}
 
 		qctx.ResolutionResult = qr

@@ -39,6 +39,13 @@ func (c *Client) ExecuteTCP(ctx context.Context, msg *dns.Msg, server *config.Up
 		if server.Proxy != "" {
 			poolKey = server.Address + "|" + server.Proxy
 		}
+		// segSize is part of the pool key: splitguard and non-splitguard
+		// queries must not share a connection, or one query's segmentation
+		// setting cross-applies to the other's writes (defense degradation,
+		// M-low).  Worst case doubles the per-upstream pool.
+		if server.Splitguard {
+			poolKey += "|split"
+		}
 		pc, err := c.tcpPool.Acquire(ctx, poolKey, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
 			if proxyDialer != nil {
 				return proxyDialer.DialContext(dialCtx, "tcp", addr)

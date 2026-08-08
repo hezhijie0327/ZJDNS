@@ -55,15 +55,9 @@ func NewMessage() *Message {
 // so callers that need a clean slate are covered; callers that pre-populate
 // fields before use can rely on the zero state.
 func (m *Message) Get() *dns.Msg {
-	v := m.pool.Get()
-	if v == nil {
-		return &dns.Msg{}
-	}
-	msg, ok := v.(*dns.Msg)
-	if !ok {
-		return &dns.Msg{}
-	}
-	return msg
+	// New always returns *dns.Msg, so Get never yields nil or a foreign
+	// type — the assertion cannot fail.
+	return m.pool.Get().(*dns.Msg)
 }
 
 // Put returns a dns.Msg to the pool.

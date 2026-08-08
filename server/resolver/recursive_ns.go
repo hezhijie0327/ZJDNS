@@ -78,6 +78,10 @@ func (r *Recursive) resolveNextNameservers(
 				continue
 			}
 			rrecNameFq := dnsutil.Fqdn(rrec.Header().Name)
+			// Bailiwick gate: glue is only trusted when its owner shares the
+			// parent hierarchy (RFC 1034 §4.3.2) — out-of-bailiwick glue is
+			// rejected.  In-bailiwick child-zone glue passes because it is
+			// also below the parent (IsBelow(parent, child) is true).
 			if !dnsutil.IsBelow(fqParDom, rrecNameFq) && fqParDom != "." {
 				continue
 			}

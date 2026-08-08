@@ -354,8 +354,12 @@ func (r *Resolver) handleRecursiveQuery(groupCtx context.Context, server *config
 	if qr.Err != nil {
 		return false
 	}
-	// NODATA / NXDOMAIN: authoritative returning empty Answer with
-	// NSEC/NSEC3 denial-of-existence proof in Authority.
+	// Empty response (no Answer AND no Authority): nothing to forward as a
+	// first-win — the query is dropped here.  Note this only matches fully
+	// empty responses: real denials carry the SOA/NSEC/NSEC3 proof in
+	// Authority, so they ARE forwarded as first-wins (forwarding fan-out
+	// has no NXDOMAIN-deferral — intentional divergence from the recursive
+	// walk).
 	if len(qr.Answer) == 0 && len(qr.Authority) == 0 {
 		return false
 	}

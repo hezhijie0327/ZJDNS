@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 	"zjdns/config"
+	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 )
@@ -219,7 +220,13 @@ func (s *Server) shutdownServer() {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 		defer cancel()
 		if err := s.dnscryptServer.Shutdown(ctx); err != nil {
-			log.Errorf("DNSCRYPT: shutdown failed: %v", err)
+			// ErrServerNotStarted is benign: a signal can arrive between
+			// New() and listener start (M-low).
+			if errors.Is(err, dnscryptcrypto.ErrServerNotStarted) {
+				log.Debugf("DNSCRYPT: server not started, skipping shutdown")
+			} else {
+				log.Errorf("DNSCRYPT: shutdown failed: %v", err)
+			}
 		} else {
 			log.Infof("DNSCRYPT: server shut down successfully")
 		}

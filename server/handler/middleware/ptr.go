@@ -54,6 +54,9 @@ func (m *PTR) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		response.Answer = records
 		response.Rcode = dns.RcodeSuccess
 		qctx.Res = response
+		// CacheServed here is a "response already built — CacheStore has
+		// nothing to do" marker, not a claim the data came from cache
+		// (semantic overload, M-low).
 		qctx.CacheServed = true
 
 		// Record the short-circuit like Zone/ANY do — PTR answers from the

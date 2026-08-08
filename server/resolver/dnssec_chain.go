@@ -238,7 +238,7 @@ func (r *Recursive) verifyNoDSInParent(ctx context.Context, nameservers []string
 	}
 
 	dsQuestion := Question{Name: dnsutil.Fqdn(childZone), Qtype: dns.TypeDS, Qclass: dns.ClassINET}
-	resp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dsQuestion, nil, nil, false, currentDomain, r.resolver.validator.Poisonguard)
+	resp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dsQuestion, nil, nil, false, currentDomain, r.resolver.validator.Poisonguard) // _ = verdict: poison already gated per-response in queryNameserversConcurrent
 	if err != nil || resp == nil {
 		log.Debugf("SECURITY: DS query for %s failed: %v", childZone, err)
 		return false, false
@@ -330,7 +330,7 @@ func (r *Recursive) fetchZoneDNSKEYs(ctx context.Context, nameservers []string, 
 
 	// Query the zone's authoritative nameservers for DNSKEY records
 	dnskeyQuestion := Question{Name: dnsutil.Fqdn(zone), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
-	dnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, nil, nil, false, zone, r.resolver.validator.Poisonguard)
+	dnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, dnskeyQuestion, nil, nil, false, zone, r.resolver.validator.Poisonguard) // _ = verdict: poison already gated per-response in queryNameserversConcurrent
 	if err != nil {
 		log.Debugf("SECURITY: DNSKEY query failed for %s: %v", zone, err)
 		return
@@ -590,7 +590,7 @@ func (r *Recursive) verifyOfflineKSK(ctx context.Context, nameservers []string, 
 // records and checking that they match the parent DS (RFC 7344 §3.1).
 func (r *Recursive) verifyViaCDS(ctx context.Context, nameservers []string, zone string, chain *dnssecChain) *dns.DS {
 	cdsQ := Question{Name: dnsutil.Fqdn(zone), Qtype: dns.TypeCDS, Qclass: dns.ClassINET}
-	cdsResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, cdsQ, nil, nil, false, zone, r.resolver.validator.Poisonguard)
+	cdsResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, cdsQ, nil, nil, false, zone, r.resolver.validator.Poisonguard) // _ = verdict: poison already gated per-response in queryNameserversConcurrent
 	if err != nil || cdsResp == nil {
 		log.Debugf("SECURITY: CDS query failed for %s: %v", zone, err)
 		return nil
@@ -621,7 +621,7 @@ func (r *Recursive) verifyViaCDS(ctx context.Context, nameservers []string, zone
 // DS is the effective authentication.
 func (r *Recursive) verifyViaCDNSKEY(ctx context.Context, nameservers []string, zone string, chain *dnssecChain) *dns.DS {
 	cdnskeyQ := Question{Name: dnsutil.Fqdn(zone), Qtype: dns.TypeCDNSKEY, Qclass: dns.ClassINET}
-	cdnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, cdnskeyQ, nil, nil, false, zone, r.resolver.validator.Poisonguard)
+	cdnskeyResp, _, err := r.queryNameserversConcurrent(ctx, nameservers, cdnskeyQ, nil, nil, false, zone, r.resolver.validator.Poisonguard) // _ = verdict: poison already gated per-response in queryNameserversConcurrent
 	if err != nil || cdnskeyResp == nil {
 		log.Debugf("SECURITY: CDNSKEY query failed for %s: %v", zone, err)
 		return nil

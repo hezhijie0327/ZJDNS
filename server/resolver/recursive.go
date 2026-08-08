@@ -433,6 +433,7 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 	allValidated := true
 	var finalRcode uint16
 	var allDNSSECEDE uint16
+	truncated := false
 
 	currentQuestion := question
 	var visitedCNAMEs [config.DefaultMaxCNAMEChain]string
@@ -465,6 +466,11 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 		if qr.Err != nil {
 			return QueryResult{Cacheable: true, Err: qr.Err}
 		}
+		if qr.Truncated {
+			// Any step's TC signal must reach the client — retry logic
+			// depends on it (M-low).
+			truncated = true
+		}
 
 		if usedServer == "" {
 			usedServer = qr.Server
@@ -495,7 +501,10 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 				}
 				continue
 			}
-			if strings.EqualFold(h.Name, currentQuestion.Name) || dns.RRToType(rr) == question.Qtype {
+			// Owner must be the current CNAME target: a type-only match
+			// (old behaviour) surfaced unrelated same-type records from
+			// other owners into the chain (M-low).
+			if strings.EqualFold(h.Name, currentQuestion.Name) {
 				allAnswers = append(allAnswers, rr)
 			}
 		}
@@ -530,5 +539,5 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 	if chainExhausted {
 		log.Debugf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, dnsutil.Canonical(question.Name))
 	}
-	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Rcode: finalRcode, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Poisoned: poisonOccurred, DNSSECEDE: allDNSSECEDE}
+	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Rcode: finalRcode, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Poisoned: poisonOccurred, DNSSECEDE: allDNSSECEDE, Truncated: truncated}
 }

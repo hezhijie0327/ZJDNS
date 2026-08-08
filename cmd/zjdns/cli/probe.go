@@ -98,15 +98,15 @@ func dialProbeTarget(addr string) (net.Conn, error) {
 		}
 		tlsConn := eTLS.Client(tcpConn, tlsCfg)
 		if err := tlsConn.SetDeadline(time.Now().Add(probeTLSHandshakeTimeout)); err != nil {
-			_ = tcpConn.Close()
+			_ = tcpConn.Close() // _ = error: best-effort cleanup close
 			return nil, fmt.Errorf("set deadline: %w", err)
 		}
 		if err := tlsConn.Handshake(); err != nil {
-			_ = tcpConn.Close()
+			_ = tcpConn.Close() // _ = error: best-effort cleanup close
 			return nil, fmt.Errorf("TLS handshake: %w", err)
 		}
 		if err := tlsConn.SetDeadline(time.Time{}); err != nil {
-			_ = tcpConn.Close()
+			_ = tcpConn.Close() // _ = error: best-effort cleanup close
 			return nil, fmt.Errorf("clear deadline: %w", err)
 		}
 		return tlsConn, nil
@@ -193,7 +193,7 @@ func probePipeline(addr string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = conn.Close() }()
+	defer func() { _ = conn.Close() }() // _ = error: best-effort cleanup close
 
 	// Generate random domain names so each query reaches the authoritative path.
 	domains := make([]string, probePipelineNumQueries)
@@ -278,7 +278,7 @@ func probeConnReuse(addr string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = conn.Close() }()
+	defer func() { _ = conn.Close() }() // _ = error: best-effort cleanup close
 
 	fmt.Printf("Probing %s for RFC 1035 connection reuse...\n\n", addr)
 
@@ -307,7 +307,7 @@ func probeIdleTimeout(addr string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = conn.Close() }()
+	defer func() { _ = conn.Close() }() // _ = error: best-effort cleanup close
 
 	_ = conn.SetDeadline(time.Now().Add(probeDefaultReadTimeout)) // _ = error: deadline advisory
 	q := newQuery("www.cloudflare.com.", 0)

@@ -289,7 +289,9 @@ func (c *Certificate) Validate() (err error) {
 	switch c.ESVersion {
 	case XWingPQ:
 		if len(c.PqPublicKey) != PQPublicKeySize {
-			return ErrESVersion
+			// Dedicated sentinel, not ErrESVersion — a broken key is a
+			// structural fault, not an unsupported construction (M-low).
+			return ErrPQKeyLength
 		}
 	case XChacha20Poly1305:
 		// Valid — no additional structural checks needed.

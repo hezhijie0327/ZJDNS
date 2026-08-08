@@ -43,6 +43,9 @@ func (m *Any) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			HINFO: rdata.HINFO{Cpu: "RFC8482", Os: ""},
 		}}
 		qctx.Res = msg
+		// CacheServed here is a "response already built — CacheStore has
+		// nothing to do" marker, not a claim the data came from cache
+		// (semantic overload, M-low).
 		qctx.CacheServed = true
 		// Record the short-circuit like Zone/PTR do — previously ANY answers
 		// never appeared in query_stats/query_log (R3-M21).

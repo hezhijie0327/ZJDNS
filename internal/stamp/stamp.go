@@ -76,6 +76,18 @@ const (
 	DefaultDNSPort   = 53
 )
 
+// Minimum wire lengths per protocol: format layout arithmetic
+// (proto + props + length prefix + minimum field size), kept named so the
+// guards cannot silently desync from the parsers (M-low).
+const (
+	minPlainLen      = 1 + 8 + 1 + 1 // proto + props + addrLen(1) + minAddr(1)
+	minDNSCryptLen   = 44            // proto+props+addrLen+addr+pkLen+pk(32)+provLen+prov
+	minDoHLen        = 15            // proto + props + addrLen + minAddr + pathLen + minPath
+	minDoTDoQLen     = 13            // proto + props + addrLen + minAddr + hashesLen
+	minODoHTargetLen = 12            // proto + props + addrLen + minAddr + hashesLen
+	minRelayLen      = 2             // proto + LP length byte(1)
+)
+
 // Common errors returned by Parse.
 var (
 	ErrNotAStamp        = errors.New("not a stamp: must start with sdns://")
@@ -114,7 +126,7 @@ func Parse(stampStr string) (*DNSStamp, error) {
 	switch proto {
 	case ProtoPlain:
 		s = &DNSStamp{Proto: proto}
-		if len(bin) < 1+8+1+1 { // proto + props + addrLen(1) + minAddr(1)
+		if len(bin) < minPlainLen {
 			return nil, ErrTooShort
 		}
 		s.Props = ServerInformalProperties(binary.LittleEndian.Uint64(bin[1:9]))
@@ -126,7 +138,7 @@ func Parse(stampStr string) (*DNSStamp, error) {
 		// proto(1) + props(8) + addrLen(1) + addr(1) + pkLen(1) + pk(32) +
 		// provLen(1) + prov(1) — 44 is the format minimum; per-field
 		// validation below rejects anything structurally invalid.
-		if len(bin) < 44 {
+		if len(bin) < minDNSCryptLen {
 			return nil, ErrTooShort
 		}
 		s.Props = ServerInformalProperties(binary.LittleEndian.Uint64(bin[1:9]))
@@ -135,7 +147,7 @@ func Parse(stampStr string) (*DNSStamp, error) {
 		}
 	case ProtoDOH:
 		s = &DNSStamp{Proto: proto}
-		if len(bin) < 15 {
+		if len(bin) < minDoHLen {
 			return nil, ErrTooShort
 		}
 		s.Props = ServerInformalProperties(binary.LittleEndian.Uint64(bin[1:9]))
@@ -144,7 +156,7 @@ func Parse(stampStr string) (*DNSStamp, error) {
 		}
 	case ProtoDOT:
 		s = &DNSStamp{Proto: proto}
-		if len(bin) < 13 {
+		if len(bin) < minDoTDoQLen {
 			return nil, ErrTooShort
 		}
 		s.Props = ServerInformalProperties(binary.LittleEndian.Uint64(bin[1:9]))
@@ -153,7 +165,7 @@ func Parse(stampStr string) (*DNSStamp, error) {
 		}
 	case ProtoDOQ:
 		s = &DNSStamp{Proto: proto}
-		if len(bin) < 13 {
+		if len(bin) < minDoTDoQLen {
 			return nil, ErrTooShort
 		}
 		s.Props = ServerInformalProperties(binary.LittleEndian.Uint64(bin[1:9]))
@@ -162,7 +174,7 @@ func Parse(stampStr string) (*DNSStamp, error) {
 		}
 	case ProtoODoHTarget:
 		s = &DNSStamp{Proto: proto}
-		if len(bin) < 12 {
+		if len(bin) < minODoHTargetLen {
 			return nil, ErrTooShort
 		}
 		s.Props = ServerInformalProperties(binary.LittleEndian.Uint64(bin[1:9]))
@@ -173,7 +185,7 @@ func Parse(stampStr string) (*DNSStamp, error) {
 		s = &DNSStamp{Proto: proto}
 		// proto(1) + LP length byte(1) — the structural minimum; the LP
 		// payload bounds are validated by parseDNSCryptRelay.
-		if len(bin) < 2 {
+		if len(bin) < minRelayLen {
 			return nil, ErrTooShort
 		}
 		if err := s.parseDNSCryptRelay(bin); err != nil {
@@ -181,7 +193,7 @@ func Parse(stampStr string) (*DNSStamp, error) {
 		}
 	case ProtoODoHRelay:
 		s = &DNSStamp{Proto: proto}
-		if len(bin) < 13 {
+		if len(bin) < minDoTDoQLen {
 			return nil, ErrTooShort
 		}
 		s.Props = ServerInformalProperties(binary.LittleEndian.Uint64(bin[1:9]))

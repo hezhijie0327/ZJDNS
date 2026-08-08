@@ -672,7 +672,7 @@ func TestCompressionRoundTrip(t *testing.T) {
 	if len(compressed) == 0 {
 		t.Fatal("compress returned empty")
 	}
-	decompressed, err := zdnsutil.Decompress(compressed)
+	decompressed, err := zdnsutil.Decompress(compressed, nil)
 	if err != nil {
 		t.Fatalf("decompress: %v", err)
 	}
@@ -691,19 +691,19 @@ func TestCompressEmpty(t *testing.T) {
 }
 
 func TestDecompressEmpty(t *testing.T) {
-	result, err := zdnsutil.Decompress(nil)
+	result, err := zdnsutil.Decompress(nil, nil)
 	if err != nil {
-		t.Errorf("zdnsutil.Decompress(nil): %v", err)
+		t.Errorf("zdnsutil.Decompress(nil, nil): %v", err)
 	}
 	if result != nil {
-		t.Error("zdnsutil.Decompress(nil) should return nil")
+		t.Error("zdnsutil.Decompress(nil, nil) should return nil")
 	}
-	result, err = zdnsutil.Decompress([]byte{})
+	result, err = zdnsutil.Decompress([]byte{}, nil)
 	if err != nil {
-		t.Errorf("zdnsutil.Decompress([]byte{}): %v", err)
+		t.Errorf("zdnsutil.Decompress([]byte{}, nil): %v", err)
 	}
 	if result != nil {
-		t.Error("zdnsutil.Decompress([]byte{}) should return nil")
+		t.Error("zdnsutil.Decompress([]byte{}, nil) should return nil")
 	}
 }
 

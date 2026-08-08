@@ -42,11 +42,15 @@ type tcpWriteShard struct {
 // shards, so a busy server never contends on a single global lock.
 const tcpWriteShardCount = 16
 
+// tcpFramePoolCap is the initial capacity of pooled TCP write frames
+// (2-byte length prefix + typical DNS response).
+const tcpFramePoolCap = 512
+
 // tcpFramePool reuses the 2+N byte TCP write frame on the per-response hot
 // path (the frame is built and written synchronously inside the writeMu
 // critical section).  Frames grown beyond the pool cap are dropped rather
 // than grown in place (mirrors the tcpReadBufPool policy).
-var tcpFramePool = sync.Pool{New: func() any { b := make([]byte, 0, 512); return &b }}
+var tcpFramePool = sync.Pool{New: func() any { b := make([]byte, 0, tcpFramePoolCap); return &b }}
 
 // tcpWriteShardFor returns the shard owning addr.  FNV-1a over the address
 // string — stable so the sweep finds entries in the same shard.
@@ -184,7 +188,13 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 				return
 			}
 
-			response := s.handler.ServeDNS(req, net.ParseIP(dnsutil.RemoteIP(w)), false, config.ProtoTCP)
+			// RemoteIP always yields a valid IP for TCP/UDP — a nil result
+			// (future transport) must not silently drop the client IP.
+			clientIP := net.ParseIP(dnsutil.RemoteIP(w))
+			if clientIP == nil {
+				log.Warnf("SERVER: cannot determine client IP from %s", w.RemoteAddr())
+			}
+			response := s.handler.ServeDNS(req, clientIP, false, config.ProtoTCP)
 			if response != nil {
 				entry.lastAccess.Store(log.NowUnixNano())
 

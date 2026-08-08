@@ -208,7 +208,10 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 			}
 
 			// Use a fresh context — the UDP attempt may have
-			// exhausted the original deadline.
+			// exhausted the original deadline.  WithTimeout takes the
+			// EARLIER of parent-deadline and timeout, so when the caller
+			// set a budget the combined wait cannot exceed it; only
+			// deadline-less parents get the full c.timeout here (M-low).
 			tcpCtx, tcpCancel := context.WithTimeout(ctx, c.timeout)
 			defer tcpCancel()
 
@@ -233,6 +236,11 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 				}
 				if result.Error == nil {
 					result.Error = fmt.Errorf("tcp fallback after truncated response failed: %w", tcpErr)
+				} else {
+					// Both transports failed — join the errors so neither
+					// the original UDP failure nor the TCP failure is lost
+					// for diagnostics (M-low).
+					result.Error = errors.Join(result.Error, fmt.Errorf("tcp fallback failed: %w", tcpErr))
 				}
 			}
 		}
@@ -312,9 +320,10 @@ func (c *Client) Close() {
 	// The dialer map is intentionally NOT nil'd here: in-flight proxied
 	// queries read c.proxyDialers from proxyDialer (warmup.go) and a nil
 	// write would race those reads (same pattern as tls.Client.Close —
-	// server/upstream/tls/client.go). The map dies with the Client, and the
-	// dialers are closed by the Range above.
+	// server/upstream/tls/client.go). The map dies with the Client.
 	if c.proxyDialers != nil {
+		// The dialers are closed by this Range (M-low: comment previously
+		// pointed above the block instead of at it).
 		c.proxyDialers.Range(func(key string, d *socks5.Dialer) bool {
 			if d != nil {
 				_ = d.Close()
@@ -327,6 +336,12 @@ func (c *Client) Close() {
 }
 
 // needsTCPFallback checks whether a UDP result should be retried over TCP.
+// Caller-side cancellation (resolver first-wins fan-out) is not a transport
+// failure — falling back on it wastes a TCP attempt that fails immediately
+// (M-low).
 func (c *Client) needsTCPFallback(result *Result, protocol string) bool {
-	return protocol != config.ProtoTCP && (result.Error != nil || (result.Response != nil && result.Response.Truncated))
+	if protocol == config.ProtoTCP || errors.Is(result.Error, context.Canceled) {
+		return false
+	}
+	return result.Error != nil || (result.Response != nil && result.Response.Truncated)
 }

@@ -111,7 +111,11 @@ func RunDNSStampEncode(protoStr, addr, providerName, publicKeyHex, path string, 
 		return errors.New("--provider-name is required for odoh-target protocol")
 	}
 
-	fmt.Println(s.String())
+	uri, err := s.MarshalStamp()
+	if err != nil {
+		return fmt.Errorf("encoding stamp: %w", err)
+	}
+	fmt.Println(uri)
 	return nil
 }
 

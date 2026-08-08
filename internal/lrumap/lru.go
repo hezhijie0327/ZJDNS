@@ -36,14 +36,6 @@ type Map[K comparable, V any] struct {
 	OnEvict func(K, V)
 }
 
-// SetOnEvict configures the eviction callback. The assignment is performed
-// under the map mutex so it cannot race a concurrent eviction read.
-func (m *Map[K, V]) SetOnEvict(fn func(K, V)) {
-	m.mu.Lock()
-	m.OnEvict = fn
-	m.mu.Unlock()
-}
-
 // New creates a Map with the given capacity. When the map reaches capacity,
 // the least recently used entry is evicted to make room for new entries.
 func New[K comparable, V any](capacity int) *Map[K, V] {
@@ -60,6 +52,14 @@ func New[K comparable, V any](capacity int) *Map[K, V] {
 		tail: tail,
 		cap:  capacity,
 	}
+}
+
+// SetOnEvict configures the eviction callback. The assignment is performed
+// under the map mutex so it cannot race a concurrent eviction read.
+func (m *Map[K, V]) SetOnEvict(fn func(K, V)) {
+	m.mu.Lock()
+	m.OnEvict = fn
+	m.mu.Unlock()
 }
 
 // Get returns the value for key and whether it was found.

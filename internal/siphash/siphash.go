@@ -7,6 +7,8 @@
 package siphash
 
 // Sum64 computes the SipHash-2-4 64-bit MAC of msg under the given 128-bit key.
+// A nil key returns 0 (a valid-looking MAC) — callers must always pass a
+// non-nil key; the nil guard exists for the cookie path's optional-key flow.
 func Sum64(key *[16]byte, msg []byte) uint64 {
 	if key == nil {
 		return 0

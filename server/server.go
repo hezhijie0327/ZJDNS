@@ -324,8 +324,10 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 }
 
 // initProtocolListeners creates and wires all protocol servers (TLS, TLCP,
-// DNSCrypt, Plain) into the Server struct.  Errors are non-fatal — the
-// server starts with the protocols that initialised successfully.
+// DNSCrypt, Plain) into the Server struct.  The first error is returned and
+// fails New() — a configured protocol that cannot initialise (bad
+// certificate, invalid port) is a configuration error, not something to
+// silently skip (M-low).
 func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Handler) error {
 	if cfg.Server.Certificate.TLS.IsEnabled() {
 		tlsCfg := tls.Config{

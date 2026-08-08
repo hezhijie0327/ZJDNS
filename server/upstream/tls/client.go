@@ -279,7 +279,10 @@ func (c *Client) WarmUpQUIC(ctx context.Context, server *config.UpstreamServer) 
 	}
 }
 
-// WarmUpHTTPS pre-creates a DoH transport.
+// WarmUpHTTPS pre-creates a DoH transport.  The ctx parameter is unused
+// (HTTP transports dial lazily — nothing to pre-establish) but kept for
+// signature consistency with the other WarmUp* methods, which the warmup
+// dispatcher calls uniformly.
 func (c *Client) WarmUpHTTPS(_ context.Context, server *config.UpstreamServer) {
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
@@ -297,7 +300,9 @@ func (c *Client) WarmUpHTTPS(_ context.Context, server *config.UpstreamServer) {
 	log.Debugf("UPSTREAM: pre-warmed DoH transport for %s (key=%s)", server.Address, key)
 }
 
-// WarmUpHTTP3 pre-creates a DoH3 transport.
+// WarmUpHTTP3 pre-creates a DoH3 transport.  The ctx parameter is unused
+// (HTTP/3 transports dial lazily) but kept for signature consistency with
+// the other WarmUp* methods (see WarmUpHTTPS).
 func (c *Client) WarmUpHTTP3(_ context.Context, server *config.UpstreamServer) {
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {

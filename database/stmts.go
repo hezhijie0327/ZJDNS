@@ -164,7 +164,7 @@ func (db *DB) prepareStatements() error {
 	// binds unused slots to empty string. ORDER BY LENGTH(zone) DESC returns
 	// the deepest match first; LIMIT 1 picks the best candidate.
 	db.StmtDelegationLookup, err = db.SQ.Prepare(
-		"SELECT zone, parent, ns_names, addrs, ds_wire, timestamp, ttl " + //nolint:gosec // G202: parameterized placeholders, no user input
+		"SELECT zone, parent, ns_names, addrs, ds_wire " + //nolint:gosec // G202: parameterized placeholders, no user input
 			"FROM delegations WHERE zone IN (" +
 			delegationLookupPlaceholdersSQL + ") AND expires_at > unixepoch() " +
 			"ORDER BY LENGTH(zone) DESC LIMIT 1",

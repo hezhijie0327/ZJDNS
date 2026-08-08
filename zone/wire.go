@@ -34,7 +34,7 @@ func unpackRRs(blob []byte) []dns.RR {
 	if len(blob) == 0 {
 		return nil
 	}
-	wire, err := zdnsutil.Decompress(blob)
+	wire, err := zdnsutil.Decompress(blob, nil)
 	if err != nil {
 		return nil
 	}

@@ -144,7 +144,9 @@ func (d *Detector) detectViaHTTP(forceIPv6 bool) net.IP {
 		return nil
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// Bound the body: TraceURL is operator-configurable and a hostile/
+	// misconfigured endpoint must not buffer unbounded data at startup.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 	if err != nil {
 		return nil
 	}

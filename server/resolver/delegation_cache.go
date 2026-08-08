@@ -14,14 +14,14 @@ import (
 
 // delegationRecord is a row from the delegations table, parsed into Go types.
 // ds is nil for insecure delegations (authenticated no-DS denial).
+// Freshness is enforced in SQL via expires_at — timestamp/ttl are not
+// scanned (M-low).
 type delegationRecord struct {
-	zone      string
-	parent    string
-	nsNames   []string
-	addrs     []string // snapshot fallback when NS-address cache is cold
-	ds        []*dns.DS
-	timestamp int64
-	ttl       int
+	zone    string
+	parent  string
+	nsNames []string
+	addrs   []string // snapshot fallback when NS-address cache is cold
+	ds      []*dns.DS
 }
 
 // ancestorZones returns the ancestor zones of qname from deepest to shallowest,
@@ -202,7 +202,7 @@ func (r *Recursive) lookupDelegation(qname string, qtype uint16) (*delegationRec
 	var rec delegationRecord
 	var nsNamesStr, addrsStr string
 	var dsWire []byte
-	if err := row.Scan(&rec.zone, &rec.parent, &nsNamesStr, &addrsStr, &dsWire, &rec.timestamp, &rec.ttl); err != nil {
+	if err := row.Scan(&rec.zone, &rec.parent, &nsNamesStr, &addrsStr, &dsWire); err != nil {
 		return nil, false
 	}
 
