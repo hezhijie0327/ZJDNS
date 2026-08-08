@@ -5,7 +5,7 @@
   },
   "upstream": [
     {
-      "address": "https://dns.alidns.com/dns-query",
+      "address": "https://223.5.5.5:443/dns-query",
       "protocol": "http3",
       "server_name": "dns.alidns.com"
     }

@@ -12,7 +12,7 @@ import (
 // BuildTime is the UTC timestamp of when the binary was built.
 var (
 	ProjectName = "ZJDNS"
-	Version     = "3.11.26"
+	Version     = "3.12.0"
 	CommitHash  = "" // set via ldflags: -X main.CommitHash=$(git rev-parse --short HEAD)
 	BuildTime   = "" // set via ldflags: -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 )

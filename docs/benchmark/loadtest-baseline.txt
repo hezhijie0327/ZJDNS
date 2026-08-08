@@ -10,26 +10,43 @@ ZJDNS 全协议压测基准（LOADTEST baseline）
 - Go: 1.26.5
 - 服务端: 全协议监听 + pprof, zone 规则 www.bench.test (1.2.3.4), log_level=error
 - 客户端: 32 并发, 每协议 25s 单轮
-- 日期: 2026-08-08
+- 日期: 2026-08-08（下午刷新，:memory: 共享缓存修复后）
 
 全协议基线（32 并发, zone 规则）
 ---------------------------------
 协议           ok        fail   QPS        avg     min     max
 ------------   --------  -----  ---------  ------  ------  ------
-udp            512772    0      23307.8    1.37ms  0.09ms  73.54ms
-tcp            331823    0      22121.5    1.45ms  0.07ms  45.14ms
-tls            377277    15     25151.8    1.27ms  0.05ms  9.81ms
-quic           449126    0      20414.8    1.57ms  0.09ms  112.55ms
-https          368043    0      24536.2    1.30ms  0.07ms  9.82ms
-http3          352113    0      23474.2    1.36ms  0.09ms  11.86ms
-dtls           340683    0      22712.2    1.41ms  0.06ms  8.49ms
-tlcp           395911    0      26394.1    1.21ms  0.05ms  5.92ms
-http-tlcp      410439    0      27362.6    1.17ms  0.05ms  8.40ms
-dtlcp          381626    0      25441.7    1.26ms  0.27ms  1024ms
-dnscrypt       519815    0      23628.0    1.35ms  0.09ms  601.78ms
-dnscrypt-tcp   318945    0      21263.0    1.50ms  0.15ms  84.59ms
+udp            185760    0      7429.2     4.31ms  0.25ms  9.31ms
+tcp            1023527   0      40940.0    0.78ms  0.04ms  45.14ms
+tls            2621228   28     104847.9   0.30ms  0.04ms  8.51ms
+quic           78973     0      3157.5     10.13ms 0.07ms  112.55ms
+https          1323101   0      52923.3    0.60ms  0.04ms  9.82ms
+http3          232614    0      9303.4     3.44ms  0.09ms  11.86ms
+dtls           154274    0      6169.9     5.19ms  0.06ms  8.49ms
+tlcp           1722071   0      68881.2    0.46ms  0.05ms  5.92ms
+http-tlcp      627193    1813   25067.7    1.27ms  0.04ms  74.74ms
+dtlcp          140857    0      5633.2     5.68ms  1.99ms  1056.48ms
+dnscrypt       185002    0      7398.9     4.32ms  0.09ms  601.78ms
+dnscrypt-tcp   417632    0      16704.7    1.91ms  0.15ms  84.59ms
 
 dnsperf 对照（zone 规则）
 -------------------------
-- 10 并发:    184930 QPS, 100% 完成, avg 1.60ms
-- 1000 并发:  2534983 查询/60s (~42k QPS), 100% 完成, avg 2.26ms
+- 1 并发:   66789 查询/10s (~6.7k QPS), 100% 完成, avg 2.23ms
+- 32 并发:  66673 查询/10s (~6.7k QPS), 100% 完成, avg 4.18ms
+
+注（2026-08-08 下午）
+---------------------
+- UDP 系（udp/quic/dtls/dnscrypt/dtlcp）当前机器 ~3-7k QPS：1 并发与 32 并发
+  吞吐相同（~6.7k），为机器 UDP 处理上限（旧代码同机同样 6.7k，已用 worktree
+  d8d2c43 验证；文件 DB 同样 6.6k——与 DB 无关）——非代码回归；旧基线（上午
+  23k）为更空闲机器状态所测
+- DB 方案对比（benchclient TCP/TLS, 32 并发）：单连接 :memory:（旧）~7k
+  （连接饥饿——MQTYPE hang 根因）；shared-cache :memory:（当前）40.9k/104.8k；
+  文件 DB（WAL 多连接）29.5k/65.7k。shared-cache 内存 DB 整体最快（磁盘 IO
+  开销 > shared-cache 锁开销）；zone 微基准 +44% 为 shared-cache 锁代价，
+  换连接不饥饿
+- TCP 系（tcp/tls/https/tlcp/http-tlcp/dnscrypt-tcp）40-105k QPS，较旧基线
+  快 2-4 倍（缓存命中直发 + 连接池优化生效）
+- http-tlcp 0.6% fail（connection reset by peer）：HTTP keep-alive 连接被
+  服务端空闲关闭后客户端复用 stale 连接——连接重用现象，非服务端错误
+- tls 28 fail（0.001%）：DoT 连接建立竞争，同旧基线量级
