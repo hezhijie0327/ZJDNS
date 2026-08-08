@@ -32,9 +32,12 @@ import (
 
 // collectPacket is one datagram delivered to a collect-mode caller, carrying
 // the IP-layer TTL/HopLimit captured by readLoop (0 when unavailable).
+// Release must be called exactly once after Data is consumed (the caller
+// copies it out — processPacket's copyData — before releasing).
 type collectPacket struct {
-	Data []byte
-	TTL  uint8
+	Data    []byte
+	TTL     uint8
+	Release func()
 }
 
 // udpPending is one in-flight query awaiting its response.
@@ -71,6 +74,58 @@ type UDPPool struct {
 	maxPipe    int
 	closed     bool
 	extractKey func(payload []byte) (string, bool)
+}
+
+// Tiered payload-buffer pools for the pooled-UDP read loop: the per-response
+// make([]byte, n) allocation on the hot path (every plain-UDP and DNSCrypt
+// response) is replaced with a size-classed pool (M-3-6).
+const (
+	packetBufSmall  = 512  // typical A/AAAA responses
+	packetBufMedium = 1500 // Ethernet MTU
+)
+
+var (
+	packetBufSmallPool  = sync.Pool{New: func() any { b := make([]byte, packetBufSmall); return &b }}
+	packetBufMediumPool = sync.Pool{New: func() any { b := make([]byte, packetBufMedium); return &b }}
+)
+
+// acquirePacketBuf returns a payload buffer of at least n bytes and the
+// release func that must be called exactly once after the payload has been
+// consumed (read, decrypted, unpacked).
+func acquirePacketBuf(n int) (packet []byte, release func()) {
+	switch {
+	case n <= packetBufSmall:
+		bp := packetBufSmallPool.Get().(*[]byte)
+		return (*bp)[:n], func() { clear(*bp); packetBufSmallPool.Put(bp) }
+	case n <= packetBufMedium:
+		bp := packetBufMediumPool.Get().(*[]byte)
+		return (*bp)[:n], func() { clear(*bp); packetBufMediumPool.Put(bp) }
+	default:
+		b := make([]byte, n)
+		return b, func() {}
+	}
+}
+
+// ReleaseUDPPayload returns a pooled payload buffer to its tier.  Used by
+// result-channel consumers that received the raw slice (collect-mode callers
+// use collectPacket.release instead).
+func ReleaseUDPPayload(packet []byte) { releasePacketBuf(packet) }
+
+// releasePacketBuf returns a pooled payload buffer to its tier, keyed by
+// capacity class.  Heap buffers (cap not matching a tier) are left for the GC.
+func releasePacketBuf(packet []byte) {
+	switch cap(packet) {
+	case packetBufSmall:
+		bp := &packet
+		*bp = (*bp)[:packetBufSmall]
+		clear(*bp)
+		packetBufSmallPool.Put(bp)
+	case packetBufMedium:
+		bp := &packet
+		*bp = (*bp)[:packetBufMedium]
+		clear(*bp)
+		packetBufMediumPool.Put(bp)
+	}
 }
 
 // NextID returns the next DNS message ID for this connection, skipping 0.
@@ -218,11 +273,15 @@ func (c *UDPConn) ReleaseCollect(matchKey string) {
 	<-c.capacity
 }
 
-// drainCollectCh empties a collect channel without blocking.
+// drainCollectCh empties a collect channel without blocking, returning each
+// queued payload buffer to its tier pool (M-3-6).
 func drainCollectCh(ch <-chan collectPacket) {
 	for {
 		select {
-		case <-ch:
+		case pkt := <-ch:
+			if pkt.Release != nil {
+				pkt.Release()
+			}
 		default:
 			return
 		}
@@ -279,17 +338,20 @@ func (c *UDPConn) readLoop() {
 		}
 
 		// Copy the payload out of the read buffer — the waiter decrypts/
-		// unpacks asynchronously and owns the returned slice.
-		packet := make([]byte, n)
+		// unpacks asynchronously and owns the returned slice.  The release
+		// func travels with the data; result-channel consumers call
+		// releasePacketBuf by capacity class (M-3-6).
+		packet, release := acquirePacketBuf(n)
 		copy(packet, buf[:n])
 
 		// Collect mode: deliver every matching packet; the caller runs a
 		// multi-read loop (spoofguard) and calls ReleaseCollect to clean up.
 		if p.collectCh != nil {
 			select {
-			case p.collectCh <- collectPacket{Data: packet, TTL: ttl}:
+			case p.collectCh <- collectPacket{Data: packet, TTL: ttl, Release: release}:
 			default:
 				// collectCh full (4 candidates already queued) — drop.
+				release()
 			}
 			continue
 		}
@@ -298,6 +360,7 @@ func (c *UDPConn) readLoop() {
 		case p.resultCh <- packet:
 		default:
 			// Waiter already gave up (ctx cancelled) — drop.
+			release()
 		}
 	}
 }
@@ -309,9 +372,17 @@ func (c *UDPConn) close() {
 		_ = c.conn.Close()
 		c.mu.Lock()
 		for _, p := range c.inflight {
-			select {
-			case p.resultCh <- nil:
-			default:
+			if p.collectCh != nil {
+				// Collect-mode waiters block on collectCh — closing it wakes
+				// them (the !ok branch in executeUDPCollect).  Previously
+				// they were never signalled and burned the full query
+				// budget on a dead socket (M-3-6).
+				close(p.collectCh)
+			} else {
+				select {
+				case p.resultCh <- nil:
+				default:
+				}
 			}
 		}
 		c.inflight = make(map[string]*udpPending)

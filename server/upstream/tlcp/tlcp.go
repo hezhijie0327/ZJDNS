@@ -26,12 +26,14 @@ func (c *Client) ExecuteTLCP(ctx context.Context, msg *dns.Msg, server *config.U
 	if server == nil {
 		return nil, errors.New("tlcp: nil server config")
 	}
-	tlcpCfg := c.tlcpClientConfig(server).Clone()
-	tlcpCfg.NextProtos = config.NextProtoDOT
 	proxyDialer := c.getProxy(server)
 
 	if c.tlcpPool != nil {
 		pc, err := c.tlcpPool.Acquire(ctx, tlcpPoolKey(server), server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
+			// Config built only on dial — the pool-hit path skips the
+			// per-query SystemCertPool Clone (M-3-6).
+			tlcpCfg := c.tlcpClientConfig(server).Clone()
+			tlcpCfg.NextProtos = config.NextProtoDOT
 			return c.dialTLCPConnForDOT(dialCtx, addr, tlcpCfg, proxyDialer)
 		})
 		if err == nil {
@@ -47,6 +49,8 @@ func (c *Client) ExecuteTLCP(ctx context.Context, msg *dns.Msg, server *config.U
 	}
 
 	// Non-pooled fallback: manual dial + TLCP handshake + DNS exchange.
+	tlcpCfg := c.tlcpClientConfig(server).Clone()
+	tlcpCfg.NextProtos = config.NextProtoDOT
 	response, err := c.exchangeOverTLCP(ctx, msg, server.Address, tlcpCfg, proxyDialer)
 	if err != nil {
 		log.Debugf("UPSTREAM: TLCP query to %s failed: %v", server.Address, err)

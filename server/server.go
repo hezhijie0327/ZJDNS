@@ -12,6 +12,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/database"
@@ -54,6 +55,7 @@ type Server struct {
 	plain          *serverplain.Server
 	pprofServers   []*http.Server
 	shutdown       chan struct{}
+	shutdownOnce   sync.Once // guards close(shutdown) — a second shutdownServer call would double-close (M-3-6)
 	tcpSem         chan struct{}
 	// tcpWriteShards is the per-connection TCP write-serialization registry,
 	// sharded by client address so concurrent connections never contend on a
@@ -470,7 +472,10 @@ func (s *Server) Start() error {
 				err := p.ListenAndServe()
 
 				if err != nil && err != http.ErrServerClosed {
-					return fmt.Errorf("pprof startup: %w", err)
+					// Optional diagnostics listener: a bind failure (port in
+					// use) must not take the DNS server down — log and keep
+					// serving (M-3-6).
+					log.Warnf("PPROF: pprof listener on %s failed: %v", p.Addr, err)
 				}
 				<-ctx.Done()
 				return nil

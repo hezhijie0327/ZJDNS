@@ -19,13 +19,16 @@ func RunSQL(dbPath, query string) error {
 	if _, err := os.Stat(dbPath); err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	db, err := database.Open(dbPath, 0, database.Options{})
+	// ReadOnly: SQLite mode=ro (no DDL — migrate is skipped), so inspecting
+	// an older DB never modifies its schema (M-3-6).
+	db, err := database.Open(dbPath, 0, database.Options{ReadOnly: true})
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer func() { _ = db.Close() }()
 
-	// PRAGMA query_only=ON prevents any write operations on this connection.
+	// Belt and braces: query_only blocks any write statement that slips
+	// through mode=ro.
 	if _, err := db.SQ.Exec("PRAGMA query_only = ON"); err != nil {
 		return fmt.Errorf("set query_only: %w", err)
 	}

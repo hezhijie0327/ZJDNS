@@ -23,6 +23,12 @@ import (
 type Options struct {
 	MMapSizeMB  int
 	CacheSizeMB int
+	// ReadOnly opens the database with SQLite mode=ro: no DDL (migrate is
+	// skipped), no writes of any kind.  Used by the --sql inspection tool —
+	// the previous behaviour ran migrate() (DDL on older DBs) before the
+	// query_only PRAGMA, so a 'read-only' inspection could still modify the
+	// schema (M-3-6).
+	ReadOnly bool
 }
 
 // DB is a unified SQLite database backing all ZJDNS subsystems (cache, zone).
@@ -30,8 +36,9 @@ type Options struct {
 // databases. :memory: is used for in-memory so all connections share the
 // same database (pinned to a single connection).
 type DB struct {
-	SQ     *sql.DB
-	dbPath string
+	SQ       *sql.DB
+	dbPath   string
+	readOnly bool
 
 	mmapSizeMB  int
 	cacheSizeMB int
@@ -81,11 +88,15 @@ func buildDSN(path string, opts Options) string {
 		return ":memory:"
 	}
 	mmap := int64(opts.MMapSizeMB) * 1024 * 1024
+	mode := ""
+	if opts.ReadOnly {
+		mode = "&mode=ro"
+	}
 	return fmt.Sprintf("file:%s?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=10000"+
 		"&_foreign_keys=ON&_txlock=immediate"+
 		"&_pragma=temp_store(MEMORY)&_pragma=cache_size(%d)&_pragma=mmap_size(%d)"+
-		"&_pragma=wal_autocheckpoint(%d)&_pragma=journal_size_limit(%d)",
-		path, -opts.CacheSizeMB*1024, mmap, walAutoCheckpointPages, mmap)
+		"&_pragma=wal_autocheckpoint(%d)&_pragma=journal_size_limit(%d)%s",
+		path, -opts.CacheSizeMB*1024, mmap, walAutoCheckpointPages, mmap, mode)
 }
 
 // Open opens or creates the SQLite database at path. An empty path uses
@@ -125,17 +136,21 @@ func Open(path string, maxEntries int, opts Options) (*DB, error) {
 	db := &DB{
 		SQ:          sqldb,
 		dbPath:      path,
+		readOnly:    opts.ReadOnly,
 		maxEntries:  maxEntries,
 		mmapSizeMB:  opts.MMapSizeMB,
 		cacheSizeMB: opts.CacheSizeMB,
 	}
 
-	if err := db.migrate(); err != nil {
-		_ = sqldb.Close()
-		return nil, fmt.Errorf("sqlite migrate: %w", err)
+	if !opts.ReadOnly {
+		if err := db.migrate(); err != nil {
+			_ = sqldb.Close()
+			return nil, fmt.Errorf("sqlite migrate: %w", err)
+		}
 	}
 
-	// Initialize entryCount from existing rows.
+	// Initialize entryCount from existing rows (read-only: table may not
+	// exist on an old DB — a query error here is non-fatal).
 	var count int64
 	if err := db.SQ.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&count); err == nil {
 		db.entryCount.Store(count)
@@ -176,7 +191,7 @@ func (db *DB) Close() error {
 			_ = stmt.Close()
 		}
 	}
-	if db.dbPath != "" {
+	if db.dbPath != "" && !db.readOnly {
 		if _, err := db.SQ.Exec("PRAGMA optimize"); err != nil {
 			log.Warnf("DB: PRAGMA optimize failed: %v", err)
 		}

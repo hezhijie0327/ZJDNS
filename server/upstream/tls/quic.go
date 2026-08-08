@@ -91,8 +91,14 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 					if err == nil {
 						return response, nil
 					}
+					// Second failure on the fresh conn — the 0-RTT rejection
+					// invalidated it too; remove it so it never re-enters
+					// the pool (policy: rejected conns must not be reused).
+					c.quicPool.Remove(fresh)
 				}
-			} else {
+			} else if !errors.Is(err, context.Canceled) {
+				// Caller-side cancellation (resolver first-wins fan-out) is
+				// not a connection failure — the conn stays pooled.
 				c.quicPool.Remove(pc)
 			}
 			log.Debugf("UPSTREAM: pooled DoQ query to %s failed: %v, retrying with new connection", server.Address, err)

@@ -297,7 +297,9 @@ func (s *Server) shutdownServer() {
 	}
 
 	if s.shutdown != nil {
-		close(s.shutdown)
+		// Idempotent: the signal handler and the shutdown-timeout path can
+		// both reach here — a second close would panic (M-3-6).
+		s.shutdownOnce.Do(func() { close(s.shutdown) })
 	}
 
 	log.Infof("SERVER: Shutdown complete")

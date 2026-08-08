@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
 
@@ -27,9 +28,22 @@ const (
 	probePipelineNumQueries  = 5
 	probeConnReuseNumQueries = 3
 	probeDialTimeout         = 10 * time.Second // fail fast on blackholed targets
-	defaultProbePort         = 53               // matches config.DefaultUDPPort
-	defaultProbeTLSPort      = 853              // matches config.DefaultTLSPort
 )
+
+// Probe port defaults are the config package's constants — duplicated
+// literals here would drift (M-3-6).
+var (
+	defaultProbePort    = mustPort(config.DefaultUDPPort)
+	defaultProbeTLSPort = mustPort(config.DefaultTLSPort)
+)
+
+func mustPort(s string) int {
+	p, err := strconv.Atoi(s)
+	if err != nil {
+		panic("config default port is not numeric: " + s)
+	}
+	return p
+}
 
 // runProbe dispatches to the requested probe type.
 func runProbe(probeType, addr string) error {

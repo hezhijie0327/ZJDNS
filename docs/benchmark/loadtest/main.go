@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/server/upstream"
 
 	"codeberg.org/miekg/dns"
@@ -56,11 +57,24 @@ func main() {
 	pprofAddr := flag.String("pprof", "127.0.0.1:6061", "client pprof listen address")
 	flag.Parse()
 
+	// Validate before any defer/goroutine setup: os.Exit would skip them.
+	if *workers <= 0 {
+		fmt.Fprintln(os.Stderr, "error: -workers must be > 0")
+		os.Exit(1)
+	}
+	if *seconds <= 0 {
+		fmt.Fprintln(os.Stderr, "error: -seconds must be > 0")
+		os.Exit(1)
+	}
+
 	// Enable the block profile (off by default in Go) so
 	// /debug/pprof/block shows where queries wait.
 	runtime.SetBlockProfileRate(1)
 	//nolint:gosec // G114: bench tool pprof endpoint; localhost-only diagnostics
-	go func() { _ = http.ListenAndServe(*pprofAddr, nil) }()
+	go func() {
+		defer zdnsutil.HandlePanic("loadtest pprof")
+		_ = http.ListenAndServe(*pprofAddr, nil) // _ = error: diagnostics endpoint, best-effort
+	}()
 
 	client := upstream.New()
 	defer client.Close()
@@ -68,6 +82,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
+		defer zdnsutil.HandlePanic("loadtest signal")
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt)
 		<-sig
@@ -84,10 +99,12 @@ func main() {
 		PublicKey:     *publicKey,
 	}
 
-	deadline := time.Now().Add(time.Duration(*seconds) * time.Second)
+	testStart := time.Now()
+	deadline := testStart.Add(time.Duration(*seconds) * time.Second)
 	var wg sync.WaitGroup
 	for range *workers {
 		wg.Go(func() {
+			defer zdnsutil.HandlePanic("loadtest worker")
 			for {
 				if ctx.Err() != nil || time.Now().After(deadline) {
 					return
@@ -127,7 +144,10 @@ func main() {
 
 	ok := c.ok.Load()
 	fail := c.fail.Load()
-	elapsed := time.Since(time.Now().Add(-time.Duration(*seconds) * time.Second)).Seconds()
+	// Measure the ACTUAL query window, not the configured duration: an
+	// early Ctrl-C exit previously divided by the full configured seconds
+	// and understated QPS (M-3-6).
+	elapsed := time.Since(testStart).Seconds()
 	fmt.Printf("proto=%-10s ok=%-8d fail=%-6d qps=%-10.1f avg=%-8.2fms min=%-8.2fms max=%-8.2fms\n",
 		*proto, ok, fail, float64(ok)/elapsed,
 		float64(c.latSum.Load())/float64(max(ok, 1))/1000.0,

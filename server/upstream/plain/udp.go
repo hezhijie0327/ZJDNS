@@ -13,6 +13,7 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server/defense"
+	zpool "zjdns/server/upstream/pool"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -144,10 +145,14 @@ func (c *Client) executeUDPPooled(ctx context.Context, msg *dns.Msg, server *con
 	response := pool.DefaultMessage.Get()
 	response.Data = payload
 	if err := response.Unpack(); err != nil {
+		// Return the pooled payload buffer (M-3-6).
+		zpool.ReleaseUDPPayload(payload)
 		pool.DefaultMessage.Put(response)
 		return nil, err
 	}
 	response.Data = nil
+	// Payload consumed (unpacked, no longer referenced) — return it.
+	zpool.ReleaseUDPPayload(payload)
 	response.ID = originalID
 
 	// Question verification (RFC 7766 §7 discipline): the routing key was the
@@ -226,6 +231,10 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 	}
 
 	var sg spoofguardState
+	// One timer per collect window, Reset per iteration — time.After inside
+	// the select allocated a fresh timer every poll (M-3-6).
+	pollTimer := time.NewTimer(config.DefaultSpoofguardPollInterval)
+	defer pollTimer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -242,7 +251,17 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 			return nil, ctx.Err()
 		case pkt, ok := <-collectCh:
 			if !ok {
+				// The conn died mid-collect: return the other candidates to
+				// the pool — only sg.last is handed to the caller.  This
+				// branch is reachable since close() now wakes collect
+				// waiters (M-3-6).
 				uc.ReleaseCollect(matchKey)
+				if sg.prev != nil {
+					pool.DefaultMessage.Put(sg.prev)
+				}
+				if sg.nonEDNS != nil {
+					pool.DefaultMessage.Put(sg.nonEDNS)
+				}
 				if sg.last != nil {
 					return sg.last, nil
 				}
@@ -275,6 +294,9 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 			// TTL evidence — never fast-accept on it (M-low).
 			ttlConfident := hg != nil && hg.Confident(server.Address) && pkt.TTL != 0
 			resp := sg.processPacket(pkt.Data, len(pkt.Data), msg.UDPSize, server.Address, ttlConfident, pkt.TTL, server.Spoofguard)
+			// processPacket copied the payload (copyData) — return the
+			// pooled buffer on every exit path (M-3-6).
+			pkt.Release()
 			if resp != nil {
 				if sg.last != nil && sg.last != resp {
 					pool.DefaultMessage.Put(sg.last)
@@ -295,7 +317,8 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 				uc.ReleaseCollect(matchKey)
 				return resp, nil
 			}
-		case <-time.After(config.DefaultSpoofguardPollInterval):
+		case <-pollTimer.C:
+			pollTimer.Reset(config.DefaultSpoofguardPollInterval)
 			now := time.Now()
 			if sg.last != nil && now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
 				resp := sg.pickBest()

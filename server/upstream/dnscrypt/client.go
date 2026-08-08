@@ -11,6 +11,7 @@ import (
 	"time"
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
 	"zjdns/internal/pending"
@@ -228,7 +229,10 @@ func (c *Client) executeOnce(
 	resp := &dnscryptcrypto.EncryptedResponse{
 		ESVersion: state.esVersion,
 	}
+	// Decrypt copies the payload out — the pooled response buffer can be
+	// returned now, regardless of decrypt success (M-3-6).
 	decrypted, err := resp.Decrypt(respPayload, sharedKey, clientNonce)
+	zpool.ReleaseUDPPayload(respPayload)
 	if err != nil {
 		c.deleteState(stampAddr, providerName)
 		return nil, false, fmt.Errorf("decrypting dnscrypt response: %w", err)
@@ -326,6 +330,7 @@ func readUDPWithCancel(ctx context.Context, conn net.Conn, buf []byte) (int, err
 	}
 	ch := make(chan result, 1)
 	go func() {
+		defer zdnsutil.HandlePanic("DNSCrypt read")
 		n, err := conn.Read(buf)
 		ch <- result{n, err}
 	}()
@@ -348,6 +353,7 @@ func readPrefixedWithCancel(ctx context.Context, conn net.Conn) ([]byte, error) 
 	}
 	ch := make(chan result, 1)
 	go func() {
+		defer zdnsutil.HandlePanic("DNSCrypt read")
 		data, err := dnscryptcrypto.ReadPrefixed(conn)
 		ch <- result{data, err}
 	}()

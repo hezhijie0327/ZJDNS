@@ -124,13 +124,13 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	// sub-modes are checked against the special modes too: --version
 	// --pipeline would otherwise silently swallow the probe request.
 	modes := 0
-	for _, on := range []bool{showVersion, generateConfig, runDNSStamp, runProbeFlag} {
+	for _, on := range []bool{showVersion, generateConfig, runDNSStamp, runProbeFlag, runSQL} {
 		if on {
 			modes++
 		}
 	}
 	if modes > 1 {
-		fmt.Fprintln(os.Stderr, "error: --version, --generate-config, --dnsstamp and --probe are mutually exclusive")
+		fmt.Fprintln(os.Stderr, "error: --version, --generate-config, --dnsstamp, --probe and --sql are mutually exclusive")
 		return "", true, 1
 	}
 	probeModes := 0
