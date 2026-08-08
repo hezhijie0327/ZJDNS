@@ -47,10 +47,15 @@ func (m *Any) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// Record the short-circuit like Zone/PTR do — previously ANY answers
 		// never appeared in query_stats/query_log (R3-M21).
 		if m.store != nil {
-			m.store.RecordRequest(&cache.RequestRecord{
-				Qname: qd.Header().Name, Qtype: dns.TypeANY, Qclass: qd.Header().Class,
-				Protocol: qctx.Protocol, Result: "any", Rcode: dns.RcodeSuccess,
-			})
+			rec := cache.AcquireRequestRecord()
+			rec.Qname = qd.Header().Name
+			rec.Qtype = dns.TypeANY
+			rec.Qclass = qd.Header().Class
+			rec.Protocol = qctx.Protocol
+			rec.Result = "any"
+			rec.Rcode = dns.RcodeSuccess
+			m.store.RecordRequest(rec)
+			cache.ReleaseRequestRecord(rec)
 		}
 		log.Debugf("ANY: serving RFC 8482 minimal response for %s", qd.Header().Name)
 		return nil

@@ -270,15 +270,21 @@ func (m *MQTYPE) resolve(ctx context.Context, qname string, qt, qclass uint16, e
 	// (regression of the removed internal canonicalization).
 	qname = dnsutil.Canonical(qname)
 	if m.store != nil {
-		if entry, found, _ := m.store.Get(qname, qt, qclass, ecsOpt, dnssecOK); found && entry.Unpack() == nil {
-			// Return the pool-owned TTL-offset slice before the entry is
-			// dropped (same family as M15 / dns64 TTLOffsets leak).
-			cache.ReleaseTTLOffsets(entry.TTLOffsets)
-			return &resolver.QueryResult{
-				Answer: entry.Answer, Authority: entry.Authority, Additional: entry.Additional,
-				Validated: entry.Validated, Rcode: entryRcode(entry), Authoritative: entryAuthoritative(entry),
-				Cacheable: true,
+		// Skip expired entries: merging a stale answer with the full stored
+		// TTL would serve data past its freshness window without the
+		// stale-answer EDE the CacheLookup path applies (M-cache).
+		if entry, found, isExpired := m.store.Get(qname, qt, qclass, ecsOpt, dnssecOK); found && !isExpired {
+			if entry.Unpack() == nil {
+				cache.ReleaseTTLOffsets(entry.TTLOffsets)
+				return &resolver.QueryResult{
+					Answer: entry.Answer, Authority: entry.Authority, Additional: entry.Additional,
+					Validated: entry.Validated, Rcode: entryRcode(entry), Authoritative: entryAuthoritative(entry),
+					Cacheable: true,
+				}
 			}
+			// Unpack failed — the entry is dropped; still return the
+			// pool-owned TTL-offset slice (audit M-pool).
+			cache.ReleaseTTLOffsets(entry.TTLOffsets)
 		}
 	}
 	if m.pending != nil {

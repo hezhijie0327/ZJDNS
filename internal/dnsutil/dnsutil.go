@@ -212,7 +212,10 @@ func LogHandshake(info *HandshakeInfo) {
 		buf.WriteString(" alpn=")
 		buf.WriteString(info.ALPN)
 	}
-	log.Debugf("TLS: %s", buf.String())
+	// buf already starts with info.Role + ": " (a canonical prefix like
+	// TLS:/TLCP:/UPSTREAM:) — a hardcoded "TLS: " here duplicated the prefix
+	// and misattributed TLCP/DTLCP handshakes to the TLS component.
+	log.Debugf("%s", buf.String())
 }
 
 // IsTemporaryError reports whether err is a temporary network error (timeout)

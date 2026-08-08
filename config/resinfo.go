@@ -17,11 +17,14 @@ func resinfoKeys(cfg *ServerConfig) []string {
 
 	// exterr: the EDE codes ZJDNS can actually return (RFC 9606 §5) —
 	// derived from the ExtendedError* constants used across the middleware
-	// chain and the DNSSEC validator (0,2,3,4,5,6,8,9,10,11,12,13,14,15,
-	// 19,23).  The list must not advertise codes the codebase never emits
-	// (R2: previously mis-advertised 7,16,17,18,21,22,24,30 and missed
-	// 2,4,5,8,10,11,12,13,14,19).
-	keys = append(keys, "exterr=0,2,3,4,5,6,8,9,10,11,12,13,14,15,19,23")
+	// chain and the DNSSEC validator: Other(0), UnsupportedDNSKEYAlgorithm(1),
+	// StaleAnswer(3), ForgedAnswer(4), DNSBogus(6), SignatureExpired(7),
+	// SignatureNotYetValid(8), RRSIGsMissing(10), NSECMissing(12),
+	// Blocked(15), NoReachableAuthority(22), NetworkError(23),
+	// InvalidQueryType(30).  The list must not advertise codes the codebase
+	// never emits (2026-08 audit: dropped 2,5,9,11,13,14,19 — never
+	// emitted; added 1,7,22,30 — emitted but missing).
+	keys = append(keys, "exterr=0,1,3,4,6,7,8,10,12,15,22,23,30")
 
 	if cfg != nil && cfg.Server.Features.DDR.InfoURL != "" {
 		// RFC 9606 §5 requires an https:// URI; RFC 6763 §6.1 caps a TXT

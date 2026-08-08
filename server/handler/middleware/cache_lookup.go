@@ -202,6 +202,15 @@ func (m *CacheLookup) serveExpiredWithRefresh(qctx *handler.QueryContext, qname 
 			}
 			qctx.EDE = nil
 			msg := handler.BuildResponseMsg(qctx.Req)
+			// Align with buildSuccess: propagate the resolution rcode
+			// (NXDOMAIN from the authoritative server was served as
+			// NOERROR/NODATA) and the DNSSEC validation EDE.
+			if qr.Rcode != 0 && qr.Rcode != dns.RcodeSuccess {
+				msg.Rcode = qr.Rcode
+			}
+			if qr.DNSSECEDE != 0 {
+				qctx.EDE = &dns.EDE{InfoCode: qr.DNSSECEDE, ExtraText: ""}
+			}
 			dnssecOK := qctx.ClientRequestedDNSSEC
 			msg.Answer = cache.ProcessRecords(qr.Answer, 0, false, dnssecOK)
 			msg.Ns = cache.ProcessRecords(qr.Authority, 0, false, dnssecOK)

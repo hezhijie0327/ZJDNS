@@ -116,7 +116,9 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	// family/prefix/address means the response is not for the queried subnet
 	// (spoofed or misrouted); serving it would poison the client's cache.
 	if ecsOpt != nil && responseECS != nil && !edns.VerifyECSResponse(ecsOpt, responseECS) {
-		log.Debugf("EDNS: ECS mismatch — returning SERVFAIL for spoofed response")
+		// Rare security-relevant event (spoofed or misrouted response) —
+		// Warn with the qname for correlation; not per-query spam.
+		log.Warnf("EDNS: ECS mismatch for %s — returning SERVFAIL (spoofed or misrouted response)", qname)
 		// Reuse the pooled msg built above — allocating a second one would
 		// leak the first to the GC.
 		msg.Rcode = dns.RcodeServerFailure

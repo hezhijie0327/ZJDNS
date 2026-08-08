@@ -250,7 +250,10 @@ func validateDDR(cfg *ServerConfig) error {
 		}
 	}
 	if v6 := cfg.Server.Features.DDR.IPv6; v6 != "" {
-		if ip := net.ParseIP(v6); ip == nil || ip.To16() == nil {
+		// To16() is non-nil for IPv4 strings too (IPv4-mapped form) — an
+		// IPv4 literal would pass and produce a malformed AAAA DDR record.
+		// A true IPv6 address is one whose To4() is nil.
+		if ip := net.ParseIP(v6); ip == nil || ip.To4() != nil {
 			return fmt.Errorf("server.features.ddr.ipv6: %q is not a valid IPv6 address", v6)
 		}
 	}

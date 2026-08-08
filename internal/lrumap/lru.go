@@ -132,13 +132,18 @@ func (m *Map[K, V]) Len() int {
 	return n
 }
 
-// Delete removes a key from the map.
+// Delete removes a key from the map.  OnEvict is invoked for the removed
+// entry, mirroring eviction and overwrite semantics — resource-holding
+// values (dialers, clients, sessions) must be released on every exit path.
 func (m *Map[K, V]) Delete(key K) {
 	m.mu.Lock()
 	if e, ok := m.m[key]; ok {
 		m.remove(e)
 		delete(m.m, key)
 		m.len--
+		if m.OnEvict != nil {
+			m.OnEvict(e.key, e.val)
+		}
 	}
 	m.mu.Unlock()
 }
@@ -170,6 +175,9 @@ func (m *Map[K, V]) CompareAndDelete(key K, val V) bool {
 		m.remove(e)
 		delete(m.m, key)
 		m.len--
+		if m.OnEvict != nil {
+			m.OnEvict(e.key, e.val)
+		}
 		return true
 	}
 	return false

@@ -260,19 +260,22 @@ func (g *CallGroup[K, V]) Done(key K, val V, err error) {
 	if !ok {
 		return
 	}
-	// CompareAndDelete: a replacement call for the same key (installed by a
-	// concurrent Join after this entry was LRU‑evicted) must not be deleted.
-	g.mmap.CompareAndDelete(key, entry)
-
 	shared := val
 	if g.clone != nil && err == nil {
 		shared = g.clone(val)
 	}
+	// Publish BEFORE deleting: the eviction callback (OnEvict) also closes
+	// Done via entry.Once, and whichever Once.Do runs first wins — deleting
+	// first would publish ErrEvicted to the followers instead of the real
+	// result (lrumap Delete/CompareAndDelete now invoke OnEvict).
 	entry.Once.Do(func() {
 		entry.Val = shared
 		entry.Err = err
 		close(entry.Done)
 	})
+	// CompareAndDelete: a replacement call for the same key (installed by a
+	// concurrent Join after this entry was LRU‑evicted) must not be deleted.
+	g.mmap.CompareAndDelete(key, entry)
 }
 
 // DoJoin handles the leader/follower pattern.  If a follower, it returns the

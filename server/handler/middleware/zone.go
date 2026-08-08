@@ -93,10 +93,15 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 
 		log.Debugf("ZONE: matched rule for %s -> domain=%s rcode=%d", qname, zoneResult.Domain, zoneResult.Rcode)
 
-		m.cache.RecordRequest(&cache.RequestRecord{
-			Qname: qname, Qtype: qtype, Qclass: qclass,
-			Protocol: qctx.Protocol, Result: "zone", Rcode: zoneResult.Rcode,
-		})
+		rec := cache.AcquireRequestRecord()
+		rec.Qname = qname
+		rec.Qtype = qtype
+		rec.Qclass = qclass
+		rec.Protocol = qctx.Protocol
+		rec.Result = "zone"
+		rec.Rcode = zoneResult.Rcode
+		m.cache.RecordRequest(rec)
+		cache.ReleaseRequestRecord(rec)
 
 		// Non-success rcode → build error response.
 		if zoneResult.Rcode != dns.RcodeSuccess {

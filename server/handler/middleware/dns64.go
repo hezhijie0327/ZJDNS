@@ -59,13 +59,20 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// upstream query per AAAA miss.
 		var aqr *resolver.QueryResult
 		if m.store != nil {
-			if entry, found, _ := m.store.Get(qname, dns.TypeA, qclass, ecsOpt, dnssecOK); found && entry.Unpack() == nil && len(entry.Answer) > 0 {
-				// Return the pool-owned TTL-offset slice before the entry is
-				// dropped (same family as M15 / dns64 TTLOffsets leak).
-				cache.ReleaseTTLOffsets(entry.TTLOffsets)
-				aqr = &resolver.QueryResult{
-					Answer: entry.Answer, Authority: entry.Authority, Additional: entry.Additional,
-					Validated: entry.Validated,
+			// Skip expired entries: synthesizing from a stale A answer would
+			// serve it with the full stored TTL and no stale-answer EDE
+			// (M-cache).
+			if entry, found, isExpired := m.store.Get(qname, dns.TypeA, qclass, ecsOpt, dnssecOK); found && !isExpired {
+				if entry.Unpack() == nil && len(entry.Answer) > 0 {
+					cache.ReleaseTTLOffsets(entry.TTLOffsets)
+					aqr = &resolver.QueryResult{
+						Answer: entry.Answer, Authority: entry.Authority, Additional: entry.Additional,
+						Validated: entry.Validated,
+					}
+				} else {
+					// Unpack failed or empty answers — the entry is dropped;
+					// still return the pool-owned TTL-offset slice (M-pool).
+					cache.ReleaseTTLOffsets(entry.TTLOffsets)
 				}
 			}
 		}
