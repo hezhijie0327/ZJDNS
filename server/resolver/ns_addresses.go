@@ -96,6 +96,21 @@ func (r *Recursive) getRootServers() []string {
 		r.rootCacheMu.Unlock()
 		return cached
 	}
+	// Cold or expired: install a PROVISIONAL set right now so concurrent
+	// walks return immediately.  The previous code only memoized AFTER the
+	// 26 SQLite lookups below — under load every walk raced the still-cold
+	// cache and re-ran the full read path (lookupNSAddrsFromCache →
+	// GetTypes/LatencyLastProbe per root name), piling thousands of
+	// goroutines onto the exhausted SQLite pool and wedging the process
+	// (observed: 2,469 LatencyLastProbe + 946 GetTypes waiters mid-batch).
+	// Serving the raw hints (or the previous set on expiry) is safe — the
+	// fill below atomically replaces it with the latency-sorted version.
+	provisional := r.rootCache
+	if provisional == nil {
+		provisional = allRootAddrs()
+	}
+	r.rootCache = provisional
+	r.rootCacheTime = now
 	r.rootCacheMu.Unlock()
 
 	hints := loadHints()

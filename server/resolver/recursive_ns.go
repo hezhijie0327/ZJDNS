@@ -104,6 +104,11 @@ func (r *Recursive) resolveNextNameservers(
 	// instead of recursing into each other until the depth limit.  Such a
 	// delegation is unreachable without glue/cache and now fails with
 	// "could not resolve nameservers" instead of deadlocking the walk.
+	//
+	// The root zone is exempt: every name is "below" "." by definition, so
+	// the guard would skip all 13 root servers (IsBelow(".", x) is always
+	// true) and the walk could never bootstrap.  Root addresses come from
+	// hints/cache, never from an in-bailiwick circular resolution.
 	zone := ""
 	if len(bestNSRecords) > 0 {
 		zone = dnsutil.Fqdn(bestNSRecords[0].Header().Name)
@@ -114,7 +119,7 @@ func (r *Recursive) resolveNextNameservers(
 		if cachedNSNames[nsName] || len(result.glue[nsName]) > 0 {
 			continue
 		}
-		if zone != "" && dnsutil.IsBelow(zone, nsName) {
+		if zone != "" && zone != "." && dnsutil.IsBelow(zone, nsName) {
 			log.Debugf("RECURSION: skipping in-bailiwick NS %s for %s (no glue/cache — circular)", nsName, zone)
 			continue
 		}

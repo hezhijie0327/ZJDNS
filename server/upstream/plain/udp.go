@@ -672,10 +672,13 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 	}
 
 	// EDNS-gate: GFW only injects bare A/AAAA records without EDNS and
-	// without CNAME chains.  Non-EDNS responses are collected as a fallback
-	// only when they contain a CNAME or multiple answers — patterns that
-	// GFW does not replicate.  Single-answer non-EDNS (GFW signature) is
-	// still rejected.
+	// without CNAME chains.  Non-EDNS responses are collected as a
+	// low-priority fallback — EDNS-bearing candidates always win and the
+	// collect window waits for a second candidate, so a real EDNS response
+	// beats an injected bare A.  Single-answer non-EDNS is no longer
+	// dropped outright: legitimate authorities that don't echo EDNS return
+	// that exact shape, and dropping it made every such query block the full
+	// query budget (github.com nsone, production incident 2026-08).
 	//
 	// When spoofguard is disabled (HopGuard-only mode), skip the EDNS gate
 	// entirely — HopGuard's TTL validation is the sole filter. The response
@@ -718,23 +721,16 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 			return s.collectEDNSCandidate(resp, ttlConfident, ttl, addr)
 		}
 
-		// Only keep non-EDNS responses with CNAME or AN≥2 — these are
-		// authoritative patterns GFW doesn't inject (GFW injects single
-		// A/AAAA records).
-		hasCNAME := false
-		for _, rr := range resp.Answer {
-			if _, ok := rr.(*dns.CNAME); ok {
-				hasCNAME = true
-				break
-			}
-		}
-		if !hasCNAME && len(resp.Answer) < 2 {
-			s.rejected++
-			pool.DefaultMessage.Put(resp)
-			log.Debugf("UPSTREAM: UDP spoofguard rejected non-EDNS response #%d from %s", s.rejected, addr)
-			return nil
-		}
-
+		// Non-EDNS NOERROR responses (single-answer included) are collected
+		// as the low-priority fallback instead of being dropped.  The old
+		// gate rejected single-answer non-EDNS as a "GFW injects bare
+		// A/AAAA" signature — but legitimate authorities that do not echo
+		// EDNS return exactly that shape (e.g. github.com's nsone servers),
+		// so every query to them blocked the full 9s budget and SERVFAILed.
+		// pickBest still prefers EDNS-bearing candidates and the collect
+		// window waits for a second candidate, so a real EDNS response wins
+		// over an injected bare A; the fallback is only served when nothing
+		// better arrives.
 		s.rejected++
 		if s.nonEDNS != nil {
 			pool.DefaultMessage.Put(s.nonEDNS)
@@ -825,15 +821,15 @@ func (s *spoofguardState) pickBestTTL() uint8 {
 
 // pickBest returns the best candidate.  EDNS-bearing candidates are always
 // preferred; the non-EDNS fallback is only used when no EDNS response arrived
-// (e.g. authoritative servers that don't support EDNS).  Non-EDNS fallback
-// candidates are only stored if they carry CNAME or AN≥2 — patterns GFW
-// injection does not replicate.
+// (e.g. authoritative servers that don't echo EDNS).  The fallback is served
+// only after the collect window so a second (EDNS) candidate gets a chance to
+// outrank it.
 func (s *spoofguardState) pickBest() *dns.Msg {
 	// No EDNS candidate — fall back to non-EDNS (already validated as
 	// CNAME-bearing or multi-answer in processPacket).
 	if s.last == nil {
 		if s.nonEDNS != nil {
-			log.Debugf("UPSTREAM: spoofguard fell back to non-EDNS candidate (ans=%d, rejected=%d)", s.nonEDNSAns, s.rejected)
+			log.Debugf("UPSTREAM: spoofguard fell back to non-EDNS candidate (ans=%d, collected=%d)", s.nonEDNSAns, s.rejected)
 		}
 		return s.nonEDNS
 	}
