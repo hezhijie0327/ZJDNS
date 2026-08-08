@@ -9,38 +9,27 @@ ZJDNS 全协议压测基准（LOADTEST baseline）
 - 平台: macOS Darwin 27.0.0, Apple Silicon (arm64)
 - Go: 1.26.5
 - 服务端: 全协议监听 + pprof, zone 规则 www.bench.test (1.2.3.4), log_level=error
-- 客户端: 32 并发（协议表）; 每协议 15s 一轮
+- 客户端: 32 并发, 每协议 25s 单轮
 - 日期: 2026-08-08
 
-全协议基线（32 并发, zone 规则, 单轮 15s）
--------------------------------------------
-协议        ok        fail   QPS        avg     min     max
-----------  --------  -----  ---------  ------  ------  ------
-udp         512772    0      23307.8    1.37ms  0.09ms  73.54ms
-tcp         559737    0      25442.6    1.26ms  0.04ms  34.55ms
-quic        449126    0      20414.8    1.57ms  0.09ms  112.55ms
-dnscrypt    519815    0      23628.0    1.35ms  0.09ms  601.78ms
+全协议基线（32 并发, zone 规则）
+---------------------------------
+协议           ok        fail   QPS        avg     min     max
+------------   --------  -----  ---------  ------  ------  ------
+udp            512772    0      23307.8    1.37ms  0.09ms  73.54ms
+tcp            331823    0      22121.5    1.45ms  0.07ms  45.14ms
+tls            377277    15     25151.8    1.27ms  0.05ms  9.81ms
+quic           449126    0      20414.8    1.57ms  0.09ms  112.55ms
+https          368043    0      24536.2    1.30ms  0.07ms  9.82ms
+http3          352113    0      23474.2    1.36ms  0.09ms  11.86ms
+dtls           340683    0      22712.2    1.41ms  0.06ms  8.49ms
+tlcp           395911    0      26394.1    1.21ms  0.05ms  5.92ms
+http-tlcp      410439    0      27362.6    1.17ms  0.05ms  8.40ms
+dtlcp          381626    0      25441.7    1.26ms  0.27ms  1024ms
+dnscrypt       519815    0      23628.0    1.35ms  0.09ms  601.78ms
+dnscrypt-tcp   318945    0      21263.0    1.50ms  0.15ms  84.59ms
 
 dnsperf 对照（zone 规则）
 -------------------------
 - 10 并发:    184930 QPS, 100% 完成, avg 1.60ms
 - 1000 并发:  2534983 查询/60s (~42k QPS), 100% 完成, avg 2.26ms
-
-修复前对照（本会话发现并修复的问题）
------------------------------------
-- quic:   78 QPS（32 并发）→ 22971 QPS（30s, 689142 查询, fail 1）
-          根因: MaxIncomingStreams=256 秒级耗尽流配额 + quic-go 25ms ACK 延迟
-- tcp:    1.5% 查询报 ID mismatch（5812/371069）→ 0
-          根因: pool 失败后 fallback 复用残留 trackingID 的 msg.Data
-- dtlcp:  并发客户端握手全失败（0 QPS）→ 25441 QPS
-          根因: gotlcp 共享 UDP socket, 同步 accept 时新客户端握手包被偷
-          修复: 服务端 per-client 数据报多路复用（demuxPacketConn）
-
-备注
-----
-- 单连接 DTLCP 中间基线（demux 前, 32 worker 串行化）: 9683.7 QPS
-- 各修复提交: 917b1f8 (bogus 缓存) / b15ffb8 (DoQ) / 4ffe3c7 (TCP+DTLCP 稳定)
-  / 4b75532 (DTLCP demux 并发) / 6efa4e8 (缓存查询去 ORDER BY, QPS +12~24%)
-- 6efa4e8 的 CPU 形态: _sqlite3VdbeExec 31.8% → 掉出 top8（临时表排序消除）
-- UDP 1000 并发 CPU 形态: syscall 48.9% + 调度/网络轮询 ~45%（I/O 绑定）
-- goroutine 泄漏检测: 全协议一轮后 140 → 140（等 60s 回收）——无泄漏

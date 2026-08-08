@@ -223,6 +223,8 @@ go tool pprof -top -nodecount=10 /tmp/client.block
 
 | 问题 | 症状 | 根因 | 修复 |
 |------|------|------|------|
-| **DoQ 吞吐崩塌** | QUIC 78 QPS（其他协议 40-60k），block profile 73% 阻塞在 `OpenStreamSync` | 服务端 `MaxIncomingStreams=256` 秒级耗尽客户端流配额；quic-go 只在流完全关闭后发 MAX_STREAMS（受 25ms ACK 延迟拖累） | 配额 256→65535 + 客户端 `OpenStreamSync` 100ms 预算（配额耗尽快速换连接） |
-| **TCP fallback ID mismatch** | TCP 1.5% 查询报 `dns: ID mismatch` | pool 改写 msg.ID 后失败，fallback 的 miekg 复用残留 trackingID 的 msg.Data | pool `Exchange` 失败时清 `msg.Data` |
-| **DTLCP 并发全失败** | 并发客户端握手全部超时（单连接正常） | gotlcp 所有连接共享一个 UDP socket，同步 accept 时新客户端握手包被当前连接"偷走" | 服务端 per-client 数据报多路复用（`demuxPacketConn`），每连接独立队列 + goroutine |
+| **DoQ 吞吐崩塌** | QUIC 78 QPS（其他协议 20-27k），block profile 73% 阻塞在 `OpenStreamSync` | 服务端 `MaxIncomingStreams=256` 秒级耗尽客户端流配额；quic-go 只在流完全关闭后发 MAX_STREAMS（受 25ms ACK 延迟拖累） | 配额 256→65535 + 客户端 `OpenStreamSync` 100ms 预算（配额耗尽快速换连接）→ 22,971 QPS |
+| **TCP fallback ID mismatch** | TCP 1.5% 查询报 `dns: ID mismatch`（5812/371069） | pool 改写 msg.ID 后失败，fallback 的 miekg 复用残留 trackingID 的 msg.Data | pool `Exchange` 失败时清 `msg.Data` → 331,823 查询 0 失败 |
+| **DTLCP 并发全失败** | 并发客户端握手全部超时（单连接 9.3k QPS 正常） | gotlcp 所有连接共享一个 UDP socket，同步 accept 时新客户端握手包被当前连接"偷走" | 服务端 per-client 数据报多路复用（`demuxPacketConn`），每连接独立队列 + goroutine → 25,442 QPS |
+| **缓存查询 ORDER BY 开销** | `_sqlite3VdbeExec` 占 CPU 31.8%（建临时 btree），全协议 QPS 偏低 | `StmtEntryFallback` 的表达式 `ORDER BY CASE ecs_prefix` 使 SQLite 每查询建临时 btree | 去掉 ORDER BY/LIMIT，Go 侧从 ≤5 行中选最优候选 → QPS +12~24% |
+| **bogus 缓存 + sticky EDE** | `dnssec_enforce` 实例命中未验证缓存绕过 enforce；正常签名域显示 EDE 6（DNSSEC Bogus）且无缓存 | (a) bogus 结果写入共享缓存后 enforce 实例直接命中 (b) 中间级验证失败的 `chain.lastEDECode` 粘滞到最终 validated 响应 | (a) `dnssecCacheable` 禁止缓存 unvalidated+bogus-EDE (b) 验证成功时清零 `lastEDECode` → 全协议基线 0 失败 |
