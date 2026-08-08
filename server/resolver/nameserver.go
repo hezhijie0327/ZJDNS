@@ -596,8 +596,8 @@ func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype 
 		// walks for different zones that share the same NS name (e.g. a
 		// registrar's shared DNS) each used to walk root→TLD→auth for it.
 		key := nsName + "/" + dns.TypeToString[qtype]
-		qr, _, _ = r.addrGroup.Do(ctx, key, func() (QueryResult, error) { // _ = verdict, _ = error: dedup follower — leader result already gated
-			return r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP, mqt), nil
+		qr, _, _ = r.addrGroup.Do(ctx, key, func(workCtx context.Context) (QueryResult, error) { // _ = verdict, _ = error: dedup follower — leader result already gated
+			return r.resolve(workCtx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP, mqt), nil
 		})
 	} else {
 		qr = r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP, mqt)

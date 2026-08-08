@@ -105,6 +105,29 @@ func cnameAliasFollowed(c *dns.CNAME, answer []dns.RR) bool {
 	return false
 }
 
+// findChainStep inspects one CNAME-chain step's answer: the CNAME owned by
+// the queried name (nil when the chain ends here) and whether the answer
+// carries terminal records owned by the queried name ITSELF.  A type-only
+// terminal check is wrong: an authority that bundles the whole chain into one
+// response (CNAME → CNAME → … + terminal A records, RFC 1034 §3.6.2 — e.g.
+// CDN aliases like www.iqiyi.com) would otherwise stop the chain on terminal
+// records owned by the CNAME target — records the owner-scoped collection in
+// resolveInner then drops, serving a CNAME-only answer.  Both the collection
+// and the break condition must be owner-scoped.
+func findChainStep(answer []dns.RR, question Question) (nextCNAME *dns.CNAME, hasTargetType bool) {
+	for _, r := range answer {
+		if cname, ok := r.(*dns.CNAME); ok {
+			if strings.EqualFold(r.Header().Name, question.Name) {
+				nextCNAME = cname
+			}
+		} else if dns.RRToType(r) == question.Qtype &&
+			strings.EqualFold(r.Header().Name, question.Name) {
+			hasTargetType = true
+		}
+	}
+	return nextCNAME, hasTargetType
+}
+
 // dnssecChain tracks the cryptographic trust chain state during recursive
 // resolution. At each delegation level, verified parent DNSKEYs and child DS
 // records are used to authenticate the child zone's DNSKEYs.
@@ -407,8 +430,8 @@ func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOpt
 	// re-entered by the same goroutine (self-deadlock impossible).
 	if g := c.resolver.recursive.walkGroup; g != nil {
 		key := walkDedupKey(question.Name)
-		v, _, leader := g.Do(ctx, key, func() (QueryResult, error) {
-			return c.resolveInner(ctx, question, ecs), nil
+		v, _, leader := g.Do(ctx, key, func(workCtx context.Context) (QueryResult, error) {
+			return c.resolveInner(workCtx, question, ecs), nil
 		})
 		if leader {
 			return v
@@ -497,7 +520,20 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 			// otherwise lose the intermediate CNAMEs.
 			if cname, ok := rr.(*dns.CNAME); ok {
 				if strings.EqualFold(h.Name, currentQuestion.Name) || cnameAliasFollowed(cname, qr.Answer) {
-					allAnswers = append(allAnswers, rr)
+					// Dedup: an intermediate hop's CNAME is collected once as
+					// an alias target and again as the next step's owner —
+					// serve it once (the chain now follows bundled multi-hop
+					// answers instead of breaking on type-only matches).
+					dup := false
+					for _, existing := range allAnswers {
+						if ec, ok := existing.(*dns.CNAME); ok && strings.EqualFold(ec.Header().Name, h.Name) {
+							dup = true
+							break
+						}
+					}
+					if !dup {
+						allAnswers = append(allAnswers, rr)
+					}
 				}
 				continue
 			}
@@ -511,17 +547,7 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 		finalAuthority = qr.Authority
 		finalAdditional = qr.Additional
 
-		var nextCNAME *dns.CNAME
-		hasTargetType := false
-		for _, r := range qr.Answer {
-			if cname, ok := r.(*dns.CNAME); ok {
-				if strings.EqualFold(r.Header().Name, currentQuestion.Name) {
-					nextCNAME = cname
-				}
-			} else if dns.RRToType(r) == currentQuestion.Qtype {
-				hasTargetType = true
-			}
-		}
+		nextCNAME, hasTargetType := findChainStep(qr.Answer, currentQuestion)
 
 		if hasTargetType || currentQuestion.Qtype == dns.TypeCNAME || nextCNAME == nil {
 			chainExhausted = false

@@ -125,7 +125,7 @@ func TestResultGroup_LeaderRunsOnce(t *testing.T) {
 	var runs atomic.Int64
 	ctx := context.Background()
 
-	v, err, leader := g.Do(ctx, "k", func() (int, error) {
+	v, err, leader := g.Do(ctx, "k", func(context.Context) (int, error) {
 		runs.Add(1)
 		return 42, nil
 	})
@@ -147,7 +147,7 @@ func TestResultGroup_FollowerWaitsForLeader(t *testing.T) {
 	var runs atomic.Int64
 
 	go func() {
-		_, _, _ = g.Do(context.Background(), "k", func() (int, error) {
+		_, _, _ = g.Do(context.Background(), "k", func(context.Context) (int, error) {
 			runs.Add(1)
 			close(started)
 			<-release
@@ -160,7 +160,7 @@ func TestResultGroup_FollowerWaitsForLeader(t *testing.T) {
 	var gotV int
 	var gotLeader bool
 	wg.Go(func() {
-		gotV, _, gotLeader = g.Do(context.Background(), "k", func() (int, error) {
+		gotV, _, gotLeader = g.Do(context.Background(), "k", func(context.Context) (int, error) {
 			runs.Add(1)
 			return 0, errors.New("follower should not run fn")
 		})
@@ -187,7 +187,7 @@ func TestResultGroup_FollowerReceivesLeaderError(t *testing.T) {
 	leaderErr := errors.New("leader failed")
 
 	go func() {
-		_, _, _ = g.Do(context.Background(), "k", func() (int, error) {
+		_, _, _ = g.Do(context.Background(), "k", func(context.Context) (int, error) {
 			close(started)
 			<-release
 			return 0, leaderErr
@@ -198,7 +198,7 @@ func TestResultGroup_FollowerReceivesLeaderError(t *testing.T) {
 	var wg sync.WaitGroup
 	var gotErr error
 	wg.Go(func() {
-		_, gotErr, _ = g.Do(context.Background(), "k", func() (int, error) {
+		_, gotErr, _ = g.Do(context.Background(), "k", func(context.Context) (int, error) {
 			return 0, errors.New("follower should not run fn")
 		})
 	})
@@ -218,7 +218,7 @@ func TestResultGroup_DifferentKeysIndependent(t *testing.T) {
 	var runs atomic.Int64
 
 	go func() {
-		_, _, _ = g.Do(context.Background(), "a", func() (int, error) {
+		_, _, _ = g.Do(context.Background(), "a", func(context.Context) (int, error) {
 			runs.Add(1)
 			close(started)
 			<-release
@@ -227,7 +227,7 @@ func TestResultGroup_DifferentKeysIndependent(t *testing.T) {
 	}()
 	<-started
 
-	v, err, leader := g.Do(context.Background(), "b", func() (int, error) {
+	v, err, leader := g.Do(context.Background(), "b", func(context.Context) (int, error) {
 		runs.Add(1)
 		return 2, nil
 	})
@@ -251,7 +251,7 @@ func TestResultGroup_FollowerTimeoutPromotes(t *testing.T) {
 	var runs atomic.Int64
 
 	go func() {
-		_, _, _ = g.Do(context.Background(), "k", func() (int, error) {
+		_, _, _ = g.Do(context.Background(), "k", func(context.Context) (int, error) {
 			runs.Add(1)
 			close(started)
 			<-release
@@ -263,8 +263,13 @@ func TestResultGroup_FollowerTimeoutPromotes(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	v, err, leader := g.Do(ctx, "k", func() (int, error) {
+	promotedCtxDone := make(chan error, 1)
+	v, err, leader := g.Do(ctx, "k", func(workCtx context.Context) (int, error) {
 		runs.Add(1)
+		// The caller's ctx expired (that is why the promotion fired) — the
+		// promoted run must receive a LIVE context, otherwise every
+		// operation inside fails instantly with "operation was canceled".
+		promotedCtxDone <- workCtx.Err()
 		return 2, nil
 	})
 	if !leader {
@@ -276,16 +281,19 @@ func TestResultGroup_FollowerTimeoutPromotes(t *testing.T) {
 	if runs.Load() != 2 {
 		t.Fatalf("fn should run twice (original leader + promoted), ran %d", runs.Load())
 	}
+	if got := <-promotedCtxDone; got != nil {
+		t.Fatalf("promoted fn must receive a live (uncanceled) ctx, got %v", got)
+	}
 }
 
 func TestResultGroup_KeyReleasedAfterLeader(t *testing.T) {
 	g := NewResultGroup[string, int]()
 	ctx := context.Background()
 
-	if _, _, leader := g.Do(ctx, "k", func() (int, error) { return 1, nil }); !leader {
+	if _, _, leader := g.Do(ctx, "k", func(context.Context) (int, error) { return 1, nil }); !leader {
 		t.Fatal("first call should be leader")
 	}
-	if _, _, leader := g.Do(ctx, "k", func() (int, error) { return 2, nil }); !leader {
+	if _, _, leader := g.Do(ctx, "k", func(context.Context) (int, error) { return 2, nil }); !leader {
 		t.Fatal("call after leader completion should be leader again")
 	}
 }
@@ -303,7 +311,7 @@ func TestResultGroup_EvictionWakesFollower(t *testing.T) {
 	started := make(chan struct{})
 
 	go func() {
-		_, _, _ = g.Do(context.Background(), "a", func() (int, error) {
+		_, _, _ = g.Do(context.Background(), "a", func(context.Context) (int, error) {
 			close(started)
 			<-release // never finishes — forces eviction
 			return 1, nil
@@ -315,7 +323,7 @@ func TestResultGroup_EvictionWakesFollower(t *testing.T) {
 	followerDone := make(chan struct{})
 	var followerErr error
 	go func() {
-		_, followerErr, _ = g.Do(context.Background(), "a", func() (int, error) {
+		_, followerErr, _ = g.Do(context.Background(), "a", func(context.Context) (int, error) {
 			return 0, errors.New("should not run")
 		})
 		close(followerDone)
@@ -323,7 +331,7 @@ func TestResultGroup_EvictionWakesFollower(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 
 	// Store key "b" — evicts "a" (capacity=1).
-	_, _, _ = g.Do(context.Background(), "b", func() (int, error) { return 2, nil })
+	_, _, _ = g.Do(context.Background(), "b", func(context.Context) (int, error) { return 2, nil })
 
 	select {
 	case <-followerDone:

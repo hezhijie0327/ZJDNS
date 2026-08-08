@@ -117,7 +117,7 @@ func (c *Client) state(
 	// the certificate independently (2 RTTs each — UDP then TCP).  One
 	// in-flight fetch serves the whole batch; failures are not cached, so the
 	// next query retries naturally.
-	state, err, _ := c.stateGroup.Do(ctx, cacheKey, func() (*State, error) {
+	state, err, _ := c.stateGroup.Do(ctx, cacheKey, func(workCtx context.Context) (*State, error) {
 		// Another goroutine may have populated the cache while we queued.
 		c.cacheMu.Lock()
 		state, ok := c.cache.Get(cacheKey)
@@ -125,7 +125,7 @@ func (c *Client) state(
 		if ok && time.Now().Before(state.expires) {
 			return state, nil
 		}
-		return c.fetchState(ctx, addr, providerName, publicKey, server, preferTCP)
+		return c.fetchState(workCtx, addr, providerName, publicKey, server, preferTCP)
 	})
 	if err != nil {
 		return nil, err

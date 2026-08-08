@@ -166,7 +166,15 @@ func NewResultGroup[K comparable, V any]() *ResultGroup[K, V] {
 // promoted and runs fn itself, returning (val, err, true).  When the internal
 // map is full the LRU entry is evicted with ErrEvicted — dedup degrades
 // gracefully.
-func (g *ResultGroup[K, V]) Do(ctx context.Context, key K, fn func() (V, error)) (V, error, bool) {
+//
+// fn receives the caller's ctx as its argument.  A promoted follower's ctx is
+// already canceled (that is what triggered the promotion) — running the
+// shared work against it would fail every operation instantly (e.g. every
+// network dial in a recursive walk returns "operation was canceled").  The
+// promoted run therefore gets context.WithoutCancel(ctx): no cancellation, no
+// deadline — the caller's fn is expected to bound its own work (per-query
+// timeouts), which keeps the promoted run finite while executing real work.
+func (g *ResultGroup[K, V]) Do(ctx context.Context, key K, fn func(context.Context) (V, error)) (V, error, bool) {
 	call := &resultCall[V]{done: make(chan struct{})}
 	existing, loaded := g.calls.LoadOrStore(key, call)
 	if loaded {
@@ -176,14 +184,17 @@ func (g *ResultGroup[K, V]) Do(ctx context.Context, key K, fn func() (V, error))
 			return existing.val, existing.err, false
 		case <-ctx.Done():
 			// Leader is taking too long: promote this caller to run fn
-			// itself so the wait is bounded by ctx.
-			v, err := fn()
+			// itself so the wait is bounded by ctx.  ctx is canceled here —
+			// run fn against a cancellation-stripped view so the promoted
+			// work executes with a live context instead of failing every
+			// operation instantly.
+			v, err := fn(context.WithoutCancel(ctx))
 			return v, err, true
 		}
 	}
 
 	// Leader.
-	val, err := fn()
+	val, err := fn(ctx)
 	call.once.Do(func() {
 		call.val = val
 		call.err = err

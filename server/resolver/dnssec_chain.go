@@ -297,12 +297,12 @@ func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string,
 	// their cuts.  The leader fetches + verifies + caches; followers pick up
 	// the cached keys when they proceed.
 	if r.dnskeyGroup != nil {
-		_, _, leader := r.dnskeyGroup.Do(ctx, dnsutil.Fqdn(zone), func() (struct{}, error) {
+		_, _, leader := r.dnskeyGroup.Do(ctx, dnsutil.Fqdn(zone), func(workCtx context.Context) (struct{}, error) {
 			// Another walk may have fetched while we queued.
 			if cached := crypto.ZoneKeys(zone); len(cached) > 0 {
 				return struct{}{}, nil
 			}
-			r.fetchZoneDNSKEYs(ctx, nameservers, zone, chain)
+			r.fetchZoneDNSKEYs(workCtx, nameservers, zone, chain)
 			return struct{}{}, nil
 		})
 		if !leader {
