@@ -189,9 +189,10 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		cryptoValidated := r.isValidWithDNSSEC(response, currentDomain, chain)
 		ecsResponse := r.resolver.edns.ParseFromDNS(response)
 		rcode := response.Rcode
+		truncated := response.Truncated
 		answer, authority, additional := response.Answer, response.Ns, response.Extra
 		pool.DefaultMessage.Put(response)
-		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Rcode: rcode, Validated: cryptoValidated, ECS: ecsResponse, Server: config.ProtoRecursive, Poisoned: poisonSeen, DNSSECEDE: chain.lastEDECode, Truncated: response.Truncated}
+		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Rcode: rcode, Validated: cryptoValidated, ECS: ecsResponse, Server: config.ProtoRecursive, Poisoned: poisonSeen, DNSSECEDE: chain.lastEDECode, Truncated: truncated}
 	}
 
 	for {

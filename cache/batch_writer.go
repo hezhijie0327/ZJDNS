@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"sync"
 	"time"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 )
 
@@ -115,6 +116,7 @@ func (w *BatchWriter[T]) Flush() {
 // item channel is closed, remaining items are drained and flushed, then the
 // goroutine exits.
 func (w *BatchWriter[T]) run() {
+	defer zdnsutil.HandlePanic("Cache batch writer")
 	defer close(w.done)
 
 	batch := make([]T, 0, w.batchSize)

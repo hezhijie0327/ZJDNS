@@ -257,7 +257,10 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 			if hg != nil {
 				hg.Feed(server.Address, pkt.TTL)
 			}
-			if len(pkt.Data) < 2 || uint16(pkt.Data[0])<<8|uint16(pkt.Data[1]) != trackingID {
+			// Gate on 12 bytes — processPacket reads raw[6..9] for the
+			// fast-signal checks; a 2-9 byte datagram with a matching ID
+			// would index out of range (H9; the multi-read path gates n<12).
+			if len(pkt.Data) < 12 || uint16(pkt.Data[0])<<8|uint16(pkt.Data[1]) != trackingID {
 				continue
 			}
 			// TTL confidence signal for spoofguard: when hopguard is armed

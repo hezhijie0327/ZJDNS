@@ -91,6 +91,11 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, 
 	if err != nil {
 		return nil, fmt.Errorf("decoding ed25519 private key: %w", err)
 	}
+	// circl ed25519.Sign panics on wrong-length keys and Public() silently
+	// truncates short ones — validate before constructing (H6).
+	if len(skBytes) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("dnscrypt: ed25519 private key must be %d bytes, got %d", ed25519.PrivateKeySize, len(skBytes))
+	}
 	signingSK := ed25519.PrivateKey(skBytes)
 	signingPK, ok := signingSK.Public().(ed25519.PublicKey)
 	if !ok {

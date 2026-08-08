@@ -211,6 +211,14 @@ func (m *CacheLookup) serveExpiredWithRefresh(qctx *handler.QueryContext, qname 
 			}
 			qctx.Res = msg
 			qctx.CacheServed = false
+			// Heal the cache: resolver.Query never writes entries, and the
+			// timer-path goroutine below only runs when the refresh outlasts
+			// the serve-expired window — a fast refresh would otherwise leave
+			// the entry permanently stale (H11).
+			if qr.Cacheable && dnssecCacheable(qr.Validated, qr.DNSSECEDE) {
+				m.store.Set(qname, qtype, qclass, ecsOpt, false, // dnssecOK — refresh does not need DNSSEC
+					qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
+			}
 			rec := cache.AcquireRequestRecord()
 			rec.Qname = qctx.Qname
 			rec.Qtype = qctx.Qtype

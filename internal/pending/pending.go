@@ -23,7 +23,6 @@ package pending
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 	"zjdns/internal/lrumap"
@@ -242,8 +241,13 @@ func (g *CallGroup[K, V]) Join(key K) (V, error, bool) {
 		}
 		return existing.Val, existing.Err, true
 	case <-timer.C:
+		// Read nothing from the entry: the leader's Once.Do write of
+		// existing.Err has no happens-before edge with this branch (the
+		// close(existing.Done) only synchronizes receivers of that channel),
+		// so reading it here is a data race.  The follower timed out — the
+		// leader's error would be misattributed anyway (H1).
 		var zero V
-		return zero, fmt.Errorf("%w: %w", ErrTimeout, existing.Err), true
+		return zero, ErrTimeout, true
 	}
 }
 
