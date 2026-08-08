@@ -37,7 +37,20 @@ const (
 	DefaultCacheMMapSizeMB   = 16
 	DefaultCacheCacheSizeMB  = 8
 	DefaultCacheMaxOpenConns = 6 // SQLite WAL: single writer, readers served concurrently
-	DefaultCacheMaxIdleConns = 4
+	// DefaultCacheMaxIdleConns is aligned with MaxOpenConns: with idle < open,
+	// the pool closes the surplus returned connection under sustained load and
+	// immediately dials a replacement, churning connections and re-preparing
+	// statements on every new connection (observed: thousands of retained
+	// prepared statements, then pool exhaustion wedging every query).
+	DefaultCacheMaxIdleConns = DefaultCacheMaxOpenConns
+
+	// DefaultCacheQueryTimeout bounds every SQLite READ on the query hot path.
+	// All cache/zone/ruleset lookups run through context-bounded calls so a
+	// momentarily exhausted pool fails fast instead of blocking on a
+	// context.Background wait forever (the old behaviour wedged the entire
+	// process — every handler queued on database/sql.DB.conn, only a restart
+	// recovered it).
+	DefaultCacheQueryTimeout = 2 * time.Second
 
 	DefaultQueryJournalRetention = 3 * 86400     // seconds — auto-cleanup window for query_stats + query_log
 	DefaultPruneInterval         = 1 * time.Hour // interval between PruneQueryJournal runs

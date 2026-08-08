@@ -5,6 +5,7 @@
 package ruleset
 
 import (
+	"context"
 	"database/sql"
 	"net"
 	"os"
@@ -16,13 +17,19 @@ import (
 // RuleSetStorage provides SQL operations needed by the ruleset engine.
 // *database.DB satisfies this interface implicitly.
 type RuleSetStorage interface {
-	SQLExec(query string, args ...any) (sql.Result, error)
-	SQLQueryRow(query string, args ...any) *sql.Row
-	SQLQuery(query string, args ...any) (*sql.Rows, error)
-	BeginTx() (*sql.Tx, error)
+	SQLExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	SQLQueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	SQLQueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	BeginTx(ctx context.Context) (*sql.Tx, error)
 	// RulesetDomainStmt returns the prepared domain-tag lookup statement —
 	// the per-query Match() hot path must not prepare a statement per call.
 	RulesetDomainStmt() *sql.Stmt
+	// ReadContext returns a bounded context for a hot-path read (a free
+	// connection may take time under load — the wait must never block
+	// forever).
+	ReadContext() (context.Context, context.CancelFunc)
+	// WriteContext returns a bounded context for a best-effort write.
+	WriteContext() (context.Context, context.CancelFunc)
 }
 
 // Engine matches queries against rule sets to produce tags.
@@ -52,19 +59,21 @@ func New(db RuleSetStorage) *Engine {
 // LoadRules stores RuleSet configurations into SQLite.  Rules are reloaded
 // from config on every startup — SQLite is the authoritative store.
 func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
-	tx, err := e.db.BeginTx()
+	ctx, cancel := e.db.WriteContext()
+	defer cancel()
+	tx, err := e.db.BeginTx(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.Exec(`DELETE FROM ruleset_entries`); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM ruleset_entries`); err != nil {
 		return err
 	}
 
 	for _, rs := range rulesets {
 		for _, v := range rs.Rule {
-			if err := insertRule(tx, rs.Tag, rs.Type, v); err != nil {
+			if err := insertRule(ctx, tx, rs.Tag, rs.Type, v); err != nil {
 				return err
 			}
 		}
@@ -74,7 +83,7 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 				return err
 			}
 			for _, line := range lines {
-				if err := insertRule(tx, rs.Tag, rs.Type, line); err != nil {
+				if err := insertRule(ctx, tx, rs.Tag, rs.Type, line); err != nil {
 					return err
 				}
 			}
@@ -88,24 +97,24 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 
 	// Reload tag set from committed rules.
 	var n, domainN int
-	if err := e.db.SQLQueryRow("SELECT COUNT(*) FROM ruleset_entries").Scan(&n); err != nil {
+	if err := e.db.SQLQueryRowContext(ctx, "SELECT COUNT(*) FROM ruleset_entries").Scan(&n); err != nil {
 		log.Warnf("RULESET: count query: %v", err)
 	}
-	if err := e.db.SQLQueryRow("SELECT COUNT(*) FROM ruleset_entries WHERE type='domain'").Scan(&domainN); err != nil {
+	if err := e.db.SQLQueryRowContext(ctx, "SELECT COUNT(*) FROM ruleset_entries WHERE type='domain'").Scan(&domainN); err != nil {
 		log.Warnf("RULESET: domain count query: %v", err)
 	}
 	e.domainRules = domainN
 	log.Infof("RULESET: %d rules loaded into %d tags", n, len(e.tags))
 
 	// Preload all CIDR rules into memory to avoid SQL queries on the hot path.
-	e.loadIPRules()
+	e.loadIPRules(ctx)
 
 	return nil
 }
 
 // loadIPRules loads all CIDR rules from SQLite into memory.
-func (e *Engine) loadIPRules() {
-	rows, err := e.db.SQLQuery("SELECT tag, value FROM ruleset_entries WHERE type='ip'")
+func (e *Engine) loadIPRules(ctx context.Context) {
+	rows, err := e.db.SQLQueryContext(ctx, "SELECT tag, value FROM ruleset_entries WHERE type='ip'")
 	if err != nil {
 		return
 	}
@@ -135,7 +144,9 @@ func (e *Engine) Match(qname, ip string) map[string]bool {
 	// trie match below still runs.
 	key := tldPlusOne(qname)
 	if e.domainRules > 0 {
-		domainRows, err := e.db.RulesetDomainStmt().Query(key)
+		ctx, cancel := e.db.ReadContext()
+		defer cancel()
+		domainRows, err := e.db.RulesetDomainStmt().QueryContext(ctx, key)
 		if err == nil {
 			defer func() { _ = domainRows.Close() }()
 			for domainRows.Next() {
@@ -209,7 +220,7 @@ func (e *Engine) MatchIP(ip, tag string) (matched, exists bool) {
 // insertRule validates and inserts a single ruleset entry into a transaction.
 // For IP rules it validates the CIDR; for domain rules it normalises to a
 // TLD+1 key before insertion.
-func insertRule(tx *sql.Tx, tag, typ, value string) error {
+func insertRule(ctx context.Context, tx *sql.Tx, tag, typ, value string) error {
 	if typ == "ip" {
 		if _, _, err := net.ParseCIDR(value); err != nil {
 			log.Warnf("RULESET: skipping invalid CIDR rule %s=%s: %v", tag, value, err)
@@ -220,7 +231,7 @@ func insertRule(tx *sql.Tx, tag, typ, value string) error {
 	if typ == "domain" {
 		key = domainKey(value)
 	}
-	_, err := tx.Exec(
+	_, err := tx.ExecContext(ctx,
 		`INSERT OR REPLACE INTO ruleset_entries (tag, type, value) VALUES (?, ?, ?)`,
 		tag, typ, key,
 	)

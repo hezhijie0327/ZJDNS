@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"database/sql"
 	"strconv"
 	"strings"
@@ -75,8 +76,8 @@ func (s *SQLiteCache) newCacheBatchWriter() *BatchWriter[cacheWriteItem] {
 		config.DefaultAsyncCacheBatchSize,
 		config.DefaultAsyncFlushInterval,
 		config.DefaultCacheWriteTimeout,
-		func(tx *sql.Tx, batch []cacheWriteItem) error {
-			return s.flushCacheEntries(tx, batch)
+		func(ctx context.Context, tx *sql.Tx, batch []cacheWriteItem) error {
+			return s.flushCacheEntries(ctx, tx, batch)
 		},
 		func() { s.evictIfNeeded() },
 	)
@@ -86,7 +87,7 @@ func (s *SQLiteCache) newCacheBatchWriter() *BatchWriter[cacheWriteItem] {
 // per row EXISTS (for the entry counter) → INSERT OR REPLACE RETURNING id →
 // ptr_map rows.  The read-through entry is removed once the row is written.
 // Errors abort the batch — the BatchWriter drops it (best-effort).
-func (s *SQLiteCache) flushCacheEntries(tx *sql.Tx, batch []cacheWriteItem) error {
+func (s *SQLiteCache) flushCacheEntries(ctx context.Context, tx *sql.Tx, batch []cacheWriteItem) error {
 	for i := range batch {
 		item := &batch[i]
 
@@ -94,14 +95,17 @@ func (s *SQLiteCache) flushCacheEntries(tx *sql.Tx, batch []cacheWriteItem) erro
 		// entry counter tracks the real row count (see Set for the original
 		// rationale — this logic moved here with the async write-back).
 		var exists bool
-		if err := tx.Stmt(s.db.StmtEntryExists).QueryRow(
+		// Raw SQL (not tx.Stmt): see flushStatsRecords — Tx.Stmt pins every
+		// prepare in the statement's per-connection cache and accumulated
+		// thousands of retained driverStmt objects under connection churn.
+		if err := tx.QueryRowContext(ctx, database.EntryExistsSQL,
 			item.qname, int(item.qtype), int(item.qclass), item.ecsAddr, item.ecsPrefix, item.dnssecInt,
 		).Scan(&exists); err != nil {
 			return err
 		}
 
 		var entryID int64
-		if err := tx.Stmt(s.db.StmtEntryInsert).QueryRow(
+		if err := tx.QueryRowContext(ctx, database.EntryInsertSQL,
 			item.qname, int(item.qtype), int(item.qclass), item.ecsAddr, item.ecsPrefix, item.dnssecInt,
 			item.now, item.ttl, item.now+int64(item.ttl), database.BoolToInt(item.validated),
 			item.msgWire,
@@ -113,7 +117,7 @@ func (s *SQLiteCache) flushCacheEntries(tx *sql.Tx, batch []cacheWriteItem) erro
 		}
 
 		if len(item.ptrRecs) > 0 {
-			if err := insertPtrRecs(tx, entryID, item.ptrRecs); err != nil {
+			if err := insertPtrRecs(ctx, tx, entryID, item.ptrRecs); err != nil {
 				// Best-effort: a failure here must not abort the batch — the
 				// cached entry is more valuable than reverse-lookup data.
 				log.Warnf("CACHE: insert ptr_map failed (non-fatal): %v", err)

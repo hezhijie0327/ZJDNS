@@ -24,7 +24,7 @@ import (
 // the query path must never block on or observe SQLite write failures.
 type BatchWriter[T any] struct {
 	ch        chan T
-	flushFn   func(tx *sql.Tx, batch []T) error
+	flushFn   func(ctx context.Context, tx *sql.Tx, batch []T) error
 	onCommit  func() // optional post-commit hook (e.g. cache eviction check)
 	db        *sql.DB
 	flushSig  chan chan struct{}
@@ -41,7 +41,7 @@ type BatchWriter[T any] struct {
 // interval is the idle-flush ticker; timeout bounds each flush transaction.
 // onCommit, when non-nil, runs after each successful commit (never inside the
 // transaction).
-func NewBatchWriter[T any](db *sql.DB, bufferSize, batchSize int, interval, timeout time.Duration, flushFn func(tx *sql.Tx, batch []T) error, onCommit func()) *BatchWriter[T] {
+func NewBatchWriter[T any](db *sql.DB, bufferSize, batchSize int, interval, timeout time.Duration, flushFn func(ctx context.Context, tx *sql.Tx, batch []T) error, onCommit func()) *BatchWriter[T] {
 	if batchSize <= 0 {
 		batchSize = 64
 	}
@@ -183,7 +183,7 @@ func (w *BatchWriter[T]) flush(batch []T) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := w.flushFn(tx, batch); err != nil {
+	if err := w.flushFn(ctx, tx, batch); err != nil {
 		log.Debugf("CACHE: async batch flush failed (%d items): %v", len(batch), err)
 		return
 	}

@@ -4,6 +4,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -163,11 +164,13 @@ func Open(path string, maxEntries int, opts Options) (*DB, error) {
 	// exist on an old DB — a query error here is non-fatal, the counter
 	// starts at 0 and eviction resyncs it).
 	var count int64
-	if err := db.SQ.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&count); err == nil {
+	countCtx, countCancel := context.WithTimeout(context.Background(), config.DefaultCacheWriteTimeout)
+	if err := db.SQ.QueryRowContext(countCtx, `SELECT COUNT(*) FROM entries`).Scan(&count); err == nil {
 		db.entryCount.Store(count)
 	} else if !opts.ReadOnly {
 		log.Debugf("DB: entryCount seed query failed (counter starts at 0): %v", err)
 	}
+	countCancel()
 
 	if err := db.prepareStatements(); err != nil {
 		_ = sqldb.Close()
@@ -205,7 +208,10 @@ func (db *DB) Close() error {
 		}
 	}
 	if db.dbPath != "" && !db.readOnly {
-		if _, err := db.SQ.Exec("PRAGMA optimize"); err != nil {
+		optimizeCtx, optimizeCancel := context.WithTimeout(context.Background(), config.DefaultCacheWriteTimeout)
+		_, err := db.SQ.ExecContext(optimizeCtx, "PRAGMA optimize")
+		optimizeCancel()
+		if err != nil {
 			log.Warnf("DB: PRAGMA optimize failed: %v", err)
 		}
 	}
@@ -217,24 +223,36 @@ func (db *DB) Close() error {
 	return nil
 }
 
-// SQLExec delegates to db.SQ.Exec, exposing a method that satisfies the
-// sqlExecutor interface defined by consumer packages (ruleset, zone).
-// Context-less variants are used intentionally: SQLite queries are fast (<1ms)
-// and context cancellation during shutdown is handled by closing the DB.
-func (db *DB) SQLExec(query string, args ...any) (sql.Result, error) {
-	return db.SQ.Exec(query, args...)
+// ReadContext returns a bounded context for a SQLite read on the query hot
+// path.  Every cache/zone/ruleset/delegation lookup must use it (or the
+// caller's own ctx): a pool that is momentarily exhausted then fails fast
+// instead of blocking on a context.Background wait forever — the previous
+// context-less calls wedged the whole process once all connections were
+// checked out (only a restart recovered it).
+func (db *DB) ReadContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), config.DefaultCacheQueryTimeout)
 }
 
-// SQLQueryRow delegates to db.SQ.QueryRow.
-// Context-less variant: see SQLExec for rationale.
-func (db *DB) SQLQueryRow(query string, args ...any) *sql.Row {
-	return db.SQ.QueryRow(query, args...)
+// WriteContext returns a bounded context for a best-effort SQLite write.
+func (db *DB) WriteContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), config.DefaultCacheWriteTimeout)
 }
 
-// SQLQuery executes a query and returns the *sql.Rows for iteration.
-// Context-less variant: see SQLExec for rationale.
-func (db *DB) SQLQuery(query string, args ...any) (*sql.Rows, error) {
-	return db.SQ.Query(query, args...)
+// SQLExecContext delegates to db.SQ.ExecContext, exposing a method that
+// satisfies the sqlExecutor interface defined by consumer packages (ruleset,
+// zone).  The caller supplies a bounded ctx (ReadContext/WriteContext).
+func (db *DB) SQLExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return db.SQ.ExecContext(ctx, query, args...)
+}
+
+// SQLQueryRowContext delegates to db.SQ.QueryRowContext.
+func (db *DB) SQLQueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return db.SQ.QueryRowContext(ctx, query, args...)
+}
+
+// SQLQueryContext executes a query and returns the *sql.Rows for iteration.
+func (db *DB) SQLQueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return db.SQ.QueryContext(ctx, query, args...)
 }
 
 // Cache methods
@@ -248,8 +266,8 @@ func (db *DB) EntryCount() int64 { return db.entryCount.Load() }
 // SetEntryCount atomically sets the entry counter to n.
 func (db *DB) SetEntryCount(n int64) { db.entryCount.Store(n) }
 
-// BeginTx starts a new SQL transaction.
-func (db *DB) BeginTx() (*sql.Tx, error) { return db.SQ.Begin() }
+// BeginTx starts a new SQL transaction within a bounded write context.
+func (db *DB) BeginTx(ctx context.Context) (*sql.Tx, error) { return db.SQ.BeginTx(ctx, nil) }
 
 // RulesetDomainStmt returns the prepared ruleset domain lookup statement.
 // Satisfies ruleset.RuleSetStorage: the per-query Match() hot path must not
@@ -260,24 +278,27 @@ func (db *DB) RulesetDomainStmt() *sql.Stmt { return db.StmtRulesetDomain }
 func (db *DB) MaxEntries() int { return db.maxEntries }
 
 // QueryZoneExact runs the exact-match zone query via StmtZoneExact.
-// Satisfies zone.ZoneStorage.
-func (db *DB) QueryZoneExact(qname string, qtype, qclass int) (*sql.Rows, error) {
-	return db.StmtZoneExact.Query(qname, qtype, qclass)
+// Satisfies zone.ZoneStorage.  ctx must be bounded (ReadContext or the
+// caller's own) — a free connection may take time under load.
+func (db *DB) QueryZoneExact(ctx context.Context, qname string, qtype, qclass int) (*sql.Rows, error) {
+	return db.StmtZoneExact.QueryContext(ctx, qname, qtype, qclass)
 }
 
 // QueryZoneWildcard runs the wildcard-batch zone query via StmtZoneWildcard.
 // Satisfies zone.ZoneStorage.
-func (db *DB) QueryZoneWildcard(args []any) (*sql.Rows, error) {
-	return db.StmtZoneWildcard.Query(args...)
+func (db *DB) QueryZoneWildcard(ctx context.Context, args []any) (*sql.Rows, error) {
+	return db.StmtZoneWildcard.QueryContext(ctx, args...)
 }
 
 // Begin starts a new SQL transaction. Satisfies zone.ZoneStorage.
-// Begin starts a new SQL transaction. Identical to BeginTx — both exist to
-// satisfy different consumer interfaces (zone.ZoneStorage and ruleset.RuleSetStorage).
-func (db *DB) Begin() (*sql.Tx, error) { return db.BeginTx() }
+// Identical to BeginTx — both exist to satisfy different consumer interfaces
+// (zone.ZoneStorage and ruleset.RuleSetStorage).
+func (db *DB) Begin(ctx context.Context) (*sql.Tx, error) { return db.BeginTx(ctx) }
 
 // Exec executes a SQL statement. Satisfies zone.ZoneStorage.
-func (db *DB) Exec(query string, args ...any) (sql.Result, error) { return db.SQ.Exec(query, args...) }
+func (db *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return db.SQ.ExecContext(ctx, query, args...)
+}
 
 // IsClosed reports whether the database has been closed.
 func (db *DB) IsClosed() bool { return atomic.LoadInt32(&db.closed) != 0 }
@@ -288,7 +309,9 @@ func (db *DB) IsClosed() bool { return atomic.LoadInt32(&db.closed) != 0 }
 // blobs, or (nil, nil) when no state has been saved yet.  Satisfies the
 // StateStore interface defined by server/protocol/dnscrypt.
 func (db *DB) LoadDNSCryptState() (identity, windows []byte, err error) {
-	err = db.StmtDNSCryptLoad.QueryRow().Scan(&identity, &windows)
+	ctx, cancel := db.ReadContext()
+	defer cancel()
+	err = db.StmtDNSCryptLoad.QueryRowContext(ctx).Scan(&identity, &windows)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, nil
 	}
@@ -298,6 +321,8 @@ func (db *DB) LoadDNSCryptState() (identity, windows []byte, err error) {
 // SaveDNSCryptState upserts the singleton DNSCrypt state row.  Satisfies the
 // StateStore interface defined by server/protocol/dnscrypt.
 func (db *DB) SaveDNSCryptState(identity, windows []byte) error {
-	_, err := db.StmtDNSCryptSave.Exec(identity, windows)
+	ctx, cancel := db.WriteContext()
+	defer cancel()
+	_, err := db.StmtDNSCryptSave.ExecContext(ctx, identity, windows)
 	return err
 }

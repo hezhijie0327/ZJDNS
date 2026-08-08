@@ -22,6 +22,30 @@ const (
 	IPLatencyPlaceholders = 64
 )
 
+// Raw SQL strings shared by the prepared statements below and the async
+// flush paths (cache/async_cache.go, cache/async_writer.go).  The flush paths
+// execute these with tx.ExecContext / tx.QueryRowContext — raw execution is
+// prepared-then-closed, so it never accumulates per-connection statement
+// cache entries (database/sql pins every Tx.Stmt prepare in the Stmt's css
+// map; under connection churn that grew to thousands of retained
+// driverStmt objects and contributed to the SQLite pool exhaustion).
+const (
+	EntryExistsSQL = `SELECT EXISTS(SELECT 1 FROM entries
+		WHERE qname = ? AND qtype = ? AND qclass = ? AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?)`
+	EntryInsertSQL = `INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok,
+		timestamp, ttl, expires_at, validated, msg_wire)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		RETURNING id`
+	QueryLogInsertSQL = `INSERT INTO query_log (timestamp, qname, qtype, qclass, protocol, result,
+		rcode, response_ms, server, poisoned, dnssec)
+		VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`
+	QueryStatsUpsertSQL = `INSERT INTO query_stats (stat_day, result, protocol, rcode, dnssec, poisoned, query_count, total_ms)
+		VALUES (unixepoch() / 86400, ?1, ?2, ?3, ?4, ?5, 1, ?6)
+		ON CONFLICT(stat_day, result, protocol, rcode, dnssec, poisoned) DO UPDATE
+		SET query_count = query_stats.query_count + 1,
+		    total_ms = query_stats.total_ms + ?6`
+)
+
 var (
 	zoneWildcardPlaceholdersSQL     = strings.Repeat("?,", ZoneWildcardPlaceholders-1) + "?"
 	delegationLookupPlaceholdersSQL = strings.Repeat("?,", DelegationLookupZones-1) + "?"
@@ -32,10 +56,7 @@ func (db *DB) prepareStatements() error {
 	var err error
 
 	// Cache statements.
-	db.StmtEntryExists, err = db.SQ.Prepare(
-		`SELECT EXISTS(SELECT 1 FROM entries
-			WHERE qname = ? AND qtype = ? AND qclass = ? AND ecs_addr = ? AND ecs_prefix = ? AND dnssec_ok = ?)`,
-	)
+	db.StmtEntryExists, err = db.SQ.Prepare(EntryExistsSQL)
 	if err != nil {
 		return err
 	}
@@ -68,30 +89,15 @@ func (db *DB) prepareStatements() error {
 	if err != nil {
 		return err
 	}
-	db.StmtEntryInsert, err = db.SQ.Prepare(
-		`INSERT OR REPLACE INTO entries (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok,
-			timestamp, ttl, expires_at, validated, msg_wire)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 RETURNING id`,
-	)
+	db.StmtEntryInsert, err = db.SQ.Prepare(EntryInsertSQL)
 	if err != nil {
 		return err
 	}
-	db.StmtQueryLog, err = db.SQ.Prepare(
-		`INSERT INTO query_log (timestamp, qname, qtype, qclass, protocol, result,
-			rcode, response_ms, server, poisoned, dnssec)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
-	)
+	db.StmtQueryLog, err = db.SQ.Prepare(QueryLogInsertSQL)
 	if err != nil {
 		return err
 	}
-	db.StmtQueryStats, err = db.SQ.Prepare(
-		`INSERT INTO query_stats (stat_day, result, protocol, rcode, dnssec, poisoned, query_count, total_ms)
-		 VALUES (unixepoch() / 86400, ?1, ?2, ?3, ?4, ?5, 1, ?6)
-		 ON CONFLICT(stat_day, result, protocol, rcode, dnssec, poisoned) DO UPDATE
-		 SET query_count = query_stats.query_count + 1,
-		     total_ms = query_stats.total_ms + ?6`,
-	)
+	db.StmtQueryStats, err = db.SQ.Prepare(QueryStatsUpsertSQL)
 	if err != nil {
 		return err
 	}

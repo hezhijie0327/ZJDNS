@@ -47,10 +47,12 @@ func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
 	if s.db.IsClosed() {
 		return
 	}
-	_, _ = s.db.StmtQueryStats.Exec(r.Result, r.Protocol, r.Rcode, r.DNSSECStatus,
+	ctx, cancel := s.db.WriteContext()
+	defer cancel()
+	_, _ = s.db.StmtQueryStats.ExecContext(ctx, r.Result, r.Protocol, r.Rcode, r.DNSSECStatus,
 		database.BoolToInt(r.Poisoned), r.ResponseTime)
 	if r.Result != "hit" {
-		_, _ = s.db.StmtQueryLog.Exec(
+		_, _ = s.db.StmtQueryLog.ExecContext(ctx,
 			log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass),
 			r.Protocol, r.Result, r.Rcode, r.ResponseTime, r.Server,
 			database.BoolToInt(r.Poisoned), r.DNSSECStatus,
@@ -69,7 +71,9 @@ func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
 	staleCutoff := log.NowUnix() - defaultStaleMaxAge
 	// Use a correlated subquery to pick the row with the latest expiry for each
 	// name, avoiding the non-deterministic GROUP BY on unaggregated columns.
-	rows, err := s.db.SQ.Query(
+	ctx, cancel := s.db.ReadContext()
+	defer cancel()
+	rows, err := s.db.SQ.QueryContext(ctx,
 		`SELECT pm.name, pm.ttl, e.timestamp, pm.entry_id
 		 FROM ptr_map pm
 		 JOIN entries e ON pm.entry_id = e.id
@@ -139,30 +143,46 @@ func (s *SQLiteCache) FlushDB(target string) (int64, error) {
 	var err error
 	switch target {
 	case "stats":
-		result, err = s.db.SQ.Exec(`DELETE FROM query_stats`)
+		ctx, cancel := s.db.WriteContext()
+		defer cancel()
+		result, err = s.db.SQ.ExecContext(ctx, `DELETE FROM query_stats`)
 		if err != nil {
 			return 0, fmt.Errorf("flushDB stats: %w", err)
 		}
 	case "querylog":
-		result, err = s.db.SQ.Exec(`DELETE FROM query_log`)
+		ctx, cancel := s.db.WriteContext()
+		defer cancel()
+		result, err = s.db.SQ.ExecContext(ctx, `DELETE FROM query_log`)
 		if err != nil {
 			return 0, fmt.Errorf("flushDB querylog: %w", err)
 		}
 	case "cache":
-		result, err = s.db.SQ.Exec(`DELETE FROM entries`)
+		ctx, cancel := s.db.WriteContext()
+		defer cancel()
+		result, err = s.db.SQ.ExecContext(ctx, `DELETE FROM entries`)
 		if err == nil {
 			s.db.SetEntryCount(0)
 		}
 	case "latency":
-		result, err = s.db.SQ.Exec(`DELETE FROM ip_latency`)
+		ctx, cancel := s.db.WriteContext()
+		defer cancel()
+		result, err = s.db.SQ.ExecContext(ctx, `DELETE FROM ip_latency`)
 	case "ptr":
-		result, err = s.db.SQ.Exec(`DELETE FROM ptr_map`)
+		ctx, cancel := s.db.WriteContext()
+		defer cancel()
+		result, err = s.db.SQ.ExecContext(ctx, `DELETE FROM ptr_map`)
 	case "zone":
-		result, err = s.db.SQ.Exec(`DELETE FROM zone_entries`)
+		ctx, cancel := s.db.WriteContext()
+		defer cancel()
+		result, err = s.db.SQ.ExecContext(ctx, `DELETE FROM zone_entries`)
 	case "delegation":
-		result, err = s.db.SQ.Exec(`DELETE FROM delegations`)
+		ctx, cancel := s.db.WriteContext()
+		defer cancel()
+		result, err = s.db.SQ.ExecContext(ctx, `DELETE FROM delegations`)
 	case "ruleset":
-		result, err = s.db.SQ.Exec(`DELETE FROM ruleset_entries`)
+		ctx, cancel := s.db.WriteContext()
+		defer cancel()
+		result, err = s.db.SQ.ExecContext(ctx, `DELETE FROM ruleset_entries`)
 	default:
 		return 0, fmt.Errorf("flushDB: unknown target %q", target)
 	}
@@ -218,7 +238,9 @@ func (s *SQLiteCache) Stats() []string {
 	var totalMS int64
 
 	// Single scan of query_stats — result+protocol+rcode breakdown + totals.
-	err := s.db.SQ.QueryRow(
+	ctx, cancel := s.db.ReadContext()
+	defer cancel()
+	err := s.db.SQ.QueryRowContext(ctx,
 		"SELECT COALESCE(SUM(query_count), 0),"+
 			// result breakdown
 			" COALESCE(SUM(CASE WHEN result='hit' THEN query_count ELSE 0 END), 0),"+
@@ -413,10 +435,12 @@ func (s *SQLiteCache) LatencyLastProbe(ip string) (int64, bool) {
 	if s.db.IsClosed() {
 		return 0, false
 	}
+	ctx, cancel := s.db.ReadContext()
+	defer cancel()
 	var ts int64
 	// Note: ts==0 is ambiguous (no row vs. fresh row with last_probe_time=0).
 	// Both cases trigger a probe, which is harmless for fresh rows.
-	if err := s.db.StmtLastProbe.QueryRow(ip).Scan(&ts); err != nil || ts == 0 {
+	if err := s.db.StmtLastProbe.QueryRowContext(ctx, ip).Scan(&ts); err != nil || ts == 0 {
 		return 0, false
 	}
 	return ts, true

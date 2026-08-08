@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"testing"
 )
 
@@ -119,7 +120,7 @@ func TestSQLiteWALConcurrentWrites(t *testing.T) {
 
 	// Verify that two concurrent transactions can both commit successfully
 	// — SQLite WAL mode serializes writers, no app-level mutex needed.
-	tx1, err := db.BeginTx()
+	tx1, err := db.BeginTx(context.Background())
 	if err != nil {
 		t.Fatalf("BeginTx error: %v", err)
 	}
@@ -131,7 +132,7 @@ func TestSQLiteWALConcurrentWrites(t *testing.T) {
 		t.Fatalf("Commit error: %v", err)
 	}
 
-	tx2, err := db.BeginTx()
+	tx2, err := db.BeginTx(context.Background())
 	if err != nil {
 		t.Fatalf("BeginTx error: %v", err)
 	}
@@ -152,7 +153,7 @@ func TestBeginTx(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	tx, err := db.BeginTx()
+	tx, err := db.BeginTx(context.Background())
 	if err != nil {
 		t.Fatalf("BeginTx error: %v", err)
 	}
@@ -168,7 +169,7 @@ func TestSQLExec(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	_, err = db.SQLExec("SELECT 1")
+	_, err = db.SQLExecContext(context.Background(), "SELECT 1")
 	if err != nil {
 		t.Errorf("SQLExec error: %v", err)
 	}
@@ -181,7 +182,7 @@ func TestSQLQueryRow(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	row := db.SQLQueryRow("SELECT 1")
+	row := db.SQLQueryRowContext(context.Background(), "SELECT 1")
 	var n int
 	if err := row.Scan(&n); err != nil {
 		t.Errorf("SQLQueryRow scan error: %v", err)
@@ -198,7 +199,7 @@ func TestSQLQuery(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	rows, err := db.SQLQuery("SELECT 1 AS n")
+	rows, err := db.SQLQueryContext(context.Background(), "SELECT 1 AS n")
 	if err != nil {
 		t.Fatalf("SQLQuery error: %v", err)
 	}
@@ -220,13 +221,13 @@ func TestZoneStorageMethods(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	// Exec
-	_, err = db.Exec("SELECT 1")
+	_, err = db.Exec(context.Background(), "SELECT 1")
 	if err != nil {
 		t.Errorf("Exec error: %v", err)
 	}
 
 	// Begin
-	tx, err := db.Begin()
+	tx, err := db.Begin(context.Background())
 	if err != nil {
 		t.Fatalf("Begin error: %v", err)
 	}

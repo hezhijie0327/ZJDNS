@@ -237,7 +237,10 @@ func (s *SQLiteCache) optimizeLoop() {
 			if s.db.IsClosed() {
 				return
 			}
-			if _, err := s.db.SQ.Exec("PRAGMA optimize"); err != nil {
+			optimizeCtx, optimizeCancel := context.WithTimeout(context.Background(), config.DefaultCacheWriteTimeout)
+			_, err := s.db.SQ.ExecContext(optimizeCtx, "PRAGMA optimize")
+			optimizeCancel()
+			if err != nil {
 				log.Debugf("CACHE: PRAGMA optimize failed: %v", err)
 			}
 		case <-s.optimizeDone:
@@ -267,6 +270,8 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	if s.db.IsClosed() {
 		return nil, false, false
 	}
+	ctx, cancel := s.db.ReadContext()
+	defer cancel()
 
 	dnssecInt := database.BoolToInt(dnssecOK)
 
@@ -312,7 +317,7 @@ func (s *SQLiteCache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOpt
 	// ecs_prefix).  StmtEntryFallback carries no ORDER BY — an expression
 	// sort built a temporary btree per execution (~16% CPU in load tests);
 	// at most 5 rows match, so the winner is picked here.
-	rows, err := s.db.StmtEntryFallback.Query(args[:]...)
+	rows, err := s.db.StmtEntryFallback.QueryContext(ctx, args[:]...)
 	if err != nil {
 		log.Warnf("CACHE: get query failed for %s (type=%d): %v", qname, qtype, err)
 		return nil, false, false
@@ -354,6 +359,8 @@ func (s *SQLiteCache) GetTypes(qname string, qclass uint16, qtypes [2]uint16, dn
 	if s.db.IsClosed() {
 		return entries, found, expired
 	}
+	ctx, cancel := s.db.ReadContext()
+	defer cancel()
 
 	dnssecInt := database.BoolToInt(dnssecOK)
 
@@ -377,7 +384,7 @@ func (s *SQLiteCache) GetTypes(qname string, qclass uint16, qtypes [2]uint16, dn
 		return entries, found, expired
 	}
 
-	rows, err := s.db.StmtEntryBatch.Query(qname, int(qclass), dnssecInt, "", 0, int(qtypes[0]), int(qtypes[1]))
+	rows, err := s.db.StmtEntryBatch.QueryContext(ctx, qname, int(qclass), dnssecInt, "", 0, int(qtypes[0]), int(qtypes[1]))
 	if err != nil {
 		log.Warnf("CACHE: two-types get failed for %s: %v", qname, err)
 		return entries, found, expired
@@ -595,7 +602,9 @@ func (s *SQLiteCache) lookupIPLatencies(ips []string) map[string]int {
 		}
 	}
 
-	rows, err := s.db.StmtIPLatency.Query(argsPtr[:]...)
+	ctx, cancel := s.db.ReadContext()
+	defer cancel()
+	rows, err := s.db.StmtIPLatency.QueryContext(ctx, argsPtr[:]...)
 	if err != nil {
 		return latencies
 	}
@@ -786,19 +795,19 @@ func (s *SQLiteCache) setSync(qname string, qtype, qclass uint16, ecsAddr string
 		// REPLACE deletes and reinserts, leaving the row count unchanged, so
 		// only new rows may increment the entry counter.
 		var exists bool
-		txErr = tx.Stmt(s.db.StmtEntryExists).QueryRow(
+		txErr = tx.StmtContext(writeCtx, s.db.StmtEntryExists).QueryRowContext(writeCtx,
 			qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
 		).Scan(&exists)
 
 		if txErr == nil {
-			if txErr = tx.Stmt(s.db.StmtEntryInsert).QueryRow(
+			if txErr = tx.StmtContext(writeCtx, s.db.StmtEntryInsert).QueryRowContext(writeCtx,
 				qname, int(qtype), int(qclass), ecsAddr, ecsPrefix, dnssecInt,
 				now, entryTTL, now+int64(entryTTL), database.BoolToInt(validated),
 				msgWire,
 			).Scan(&entryID); txErr == nil {
 
 				if len(recs) > 0 {
-					if err := insertPtrRecs(tx, entryID, recs); err != nil {
+					if err := insertPtrRecs(writeCtx, tx, entryID, recs); err != nil {
 						// Best-effort: a failure here must not abort the
 						// transaction — the cached entry is more valuable
 						// than reverse-lookup data.
@@ -850,7 +859,10 @@ func (s *SQLiteCache) evictIfNeeded() {
 	// zero — the resync is purely periodic (R3-L25).
 	count = s.db.EntryCount()
 	if s.evictCount.Load()%20 == 0 {
-		if err := s.db.SQ.QueryRow("SELECT COUNT(*) FROM entries").Scan(&count); err == nil {
+		ctx, cancel := s.db.ReadContext()
+		err := s.db.SQ.QueryRowContext(ctx, "SELECT COUNT(*) FROM entries").Scan(&count)
+		cancel()
+		if err == nil {
 			s.db.SetEntryCount(count)
 		}
 	}
@@ -893,7 +905,7 @@ func (s *SQLiteCache) PruneQueryJournal(retentionSec int64) (int64, error) {
 	// result×protocol×rcode×dnssec×poisoned combination, so a single day
 	// is tiny and the loop is bounded by the accumulated history.
 	var minDay int64
-	if err := s.db.SQ.QueryRow(
+	if err := s.db.SQ.QueryRowContext(ctx,
 		`SELECT COALESCE(MIN(stat_day), 0) FROM query_stats`,
 	).Scan(&minDay); err != nil {
 		return 0, fmt.Errorf("cleanup query_stats: %w", err)
@@ -945,7 +957,7 @@ func (s *SQLiteCache) evictOldest(toEvict int64) {
 
 	// Clean up stale rows from tables with no FK cascade to entries.
 	// All three use the same staleCutoff — batched into a single Exec.
-	if _, err := tx.Exec(
+	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM ip_latency WHERE last_probe_time > 0 AND last_probe_time < ?; `+
 			`DELETE FROM query_log WHERE timestamp < ?`,
 		staleCutoff, staleCutoff,
@@ -958,7 +970,7 @@ func (s *SQLiteCache) evictOldest(toEvict int64) {
 	// can no longer serve stale and are worthless. idx_entries_expires
 	// enables an index-assisted range scan for the WHERE filter.
 	// Phase 2 — if still over limit, evict the oldest entries regardless.
-	result, err := tx.Exec(
+	result, err := tx.ExecContext(ctx,
 		`DELETE FROM entries WHERE id IN (
 			SELECT id FROM entries WHERE expires_at < ?
 			ORDER BY timestamp ASC LIMIT ?
@@ -971,7 +983,7 @@ func (s *SQLiteCache) evictOldest(toEvict int64) {
 	remaining := toEvict - phase1
 
 	if remaining > 0 {
-		result2, err2 := tx.Exec(
+		result2, err2 := tx.ExecContext(ctx,
 			`DELETE FROM entries WHERE id IN (
 				SELECT id FROM entries ORDER BY timestamp ASC LIMIT ?
 			)`, remaining,

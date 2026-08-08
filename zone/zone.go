@@ -5,6 +5,7 @@
 package zone
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -59,11 +60,17 @@ type dynamicEntry struct {
 // pattern as ruleset.RuleSetStorage.  It allows zone.Evaluator to depend on
 // an abstraction rather than the concrete *database.DB type.
 type ZoneStorage interface {
-	Exec(query string, args ...any) (sql.Result, error)
-	Begin() (*sql.Tx, error)
-	QueryZoneExact(qname string, qtype, qclass int) (*sql.Rows, error)
-	QueryZoneWildcard(args []any) (*sql.Rows, error)
+	Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
+	Begin(ctx context.Context) (*sql.Tx, error)
+	QueryZoneExact(ctx context.Context, qname string, qtype, qclass int) (*sql.Rows, error)
+	QueryZoneWildcard(ctx context.Context, args []any) (*sql.Rows, error)
 	Close() error
+	// ReadContext returns a bounded context for a hot-path read (a free
+	// connection may take time under load — the wait must never block
+	// forever).
+	ReadContext() (context.Context, context.CancelFunc)
+	// WriteContext returns a bounded context for a best-effort write.
+	WriteContext() (context.Context, context.CancelFunc)
 }
 
 // Evaluator manages zone rules backed by a ZoneStorage implementation.
@@ -126,16 +133,20 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 	e.rulesMu.Lock()
 	defer e.rulesMu.Unlock()
 
-	if _, err := e.db.Exec(`DELETE FROM zone_entries`); err != nil {
+	ctx, cancel := e.db.WriteContext()
+	defer cancel()
+
+	if _, err := e.db.Exec(ctx, `DELETE FROM zone_entries`); err != nil {
 		return fmt.Errorf("zone: clear: %w", err)
 	}
 	// Clear dynamic content registrations.
 	e.dynamics = make(map[string]*dynamicEntry)
 
-	tx, err := e.db.Begin()
+	tx, err := e.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("zone: begin tx: %w", err)
 	}
+	defer func() { _ = tx.Rollback() }()
 
 	// Collect global bypass rules: only Match, no Name/File/Answer/DynamicContent.
 	var bypass [][]matchTag
@@ -163,18 +174,16 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 	for i := range content {
 		rule := &content[i]
 		if rule.File != "" {
-			n, err := e.loadFile(tx, rule)
+			n, err := e.loadFile(ctx, tx, rule)
 			if err != nil {
-				_ = tx.Rollback()
 				return fmt.Errorf("zone file %q: %w", rule.File, err)
 			}
 			total += int64(n)
 			log.Infof("ZONE: loaded %d entries from %s", n, rule.File)
 			continue
 		}
-		n, err := e.loadInline(tx, rule)
+		n, err := e.loadInline(ctx, tx, rule)
 		if err != nil {
-			_ = tx.Rollback()
 			return err
 		}
 		total += int64(n)
@@ -190,7 +199,7 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 	return nil
 }
 
-func (e *Evaluator) loadInline(tx *sql.Tx, rule *config.ZoneRule) (int, error) {
+func (e *Evaluator) loadInline(ctx context.Context, tx *sql.Tx, rule *config.ZoneRule) (int, error) {
 	if rule.Name == "" {
 		return 0, errors.New("zone rule: name is required")
 	}
@@ -223,7 +232,7 @@ func (e *Evaluator) loadInline(tx *sql.Tx, rule *config.ZoneRule) (int, error) {
 			aw := packRRs(rule.Name, g.records)
 			auth := packRRs(rule.Name, rule.Authority)
 			addl := packRRs(rule.Name, rule.Additional)
-			if err := e.insertRow(tx, normalizedName, g.qtype, g.qclass, rule.Rcode, aw, auth, addl, matchTags, isWildcard); err != nil {
+			if err := e.insertRow(ctx, tx, normalizedName, g.qtype, g.qclass, rule.Rcode, aw, auth, addl, matchTags, isWildcard); err != nil {
 				return 0, err
 			}
 			count++
@@ -232,7 +241,7 @@ func (e *Evaluator) loadInline(tx *sql.Tx, rule *config.ZoneRule) (int, error) {
 		// Sentinel entry for rcode-only or dynamic rules.
 		auth := packRRs(rule.Name, rule.Authority)
 		addl := packRRs(rule.Name, rule.Additional)
-		if err := e.insertRow(tx, normalizedName, 0, 0, rule.Rcode, nil, auth, addl, matchTags, isWildcard); err != nil {
+		if err := e.insertRow(ctx, tx, normalizedName, 0, 0, rule.Rcode, nil, auth, addl, matchTags, isWildcard); err != nil {
 			return 0, err
 		}
 		count++
@@ -241,12 +250,12 @@ func (e *Evaluator) loadInline(tx *sql.Tx, rule *config.ZoneRule) (int, error) {
 	return count, nil
 }
 
-func (e *Evaluator) insertRow(tx *sql.Tx, qname string, qtype, qclass uint16, rcode int, answer, authority, additional []byte, matchTags string, isWildcard bool) error {
+func (e *Evaluator) insertRow(ctx context.Context, tx *sql.Tx, qname string, qtype, qclass uint16, rcode int, answer, authority, additional []byte, matchTags string, isWildcard bool) error {
 	w := 0
 	if isWildcard {
 		w = 1
 	}
-	_, err := tx.Exec(
+	_, err := tx.ExecContext(ctx,
 		`INSERT OR REPLACE INTO zone_entries
 		 (is_wildcard, qname, qtype, qclass, rcode, answer, authority, additional, match_tags)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -299,27 +308,29 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 	}
 
 	loadedAt := e.loadedAt.Load()
+	readCtx, readCancel := e.db.ReadContext()
+	defer readCancel()
 
 	// 3. Exact composite key lookup.
-	if r := e.queryExact(qname, qtype, qclass, matchedTags, loadedAt); r.Matched {
+	if r := e.queryExact(readCtx, qname, qtype, qclass, matchedTags, loadedAt); r.Matched {
 		return r
 	}
 
 	// 4. Sentinel key (rcode-only rules).
-	if r := e.queryExact(qname, 0, 0, matchedTags, loadedAt); r.Matched {
+	if r := e.queryExact(readCtx, qname, 0, 0, matchedTags, loadedAt); r.Matched {
 		return r
 	}
 
 	// 5. Wildcard suffix batch — single IN query replaces N per-label queries.
 	// ORDER BY length(qname) DESC, qtype DESC ensures the most specific
 	// suffix and the concrete qtype match (over qtype=0 sentinel) win.
-	r := e.queryWildcardBatch(qname, qtype, qclass, matchedTags, loadedAt)
+	r := e.queryWildcardBatch(readCtx, qname, qtype, qclass, matchedTags, loadedAt)
 
 	return r
 }
 
-func (e *Evaluator) queryExact(qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
-	rows, err := e.db.QueryZoneExact(qname, int(qtype), int(qclass))
+func (e *Evaluator) queryExact(ctx context.Context, qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
+	rows, err := e.db.QueryZoneExact(ctx, qname, int(qtype), int(qclass))
 	if err != nil {
 		return Result{Rcode: dns.RcodeSuccess}
 	}
@@ -365,7 +376,7 @@ func (e *Evaluator) queryExact(qname string, qtype, qclass uint16, matchedTags m
 // queryWildcardBatch collects all suffix candidates from qname, issues a single
 // IN query ordered by specificity, and returns the first tag-matching row.
 // Replaces the per-label N-query loop (2 per suffix level) with one SQL query.
-func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
+func (e *Evaluator) queryWildcardBatch(ctx context.Context, qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
 	// Collect suffix candidates (e.g. "b.c.example.com", "c.example.com", "example.com").
 	suffixes := make([]string, 0, 8)
 	rest := qname
@@ -406,7 +417,7 @@ func (e *Evaluator) queryWildcardBatch(qname string, qtype, qclass uint16, match
 	args[maxWildcardLabels] = int(qtype)
 	args[maxWildcardLabels+1] = int(qclass)
 
-	rows, err := e.db.QueryZoneWildcard(args)
+	rows, err := e.db.QueryZoneWildcard(ctx, args)
 	if err != nil {
 		return Result{Rcode: dns.RcodeSuccess}
 	}

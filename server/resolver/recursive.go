@@ -165,7 +165,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 	// Delegation cache: if a cached zone cut exists for an ancestor of the
 	// qname, start the walk from the deepest fresh zone instead of the root.
-	if record, ok := r.lookupDelegation(qname, question.Qtype); ok {
+	if record, ok := r.lookupDelegation(ctx, qname, question.Qtype); ok {
 		if err := r.applyDelegationStart(&nameservers, &currentDomain, &tldServers, chain, record); err == nil {
 			minimiseSteps = 0 // restart minimisation schedule from new zone
 			log.Debugf("RECURSION: delegation cache hit for %s — starting walk at zone=%s", question.Name, currentDomain)
@@ -361,7 +361,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		}
 
 		r.cacheGlueRecords(nsResult.glue)
-		r.storeDelegation(currentDomain, parentDomain, bestNSRecords, nsResult.addrs, chain, verdict)
+		r.storeDelegation(ctx, currentDomain, parentDomain, bestNSRecords, nsResult.addrs, chain, verdict)
 
 		pool.DefaultMessage.Put(response)
 		nameservers = nsResult.addrs

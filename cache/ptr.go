@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"database/sql"
 	"strings"
 
@@ -46,7 +47,7 @@ func extractPtrRecs(rrs []dns.RR) []ptrRec {
 
 // insertPtrRecs inserts pre-extracted reverse-lookup rows into ptr_map for a
 // cache entry, inside the caller's transaction.
-func insertPtrRecs(tx *sql.Tx, entryID int64, recs []ptrRec) error {
+func insertPtrRecs(ctx context.Context, tx *sql.Tx, entryID int64, recs []ptrRec) error {
 	if len(recs) == 0 {
 		return nil
 	}
@@ -58,7 +59,7 @@ func insertPtrRecs(tx *sql.Tx, entryID int64, recs []ptrRec) error {
 	}
 	stmt := `INSERT OR REPLACE INTO ptr_map (rdata_ip, entry_id, name, ttl) VALUES ` + //nolint:gosec // G202: parameterized placeholders, no user input
 		strings.Join(placeholders, ",")
-	if _, err := tx.Exec(stmt, args...); err != nil {
+	if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
 		// Callers (async_cache.go flushCacheEntries) log the failure with
 		// their own context — do not double-report the same event.
 		return err

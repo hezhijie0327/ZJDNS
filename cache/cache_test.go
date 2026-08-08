@@ -2,6 +2,8 @@ package cache
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"fmt"
 	"net/netip"
 	"os"
@@ -1372,5 +1374,47 @@ func TestPruneQueryJournal(t *testing.T) {
 	}
 	if staleLog != 0 {
 		t.Errorf("stale query_log rows = %d, want 0", staleLog)
+	}
+}
+
+// TestGet_BoundedPoolWait guards the SQLite pool-exhaustion regression: every
+// cache read must fail fast within DefaultCacheQueryTimeout when all
+// connections are checked out, instead of blocking on a context.Background
+// wait forever (the old context-less queries wedged the whole process — every
+// handler queued on database/sql.DB.conn until a restart).
+func TestGet_BoundedPoolWait(t *testing.T) {
+	db, err := database.Open("", 0, database.Options{})
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	// Exhaust every pooled connection with unfinished transactions.
+	var txs []*sql.Tx
+	for range config.DefaultCacheMaxOpenConns {
+		tx, err := db.BeginTx(context.Background())
+		if err != nil {
+			t.Fatalf("BeginTx: %v", err)
+		}
+		txs = append(txs, tx)
+	}
+	t.Cleanup(func() {
+		for _, tx := range txs {
+			_ = tx.Rollback()
+		}
+	})
+
+	s := New(db)
+	start := time.Now()
+	entry, found, _ := s.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	elapsed := time.Since(start)
+	if found || entry != nil {
+		t.Fatalf("expected cache miss on exhausted pool, got found=%v entry=%v", found, entry)
+	}
+	if elapsed > config.DefaultCacheQueryTimeout+time.Second {
+		t.Fatalf("Get blocked on the exhausted pool for %v — bounded context missing", elapsed)
+	}
+	if elapsed < config.DefaultCacheQueryTimeout-500*time.Millisecond {
+		t.Fatalf("Get returned too early (%v) — pool wait not bounded as expected", elapsed)
 	}
 }

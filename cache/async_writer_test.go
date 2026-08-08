@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 	"time"
@@ -133,8 +134,10 @@ func TestAsyncStatsWriter_ChannelFullDrops(t *testing.T) {
 	// stays full deterministically: the channel is pre-filled, so the next
 	// Enqueue must drop.
 	w := &BatchWriter[RequestRecord]{
-		ch:        make(chan RequestRecord, 1),
-		flushFn:   func(tx *sql.Tx, batch []RequestRecord) error { return flushStatsRecords(tx, batch, db) },
+		ch: make(chan RequestRecord, 1),
+		flushFn: func(ctx context.Context, tx *sql.Tx, batch []RequestRecord) error {
+			return flushStatsRecords(ctx, tx, batch, db)
+		},
 		db:        db.SQ,
 		flushSig:  make(chan chan struct{}),
 		done:      make(chan struct{}),

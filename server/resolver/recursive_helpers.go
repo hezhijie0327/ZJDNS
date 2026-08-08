@@ -136,7 +136,7 @@ func (r *Recursive) advanceApexZoneCut(ctx context.Context, queryName string, na
 	// keys or treat a would-be-insecure delegation as unverifiable.
 	r.updateDNSSECChain(ctx, nsResp, currentDomain, queryName, nameservers, chain)
 	r.cacheGlueRecords(nsResult.glue)
-	r.storeDelegation(dnsutil.Canonical(queryName), currentDomain, nsRecords, nsResult.addrs, chain, nsVerdict)
+	r.storeDelegation(ctx, dnsutil.Canonical(queryName), currentDomain, nsRecords, nsResult.addrs, chain, nsVerdict)
 	log.Debugf("RECURSION: zone=%s via authoritative-NODATA zone cut, %d NS names -> %d addresses (source=%s): %v",
 		queryName, len(nsRecords), len(nsResult.addrs), nsResult.source, nsResult.addrs)
 	return nsResult.addrs, dnsutil.Canonical(queryName), true

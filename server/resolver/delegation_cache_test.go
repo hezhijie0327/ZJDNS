@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"zjdns/config"
@@ -184,10 +185,10 @@ func TestStoreAndLookupDelegation(t *testing.T) {
 	addrs := []string{"1.2.3.4:53", "5.6.7.8:53"}
 	chain := &dnssecChain{childDS: dsRecords}
 
-	r.storeDelegation("baidu.com.", "com.", nsRecords, addrs, chain, 0)
+	r.storeDelegation(context.Background(), "baidu.com.", "com.", nsRecords, addrs, chain, 0)
 
 	// Lookup should find it
-	record, ok := r.lookupDelegation("www.baidu.com.", dns.TypeA)
+	record, ok := r.lookupDelegation(context.Background(), "www.baidu.com.", dns.TypeA)
 	if !ok {
 		t.Fatal("lookupDelegation should find the stored delegation")
 	}
@@ -205,13 +206,13 @@ func TestStoreAndLookupDelegation(t *testing.T) {
 	}
 
 	// Lookup with qname exactly at the zone (non-parent-side type)
-	_, ok = r.lookupDelegation("baidu.com.", dns.TypeA)
+	_, ok = r.lookupDelegation(context.Background(), "baidu.com.", dns.TypeA)
 	if !ok {
 		t.Error("lookupDelegation for zone=A type=A should find self")
 	}
 
 	// Lookup with root qname
-	_, ok = r.lookupDelegation(".", dns.TypeA)
+	_, ok = r.lookupDelegation(context.Background(), ".", dns.TypeA)
 	if ok {
 		t.Error("lookupDelegation for root should return nothing")
 	}
@@ -225,16 +226,16 @@ func TestLookupDelegationParentSideType(t *testing.T) {
 		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: "ns1.baidu.com."}},
 	}
 	chain := &dnssecChain{} // insecure delegation
-	r.storeDelegation("baidu.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
+	r.storeDelegation(context.Background(), "baidu.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
 
 	// DS qtype at zone boundary should skip the cached zone
-	_, ok := r.lookupDelegation("baidu.com.", dns.TypeDS)
+	_, ok := r.lookupDelegation(context.Background(), "baidu.com.", dns.TypeDS)
 	if ok {
 		t.Error("lookupDelegation for zone=baidu.com. type=DS should skip the cached zone (parent-side)")
 	}
 
 	// DS qtype at a subdomain should still work (deepest match is baidu.com.)
-	record, ok := r.lookupDelegation("www.baidu.com.", dns.TypeDS)
+	record, ok := r.lookupDelegation(context.Background(), "www.baidu.com.", dns.TypeDS)
 	if !ok {
 		t.Error("lookupDelegation for www.baidu.com. type=DS should find baidu.com. delegation")
 	}
@@ -251,9 +252,9 @@ func TestStoreDelegationSkipsUnverifiable(t *testing.T) {
 		{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: "ns1.example.com."}},
 	}
 	chain := &dnssecChain{dsPresentButUnverified: true}
-	r.storeDelegation("example.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
+	r.storeDelegation(context.Background(), "example.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
 
-	_, ok := r.lookupDelegation("www.example.com.", dns.TypeA)
+	_, ok := r.lookupDelegation(context.Background(), "www.example.com.", dns.TypeA)
 	if ok {
 		t.Error("unverifiable delegation should not be stored")
 	}
@@ -262,8 +263,8 @@ func TestStoreDelegationSkipsUnverifiable(t *testing.T) {
 func TestStoreDelegationSkipsNilDB(t *testing.T) {
 	r := &Recursive{db: nil, resolver: &Resolver{}}
 	// Should not panic
-	r.storeDelegation("example.com.", "com.", nil, nil, &dnssecChain{}, 0)
-	_, ok := r.lookupDelegation("www.example.com.", dns.TypeA)
+	r.storeDelegation(context.Background(), "example.com.", "com.", nil, nil, &dnssecChain{}, 0)
+	_, ok := r.lookupDelegation(context.Background(), "www.example.com.", dns.TypeA)
 	if ok {
 		t.Error("nil db should return no results")
 	}

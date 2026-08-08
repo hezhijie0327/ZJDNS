@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"zjdns/config"
@@ -133,10 +134,12 @@ func unpackDS(wire []byte) []*dns.DS {
 // storeDelegation persists a zone-cut delegation discovered during a recursive
 // walk.  Only verified delegations (secure DS verified, or authenticated
 // no-DS) are stored; unverifiable and poisoned delegations are skipped.
-func (r *Recursive) storeDelegation(zone, parent string, nsRecords []*dns.NS, addrs []string, chain *dnssecChain, verdict defense.Verdict) {
+func (r *Recursive) storeDelegation(ctx context.Context, zone, parent string, nsRecords []*dns.NS, addrs []string, chain *dnssecChain, verdict defense.Verdict) {
 	if r.db == nil {
 		return
 	}
+	writeCtx, writeCancel := r.db.WriteContext()
+	defer writeCancel()
 	if verdict == defense.VerdictPoisoned {
 		return
 	}
@@ -162,7 +165,7 @@ func (r *Recursive) storeDelegation(zone, parent string, nsRecords []*dns.NS, ad
 	}
 	// dsWire is nil for insecure delegations (authenticated no-DS denial).
 
-	if _, err := r.db.StmtDelegationStore.Exec(zone, parent, nsNamesStr, addrsStr, dsWire, ts, ttl, ts+int64(ttl)); err != nil {
+	if _, err := r.db.StmtDelegationStore.ExecContext(writeCtx, zone, parent, nsNamesStr, addrsStr, dsWire, ts, ttl, ts+int64(ttl)); err != nil {
 		log.Debugf("RECURSION: store delegation %s: %v", zone, err)
 	}
 }
@@ -171,10 +174,12 @@ func (r *Recursive) storeDelegation(zone, parent string, nsRecords []*dns.NS, ad
 // ancestor of (or equal to) qname.  Parent-side qtypes (DS, NSEC, NSEC3) skip
 // a delegation whose zone matches the qname exactly, because the parent — not
 // the child — is authoritative for those records (RFC 4035 §1).
-func (r *Recursive) lookupDelegation(qname string, qtype uint16) (*delegationRecord, bool) {
+func (r *Recursive) lookupDelegation(ctx context.Context, qname string, qtype uint16) (*delegationRecord, bool) {
 	if r.db == nil {
 		return nil, false
 	}
+	readCtx, readCancel := r.db.ReadContext()
+	defer readCancel()
 
 	zones := ancestorZones(qname)
 	if len(zones) == 0 {
@@ -198,7 +203,7 @@ func (r *Recursive) lookupDelegation(qname string, qtype uint16) (*delegationRec
 		args[i] = ""
 	}
 
-	row := r.db.StmtDelegationLookup.QueryRow(args...)
+	row := r.db.StmtDelegationLookup.QueryRowContext(readCtx, args...)
 	var rec delegationRecord
 	var nsNamesStr, addrsStr string
 	var dsWire []byte
