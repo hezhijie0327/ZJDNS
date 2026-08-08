@@ -248,7 +248,7 @@ Full implementation with PQC support. Two crypto constructions: XWingPQ (default
 
 ### Ticket Resumption
 
-Server issues tickets sealed with XChacha20-Poly1305 under `ticketKey` (SHA-256 of Ed25519 signing key). Ticket plaintext (86B, `TicketPlaintext*` offsets in `internal/dnscryptcrypto/certificate.go`): `ResumeSecret(off 0, 32) + ESVersion(off 32, 2) + ClientMagic(off 34, 8) + Serial(off 42, 4) + TS-end(off 46, 4) + Expiry(off 50, 4) + ProfileExtHash=SHA-256(profile-ext)(off 54, 32)`. Client derives per-query keys via `pqResumedSharedKey(resumeSecret, clientMagic, clientNonce/2, ticket)`.
+Server issues tickets sealed with XChacha20-Poly1305 under `ticketKey` (SHA-256 of Ed25519 signing key). Ticket plaintext (86B, `TicketPlaintext*` offsets in `internal/dnscryptcrypto/pq.go`): `ResumeSecret(off 0, 32) + ESVersion(off 32, 2) + ClientMagic(off 34, 8) + Serial(off 42, 4) + TS-end(off 46, 4) + Expiry(off 50, 4) + ProfileExtHash=SHA-256(profile-ext)(off 54, 32)`. Client derives per-query keys via `PQResumedSharedKey(resumeSecret, clientMagic, clientNonce/2, ticket)`.
 
 ## DTLCP (GM/T 0128-2023)
 
@@ -274,9 +274,10 @@ Reuses SM2 certificate pair from TLCP. Wire format = DTLS (RFC 8094): 2-byte big
 - **Wildcard matching**: Batch IN query with fixed 16 placeholders via `StmtZoneWildcard` prepared statement — single query replaces the old per-label N-query loop.
 - **Synthetic zone rules**: config load injects zone rules for local answers —
   CHAOS introspection (`config/chaos.go`: id.server/hostname.bind/version.*,
-  ZJDNS.* stats & clear endpoints), DDR SVCB records (`config/ddr.go`,
-  RFC 9462), and RESINFO (`config/resinfo.go`, RFC 9606, opt-in via
-  `resolver_info`).
+  ZJDNS.* stats & clear endpoints, zjdns.whoami — client source IP),
+  DDR SVCB records (`config/ddr.go`, RFC 9462), and RESINFO
+  (`config/resinfo.go`, RFC 9606, auto-enabled with DDR via
+  `shouldEnableDDR` in `config/load.go`).
 
 ## EDNS Extensions & RFC Support
 

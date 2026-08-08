@@ -86,7 +86,7 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 - **RESINFO**：[RFC 9606](docs/rfc/rfc9606.txt)，`resolver.arpa` 的解析器能力信息（qnamemin/exterr/infourl，随 DDR 发布）
 
 ### 缓存与数据库
-基于 SQLite WAL + mmap 的统一数据库（[九表设计](docs/ARCHITECTURE.md#db-schema)），zstd 压缩存储，缓存命中走 pre-packed 直发路径（零分配、纳秒级）。A/AAAA 记录按延迟探测排序。异步统计写入（non-blocking channel + 后台 goroutine）。懒惰过期 + 条数上限淘汰。
+基于 SQLite WAL + mmap 的统一数据库（[十表设计](docs/ARCHITECTURE.md#db-schema)），zstd 压缩存储，缓存命中走 pre-packed 直发路径（零分配、纳秒级）。A/AAAA 记录按延迟探测排序。异步统计写入（non-blocking channel + 后台 goroutine）。懒惰过期 + 条数上限淘汰。
 
 ### 规则集
 统一的 IP + 域名标签匹配引擎，上游可按标签分流、Zone 可按标签过滤：
@@ -111,7 +111,7 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 - `match` 双层作用：查询前分流 + 查询后 IP 过滤（`!tag` 取反）
 
 ### 连接池
-TCP/TLS [RFC 7766](docs/rfc/rfc7766.txt) 查询管线化 + QUIC 原生流复用，按需拨号入池。4 种 Session Cache（TLS/DTLS/TLCP/DTLCP）减少握手开销。
+TCP/TLS [RFC 7766](docs/rfc/rfc7766.txt) 查询管线化 + QUIC 原生流复用，按需拨号入池。5 种 Session Cache（TLS/DTLS/QUIC/TLCP/DTLCP）减少握手开销。
 
 ### KTLS 内核卸载
 TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅适用 TLS/HTTPS（TCP），非 Linux 静默回退。

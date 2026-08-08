@@ -89,7 +89,7 @@ func TestSynthesize(t *testing.T) {
 			A:   rdata.A{Addr: netip.MustParseAddr("93.184.216.34")},
 		},
 	}
-	answer, _, _ := s.Synthesize(nil, nil, nil, aAnswer, nil, nil, false)
+	answer, _, _ := s.Synthesize(nil, aAnswer, nil, nil)
 	if len(answer) != 1 {
 		t.Fatalf("expected 1 record, got %d", len(answer))
 	}

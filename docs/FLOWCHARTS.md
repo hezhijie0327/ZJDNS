@@ -6,7 +6,7 @@
 graph LR
     C[Clients] --> L
     subgraph ZJDNS
-        L[Listeners<br/>UDP · TCP · DoT · DoH · DoH3<br/>DoQ · DTLS · TLCP · DTLCP<br/>DNSCrypt] --> MW[Middleware Chain<br/>Response · CacheStore · Validation<br/>Zone · EDNS · CacheLookup<br/>PTR · DNS64 · Resolution]
+        L[Listeners<br/>UDP · TCP · DoT · DoH · DoH3<br/>DoQ · DTLS · TLCP · DTLCP<br/>DNSCrypt] --> MW[Middleware Chain<br/>Response · EDNS · MQTYPE<br/>CacheStore · Validation · Zone<br/>Any · CacheLookup · PTR<br/>DNS64 · Resolution]
         MW --> RES[Resolver<br/>Forwarding · Recursive<br/>QNAME Minimisation · DNSSEC<br/>Delegation Cache]
         RES --> UP[Upstream Pool<br/>TCP Pipeline · QUIC Pool<br/>SOCKS5 Proxy]
     end
@@ -27,7 +27,7 @@ graph LR
 graph TD
     START[New Server] --> LOADCONF[Load Config<br/>+ Validate]
     LOADCONF --> INITDB[Open SQLite DB<br/>Run Migrations]
-    INITDB --> INITMW[Build Middleware Chain<br/>9 Layers]
+    INITDB --> INITMW[Build Middleware Chain<br/>11 Layers]
     INITMW --> INITHANDLER[Create Handler<br/>+ Resolver + Zone + Ruleset]
     INITHANDLER --> STARTPROTO[Start Protocol Listeners<br/>UDP TCP DoT DoH DoH3<br/>DoQ DTLS TLCP DTLCP<br/>DNSCrypt]
     STARTPROTO --> BG[Start Background Tasks<br/>ECS Refresh · Cookie Rotate<br/>TCP WriteMu Sweep · Stats]
@@ -114,7 +114,7 @@ graph TD
 
 ```mermaid
 graph TD
-    Q[Query] --> ECS[ECS 候选<br/>单轮 SQL：5 候选 OR 子句<br/>ORDER BY CASE 优先级]
+    Q[Query] --> ECS[ECS 候选<br/>单轮 SQL：5 候选 OR 子句<br/>Go 侧选最优候选]
     ECS --> SQL[SQLite Lookup<br/>StmtEntryFallback]
     SQL -->|not found| MISS[Cache Miss]
     SQL -->|found| WIRE[提取 pre-packed wire<br/>读 offset 表 · 边界校验]

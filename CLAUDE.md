@@ -223,7 +223,7 @@ zjdns/
 ├── config/             ← ServerConfig, ProtocolSettings, UpstreamServer, defaults
 ├── edns/               ← EDNS handler (ECS, Cookie, EDE, Padding)
 ├── database/           ← Unified SQLite DB (schema, migration, prepared stmts)
-├── cache/              ← DNS response cache (Store interface, SQLiteCache, AsyncStatsWriter)
+├── cache/              ← DNS response cache (Store interface, SQLiteCache, BatchWriter)
 ├── ruleset/            ← CIDR + domain tag matching (binary radix trie)
 ├── zone/               ← DNS zone rules (Evaluator, zone-file import)
 ├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, ...
@@ -265,12 +265,12 @@ Key rules:
 Execution order (outermost → innermost):
 
 1. `ResponseMiddleware` — EDNS / Cookie / EDE finalisation
-2. `CacheStoreMiddleware` — cache write, request logging, latency probe
+2. `EDNSMiddleware` — ECS parsing, DNS Cookie validation (RFC 7873/9018)
 3. `MQTYPEMiddleware` — RFC 10029 multi-QTYPE merge (recursive mode); forwarding pass-through
-4. `ValidationMiddleware` — domain / label / NXNAME-AXFR-IXFR rejection (RFC 9824 §3.5)
-5. `ZoneMiddleware` — zone rule evaluation, synthetic response (runs before Any so rules win)
-6. `AnyMiddleware` — RFC 8482 minimal ANY response (HINFO "RFC8482")
-7. `EDNSMiddleware` — ECS parsing, DNS Cookie validation (RFC 7873/9018)
+4. `CacheStoreMiddleware` — cache write, request logging, latency probe
+5. `ValidationMiddleware` — domain / label / NXNAME-AXFR-IXFR rejection (RFC 9824 §3.5)
+6. `ZoneMiddleware` — zone rule evaluation, synthetic response (runs before Any so rules win)
+7. `AnyMiddleware` — RFC 8482 minimal ANY response (HINFO "RFC8482")
 8. `CacheLookupMiddleware` — fresh→serve, stale→serve+refresh, miss→delegate
 9. `PTRMiddleware` — reverse PTR lookup from cache
 10. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147)
@@ -311,7 +311,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | `DB` | `database` | Unified SQLite DB; WAL mode, 15 prepared stmts |
 | `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Stats/Close |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL |
-| `AsyncStatsWriter` | `cache` | Background goroutine: non-blocking channel → batched SQLite writes |
+| `BatchWriter[T]` | `cache` | Background goroutine: channel → batched SQLite writes (100ms/64 items, best-effort drop) |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `QueryContext` | `server/handler` | Mutable struct carrying all request state through the middleware chain |
 | `QueryHandler` | `server/handler` | Interface: `ServeDNS(ctx, qctx) error` |
@@ -335,7 +335,7 @@ All logs use `zjdns/internal/log` (package-level `Default` logger). Default leve
 
 **Component filtering:** `log_level` supports `"level:comp1,comp2"` syntax (e.g. `"debug:UPSTREAM,RECURSION"`).
 
-**27 canonical prefixes:** `TLS`, `CACHE`, `DB`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `PLAIN`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `DNSCRYPT`, `TLCP`, `RULESET`, `DNS64`, `MQTYPE`, `RESPONSE`, `ANY`, `IPDETECT`.
+**29 canonical prefixes:** `TLS`, `CACHE`, `DB`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `PLAIN`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `DNSCRYPT`, `TLCP`, `RULESET`, `DNS64`, `MQTYPE`, `RESPONSE`, `ANY`, `IPDETECT`, `UDPPOOL`, `DOH`.
 
 Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECURITY:`. `DOT:`/`DOQ:`/`DOH:`/`DTLS:` → `TLS:`. `DTLCP:` → `TLCP:`. `UDP:`/`TCP:` → `PLAIN:`. Hot-path logs are `Debug` only.
 

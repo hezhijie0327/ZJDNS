@@ -296,6 +296,10 @@ func ProfileExtensionHash() [32]byte {
 	return cachedProfileExtensionHash
 }
 
+// EncodeTicketPlaintext serializes the PQ resume ticket plaintext (86B):
+// ResumeSecret(32) + ESVersion(2) + ClientMagic(8) + Serial(4) + TS-end(4)
+// + Expiry(4) + ProfileExtHash=SHA-256(profile-ext)(32).  Offsets follow the
+// TicketPlaintext* constants below (server/protocol/dnscrypt layout).
 func EncodeTicketPlaintext(resumeSecret [SharedKeySize]byte, clientMagic [ClientMagicSize]byte, serial, tsEnd, expiry uint32, peHash [32]byte) []byte {
 	buf := make([]byte, TicketPlaintextSize)
 	copy(buf[TicketPlaintextSecretOff:TicketPlaintextSecretOff+TicketPlaintextSecretLen], resumeSecret[:])

@@ -34,7 +34,7 @@ func BenchmarkSynthesizer_Synthesize(b *testing.B) {
 	}
 	b.ResetTimer()
 	for b.Loop() {
-		answer, _, _ := s.Synthesize(nil, nil, nil, []dns.RR{aRec}, nil, nil, false)
+		answer, _, _ := s.Synthesize(nil, []dns.RR{aRec}, nil, nil)
 		_ = answer
 	}
 }

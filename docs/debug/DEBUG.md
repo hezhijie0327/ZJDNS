@@ -214,7 +214,7 @@ pkill -f "client-https"
 # (e.g. AliDNS) in forwarding mode, or recursive mode.
 dig @127.0.0.1 -p 10533 +ednsopt=20:001c example.com A +short
 
-# RFC 9606 RESINFO: requires "resolver_info" in config features.
+# RFC 9606 RESINFO: auto-enabled together with DDR (config/load.go shouldEnableDDR).
 dig @127.0.0.1 -p 10533 resolver.arpa TYPE261 +noall +answer   # qnamemin exterr=... infourl=...
 
 # RFC 8482 minimal ANY: HINFO "RFC8482" instead of REFUSED/full zone.
@@ -692,9 +692,17 @@ For interactive debugging, create `config.debug.json` (not committed):
 
 Port 15353 (non-privileged), pure recursive, cache enabled with latency probing. Start: `./zjdns -config config.debug.json`.
 
+### 其他配置键速查（config.example.json 有示例但无专文）
+
+| 键 | 位置 | 说明 |
+|----|------|------|
+| `features.dns64.prefer_ipv4`（默认 true） | `config/ecs.go:95,136` | ECS 查询偏好 IPv4（缺失时默认 true） |
+| `features.database.mmap_size_mb` | `config/config.go:122` | SQLite `mmap_size` PRAGMA |
+| `features.database.cache_size_mb` | `config/config.go:123` | SQLite `cache_size` PRAGMA |
+
 ### Test Domains
 
-Verify hijack detection: `grep -E "hijack probe|hijack detected|tcp=true" /tmp/zjdns.log`.
+Verify hijack detection: `grep -E "poison detected|poisonguard triggered TCP fallback|tcp=true" /tmp/zjdns.log`.
 
 ```bash
 # Poisonguard — hijack detection → TCP fallback
@@ -714,6 +722,7 @@ dig @127.0.0.1 -p 15353 zhijie-online.mail.protection.outlook.com A +short
 dig @127.0.0.1 -p 15353 home.console.aliyun.com A
 
 # Stats
+dig @127.0.0.1 -p 15353 zjdns.whoami CH TXT +short        # 客户端源 IP（a8f15d4）
 dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.stats.clear CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.cache.clear CH TXT +short

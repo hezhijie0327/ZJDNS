@@ -351,7 +351,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 5. **info/warn 刷屏**：热路径上的 `log.Infof` / `log.Warnf` 在高 QPS 下产生海量日志，淹没真正重要的信号。所有每查询日志必须是 Debug 级别
 6. **日志缺少上下文**：`log.Warnf("resolve failed: %v", err)` 不包含 qname/qtype/server，无法定位问题
 7. **错误级别膨胀**：可恢复的错误（超时、单次查询失败）用 Warn，不可恢复的（配置错误、数据库损坏）用 Error。不要把每个 upstream 超时都打成 Error
-8. **格式不一致**：同一组件内混用 `log.Infof("TLS: ...")` 和 `log.Infof("[TLS] ...")` 和 `log.Infof("tls: ...")` — 应统一使用 23 个规范前缀
+8. **格式不一致**：同一组件内混用 `log.Infof("TLS: ...")` 和 `log.Infof("[TLS] ...")` 和 `log.Infof("tls: ...")` — 应统一使用 29 个规范前缀
 9. **架构文档过时**：`ARCHITECTURE.md` 描述已删除的中间件/类型/表；类型引用表未随代码更新。每次重构后 grep 文档确认引用的符号仍存在
 10. **注释与代码矛盾**：注释说"Phase 3 会改回来"但 Phase 3 永远不会来；注释描述的行为与实际代码不一致。每个注释在所在函数修改后必须重新验证
 11. **公开 API 无 godoc**：导出的类型/函数/方法缺少文档注释，或 godoc 只重复函数名没有说明用途和参数含义

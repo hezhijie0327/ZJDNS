@@ -37,12 +37,10 @@ Minimal config for pure zone-lookup QPS:
   "server": {
     "log_level": "error",
     "protocol": { "udp": "10533" },
-    "zone": {
-      "rules": [
-        { "domain": "www.baidu.com", "type": "A",
-          "answer": [{ "type": "A", "content": "1.2.3.4" }], "ttl": 3600 }
-      ]
-    },
+    "zone": [
+      { "name": "www.baidu.com",
+        "answer": [{ "type": 1, "ttl": 3600, "content": "1.2.3.4" }] }
+    ],
     "features": { "cache": { "max_entries": 0 } }
   }
 }
