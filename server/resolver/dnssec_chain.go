@@ -473,7 +473,14 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 	// under the dnskeyGroup singleflight dedup.
 	r.ensureZoneDNSKEYs(ctx, nameservers, currentDomain, chain)
 	if len(chain.zoneDNSKEYs) == 0 {
-		if chain.lastEDECode == 0 {
+		// A clean insecure delegation (updateDNSSECChain verified an
+		// authenticated no-DS denial — an unsigned zone) is NOT a validation
+		// failure: no EDE, and the response stays cacheable.  Only a
+		// delegation that claimed DS records (or whose no-DS could not be
+		// proven) is genuinely unverifiable and gets EDE 6 (DNSBogus) —
+		// mirroring updateDNSSECChain's posture: unverifiable → bogus,
+		// proven no-DS → insecure.
+		if (len(chain.childDS) > 0 || chain.dsPresentButUnverified) && chain.lastEDECode == 0 {
 			chain.lastEDECode = dns.ExtendedErrorDNSBogus
 		}
 		return false

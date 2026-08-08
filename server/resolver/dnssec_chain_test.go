@@ -314,6 +314,56 @@ func TestValidateWithDNSSEC_NoDNSKEYs(t *testing.T) {
 	}
 }
 
+// ── isDNSSECValid: insecure vs bogus delegation classification ────────────────
+// An unsigned zone (authenticated no-DS denial at the delegation) is insecure,
+// not bogus — it must not surface EDE 6 (DNSBogus) to clients, and the response
+// stays cacheable (dnssecCacheable allows ede==0).  Only a delegation that
+// claimed DS records but failed verification is genuinely unverifiable (EDE 6).
+
+func TestIsDNSSECValid_InsecureDelegation_NoEDE(t *testing.T) {
+	rr := newTestRecursive()
+	zone := "insecure.example.com"
+	a := aRec("www."+zone, "192.0.2.1")
+	msg := &dns.Msg{Answer: []dns.RR{a}}
+	// Clean insecure delegation: updateDNSSECChain verified the no-DS denial —
+	// no childDS, no dsPresentButUnverified flag.
+	chain := &dnssecChain{}
+
+	validated := rr.isDNSSECValid(context.Background(), msg, nil,
+		Question{Name: dnsutil.Fqdn("www." + zone), Qtype: dns.TypeA},
+		dnsutil.Fqdn(zone), nil, false, chain)
+	if validated {
+		t.Error("isDNSSECValid should return false for an unsigned zone")
+	}
+	if chain.lastEDECode != 0 {
+		t.Errorf("insecure delegation must not set an EDE code, got %d (%s)",
+			chain.lastEDECode, dns.ExtendedErrorToString[chain.lastEDECode])
+	}
+}
+
+func TestIsDNSSECValid_UnverifiableDelegation_SetsDNSBogus(t *testing.T) {
+	rr := newTestRecursive()
+	zone := "signed.example.com"
+	a := aRec("www."+zone, "192.0.2.1")
+	msg := &dns.Msg{Answer: []dns.RR{a}}
+	// The delegation claimed DS records (childDS non-empty) but the child's
+	// DNSKEYs could not be verified — the answer is genuinely unverifiable.
+	chain := &dnssecChain{childDS: []*dns.DS{{
+		Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+		DS:  rdata.DS{KeyTag: 12345, Algorithm: dns.ECDSAP256SHA256, DigestType: dns.SHA256, Digest: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+	}}}
+
+	validated := rr.isDNSSECValid(context.Background(), msg, nil,
+		Question{Name: dnsutil.Fqdn("www." + zone), Qtype: dns.TypeA},
+		dnsutil.Fqdn(zone), nil, false, chain)
+	if validated {
+		t.Error("isDNSSECValid should return false when child DNSKEYs could not be verified")
+	}
+	if chain.lastEDECode != dns.ExtendedErrorDNSBogus {
+		t.Errorf("unverifiable delegation should set EDE 6 (DNSBogus), got %d", chain.lastEDECode)
+	}
+}
+
 func TestValidateWithDNSSEC_WithVerifiedKeys(t *testing.T) {
 	rr := newTestRecursive()
 	zone := "secure.example.com"
