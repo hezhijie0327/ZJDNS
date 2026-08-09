@@ -127,6 +127,16 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	}
 	s.dnsResolver = dnsResolver
 
+	// Restore the delegation cache from its snapshot — the periodic and
+	// shutdown saves already run (M4; previously write-only).
+	if path := cfg.Server.Features.DelegationStateFile(); path != "" {
+		if err := dnsResolver.LoadDelegationSnapshot(path); err != nil {
+			log.Warnf("RESOLVER: delegation snapshot load failed (starting cold): %v", err)
+		} else {
+			log.Infof("RESOLVER: delegation cache restored from snapshot")
+		}
+	}
+
 	s.warmUpConnections(cfg, queryClient)
 
 	h := s.initHandler(cfg, cacheStore, ednsH, zoneEvaluator, dnsResolver, rulesetEngine, cacheRefreshGroup, cacheRefreshCtx, backgroundCtx)

@@ -11,34 +11,35 @@ import (
 const latencySnapshotVersion = 1
 
 // SaveLatencySnapshot writes the per-IP latency table to path atomically.
+// Entries are collected under the LRU lock and serialized outside it (H5).
 func (c *Cache) SaveLatencySnapshot(path string) error {
+	items := make(map[string]latEntry, c.latencies.Len())
+	c.latencies.Range(func(key string, e latEntry) bool {
+		items[key] = e
+		return true
+	})
 	return snapfile.Save(path, latencySnapshotVersion, func(w io.Writer) error {
 		var keyLenBuf [2]byte
 		var numBuf [4]byte
 		var tsBuf [8]byte
-		var writeErr error
-		c.latencies.Range(func(key string, e latEntry) bool {
+		for key, e := range items {
 			binary.BigEndian.PutUint16(keyLenBuf[:], uint16(len(key))) //nolint:gosec // G115: IP strings are bounded
 			if _, err := w.Write(keyLenBuf[:]); err != nil {
-				writeErr = err
-				return false
+				return err
 			}
 			if _, err := io.WriteString(w, key); err != nil {
-				writeErr = err
-				return false
+				return err
 			}
 			binary.BigEndian.PutUint32(numBuf[:], uint32(e.latency)) //nolint:gosec // G115: latency bounded by probe config
 			if _, err := w.Write(numBuf[:]); err != nil {
-				writeErr = err
-				return false
+				return err
 			}
 			binary.BigEndian.PutUint64(tsBuf[:], uint64(e.lastProbe)) //nolint:gosec // G115: unix seconds fit uint64
 			if _, err := w.Write(tsBuf[:]); err != nil {
-				writeErr = err
+				return err
 			}
-			return writeErr == nil
-		})
-		return writeErr
+		}
+		return nil
 	})
 }
 

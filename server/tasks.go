@@ -20,6 +20,7 @@ func (s *Server) startBackgroundTasks() {
 	s.startECSRefresh()
 	s.startPrefetchCooldownCleanup()
 	s.startTCPWriteMuSweep()
+	s.startUDPPoolReap()
 	s.startStateMaintenance()
 	s.setupSignalHandling()
 }
@@ -48,12 +49,15 @@ func (s *Server) startStateMaintenance() {
 			if err := cc.SaveSnapshot(cachePath); err != nil {
 				log.Warnf("CACHE: periodic snapshot failed: %v", err)
 			}
-			cc.CleanupLatency()
 		}
 		if latencyPath != "" {
 			if err := cc.SaveLatencySnapshot(latencyPath); err != nil {
 				log.Warnf("CACHE: periodic latency snapshot failed: %v", err)
 			}
+			// Physical expiry cleanup — gated on the latency state file (M7):
+			// the cache-file branch is not the right owner, and a
+			// latency-only deployment must still reap dead entries.
+			cc.CleanupLatency()
 		}
 		if delegationPath != "" {
 			if err := s.dnsResolver.SaveDelegationSnapshot(delegationPath); err != nil {
@@ -144,6 +148,17 @@ func (s *Server) startECSRefresh() {
 			case <-s.backgroundCtx.Done():
 				return nil
 			}
+		}
+	})
+}
+
+// startUDPPoolReap periodically drops dead sockets from the outbound UDP
+// pools — an idle-recycled socket otherwise stays pinned under its address
+// key until that address is queried again (H1).
+func (s *Server) startUDPPoolReap() {
+	s.runBackgroundTicker("UDP pool reap", config.DefaultSweepInterval, func() {
+		if s.queryClient != nil {
+			s.queryClient.ReapDeadConns()
 		}
 	})
 }
@@ -321,8 +336,17 @@ func (s *Server) shutdownServer() {
 	}
 
 	if cacheStore := s.handler.CacheStore(); cacheStore != nil {
-		// Persist all state stores before closing.
-		if cc, ok := cacheStore.(*cache.Cache); ok {
+		// Persist all state stores before closing.  Bounded by
+		// DefaultShutdownTimeout: a stalled disk must not hang shutdown
+		// forever (L3).
+		saveDone := make(chan struct{})
+		go func() {
+			defer zdnsutil.HandlePanic("Shutdown state save")
+			defer close(saveDone)
+			cc, ok := cacheStore.(*cache.Cache)
+			if !ok {
+				return
+			}
 			feats := s.config.Server.Features
 			if path := feats.CacheStateFile(); path != "" {
 				if err := cc.SaveSnapshot(path); err != nil {
@@ -339,6 +363,11 @@ func (s *Server) shutdownServer() {
 					log.Warnf("RESOLVER: delegation snapshot save failed: %v", err)
 				}
 			}
+		}()
+		select {
+		case <-saveDone:
+		case <-time.After(config.DefaultShutdownTimeout):
+			log.Warnf("SERVER: state snapshot save timed out — exiting without final snapshot")
 		}
 		zdnsutil.CloseWithLog(cacheStore, "Cache store", "SERVER")
 	}

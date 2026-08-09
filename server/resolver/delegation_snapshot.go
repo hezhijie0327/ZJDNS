@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"zjdns/internal/log"
 	"zjdns/internal/snapfile"
@@ -12,14 +13,27 @@ import (
 // [4B ns_count][ns names...][4B addr_count][addrs...][4B ds_len][ds_wire]
 const delegationSnapshotVersion = 1
 
+// Load guards for the delegation snapshot — counts come from the file, so a
+// corrupt or tampered snapshot must not drive an unbounded allocation (M3).
+const (
+	maxSnapshotNames  = 64        // NS/address count per zone
+	maxSnapshotKeyLen = 1024      // zone/parent/NS name length
+	maxSnapshotDSLen  = 64 * 1024 // packed DS wire
+)
+
 // SaveDelegationSnapshot writes the zone-cut delegation cache to path
-// atomically.
+// atomically.  Entries are collected under the LRU lock and serialized
+// outside it (H5) — delegation entries are immutable once stored.
 func (r *Recursive) SaveDelegationSnapshot(path string) error {
+	items := make(map[string]*delegationEntry, r.delegations.Len())
+	r.delegations.Range(func(zone string, e *delegationEntry) bool {
+		items[zone] = e
+		return true
+	})
 	return snapfile.Save(path, delegationSnapshotVersion, func(w io.Writer) error {
 		var lenBuf [2]byte
 		var tsBuf [8]byte
 		var numBuf [4]byte
-		var writeErr error
 		writeStr := func(s string) error {
 			binary.BigEndian.PutUint16(lenBuf[:], uint16(len(s))) //nolint:gosec // G115: DNS names are bounded
 			if _, err := w.Write(lenBuf[:]); err != nil {
@@ -41,45 +55,37 @@ func (r *Recursive) SaveDelegationSnapshot(path string) error {
 			return nil
 		}
 
-		r.delegations.Range(func(zone string, e *delegationEntry) bool {
+		for zone, e := range items {
 			if err := writeStr(zone); err != nil {
-				writeErr = err
-				return false
+				return err
 			}
 			if err := writeStr(e.parent); err != nil {
-				writeErr = err
-				return false
+				return err
 			}
 			binary.BigEndian.PutUint64(tsBuf[:], uint64(e.ts)) //nolint:gosec // G115: unix seconds fit uint64
 			if _, err := w.Write(tsBuf[:]); err != nil {
-				writeErr = err
-				return false
+				return err
 			}
 			binary.BigEndian.PutUint32(numBuf[:], uint32(e.ttl)) //nolint:gosec // G115: TTL bounded by config cap
 			if _, err := w.Write(numBuf[:]); err != nil {
-				writeErr = err
-				return false
+				return err
 			}
 			if err := writeStrings(e.nsNames); err != nil {
-				writeErr = err
-				return false
+				return err
 			}
 			if err := writeStrings(e.addrs); err != nil {
-				writeErr = err
-				return false
+				return err
 			}
 			dsWire := packDS(e.ds)
 			binary.BigEndian.PutUint32(numBuf[:], uint32(len(dsWire))) //nolint:gosec // G115: DS wire bounded
 			if _, err := w.Write(numBuf[:]); err != nil {
-				writeErr = err
-				return false
+				return err
 			}
 			if _, err := w.Write(dsWire); err != nil {
-				writeErr = err
+				return err
 			}
-			return writeErr == nil
-		})
-		return writeErr
+		}
+		return nil
 	})
 }
 
@@ -91,7 +97,11 @@ func (r *Recursive) LoadDelegationSnapshot(path string) error {
 			if _, err := io.ReadFull(rd, lenBuf[:]); err != nil {
 				return "", err
 			}
-			buf := make([]byte, int(binary.BigEndian.Uint16(lenBuf[:])))
+			n := int(binary.BigEndian.Uint16(lenBuf[:]))
+			if n > maxSnapshotKeyLen {
+				return "", fmt.Errorf("delegation snapshot: corrupt name length %d", n)
+			}
+			buf := make([]byte, n)
 			if _, err := io.ReadFull(rd, buf); err != nil {
 				return "", err
 			}
@@ -103,6 +113,9 @@ func (r *Recursive) LoadDelegationSnapshot(path string) error {
 				return nil, err
 			}
 			n := int(binary.BigEndian.Uint32(numBuf[:]))
+			if n > maxSnapshotNames {
+				return nil, fmt.Errorf("delegation snapshot: corrupt string count %d", n)
+			}
 			out := make([]string, 0, n)
 			for range n {
 				s, err := readStr()
@@ -140,7 +153,11 @@ func (r *Recursive) LoadDelegationSnapshot(path string) error {
 		if _, err := io.ReadFull(rd, numBuf[:]); err != nil {
 			return err
 		}
-		dsWire := make([]byte, int(binary.BigEndian.Uint32(numBuf[:])))
+		dsLen := int(binary.BigEndian.Uint32(numBuf[:]))
+		if dsLen > maxSnapshotDSLen {
+			return fmt.Errorf("delegation snapshot: corrupt DS length %d", dsLen)
+		}
+		dsWire := make([]byte, dsLen)
 		if _, err := io.ReadFull(rd, dsWire); err != nil {
 			return err
 		}
