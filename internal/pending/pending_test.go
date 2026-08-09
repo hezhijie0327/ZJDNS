@@ -287,17 +287,12 @@ func TestResultGroup_LeaderPanicReleasesKey(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{})
 
-	var wg sync.WaitGroup
-	var followerErr error
-	wg.Go(func() {
-		_, followerErr, _ = g.Do(context.Background(), "k", func(context.Context) (int, error) {
-			return 0, errors.New("follower must not run fn")
-		})
-	})
-
-	// Leader panics after the follower is queued (leader runs on its own
-	// goroutine — Do is synchronous and would otherwise self-deadlock the
-	// test's main goroutine on <-release).
+	// Leader acquires the key and blocks inside fn BEFORE the follower is
+	// launched, so the follower is guaranteed to queue as a follower.  (The
+	// old order raced the two goroutines for the key: if the "follower" won
+	// the map first it completed and released the key, the "leader" then
+	// joined as a follower and exited without running fn — close(started)
+	// never fired and the test hung, reliably under -race.)
 	go func() {
 		defer func() { _ = recover() }()
 		_, _, _ = g.Do(context.Background(), "k", func(context.Context) (int, error) {
@@ -307,6 +302,14 @@ func TestResultGroup_LeaderPanicReleasesKey(t *testing.T) {
 		})
 	}()
 	<-started
+
+	var wg sync.WaitGroup
+	var followerErr error
+	wg.Go(func() {
+		_, followerErr, _ = g.Do(context.Background(), "k", func(context.Context) (int, error) {
+			return 0, errors.New("follower must not run fn")
+		})
+	})
 	time.Sleep(50 * time.Millisecond)
 	close(release)
 	wg.Wait()

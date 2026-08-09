@@ -4,16 +4,20 @@
 //
 // Concept:
 //   GFW injects bare A/AAAA records into UDP DNS responses.
-//   Real DNS servers include EDNS (OPT pseudo-record) per RFC 6891.
-//   Spoofguard uses a multi-read loop: keep reading UDP datagrams,
-//   reject GFW signatures (non-EDNS + single-answer), collect EDNS
-//   candidates, then pick the richest after a collect window.
+//   Spoofguard uses a multi-read loop: keep reading UDP datagrams, prefer
+//   EDNS-bearing and authority-signal candidates, and never serve a bare
+//   single-answer A/AAAA without confirmation.
 //
 // Detection rules (mirrors server/upstream/plain/udp.go processPacket):
 //   Fast-return: AN\u22652, NS>0, or AD=1 \u2192 authoritative, return immediately
-//   EDNS-bearing \u2192 collect as candidate
-//   Non-EDNS + single-answer \u2192 REJECT (canonical GFW signature)
-//   Non-EDNS + CNAME/multi-answer \u2192 fallback (real server w/o EDNS)
+//   EDNS-bearing \u2192 collect as candidate (always preferred)
+//   Non-EDNS + CNAME \u2192 safe fallback (GFW does not inject CNAME chains)
+//   Non-EDNS + bare single-answer A/AAAA \u2192 AMBIGUOUS:
+//     only ONE response received \u2192 serve directly (no injection signal —
+//     the observed GFW pattern always injects TWO fakes)
+//     \u22652 responses received \u2192 injection suspected \u2192 re-query (pure UDP);
+//       a matching repeat confirms the real answer (GFW fakes vary per
+//       packet, the real answer is deterministic); never served unconfirmed.
 //   After 500ms window: pick richest candidate, random tie-break
 
 package main
@@ -66,7 +70,13 @@ func (s *sgState) processPacket(r *simResp) (result *simResp, verdict string) { 
 		return r, green + "FAST-RETURN" + reset + " (authoritative signal)"
 	}
 	if r.rcode != 0 {
-		return r, green + "ACCEPT" + reset + " (non-NOERROR from real server)"
+		// Mirror production processPacket: a non-NOERROR response without
+		// authority signals is collected as a candidate (returned after the
+		// window via pickBest), not returned immediately.
+		s.prev = s.last
+		s.last = r
+		s.candidates++
+		return nil, yellow + "COLLECT" + reset + " (non-NOERROR — real server signal, collected)"
 	}
 	if r.hasEDNS {
 		s.prev = s.last
@@ -74,12 +84,17 @@ func (s *sgState) processPacket(r *simResp) (result *simResp, verdict string) { 
 		s.candidates++
 		return nil, yellow + "COLLECT" + reset + " (EDNS candidate #" + strconv.Itoa(s.candidates) + ")"
 	}
-	if r.hasCNAME || len(r.answers) >= 2 {
-		s.nonEDNS = r
-		return nil, yellow + "COLLECT" + reset + " (non-EDNS fallback)"
-	}
+	// Non-EDNS NOERROR (single-answer included) \u2192 low-priority fallback.
+	// Previously single-answer non-EDNS was REJECTED outright (the "GFW
+	// injects bare A/AAAA" heuristic) \u2014 but real servers that don't echo
+	// EDNS return the same shape, so those queries blocked the full 9s
+	// budget and SERVFAILed.  pickBest prefers EDNS candidates and the
+	// collect window waits for a second candidate, so a real EDNS response
+	// beats an injected bare A; the fallback is served only when nothing
+	// better arrives (mirrors processPacket in server/upstream/plain/udp.go).
 	s.rejected++
-	return nil, red + "REJECT" + reset + " (GFW: bare record, no EDNS, no CNAME)"
+	s.nonEDNS = r
+	return nil, yellow + "FALLBACK" + reset + " (non-EDNS \u2014 collected, EDNS preferred)"
 }
 
 func (s *sgState) pickBest() *simResp {
@@ -125,6 +140,42 @@ func showResponse(i int, r *simResp, arrival time.Duration) {
 	fmt.Printf("           EDNS: %s   Answers: [%s]   CNAME: %v\n", edns, ans, r.hasCNAME)
 }
 
+// runConfirmRound feeds one collect round's datagrams through the spoofguard
+// state machine and returns the best candidate (the ambiguous non-EDNS
+// fallback), or the safe response if one was returned immediately.
+func runConfirmRound(scenario []simResp, start time.Time) *simResp {
+	state := &sgState{}
+	for i := range scenario {
+		r := &scenario[i]
+		elapsed := time.Since(start)
+		if r.delay > elapsed {
+			time.Sleep(r.delay - elapsed)
+		}
+		arrival := time.Since(start)
+		showResponse(i+1, r, arrival)
+		result, verdict := state.processPacket(r)
+		fmt.Printf("           \u2192 %s\n", verdict)
+		fmt.Println()
+		if result != nil {
+			return result
+		}
+	}
+	return state.pickBest()
+}
+
+// sameAnswers reports whether two candidate answers carry identical records.
+func sameAnswers(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // ── Main ───────────────────────────────────────────────────────────
 
 func main() {
@@ -158,10 +209,19 @@ func main() {
 	printHR()
 	fmt.Println("  " + bold + "Multi-Read Loop" + reset)
 	fmt.Println()
-	fmt.Println("  GFW signature: bare A/AAAA, no EDNS, no CNAME \u2192 auto-reject")
+	fmt.Println("  GFW signature: bare A/AAAA, no EDNS, no CNAME \u2192 low-priority fallback")
 	fmt.Println("  Real signal:   EDNS-bearing \u2192 collect as candidate")
 	fmt.Println("  After 500ms:   compare candidates, pick richest")
 	fmt.Println()
+	fmt.Println("  " + bold + "Impact of the 2026-08 change on www.google.com:" + reset)
+	fmt.Println("    BEFORE: fakes #1/#2 \u2192 REJECTED; the REAL EDNS response was ALSO")
+	fmt.Println("            rejected \u2014 this fork's Unpack moves the OPT out of Extra")
+	fmt.Println("            (options \u2192 Pseudo, UDPSize set), and the old gate scanned")
+	fmt.Println("            Extra for *dns.OPT, so hasEDNS never matched and the single")
+	fmt.Println("            A answer was treated as a bare GFW signature. No acceptable")
+	fmt.Println("            response \u2192 www.google.com blocked the full 9s budget.")
+	fmt.Println("    AFTER:  fakes \u2192 low-priority fallback; real EDNS detected via")
+	fmt.Println("            resp.UDPSize \u2192 EDNS candidate \u2192 wins \u2192 CLEAN.")
 	printHR()
 
 	for i, r := range scenario1 {
@@ -202,7 +262,7 @@ func main() {
 		}
 		fmt.Println()
 		fmt.Printf("  %sSelected:%s %s (returned to client)\n", green, reset, best.label)
-		fmt.Printf("  GFW fakes rejected: %s%d%s\n", red, state.rejected, reset)
+		fmt.Printf("  GFW fakes discarded: %s%d%s (EDNS real response wins)\n", red, state.rejected, reset)
 	}
 
 	// ── Scenario 2: fast-return ──
@@ -242,6 +302,123 @@ func main() {
 		}
 	}
 
+	// ── Scenario 3: real server does NOT echo EDNS — confirmation re-query ──
+
+	fmt.Println()
+	fmt.Println()
+	fmt.Printf("  %sScenario 3:%s real server without EDNS — GFW fake arrives first\n", bold, reset)
+	fmt.Printf("  Query: %sA www.google.com%s \u2192 authority (no EDNS echo)\n\n", bold, reset)
+
+	printHR()
+	fmt.Println("  " + bold + "Re-Query Confirmation (pure UDP)" + reset)
+	fmt.Println()
+	fmt.Println("  Old gate: single-answer non-EDNS \u2192 REJECT \u2192 fake AND real dropped")
+	fmt.Println("           \u2192 query blocked the full 9s budget \u2192 SERVFAIL (the bug)")
+	fmt.Println("  New gate: single-answer non-EDNS \u2192 AMBIGUOUS \u2192 re-query; a matching")
+	fmt.Println("           repeat confirms the real answer. Never served unconfirmed.")
+	fmt.Println()
+	printHR()
+
+	scenario3R1 := []simResp{
+		{delay: 30 * time.Millisecond, hasEDNS: false, answers: []string{"A 93.46.8.89"}, label: "R1 GFW fake — bare A record"},
+		{delay: 110 * time.Millisecond, hasEDNS: false, answers: []string{"A 142.250.80.4"}, label: "R1 Real — single-answer non-EDNS A"},
+	}
+	scenario3R2 := []simResp{
+		{delay: 30 * time.Millisecond, hasEDNS: false, answers: []string{"A 31.13.92.37"}, label: "R2 GFW fake — bare A (different IP)"},
+		{delay: 110 * time.Millisecond, hasEDNS: false, answers: []string{"A 142.250.80.4"}, label: "R2 Real — same single-answer non-EDNS A"},
+	}
+
+	start3 := time.Now()
+	fmt.Println("  " + bold + "\u2500\u2500 Round 1 (collect window) \u2500\u2500" + reset)
+	fmt.Println()
+	best3 := runConfirmRound(scenario3R1, start3)
+	fmt.Println("  " + bold + "\u2500\u2500 Round 1 result: AMBIGUOUS \u2192 re-querying \u2500\u2500" + reset)
+	fmt.Println()
+
+	fmt.Println("  " + bold + "\u2500\u2500 Round 2 (confirmation) \u2500\u2500" + reset)
+	fmt.Println()
+	best3b := runConfirmRound(scenario3R2, time.Now())
+	fmt.Println()
+	if best3 != nil && best3b != nil && sameAnswers(best3.answers, best3b.answers) {
+		fmt.Printf("  %sConfirmed:%s round 1 and round 2 real answers match \u2192 %s\n", green, reset, best3b.label)
+		fmt.Println("  Served to client: 142.250.80.4 (real). Pure UDP, no TCP.")
+	} else {
+		fmt.Printf("  %sNo confirmation \u2192 ambiguous response not served.%s\n", red, reset)
+	}
+
+	// ── Scenario 4: lone injection (real response lost) ──
+
+	fmt.Println()
+	fmt.Println()
+	fmt.Printf("  %sScenario 4:%s lone GFW injection \u2014 real response never arrives\n", bold, reset)
+	fmt.Printf("  Query: %sA www.google.com%s \u2192 authority (real datagram dropped)\n\n", bold, reset)
+
+	printHR()
+	fmt.Println("  " + bold + "Re-Query Confirmation (pure UDP)" + reset)
+	fmt.Println()
+	fmt.Println("  Old gate: lone fake \u2192 REJECT \u2192 timeout (no answer, no poison)")
+	fmt.Println("  GFW reality: TWO fakes are injected per query (observed pattern)")
+	fmt.Println("  New gate: \u22652 non-EDNS responses \u2192 AMBIGUOUS \u2192 re-query; the fakes")
+	fmt.Println("           differ each round \u2192 never confirms \u2192 the query fails cleanly.")
+	fmt.Println("           A single clean response is served directly (no injection signal).")
+	fmt.Println()
+	printHR()
+
+	scenario4R1 := []simResp{
+		{delay: 30 * time.Millisecond, hasEDNS: false, answers: []string{"A 93.46.8.89"}, label: "R1 GFW fake #1 — bare A"},
+		{delay: 60 * time.Millisecond, hasEDNS: false, answers: []string{"A 31.13.92.37"}, label: "R1 GFW fake #2 — different IP"},
+	}
+	scenario4R2 := []simResp{
+		{delay: 30 * time.Millisecond, hasEDNS: false, answers: []string{"A 157.240.7.20"}, label: "R2 GFW fake #1 — different IP"},
+		{delay: 60 * time.Millisecond, hasEDNS: false, answers: []string{"A 185.45.5.35"}, label: "R2 GFW fake #2 — different IP"},
+	}
+	scenario4R3 := []simResp{
+		{delay: 30 * time.Millisecond, hasEDNS: false, answers: []string{"A 104.244.42.197"}, label: "R3 GFW fake #1 — different IP"},
+		{delay: 60 * time.Millisecond, hasEDNS: false, answers: []string{"A 174.132.167.252"}, label: "R3 GFW fake #2 — different IP"},
+	}
+
+	best4 := runConfirmRound(scenario4R1, time.Now())
+	fmt.Println("  \u2500\u2500 Round 1: AMBIGUOUS \u2192 re-querying" + reset)
+	best4b := runConfirmRound(scenario4R2, time.Now())
+	fmt.Println("  \u2500\u2500 Round 2: DIFFERS \u2192 re-querying" + reset)
+	best4c := runConfirmRound(scenario4R3, time.Now())
+	fmt.Println()
+	if best4 != nil && best4b != nil && best4c != nil &&
+		sameAnswers(best4.answers, best4b.answers) && sameAnswers(best4b.answers, best4c.answers) {
+		fmt.Printf("  %sServed:%s %s (confirmed across rounds)\n", green, reset, best4c.label)
+	} else {
+		fmt.Printf("  %sNo matching confirmation across 3 rounds \u2192 query fails, nothing served.%s\n", red, reset)
+		fmt.Println("  (HopGuard TTL validation, when armed, is the additional first-line filter.)")
+	}
+
+	// ── Scenario 5: clean single response (github.com nsone) ──
+
+	fmt.Println()
+	fmt.Println()
+	fmt.Printf("  %sScenario 5:%s clean single-answer no-EDNS response — no injection\n", bold, reset)
+	fmt.Printf("  Query: %sA github.com%s \u2192 nsone authority (single response)\n\n", bold, reset)
+
+	printHR()
+	fmt.Println("  " + bold + "Single Clean Response (no re-query)" + reset)
+	fmt.Println()
+	fmt.Println("  GFW always injects TWO fakes \u2014 one response carries no injection")
+	fmt.Println("  signal, so it is served directly (no confirmation latency). This is")
+	fmt.Println("  the github.com nsone case: the old gate rejected it \u2192 9s timeout;")
+	fmt.Println("  the naive fallback served it; now it is trusted without delay.")
+	fmt.Println()
+	printHR()
+
+	scenario5 := []simResp{
+		{delay: 40 * time.Millisecond, hasEDNS: false, answers: []string{"A 140.82.112.4"}, label: "Real: nsone — single-answer non-EDNS A (only datagram)"},
+	}
+	best5 := runConfirmRound(scenario5, time.Now())
+	fmt.Println()
+	if best5 != nil {
+		fmt.Printf("  %sServed directly:%s %s (1 response, no injection signal)\n", green, reset, best5.label)
+	} else {
+		fmt.Printf("  %sNo response.%s\n", red, reset)
+	}
+
 	// ── Comparison Table ──
 
 	fmt.Println()
@@ -257,13 +434,13 @@ func main() {
 	fmt.Println(hr)
 
 	fmt.Printf(dim+"  │ %-26s │ "+red+"%-28s"+reset+" │ "+green+"%-28s"+reset+" │"+reset+"\n",
-		"First response", "GFW fake (30ms)", "GFW fake \u2192 REJECTED")
+		"First response", "GFW fake (30ms)", "GFW fake \u2192 fallback (discarded later)")
 	fmt.Printf(dim+"  │ %-26s │ "+red+"%-28s"+reset+" │ "+green+"%-28s"+reset+" │"+reset+"\n",
 		"Returned to client", "A 93.46.8.89 (fake)", "A 142.250.80.4 (real)")
 	fmt.Printf(dim+"  │ %-26s │ "+red+"%-28s"+reset+" │ "+green+"%-28s"+reset+" │"+reset+"\n",
-		"Detection method", "None — first wins", "EDNS gate + multi-read")
+		"Detection method", "None — first wins", "EDNS preference + multi-read")
 	fmt.Printf(dim+"  │ %-26s │ "+red+"%-28s"+reset+" │ "+green+"%-28s"+reset+" │"+reset+"\n",
-		"GFW fakes filtered", "0 / 2", "2 / 2 rejected")
+		"GFW fakes filtered", "0 / 2", "2 / 2 discarded (EDNS wins)")
 	fmt.Printf(dim+"  │ %-26s │ "+green+"%-28s"+reset+" │ "+yellow+"%-28s"+reset+" │"+reset+"\n",
 		"Latency cost", "~30ms (first wins)", "+80ms (real @ 110ms)")
 
@@ -276,7 +453,10 @@ func main() {
 	fmt.Println(bold + "  How it works:" + reset)
 	fmt.Println("  GFW injects bare A/AAAA records without EDNS — the signature")
 	fmt.Println("  of DNS injection. Spoofguard reads all UDP datagrams in a")
-	fmt.Println("  500ms window, filters by EDNS gate, and picks the richest")
-	fmt.Println("  response. Real servers always include EDNS (RFC 6891).")
+	fmt.Println("  500ms window, prefers EDNS-bearing candidates, and picks the")
+	fmt.Println("  richest response. Non-EDNS responses are kept as a low-priority")
+	fmt.Println("  candidate; a bare single-answer A/AAAA is ambiguous and is served")
+	fmt.Println("  only after a matching re-query confirms it (pure UDP — GFW fakes")
+	fmt.Println("  vary per packet, the real answer is deterministic).")
 	fmt.Println()
 }

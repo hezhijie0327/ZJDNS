@@ -27,6 +27,37 @@ func TestHopGuard_LearningPhase_AllPass(t *testing.T) {
 	}
 }
 
+// TestHopGuard_POCScenario_ArmedRejectsGFWJitter mirrors docs/poc/hopguard
+// Scenario B: a clean warm-up on the real server's TTL (52±1) arms the guard;
+// GFW-injected TTLs from a different network path (32-47 / 58-73 jitter) are
+// then rejected while the real baseline still passes.
+func TestHopGuard_POCScenario_ArmedRejectsGFWJitter(t *testing.T) {
+	hg := NewHopGuard()
+
+	// Clean warm-up: hopGuardMinSamples observations of the real TTL 52±1.
+	realTTLs := []uint8{51, 52, 53}
+	for i := range hopGuardMinSamples {
+		hg.Feed(testServer, realTTLs[i%len(realTTLs)])
+	}
+	if !hg.armed(testServer) {
+		t.Fatal("should be armed after a clean warm-up")
+	}
+
+	// Real baseline (52±1, within the ±2 tolerance) passes.
+	for _, ttl := range []uint8{51, 52, 53} {
+		if !hg.Validate(testServer, ttl) {
+			t.Errorf("real TTL=%d should pass (within 52±2)", ttl)
+		}
+	}
+
+	// GFW jitter (32-47 and 58-73) is outside the trusted ±2 window.
+	for _, ttl := range []uint8{32, 40, 47, 58, 65, 73} {
+		if hg.Validate(testServer, ttl) {
+			t.Errorf("GFW TTL=%d should be rejected (outside 52±2)", ttl)
+		}
+	}
+}
+
 func TestHopGuard_AdaptiveThreshold(t *testing.T) {
 	hg := NewHopGuard()
 

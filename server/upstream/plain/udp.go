@@ -30,12 +30,13 @@ type spoofguardState struct {
 	lastRecv             time.Time
 
 	// nonEDNS holds a non-EDNS fallback candidate.  It is only populated
-	// when the response carries an authority signal (CNAME chain or AN≥2)
-	// that GFW injection does not replicate — GFW injects bare A/AAAA
-	// records without CNAMEs.  EDNS-bearing candidates always take
-	// precedence; non-EDNS is used only when no EDNS response arrives.
-	nonEDNS    *dns.Msg
-	nonEDNSAns int
+	// when no EDNS response arrived.  nonEDNSSafe marks candidates whose
+	// shape GFW injection does not replicate (CNAME chains) — those can be
+	// served directly; a bare single-answer A/AAAA is ambiguous and must be
+	// confirmed by a matching re-query before it is served.
+	nonEDNS     *dns.Msg
+	nonEDNSAns  int
+	nonEDNSSafe bool
 
 	// TTL values for hopguard learning — stored per candidate.
 	lastTTL, prevTTL, nonEDNSTTL uint8
@@ -207,151 +208,249 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 	}
 
 	originalID := msg.ID
-	trackingID := uc.NextID()
-	msg.ID = trackingID
-	packErr := msg.Pack()
-	msgData := msg.Data
-	msg.ID = originalID
-	if packErr != nil {
-		return nil, packErr
-	}
-
-	matchKey := string([]byte{byte(trackingID >> 8), byte(trackingID)}) //nolint:gosec // G115: DNS ID — protocol-bounded uint16
-	collectCh, err := uc.ExchangeCollect(ctx, msgData, matchKey)
-	if err != nil {
-		if uc.IsDead() {
-			c.udpPool.Remove(uc)
-		}
-		return nil, err
-	}
-
 	maxDeadline := time.Now().Add(c.timeout)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(maxDeadline) {
 		maxDeadline = dl
 	}
 
-	var sg spoofguardState
 	// One timer per collect window, Reset per iteration — time.After inside
 	// the select allocated a fresh timer every poll (M-3-6).
 	pollTimer := time.NewTimer(config.DefaultSpoofguardPollInterval)
 	defer pollTimer.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			if sg.last != nil {
-				pool.DefaultMessage.Put(sg.last)
+
+	// previous holds the best candidate of the prior round when it was
+	// ambiguous (a bare single-answer non-EDNS response).  A matching repeat
+	// confirms it as the real server's answer — GFW fakes vary per packet
+	// while the real answer is deterministic — and an ambiguous response is
+	// NEVER served without that confirmation (pure UDP, no TCP fallback).
+	var previous *dns.Msg
+
+	for round := 0; ; round++ {
+		trackingID := uc.NextID()
+		msg.ID = trackingID
+		if packErr := msg.Pack(); packErr != nil {
+			if previous != nil {
+				pool.DefaultMessage.Put(previous)
 			}
-			if sg.prev != nil {
-				pool.DefaultMessage.Put(sg.prev)
+			return nil, packErr
+		}
+		msgData := msg.Data
+		msg.ID = originalID
+
+		matchKey := string([]byte{byte(trackingID >> 8), byte(trackingID)}) //nolint:gosec // G115: DNS ID — protocol-bounded uint16
+		collectCh, err := uc.ExchangeCollect(ctx, msgData, matchKey)
+		if err != nil {
+			if uc.IsDead() {
+				c.udpPool.Remove(uc)
 			}
-			if sg.nonEDNS != nil {
-				pool.DefaultMessage.Put(sg.nonEDNS)
+			if previous != nil {
+				pool.DefaultMessage.Put(previous)
 			}
-			uc.ReleaseCollect(matchKey)
-			return nil, ctx.Err()
-		case pkt, ok := <-collectCh:
-			if !ok {
-				// The conn died mid-collect: return the other candidates to
-				// the pool — only sg.last is handed to the caller.  This
-				// branch is reachable since close() now wakes collect
-				// waiters (M-3-6).
-				uc.ReleaseCollect(matchKey)
+			return nil, err
+		}
+
+		var sg spoofguardState
+	collect:
+		for {
+			select {
+			case <-ctx.Done():
+				if sg.last != nil {
+					pool.DefaultMessage.Put(sg.last)
+				}
 				if sg.prev != nil {
 					pool.DefaultMessage.Put(sg.prev)
 				}
 				if sg.nonEDNS != nil {
 					pool.DefaultMessage.Put(sg.nonEDNS)
 				}
-				if sg.last != nil {
-					return sg.last, nil
+				if previous != nil {
+					pool.DefaultMessage.Put(previous)
 				}
-				return nil, errors.New("pooled udp connection closed during spoofguard collect")
-			}
-			// Gate on 12 bytes first — processPacket reads raw[6..9] for the
-			// fast-signal checks; a 2-9 byte datagram with a matching ID
-			// would index out of range (H9; the multi-read path gates n<12).
-			// ID/length validation also runs BEFORE HopGuard Feed so that
-			// stray datagrams never enter the TTL histogram (M1).
-			if len(pkt.Data) < 12 || uint16(pkt.Data[0])<<8|uint16(pkt.Data[1]) != trackingID {
-				continue
-			}
-			// HopGuard: validate gates packet acceptance; Feed happens only
-			// after spoofguard accepts the response (below) — the learning
-			// phase otherwise lets a fixed-TTL flood win the mode and arm
-			// the guard on the attacker's TTL (M1).  Rejected TTLs are
-			// sampled 1-in-16 into the histogram so legitimate drift can
-			// recover (M2).
-			if hg != nil && !hg.Validate(server.Address, pkt.TTL) {
-				if hg.ShouldSampleRejected(server.Address) {
-					hg.Feed(server.Address, pkt.TTL)
-				}
-				continue
-			}
-			// TTL confidence signal for spoofguard: when hopguard is armed
-			// and the TTL is trusted, ambiguous EDNS responses can be
-			// fast-accepted without waiting for a second candidate.  A
-			// TTL=0 read (no control message on some platforms) carries no
-			// TTL evidence — never fast-accept on it (M-low).
-			ttlConfident := hg != nil && hg.Confident(server.Address) && pkt.TTL != 0
-			resp := sg.processPacket(pkt.Data, len(pkt.Data), msg.UDPSize, server.Address, ttlConfident, pkt.TTL, server.Spoofguard)
-			// processPacket copied the payload (copyData) — return the
-			// pooled buffer on every exit path (M-3-6).
-			pkt.Release()
-			if resp != nil {
-				if sg.last != nil && sg.last != resp {
-					pool.DefaultMessage.Put(sg.last)
-				}
-				if sg.prev != nil && sg.prev != resp {
-					pool.DefaultMessage.Put(sg.prev)
-				}
-				if sg.nonEDNS != nil && sg.nonEDNS != resp {
-					pool.DefaultMessage.Put(sg.nonEDNS)
-				}
-				// Feed exactly once per accepted response (the adoption
-				// feed was a duplicate — every query was counted twice,
-				// halving the arming threshold; M-low).
-				if hg != nil {
-					hg.Feed(server.Address, pkt.TTL)
-				}
-				resp.ID = originalID
 				uc.ReleaseCollect(matchKey)
-				return resp, nil
-			}
-		case <-pollTimer.C:
-			pollTimer.Reset(config.DefaultSpoofguardPollInterval)
-			now := time.Now()
-			if sg.last != nil && now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
-				resp := sg.pickBest()
-				if hg != nil {
-					hg.Feed(server.Address, sg.pickBestTTL())
-				}
-				resp.ID = originalID
-				uc.ReleaseCollect(matchKey)
-				return resp, nil
-			}
-			if sg.last == nil && sg.nonEDNS != nil && now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
-				resp := sg.pickBest()
-				if hg != nil {
-					hg.Feed(server.Address, sg.pickBestTTL())
-				}
-				resp.ID = originalID
-				uc.ReleaseCollect(matchKey)
-				return resp, nil
-			}
-			if now.After(maxDeadline) {
-				resp := sg.pickBest()
-				if resp == nil {
+				return nil, ctx.Err()
+			case pkt, ok := <-collectCh:
+				if !ok {
+					// The conn died mid-collect: return the other candidates
+					// to the pool — only sg.last is handed to the caller.
 					uc.ReleaseCollect(matchKey)
-					return nil, errors.New("no UDP response received")
+					if sg.prev != nil {
+						pool.DefaultMessage.Put(sg.prev)
+					}
+					if sg.nonEDNS != nil {
+						pool.DefaultMessage.Put(sg.nonEDNS)
+					}
+					if previous != nil {
+						pool.DefaultMessage.Put(previous)
+					}
+					if sg.last != nil {
+						return sg.last, nil
+					}
+					return nil, errors.New("pooled udp connection closed during spoofguard collect")
 				}
-				if hg != nil {
-					hg.Feed(server.Address, sg.pickBestTTL())
+				// Gate on 12 bytes first — processPacket reads raw[6..9] for
+				// the fast-signal checks; a 2-9 byte datagram with a matching
+				// ID would index out of range (H9; the multi-read path gates
+				// n<12).  ID/length validation also runs BEFORE HopGuard Feed
+				// so that stray datagrams never enter the TTL histogram (M1).
+				if len(pkt.Data) < 12 || uint16(pkt.Data[0])<<8|uint16(pkt.Data[1]) != trackingID {
+					continue
 				}
-				resp.ID = originalID
-				uc.ReleaseCollect(matchKey)
-				return resp, nil
+				// HopGuard: validate gates packet acceptance; Feed happens
+				// only after spoofguard accepts the response (below).
+				if hg != nil && !hg.Validate(server.Address, pkt.TTL) {
+					if hg.ShouldSampleRejected(server.Address) {
+						hg.Feed(server.Address, pkt.TTL)
+					}
+					continue
+				}
+				ttlConfident := hg != nil && hg.Confident(server.Address) && pkt.TTL != 0
+				resp := sg.processPacket(pkt.Data, len(pkt.Data), msg.UDPSize, server.Address, ttlConfident, pkt.TTL, server.Spoofguard)
+				pkt.Release()
+				if resp != nil {
+					// Safe: fast-return (AN≥2/NS>0/AD=1), TTL-confident EDNS,
+					// or spoofguard-disabled path.
+					if sg.last != nil && sg.last != resp {
+						pool.DefaultMessage.Put(sg.last)
+					}
+					if sg.prev != nil && sg.prev != resp {
+						pool.DefaultMessage.Put(sg.prev)
+					}
+					if sg.nonEDNS != nil && sg.nonEDNS != resp {
+						pool.DefaultMessage.Put(sg.nonEDNS)
+					}
+					if previous != nil {
+						pool.DefaultMessage.Put(previous)
+					}
+					if hg != nil {
+						hg.Feed(server.Address, pkt.TTL)
+					}
+					resp.ID = originalID
+					uc.ReleaseCollect(matchKey)
+					return resp, nil
+				}
+			case <-pollTimer.C:
+				pollTimer.Reset(config.DefaultSpoofguardPollInterval)
+				now := time.Now()
+				if sg.last != nil && now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
+					// EDNS candidate — safe, return directly.
+					resp := sg.pickBest()
+					if hg != nil {
+						hg.Feed(server.Address, sg.pickBestTTL())
+					}
+					if previous != nil {
+						pool.DefaultMessage.Put(previous)
+					}
+					resp.ID = originalID
+					uc.ReleaseCollect(matchKey)
+					return resp, nil
+				}
+				if sg.last == nil && sg.nonEDNS != nil && now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
+					resp := sg.pickBest()
+					uc.ReleaseCollect(matchKey)
+					if sg.nonEDNSSafe || sg.rejected <= 1 {
+						// CNAME-bearing — GFW does not inject CNAME chains.
+						// Or a single clean response: the empirical GFW
+						// pattern injects TWO bare fakes per query, so a
+						// lone response carries no injection signal and is
+						// safe to serve directly (no confirmation re-query
+						// latency for legitimate no-EDNS servers).
+						if hg != nil {
+							hg.Feed(server.Address, sg.pickBestTTL())
+						}
+						if previous != nil {
+							pool.DefaultMessage.Put(previous)
+						}
+						resp.ID = originalID
+						return resp, nil
+					}
+					// Ambiguous bare single-answer non-EDNS: confirm with a
+					// matching re-query before serving (pure UDP).
+					if previous != nil && sameUDPAnswer(previous, resp) {
+						if hg != nil {
+							hg.Feed(server.Address, sg.pickBestTTL())
+						}
+						pool.DefaultMessage.Put(previous)
+						resp.ID = originalID
+						return resp, nil
+					}
+					if previous != nil {
+						pool.DefaultMessage.Put(previous)
+					}
+					previous = resp
+					if round+1 >= config.DefaultSpoofguardConfirmRounds || now.After(maxDeadline) {
+						pool.DefaultMessage.Put(resp)
+						return nil, errors.New("ambiguous UDP response (single-answer, no EDNS) — no matching confirmation")
+					}
+					break collect // re-query in the next round
+				}
+				if now.After(maxDeadline) {
+					resp := sg.pickBest()
+					if resp == nil {
+						if previous != nil {
+							pool.DefaultMessage.Put(previous)
+						}
+						uc.ReleaseCollect(matchKey)
+						return nil, errors.New("no UDP response received")
+					}
+					if sg.last != nil || sg.nonEDNSSafe || sg.rejected <= 1 {
+						if hg != nil {
+							hg.Feed(server.Address, sg.pickBestTTL())
+						}
+						if previous != nil {
+							pool.DefaultMessage.Put(previous)
+						}
+						resp.ID = originalID
+						uc.ReleaseCollect(matchKey)
+						return resp, nil
+					}
+					// Ambiguous at the deadline — never serve it.
+					pool.DefaultMessage.Put(resp)
+					if previous != nil {
+						pool.DefaultMessage.Put(previous)
+					}
+					uc.ReleaseCollect(matchKey)
+					return nil, errors.New("ambiguous UDP response (single-answer, no EDNS)")
+				}
 			}
 		}
+	}
+}
+
+// sameUDPAnswer reports whether two candidate responses carry the same
+// answer records (owner, type, and rdata; TTL ignored).  Used to confirm an
+// ambiguous single-answer non-EDNS response via a matching re-query — GFW
+// fakes vary per packet, while the real server's answer is deterministic.
+func sameUDPAnswer(a, b *dns.Msg) bool {
+	if a == nil || b == nil || len(a.Answer) != len(b.Answer) {
+		return false
+	}
+	for i := range a.Answer {
+		if !sameRRData(a.Answer[i], b.Answer[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameRRData(x, y dns.RR) bool {
+	if x == nil || y == nil {
+		return false
+	}
+	if !dns.EqualName(x.Header().Name, y.Header().Name) || dns.RRToType(x) != dns.RRToType(y) {
+		return false
+	}
+	switch a := x.(type) {
+	case *dns.A:
+		b, ok := y.(*dns.A)
+		return ok && a.A == b.A
+	case *dns.AAAA:
+		b, ok := y.(*dns.AAAA)
+		return ok && a.AAAA == b.AAAA
+	case *dns.CNAME:
+		b, ok := y.(*dns.CNAME)
+		return ok && a.CNAME == b.CNAME
+	default:
+		return false
 	}
 }
 
@@ -704,15 +803,12 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 		}
 		resp.Data = nil
 
-		// EDNS presence is determined from the parsed OPT RR, not raw
-		// ARCOUNT (which counts ALL additional records).
-		hasEDNS := false
-		for _, extra := range resp.Extra {
-			if _, ok := extra.(*dns.OPT); ok {
-				hasEDNS = true
-				break
-			}
-		}
+		// EDNS presence is determined from resp.UDPSize, not raw ARCOUNT
+		// (which counts ALL additional records).  This fork's Unpack removes
+		// the OPT RR from Extra and folds its options into Pseudo, setting
+		// Msg.UDPSize only when an OPT was present — so a bare `*dns.OPT`
+		// scan of Extra never matched and the EDNS candidate path was dead.
+		hasEDNS := resp.UDPSize > 0
 		if hasEDNS {
 			// An EDNS response is a legitimate candidate, NOT a spoofguard
 			// target — route it into the ambiguous EDNS-bearing handling
@@ -728,9 +824,20 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 		// EDNS return exactly that shape (e.g. github.com's nsone servers),
 		// so every query to them blocked the full 9s budget and SERVFAILed.
 		// pickBest still prefers EDNS-bearing candidates and the collect
-		// window waits for a second candidate, so a real EDNS response wins
-		// over an injected bare A; the fallback is only served when nothing
-		// better arrives.
+		// window waits for a second candidate.  A bare single-answer A/AAAA
+		// is marked ambiguous (nonEDNSSafe=false): executeUDPCollect only
+		// serves it after a matching re-query confirms it (pure-UDP
+		// consistency — GFW fakes vary per packet, the real answer is
+		// deterministic); CNAME-bearing responses are safe to serve
+		// directly (GFW does not inject CNAME chains).
+		hasCNAME := false
+		for _, rr := range resp.Answer {
+			if _, ok := rr.(*dns.CNAME); ok {
+				hasCNAME = true
+				break
+			}
+		}
+		s.nonEDNSSafe = hasCNAME
 		s.rejected++
 		if s.nonEDNS != nil {
 			pool.DefaultMessage.Put(s.nonEDNS)

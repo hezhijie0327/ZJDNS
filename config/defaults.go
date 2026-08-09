@@ -162,8 +162,15 @@ const (
 // =============================================================================
 
 const (
-	DefaultSpoofguardCollectWindow     = 500 * time.Millisecond // silence window before returning best EDNS candidate
-	DefaultSpoofguardPollInterval      = 100 * time.Millisecond // per-read poll interval
+	DefaultSpoofguardCollectWindow = 500 * time.Millisecond // silence window before returning best EDNS candidate
+	DefaultSpoofguardPollInterval  = 100 * time.Millisecond // per-read poll interval
+	// DefaultSpoofguardConfirmRounds bounds the pure-UDP re-query
+	// confirmation for an ambiguous single-answer non-EDNS response: a
+	// matching repeat (same answer records) confirms it as the real server's
+	// response, since GFW fakes vary per packet while the real answer is
+	// deterministic.  Re-queries stop after this many rounds or at the query
+	// deadline — an unconfirmed ambiguous response is never served.
+	DefaultSpoofguardConfirmRounds     = 3
 	DefaultSplitguardMaxSegSize        = 4                      // max bytes per TCP segment (random [1,N] to avoid fingerprinting)
 	DefaultQUICSecondQueryProbeTimeout = 100 * time.Millisecond // DoQ: probe for a second query on the same stream (RFC 9250 §4.3.3)
 )

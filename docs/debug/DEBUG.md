@@ -5,6 +5,7 @@
 ```
 docs/debug/
 ├── DEBUG.md                # this file
+├── domains.txt             # 186 domains (sorted, deduped) for batch tests
 ├── loopback/               # ZJDNS ↔ ZJDNS protocol loopback tests
 │   ├── server.json         # server: all protocols + self-signed TLS + DNSCrypt + TLCP/DTLCP
 │   ├── server-dnssec.json  # server: dnssec_enforce=true, recursive mode

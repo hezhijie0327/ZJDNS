@@ -1437,10 +1437,8 @@ func TestPoolReturnsToIdleAfterLoad(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range 32 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 200; j++ {
+		wg.Go(func() {
+			for j := range 200 {
 				qname := fmt.Sprintf("host%d.example.com.", j%997)
 				s.Get(qname, dns.TypeA, dns.ClassINET, nil, false)
 				s.GetTypes(qname, dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA}, false)
@@ -1456,7 +1454,7 @@ func TestPoolReturnsToIdleAfterLoad(t *testing.T) {
 					Protocol: "udp", Result: "hit", Rcode: 0,
 				})
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
