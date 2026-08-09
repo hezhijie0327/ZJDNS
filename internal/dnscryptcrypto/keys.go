@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/cloudflare/circl/dh/x25519"
-	"github.com/cloudflare/circl/sign/ed25519"
 )
 
 // HexEncodeKey encodes a byte slice as an uppercase hex string.
@@ -41,15 +40,6 @@ func GenerateRandomKeyPair() (secretKey, publicKey [KeySize]byte, err error) {
 	secretKey = [KeySize]byte(sk)
 	publicKey = [KeySize]byte(pk)
 	return secretKey, publicKey, nil
-}
-
-// GenerateEd25519Keypair generates a new Ed25519 key pair for provider signing.
-func GenerateEd25519Keypair() (publicKey, privateKey []byte, err error) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, nil, fmt.Errorf("generating ed25519 keypair: %w", err)
-	}
-	return pub, priv, nil
 }
 
 // X25519KeyPairFromSeed derives an X25519 key pair from a 32-byte seed.

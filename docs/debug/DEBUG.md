@@ -730,7 +730,7 @@ ls -la /tmp/zjdns-persist/zjdns.dnscrypt
 
 ## Query Stats & Debug
 
-查询统计（`query_stats`）和查询日志（`query_log`）是纯内存实现（`internal/statsjournal`）：原子计数器 + 每种 RCODE 的 top-N 域名 journal，重启后归零。整个服务器无 SQLite——缓存/延迟/委派（lrumap）、规则（快照）全部内存化，唯一的持久化是 DNSCrypt 状态文件（`zjdns.dnscrypt`）。
+查询统计（`query_stats`）和查询日志（`query_log`）是纯内存实现（`cache/statsjournal.go`）：原子计数器 + 每种 RCODE 的 top-N 域名 journal，重启后归零。整个服务器无 SQLite——缓存/延迟/委派（lrumap）、规则（快照）全部内存化，唯一的持久化是 DNSCrypt 状态文件（`zjdns.dnscrypt`）。
 
 ```bash
 # 实时统计（聚合计数）

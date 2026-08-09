@@ -1173,11 +1173,8 @@ func TestPruneQueryJournal(t *testing.T) {
 }
 
 // TestPoolReturnsToIdleAfterLoad hammers the exact hot paths the recursive
-// resolver exercises (cache Get/GetTypes/LatencyLastProbe + async Set +
-// stats RecordRequest + UpdateLatency) under concurrency, then verifies every
-// pooled connection returns to idle.  This reproduces the production
-// connection-pool exhaustion: if any path leaks a Rows/Tx, InUse stays > 0
-// (or OpenConnections stays pinned) after quiescence.
+// resolver exercises (cache Get/GetTypes/LatencyLastProbe + Set + stats
+// RecordRequest + UpdateLatency) under concurrency.
 func TestPoolReturnsToIdleAfterLoad(t *testing.T) {
 	s := New(0, 0)
 

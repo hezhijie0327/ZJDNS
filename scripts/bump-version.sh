@@ -19,14 +19,8 @@ set -eu
 
 BUMP="${1:-}"
 SLUG="${2:-}"
-GEN_MIGRATION=true
-
-if [ "${3:-}" = "--no-migration" ]; then
-    GEN_MIGRATION=false
-fi
-
 if [ -z "$BUMP" ] || [ -z "$SLUG" ]; then
-    echo "Usage: sh scripts/bump-version.sh <patch|minor|major> <slug> [--no-migration]" >&2
+    echo "Usage: sh scripts/bump-version.sh <patch|minor|major> <slug>" >&2
     exit 1
 fi
 
@@ -70,23 +64,3 @@ else
     sed -i "s/Version-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-/Version-${NEW}-/" "$README"
 fi
 echo "Bumped $README"
-
-# ── Create migration SQL archive ─────────────────────────────────────────
-if $GEN_MIGRATION; then
-    MIGRATION_FILE="database/migrations/${NEW}_${SLUG}.sql"
-    mkdir -p database/migrations
-    cat > "$MIGRATION_FILE" <<EOF
--- $NEW: $SLUG
--- TODO: add migration SQL here
-EOF
-    echo "Created $MIGRATION_FILE"
-
-    echo ""
-    echo "Next steps:"
-    echo "  1. Edit $MIGRATION_FILE with the actual SQL"
-    echo "  2. Add migration entry to database/migration.go:"
-    echo "     {\"$NEW\", \"$SLUG\", migrateV${MAJOR}_${MINOR}_${PATCH}},"
-    echo "  3. Implement the migrateV${MAJOR}_${MINOR}_${PATCH} function"
-else
-    echo "(skipped migration SQL — schema unchanged)"
-fi

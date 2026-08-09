@@ -37,7 +37,7 @@ so cache hits serve the exact rcode.
   deduction happens in-place via the offset table; DNSSEC filtering for
   DO=0 clients uses a wire scan (WireHasDNSSEC). Entries below the
   compression threshold are stored uncompressed (no decompress either).
-- **RecordRequest**: All results → in-memory atomic counters (`internal/statsjournal`); non-hit events also enter a per-RCODE top-N domain journal (`topk.Map`, bounded). No SQL, no disk — pure memory, reset on restart.
+- **RecordRequest**: All results → in-memory atomic counters (`cache/statsjournal.go`); non-hit events also enter a per-RCODE top-N domain journal (`topk.Map`, bounded). No SQL, no disk — pure memory, reset on restart.
 - **Stats aggregation**: `Stats()` reads the in-memory snapshot — O(1) counters + per-RCODE top-N sort. Output keeps the previous TXT layout plus `top-rcode<N>` lines.
 - **Pruning**: `PruneQueryJournal` is a no-op — the journal is bounded in memory, nothing to prune.
 - **Eviction**: On `Set()` when count > maxEntries. Prefers past serve-stale, then oldest. Latency and delegation entries expire lazily on read (past the stale window / TTL).
@@ -112,7 +112,7 @@ Full implementation with PQC support. Two crypto constructions: XWingPQ (default
 - `keys []keyEntry` holds current + previous certs for rotation overlap
 - `rotateKeys()` generates fresh resolver keys every 24h, signed with fixed Ed25519 identity; ticket keys rotate alongside (RFC §11.7)
 - `decrypt()` tries keys newest-first; `decryptPQResumed()` validates tickets against all active certs
-- Persistence: identity + cert windows stored in the `dnscrypt_state` state file (`internal/dnscryptstate`) — a restart resumes the exact same windows (client-cached certs stay valid); config key change drops the persisted state and mints fresh windows
+- Persistence: identity + cert windows stored in the `dnscrypt_state` state file (`server/protocol/dnscrypt/persist_file.go`) — a restart resumes the exact same windows (client-cached certs stay valid); config key change drops the persisted state and mints fresh windows
 - CHAOS `zjdns.dnscrypt.clear` (loopback-only) regenerates all windows immediately (ResetKeys)
 - Config generator: `GenerateDNSCryptConfig()` in `generate.go` → called from `cmd/zjdns/cli/generate.go`
 
@@ -164,7 +164,7 @@ Reuses SM2 certificate pair from TLCP. Wire format = DTLS (RFC 8094): 2-byte big
 ## Zone Rules (`zone/`)
 
 - **Zone evaluator**: in-memory maps (exact/wildcard) behind an atomic.Pointer snapshot; rules come from config at startup.
-- **Wildcard matching**: Batch IN query with fixed 16 placeholders via `StmtZoneWildcard` prepared statement — single query replaces the old per-label N-query loop.
+- **Wildcard matching**: suffix-walk over the in-memory wildcard map, deepest match first.
 - **Synthetic zone rules**: config load injects zone rules for local answers —
   CHAOS introspection (`config/chaos.go`: id.server/hostname.bind/version.*,
   ZJDNS.* stats & clear endpoints, zjdns.whoami — client source IP),

@@ -29,8 +29,8 @@ type Detector struct {
 }
 
 const (
-	ipDetectDialTimeout = 2 * time.Second // matches config.DefaultIPDetectDialTimeout
-	ipDetectTimeout     = 3 * time.Second // matches config.DefaultIPDetectTotalTimeout
+	ipDetectDialTimeout = 2 * time.Second // matches config.the local ipDetectDialTimeout
+	ipDetectTimeout     = 3 * time.Second // matches config.the local ipDetectTimeout
 
 	// DefaultTraceURL is the default HTTP trace endpoint used by the
 	// fallback detection path.

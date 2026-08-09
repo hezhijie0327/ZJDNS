@@ -140,12 +140,6 @@ func (t *ipTrie) hasTag(tag string) bool {
 	return t.tagSet[tag]
 }
 
-// reset clears the trie for rebuilding.
-func (t *ipTrie) reset() {
-	t.root = ipTrieNode{}
-	t.tagSet = nil
-}
-
 // ipToBits converts a net.IP to a fixed 16-byte representation.
 // IPv4 addresses use the IPv4-in-IPv6 mapping (::ffff:0:0/96).
 func ipToBits(ip net.IP) [16]byte {

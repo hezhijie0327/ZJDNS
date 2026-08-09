@@ -6,7 +6,7 @@
 graph LR
     C[Clients] --> L
     subgraph ZJDNS
-        L[Listeners<br/>UDP · TCP · DoT · DoH · DoH3<br/>DoQ · DTLS · TLCP · DTLCP<br/>DNSCrypt] --> MW[Middleware Chain<br/>Response · EDNS · CacheStore<br/>Validation · Zone · Any<br/>CacheLookup · PTR · DNS64<br/>Resolution]
+        L[Listeners<br/>UDP · TCP · DoT · DoH · DoH3<br/>DoQ · DTLS · TLCP · DTLCP<br/>DNSCrypt] --> MW[Middleware Chain<br/>Response · EDNS · CacheStore<br/>Validation · Zone · Any<br/>CacheLookup · DNS64<br/>Resolution]
         MW --> RES[Resolver<br/>Forwarding · Recursive<br/>QNAME Minimisation · DNSSEC<br/>Delegation Cache]
         RES --> UP[Upstream Pool<br/>TCP Pipeline · QUIC Pool<br/>SOCKS5 Proxy]
     end
@@ -26,15 +26,15 @@ graph LR
 ```mermaid
 graph TD
     START[New Server] --> LOADCONF[Load Config<br/>+ Validate]
-    LOADCONF --> INITDB[Open SQLite DB<br/>Run Migrations]
-    INITDB --> INITMW[Build Middleware Chain<br/>11 Layers]
+    LOADCONF --> INITDB[In-memory init<br/>Load snapshots]
+    INITDB --> INITMW[Build Middleware Chain<br/>9 Layers]
     INITMW --> INITHANDLER[Create Handler<br/>+ Resolver + Zone + Ruleset]
     INITHANDLER --> STARTPROTO[Start Protocol Listeners<br/>UDP TCP DoT DoH DoH3<br/>DoQ DTLS TLCP DTLCP<br/>DNSCrypt]
     STARTPROTO --> BG[Start Background Tasks<br/>ECS Refresh · Cookie Rotate<br/>TCP WriteMu Sweep · Stats]
     BG --> RUNNING[Running<br/>accept queries]
     RUNNING --> SIG{Signal?}
     SIG -->|SIGINT/SIGTERM| SHUTDOWN[Mark Handler Closed<br/>Cancel Context<br/>Stop Protocol Listeners]
-    SHUTDOWN --> WAITBG[Wait Background Tasks<br/>Flush Stats · Close DB]
+    SHUTDOWN --> WAITBG[Wait Background Tasks<br/>Save snapshots]
     WAITBG --> EXIT[Exit]
     classDef start fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     classDef proc fill:#fef3c7,stroke:#f59e0b,color:#78350f
@@ -57,12 +57,11 @@ graph LR
     V --> Z[Zone<br/>Rules · Wildcard<br/>Bypass]
     Z --> A[Any<br/>RFC 8482 HINFO]
     A --> CL[CacheLookup<br/>Fresh → Serve<br/>Stale → Refresh]
-    CL --> PT[PTR<br/>Reverse Lookup]
-    PT --> D64[DNS64<br/>AAAA Synthesis]
+    CL --> D64[DNS64<br/>AAAA Synthesis]
     D64 --> RE[Resolution<br/>Upstream · Recursive<br/>Singleflight]
     classDef mw fill:#fef3c7,stroke:#f59e0b,color:#78350f
     class Q mw
-    class R,E,CS,V,Z,A,CL,PT,D64,RE mw
+    class R,E,CS,V,Z,A,CL,D64,RE mw
 ```
 
 ### 缓存命中直发（pre-packed）
@@ -96,8 +95,8 @@ graph TD
 
 ```mermaid
 graph TD
-    Q[Query] --> ECS[ECS 候选<br/>单轮 SQL：5 候选 OR 子句<br/>Go 侧选最优候选]
-    ECS --> SQL[SQLite Lookup<br/>StmtEntryFallback]
+    Q[Query] --> ECS[ECS 候选<br/>内存 LRU：5 候选遍历<br/>Go 侧选最优候选]
+    ECS --> SQL[lrumap lookup<br/>ECS candidates]
     SQL -->|not found| MISS[Cache Miss]
     SQL -->|found| WIRE[提取 pre-packed wire<br/>读 offset 表 · 边界校验]
     WIRE --> ZSTD{zstd 压缩?}
@@ -419,7 +418,7 @@ graph TD
 graph TD
     Q[Query] --> BYPASS{Bypass Rules<br/>Match?}
     BYPASS -->|Yes| NEXT[Skip Zone -> Next]
-    BYPASS -->|No| LOAD[Load Rules from SQLite<br/>Exact + Wildcard + File]
+    BYPASS -->|No| LOAD[Load Rules from config<br/>Exact + Wildcard + File]
     LOAD --> MATCH[Intersect with<br/>Client Match Tags<br/>CIDR + Domain]
     MATCH -->|No Match| NOMATCH[No Match -> Next]
     MATCH -->|Match| SCORE[Score by Tag Priority]
@@ -496,7 +495,7 @@ graph LR
         CFG --> IP[IP CIDR Rules<br/>Binary Radix Trie]
     end
     subgraph Match
-        Q[Query] --> DOMQ[Domain Lookup<br/>SQLite PK Prefix Seek]
+        Q[Query] --> DOMQ[Domain Lookup<br/>in-memory suffix map]
         Q --> IPQ[IP Lookup<br/>O-128 Trie Walk]
         DOMQ --> TAGS[Collect Tags]
         IPQ --> TAGS
@@ -517,7 +516,7 @@ graph LR
 ```mermaid
 graph TD
     QUERY[Cache Hit<br/>with A/AAAA Records] --> EXTRACT[Extract All IPs<br/>from Answer Section]
-    EXTRACT --> BATCH[Batch SQL Lookup<br/>ip_latency table]
+    EXTRACT --> BATCH[Batch lookup<br/>in-memory latency map]
     BATCH -->|All Cached| SORT[Sort Records<br/>by Latency ASC]
     BATCH -->|Some Missing| PROBE[Background Probe<br/>per-IP concurrent]
 
@@ -536,7 +535,7 @@ graph TD
     HTTPS --> AGG
     HTTP3 --> AGG
 
-    AGG --> STORE[Store in ip_latency<br/>Per-IP, shared across domains]
+    AGG --> STORE[Store latency map<br/>Per-IP, shared across domains]
     STORE --> SORT
 
     SORT --> RETURN[Return Sorted Answer<br/>Fastest IP First]
@@ -755,7 +754,7 @@ graph LR
     CH -->|default: drop| DROP[Drop under overload]
     CH -->|send| BG[Background Goroutine<br/>batch accumulate]
     BG --> TICKER{100ms Ticker<br/>or batch full 64}
-    TICKER -->|Fire| FLUSH[Batch INSERT<br/>query_stats + query_log]
+    TICKER -->|Fire| FLUSH[atomic counters<br/>stats journal]
     FLUSH --> BG
     CLOSE[Close] --> DRAIN[Drain channel]
     DRAIN --> FLUSHLAST[Final Flush]

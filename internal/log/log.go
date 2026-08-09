@@ -347,13 +347,6 @@ func IsDebug() bool { return Default.Level() >= Debug }
 func SetLevel(lvl Level) { Default.SetLevel(lvl) }
 
 // SetLevelFilter applies both a level and optional component filter to the
-// default logger. The logLevelStr is in the format "level:comp1,comp2".
-func SetLevelFilter(logLevelStr string) {
-	lvl, components := ParseLevelFilter(logLevelStr, Info)
-	Default.SetLevel(lvl)
-	Default.SetComponentFilter(components)
-}
-
 func sanitizeLogMessage(msg string) string {
 	if msg == "" {
 		return msg

@@ -115,17 +115,6 @@ func TestIPTrie_HasTag(t *testing.T) {
 	}
 }
 
-func TestIPTrie_Reset(t *testing.T) {
-	trie := &ipTrie{}
-	trie.insert(parseCIDR("10.0.0.0/8"), "a")
-
-	trie.reset()
-	tags := trie.match(parseIP("10.1.2.3"))
-	if len(tags) != 0 {
-		t.Fatalf("expected empty after reset, got %v", tags)
-	}
-}
-
 func TestIPTrie_ExactPrefix(t *testing.T) {
 	trie := &ipTrie{}
 	trie.insert(parseCIDR("1.2.3.4/32"), "host")

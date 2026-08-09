@@ -186,20 +186,6 @@ func (rc *ResolverConfig) CreateStamp(addr string) (string, error) {
 	return s.String(), nil
 }
 
-// ParseStamp parses a DNSCrypt DNS stamp string (sdns://...) and returns the
-// server address, provider name, and server public key.  It delegates to the
-// general-purpose stamp parser and adds DNSCrypt-specific validation.
-func ParseStamp(stampStr string) (addr, providerName string, publicKey []byte, err error) {
-	s, err := zstamp.Parse(stampStr)
-	if err != nil {
-		return "", "", nil, err
-	}
-	if s.Proto != zstamp.ProtoDNSCrypt {
-		return "", "", nil, fmt.Errorf("stamp is not DNSCrypt (proto=%d)", s.Proto)
-	}
-	return s.Address, s.ProviderName, s.PublicKey, nil
-}
-
 // GenerateDNSCryptConfig generates a complete ZJDNS JSON configuration for
 // the given provider name and address.  The output includes the server-side
 // DNSCrypt cert + protocol config and a client-side upstream entry with the

@@ -84,7 +84,7 @@ type DNSCryptCertificate struct {
 	StateFile string `json:"state_file,omitzero"`
 }
 
-// FeatureFlags enables optional features: KTLS, DDR, ECS, database,
+// FeatureFlags enables optional features: KTLS, DDR, ECS,
 // cache, latency probes, and stats.
 type FeatureFlags struct {
 	KTLS          *KTLSSettings      `json:"ktls,omitzero"`
@@ -216,12 +216,6 @@ func (f *FeatureFlags) LatencyStateFile() string { return f.Cache.Latency.StateF
 // DelegationStateFile returns the delegation store persistence path
 // ("" = pure memory).
 func (f *FeatureFlags) DelegationStateFile() string { return f.Cache.Delegation.StateFile }
-
-// IsEnabled reports whether explicit DNSCrypt identity keys are provided in
-// config. Returns false when keys are empty (auto-generation applies at startup).
-func (d *DNSCryptCertificate) IsEnabled() bool {
-	return d.PublicKey != "" && d.PrivateKey != ""
-}
 
 // ProviderName returns the DNSCrypt v2 provider name derived from the DDR
 // domain (e.g. "2.dnscrypt-cert.example.com").

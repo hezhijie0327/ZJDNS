@@ -25,7 +25,7 @@ import (
 // builds a cryptographic chain of trust at each delegation step.
 //
 // Both root servers and per-nameserver addresses share the same latency-sorted
-// cache mechanism: per-type TypeA/TypeAAAA entries + ip_latency table. The
+// cache mechanism: per-type TypeA/TypeAAAA entries + per-IP latency map. The
 // client-facing A/AAAA answers are reordered fastest-first by the cache at
 // Get() time (cache.sortAnswerByLatency); the NS addresses below are ordered
 // by the resolver's own sortAddrsByLatency.

@@ -2,6 +2,7 @@ package dnscrypt
 
 import (
 	"bytes"
+	"crypto/rand"
 	"path/filepath"
 	"testing"
 	"time"
@@ -16,10 +17,9 @@ type fakeStore struct {
 	identity, windows []byte
 }
 
-// testPub/testPriv is a fixed test Ed25519 identity — config keys are
-// required since the auto-generation path was removed.
+// testPub/testPriv is a generated test Ed25519 identity.
 var testPub, testPriv = func() (pub, priv []byte) {
-	pub, priv, err := dnscryptcrypto.GenerateEd25519Keypair()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		panic(err)
 	}
@@ -155,9 +155,9 @@ func TestPersistConfigIdentityChange(t *testing.T) {
 	oldPK, _ := srv1.signingSK.Public().(ed25519.PublicKey)
 
 	// New config with explicit keys that differ from the persisted identity.
-	pub, priv, err := dnscryptcrypto.GenerateEd25519Keypair()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("GenerateEd25519Keypair: %v", err)
+		t.Fatalf("generate ed25519 keypair: %v", err)
 	}
 	cfg2 := &config.DNSCryptCertificate{
 		PublicKey:  dnscryptcrypto.HexEncodeKey(pub),

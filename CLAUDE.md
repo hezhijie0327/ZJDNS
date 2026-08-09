@@ -263,13 +263,12 @@ Execution order (outermost → innermost):
 5. `ZoneMiddleware` — zone rule evaluation, synthetic response (runs before Any so rules win)
 6. `AnyMiddleware` — RFC 8482 minimal ANY response (HINFO "RFC8482")
 7. `CacheLookupMiddleware` — fresh→serve, stale→serve+refresh, miss→delegate
-8. `PTRMiddleware` — reverse PTR lookup from cache
 9. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147)
 10. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive with singleflight dedup
 
 All layers share a mutable `QueryContext`. Any layer may short-circuit by setting `qctx.Res`.
 
-> **Note:** Names like `ResponseMiddleware`, `CacheStoreMiddleware`, etc. are descriptive labels for the pipeline. The actual Go types are simply `Response`, `CacheStore`, `Validation`, `Zone`, `Any`, `EDNS`, `CacheLookup`, `PTR`, `DNS64`, and `Resolution`.
+> **Note:** Names like `ResponseMiddleware`, `CacheStoreMiddleware`, etc. are descriptive labels for the pipeline. The actual Go types are simply `Response`, `CacheStore`, `Validation`, `Zone`, `Any`, `EDNS`, `CacheLookup`, `DNS64`, and `Resolution`.
 
 ### Query Routing (`server/resolver`)
 - Upstream servers queried concurrently via `errgroup`; first NOERROR wins
@@ -324,7 +323,7 @@ All logs use `zjdns/internal/log` (package-level `Default` logger). Default leve
 
 **Component filtering:** `log_level` supports `"level:comp1,comp2"` syntax (e.g. `"debug:UPSTREAM,RECURSION"`).
 
-**28 canonical prefixes:** `TLS`, `CACHE`, `DB`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `PLAIN`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PTR`, `PANIC`, `DNSCRYPT`, `TLCP`, `RULESET`, `DNS64`, `RESPONSE`, `ANY`, `IPDETECT`, `UDPPOOL`, `DOH`.
+**canonical prefixes:** `TLS`, `CACHE`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `PLAIN`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PANIC`, `DNSCRYPT`, `TLCP`, `RULESET`, `DNS64`, `RESPONSE`, `ANY`, `IPDETECT`, `UDPPOOL`, `DOH`.
 
 Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECURITY:`. `DOT:`/`DOQ:`/`DOH:`/`DTLS:` → `TLS:`. `DTLCP:` → `TLCP:`. `UDP:`/`TCP:` → `PLAIN:`. Hot-path logs are `Debug` only.
 
@@ -332,7 +331,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECUR
 
 | Doc | Content |
 |-----|---------|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full architecture, DB schema, design decisions, type reference |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full architecture, storage design, type reference |
 | [docs/AUDIT-METHODOLOGY.md](docs/AUDIT-METHODOLOGY.md) | Audit framework, severity definitions, fix Sprint process |
 | [docs/audit/](docs/audit/) | Per-audit detailed findings and fix plans |
 | [docs/debug/DEBUG.md](docs/debug/DEBUG.md) | Debug config, test domains, TLCP/DTLCP E2E tests |

@@ -262,13 +262,9 @@ func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	return nil, false, false
 }
 
-// GetTypes retrieves the entries for exactly two qtypes of one qname in a
-// single query (NS A/AAAA address lookups).  ECS is not supported — entries
-// are matched on the empty ECS candidate, and the caller must pass a
-// canonical qname.  The pending read-through layer is consulted first (fresh
-// entries awaiting their batch commit); SQLite rows fill only the slots the
-// pending layer did not serve, so a pending hit is never shadowed by an
-// older committed row.
+// GetTypes retrieves the entries for exactly two qtypes of one qname (NS
+// A/AAAA address lookups).  ECS is not supported — entries are matched on
+// the empty ECS candidate, and the caller must pass a canonical qname.
 func (s *Cache) GetTypes(qname string, qclass uint16, qtypes [2]uint16, dnssecOK bool) (entries [2]*Entry, found, expired [2]bool) {
 	dnssecInt := boolToInt(dnssecOK)
 	for i, qt := range qtypes {
@@ -405,7 +401,7 @@ func (s *Cache) sortAnswerByLatency(entry *Entry) bool {
 		return false
 	}
 
-	// Batch lookup: WHERE rdata_ip IN (?,?,...).
+	// Batch latency lookup from the in-memory map.
 	latencies := s.lookupIPLatencies(ips)
 	if len(latencies) == 0 {
 		return false
@@ -466,9 +462,9 @@ func (s *Cache) lookupIPLatencies(ips []string) map[string]int {
 }
 
 // Set stores a DNS response in the cache. Wire format is zstd-compressed.
-// SQLite WAL mode serializes concurrent writers, so no app-level mutex is
-// needed.  Prep work (TTL calculation, wire packing, zstd compression) runs
-// outside the transaction so CPU-heavy steps can overlap across goroutines.
+// Set stores a DNS response in the cache.  Wire format is zstd-compressed
+// above the threshold.  Prep work (TTL calculation, wire packing, zstd
+// compression) runs before the synchronous in-memory write.
 func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
 	answer, authority, additional []dns.RR, validated bool, rcode uint16,
 ) int64 {

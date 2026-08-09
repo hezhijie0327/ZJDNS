@@ -305,16 +305,3 @@ func (g *CallGroup[K, V]) Done(key K, val V, err error) {
 	// concurrent Join after this entry was LRU‑evicted) must not be deleted.
 	g.mmap.CompareAndDelete(key, entry)
 }
-
-// DoJoin handles the leader/follower pattern.  If a follower, it returns the
-// shared result.  If the leader, it executes fn, stores the result via Done,
-// and returns the result.
-func (g *CallGroup[K, V]) DoJoin(key K, fn func() (V, error)) (V, error) {
-	v, err, follower := g.Join(key)
-	if follower {
-		return v, err
-	}
-	v, err = fn()
-	g.Done(key, v, err)
-	return v, err
-}

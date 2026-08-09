@@ -68,19 +68,6 @@ func BenchmarkCompressDecompressRoundTrip(b *testing.B) {
 
 // ── Domain helpers ───────────────────────────────────────────────────────────
 
-func BenchmarkParseReverseDNSName(b *testing.B) {
-	names := []string{
-		"1.0.0.127.in-addr.arpa.",
-		"1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.e.f.ip6.arpa.",
-	}
-	b.ResetTimer()
-	for b.Loop() {
-		for _, name := range names {
-			_ = ParseReverseDNSName(name)
-		}
-	}
-}
-
 func BenchmarkIsSecureProtocol(b *testing.B) {
 	protos := []string{"tls", "quic", "https", "http3", "dtls", "tlcp", "http-tlcp", "dtlcp", "udp", "tcp"}
 	b.ResetTimer()
@@ -104,13 +91,6 @@ func BenchmarkExtractIPString(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		_, _ = ExtractIPString(a)
-	}
-}
-
-func BenchmarkNewPTRRecord(b *testing.B) {
-	b.ResetTimer()
-	for b.Loop() {
-		_ = NewPTRRecord("1.0.0.127.in-addr.arpa.", "localhost.", 300, 1)
 	}
 }
 

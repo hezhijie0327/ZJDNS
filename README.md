@@ -14,7 +14,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
 
-高性能递归 DNS 服务器，内置 DNS 防污染、SQLite 缓存、DNSSEC、全协议加密传输（TLS/QUIC/HTTPS/HTTP3/DTLS/(PQ)DNSCrypt/TLCP/DTLCP）及 KTLS 内核卸载。
+高性能递归 DNS 服务器，内置 DNS 防污染、纯内存缓存、DNSSEC、全协议加密传输（TLS/QUIC/HTTPS/HTTP3/DTLS/(PQ)DNSCrypt/TLCP/DTLCP）及 KTLS 内核卸载。
 
 ## 快速开始
 
@@ -52,7 +52,7 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 - **上游转发**：主/备服务器并发查询 + 首胜策略；支持 `protocol: "recursive"` 纯递归模式
 - **CNAME 追踪**：最大 16 级，防循环检测
 - **QNAME 最小化**：[RFC 9156](docs/rfc/rfc9156.txt)，默认启用
-- **委派缓存**：zone-cut 委派记录（NS 名称 + DS）持久化到 SQLite，后续同域子域名查询直接跳过已知层级
+- **委派缓存**：zone-cut 委派记录（NS 名称 + DS）内存 LRU + 快照文件，后续同域子域名查询直接跳过已知层级
 - **并发去重**：singleflight 合并同 key 并发 miss
 - **紧凑否认**：[RFC 9824](docs/rfc/rfc9824.txt) —— 上游查询设置 CO 位，NXNAME 信号自动恢复 NXDOMAIN 语义
 - **分片避免**：[RFC 9715](docs/rfc/rfc9715.txt) —— UDP 响应 1400 字节上限，超限 TC + TCP 重试
@@ -85,7 +85,7 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 - **RESINFO**：[RFC 9606](docs/rfc/rfc9606.txt)，`resolver.arpa` 的解析器能力信息（qnamemin/exterr/infourl，随 DDR 发布）
 
 ### 缓存与数据库
-基于 SQLite WAL + mmap 的统一数据库（[十表设计](docs/ARCHITECTURE.md#db-schema)），zstd 压缩存储，缓存命中走 pre-packed 直发路径（零分配、纳秒级）。A/AAAA 记录按延迟探测排序。异步统计写入（non-blocking channel + 后台 goroutine）。懒惰过期 + 条数上限淘汰。
+纯内存存储（LRU 缓存 + 原子统计 + 快照规则，[架构参考](docs/ARCHITECTURE.md)），zstd 压缩存储，缓存命中走 pre-packed 直发路径（零分配、纳秒级）。A/AAAA 记录按延迟探测排序。原子计数器统计 + 可选文件快照持久化。懒惰过期 + 条数上限淘汰。
 
 ### 规则集
 统一的 IP + 域名标签匹配引擎，上游可按标签分流、Zone 可按标签过滤：
@@ -156,7 +156,7 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
     "features": {
       "ecs_subnet": { "ipv4": "1.2.3.0/24", "ipv6": "2001:db8::/56" },
       "dns64": { "prefix": "64:ff9b::/96" },
-      "database": { "db_path": "/var/lib/zjdns/cache.db" },
+      "cache": { "state_file": "/var/lib/zjdns/zjdns.state.cache" },
       "cache": { "max_entries": 10000, "prefer_stale": true },
       "ktls": { "kernel_tx": true, "kernel_rx": false }
     }
@@ -195,8 +195,6 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 ./zjdns --dnsstamp --encode --proto doh \             # 编码为 sdns://
     --stamp-addr 9.9.9.9 --provider-name dns.quad9.net:443 --path /dns-query
 
-# SQL 查询（只读；加 --rw 允许写）
-./zjdns --sql cache.db "SELECT e.qname, e.rcode FROM entries e"
 
 # 探测上游能力
 ./zjdns --probe --pipeline    tcp://8.8.8.8:53       # [RFC 7766](docs/rfc/rfc7766.txt) 管线化

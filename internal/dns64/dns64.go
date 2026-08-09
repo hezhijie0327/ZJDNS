@@ -78,10 +78,6 @@ func (s *Synthesizer) MapAddr(ip4 netip.Addr) netip.Addr {
 	return netip.AddrFrom16(ip6)
 }
 
-// IsSynthesized reports whether ip6 falls within the configured prefix
-// (i.e. could have been produced by MapAddr).
-func (s *Synthesizer) IsSynthesized(ip6 netip.Addr) bool { return s.pref.Contains(ip6) }
-
 // Synthesize builds an AAAA response from the A query result, translating
 // each A record via MapAddr (RFC 6147 §5.2).  aAnswer/aAuthority/aAdditional
 // are the A-query results; origAuthority supplies the SOA TTL cap.  The

@@ -13,8 +13,6 @@ import (
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // HandshakeInfo carries the negotiated parameters from a TLS, TLCP, DTLS, or
@@ -83,30 +81,6 @@ func HandlePanic(operation string) {
 
 // ParseReverseDNSName parses a reverse DNS name (in-addr.arpa or ip6.arpa)
 // into a net.IP.  Delegates to the library's dnsutil.AddrReverse and converts
-// the netip.Addr result.
-func ParseReverseDNSName(name string) net.IP {
-	if !dnsutil.IsFqdn(name) {
-		name = dnsutil.Fqdn(name)
-	}
-	addr := dnsutil.AddrReverse(name)
-	if !addr.IsValid() {
-		return nil
-	}
-	return net.IP(addr.AsSlice())
-}
-
-// NewPTRRecord returns a DNS PTR record.
-func NewPTRRecord(name, target string, ttl uint32, qclass uint16) dns.RR {
-	return &dns.PTR{
-		Hdr: dns.Header{
-			Name:  dnsutil.Fqdn(name),
-			Class: qclass,
-			TTL:   ttl,
-		},
-		PTR: rdata.PTR{Ptr: dnsutil.Fqdn(target)},
-	}
-}
-
 // IsValidFilePath validates a file path for security and existence.
 func IsValidFilePath(path string) bool {
 	abs, err := filepath.Abs(path)

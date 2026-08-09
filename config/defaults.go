@@ -166,14 +166,11 @@ const (
 
 const (
 	DefaultAcceptRetryDelay      = 100 * time.Millisecond // DoT/DoQ accept retry sleep
-	DefaultAsyncFlushInterval    = 100 * time.Millisecond // async stats writer flush ticker
 	DefaultSweepInterval         = 5 * time.Minute        // periodic cleanup sweep
 	DefaultTCPWriteMuStaleCutoff = 2 * time.Minute        // stale TCP write mutex cutoff
 
 	DefaultCookieSecretRotationInterval = 24 * time.Hour // RFC 7873 §7.1: default lifetime 1 day
 	DefaultECSRefreshInterval           = 15 * time.Minute
-
-	DefaultRootDownloadTimeout = 30 * time.Second // root hints file download timeout
 )
 
 // =============================================================================
@@ -263,8 +260,7 @@ const (
 // =============================================================================
 
 const (
-	DefaultDNSKeyCacheTTL     = 86400 // DNSKEY record cache TTL (seconds)
-	DefaultMaxNSEC3Iterations = 150   // NSEC3 iteration cap (RFC 5155 §10.3)
+	DefaultMaxNSEC3Iterations = 150 // NSEC3 iteration cap (RFC 5155 §10.3)
 
 	DefaultCACertValidity     = 45 * 24 * time.Hour // CA self-signed certificate lifetime
 	DefaultServerCertValidity = 45 * 24 * time.Hour // server certificate lifetime
@@ -282,7 +278,6 @@ const (
 	// (RFC 8310 §6). This is the default for encrypted upstreams.
 	PrivacyProfileStrict = "strict"
 
-	// PrivacyProfileOpportunistic encrypts DNS queries but allows
 	// unauthenticated TLS (SkipTLSVerify), providing protection against
 	// passive eavesdropping but not active MITM (RFC 8310 §5).
 	PrivacyProfileOpportunistic = "opportunistic"
@@ -292,9 +287,6 @@ const (
 	DefaultLatencyProbeMinInterval = 60              // min interval between probes for the same IP (seconds)
 	DefaultRootCacheTTL            = 3600            // root server cache entry TTL (seconds)
 	DefaultDelegationLookupZones   = 16              // max ancestor zones per delegation lookup
-
-	DefaultIPDetectDialTimeout  = 2 * time.Second // IP detection: per-address dial timeout
-	DefaultIPDetectTotalTimeout = 3 * time.Second // IP detection: total detection window
 
 	DefaultProbePortDNS   = 53
 	DefaultProbePortHTTP  = 80
@@ -359,9 +351,8 @@ const (
 const (
 	DefaultProxyPort = "1080"
 
-	SOCKS5UDPHeaderLenIPv4 = 10  // IPv4 SOCKS5 UDP header length
-	SOCKS5UDPHeaderLenIPv6 = 22  // IPv6 SOCKS5 UDP header length
-	SOCKS5MaxAuthLen       = 255 // RFC 1929 max username/password length
+	SOCKS5UDPHeaderLenIPv4 = 10 // IPv4 SOCKS5 UDP header length
+	SOCKS5UDPHeaderLenIPv6 = 22 // IPv6 SOCKS5 UDP header length
 )
 
 // =============================================================================

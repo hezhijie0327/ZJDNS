@@ -169,7 +169,7 @@ func (c *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 
 	// cache.Set derives the entry TTL from the RR TTLs itself (minTTL, capped
 	// at DefaultMaxCacheableTTL); the old ttl loop was dead code and the
-	// intended DefaultDNSKeyCacheTTL cap was never applied.
+	// intended the DNSKEY cache TTL cap was never applied.
 	rrKeys := make([]dns.RR, 0, len(keys))
 	for _, k := range keys {
 		if k != nil {

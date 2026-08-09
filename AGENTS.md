@@ -1,12 +1,12 @@
 # Repository Guidelines
 
-ZJDNS is a high-performance, pure-Go recursive DNS server (module `zjdns`, Go 1.26, no CGo). It serves plain UDP/TCP, DoT, DoQ, DoH/DoH3, DNSCrypt, and TLCP/DTLCP, with built-in iterative recursion, DNSSEC validation, and a SQLite-backed cache.
+ZJDNS is a high-performance, pure-Go recursive DNS server (module `zjdns`, Go 1.26, no CGo). It serves plain UDP/TCP, DoT, DoQ, DoH/DoH3, DNSCrypt, and TLCP/DTLCP, with built-in iterative recursion, DNSSEC validation, and a pure in-memory cache with optional file snapshots.
 
 ## Project Structure & Module Organization
 
-- `cmd/zjdns/` — main binary and CLI tools (`--sql`, `--dnsstamp`, `--probe`, benchmark client).
+- `cmd/zjdns/` — main binary and CLI tools (`--dnsstamp`, `--probe`, `--generate-config`, benchmark client).
 - `server/` — protocol listeners (`protocol/`), request middleware chain (`handler/`), recursive/forward resolution (`resolver/`), outbound clients (`upstream/`), defenses (`defense/`).
-- `cache/`, `database/` — SQLite response cache, schema, and migrations (`database/migrations/`).
+- `cache/` — in-memory DNS response cache (LRU) with snapshot persistence and stats journal.
 - `config/` — config loading/validation; all magic numbers live in `config/defaults.go`.
 - `zone/`, `ruleset/`, `edns/` — zone filtering, tag rules, EDNS handling.
 - `internal/` — shared libraries (log, pool, pending, dnsutil, latency, etc.).

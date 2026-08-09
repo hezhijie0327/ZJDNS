@@ -13,7 +13,7 @@ import (
 
 // RequestRecord captures per-request metadata. Every request updates the
 // in-memory stats counters; non-hit results also enter the per-RCODE top-N
-// domain journal (see internal/statsjournal).
+// domain journal (see cache/statsjournal.go).
 type RequestRecord struct {
 	Qname        string // normalized FQDN
 	Qtype        uint16
@@ -87,8 +87,8 @@ type Entry struct {
 }
 
 // requestRecordPool reuses RequestRecord values on the per-query hot path.
-// Safe because RecordRequest copies by value into the async writer and only
-// reads fields synchronously — callers release immediately after the call.
+// RecordRequest reads all fields synchronously, so callers may release
+// immediately after the call.
 var requestRecordPool = sync.Pool{New: func() any { return new(RequestRecord) }}
 
 // Unpack populates Answer, Authority and Additional by unpacking the

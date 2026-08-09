@@ -518,53 +518,6 @@ func TestCallGroup_DifferentKeys(t *testing.T) {
 	cg.Done("b", 2, nil)
 }
 
-func TestCallGroup_DoJoin(t *testing.T) {
-	cg := NewCallGroup[string, int](100, 5*time.Second, nil)
-	var runs atomic.Int64
-
-	v, err := cg.DoJoin("k", func() (int, error) {
-		runs.Add(1)
-		return 99, nil
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if v != 99 {
-		t.Fatalf("want 99, got %d", v)
-	}
-	if runs.Load() != 1 {
-		t.Fatalf("fn should run once, ran %d", runs.Load())
-	}
-
-	// Concurrent DoJoin sharing the same key.
-	release := make(chan struct{})
-	started := make(chan struct{})
-	go func() {
-		_, _ = cg.DoJoin("k2", func() (int, error) {
-			close(started)
-			<-release
-			return 7, nil
-		})
-	}()
-	<-started
-
-	var wg sync.WaitGroup
-	var gotV int
-	wg.Go(func() {
-		gotV, _ = cg.DoJoin("k2", func() (int, error) {
-			runs.Add(1)
-			return 0, errors.New("follower should not run fn")
-		})
-	})
-	time.Sleep(30 * time.Millisecond)
-	close(release)
-	wg.Wait()
-
-	if gotV != 7 {
-		t.Fatalf("follower should receive leader's result 7, got %d", gotV)
-	}
-}
-
 func TestCallGroup_EvictionWakesFollower(t *testing.T) {
 	// Capacity 1 so the second key evicts the first.
 	cg := NewCallGroup[string, int](1, 10*time.Second, nil)
@@ -584,7 +537,9 @@ func TestCallGroup_EvictionWakesFollower(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 
 	// Store "b" — evicts "a".
-	_, _ = cg.DoJoin("b", func() (int, error) { return 1, nil })
+	if _, _, follower := cg.Join("b"); !follower {
+		cg.Done("b", 1, nil)
+	}
 
 	select {
 	case err := <-followerWoke:

@@ -3,8 +3,6 @@ package dnsutil
 import (
 	"os"
 	"testing"
-
-	"codeberg.org/miekg/dns"
 )
 
 type testCloser struct{ err error }
@@ -34,73 +32,6 @@ func TestIsSecureProtocol(t *testing.T) {
 		if got := IsSecureProtocol(tc.proto); got != tc.want {
 			t.Errorf("IsSecureProtocol(%q) = %t, want %t", tc.proto, got, tc.want)
 		}
-	}
-}
-
-func TestParseReverseDNSName_IPv4(t *testing.T) {
-	ip := ParseReverseDNSName("4.3.2.1.in-addr.arpa.")
-	if ip == nil {
-		t.Fatal("expected valid IPv4")
-	}
-	if ip.String() != "1.2.3.4" {
-		t.Errorf("got %s, want 1.2.3.4", ip.String())
-	}
-}
-
-func TestParseReverseDNSName_IPv4NoTrailingDot(t *testing.T) {
-	ip := ParseReverseDNSName("1.0.0.127.in-addr.arpa")
-	if ip == nil {
-		t.Fatal("expected valid IPv4")
-	}
-	if !ip.IsLoopback() {
-		t.Errorf("got %s, want loopback", ip.String())
-	}
-}
-
-func TestParseReverseDNSName_IPv6(t *testing.T) {
-	// ::1 reverse
-	ip := ParseReverseDNSName("1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa.")
-	if ip == nil {
-		t.Fatal("expected valid IPv6")
-	}
-	if !ip.IsLoopback() {
-		t.Errorf("got %s, want loopback", ip.String())
-	}
-}
-
-func TestParseReverseDNSName_Invalid(t *testing.T) {
-	tests := []string{
-		"",
-		"not-a-domain",
-		"example.com",
-		"1.2.3.in-addr.arpa", // too few octets
-	}
-	for _, name := range tests {
-		if ip := ParseReverseDNSName(name); ip != nil {
-			t.Errorf("ParseReverseDNSName(%q) = %s, want nil", name, ip)
-		}
-	}
-}
-
-func TestParseReverseDNSName_InvalidIPv6Length(t *testing.T) {
-	// Too few nibbles for IPv6
-	ip := ParseReverseDNSName("1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa.")
-	if ip != nil {
-		t.Errorf("expected nil for incomplete IPv6 reverse, got %s", ip)
-	}
-}
-
-func TestNewPTRRecord(t *testing.T) {
-	rr := NewPTRRecord("4.3.2.1.in-addr.arpa", "test.example.com", 300, dns.ClassINET)
-	if rr == nil {
-		t.Fatal("NewPTRRecord returned nil")
-	}
-	ptr, ok := rr.(*dns.PTR)
-	if !ok {
-		t.Fatalf("not a PTR record, got %T", rr)
-	}
-	if ptr.Ptr != "test.example.com." {
-		t.Errorf("PTR target = %s, want test.example.com.", ptr.Ptr)
 	}
 }
 
@@ -144,15 +75,6 @@ func TestHandlePanic_Recovers(t *testing.T) {
 		panic("intentional test panic")
 	}()
 	// If we reach here, HandlePanic successfully recovered
-}
-
-func TestParseReverseDNSName_IPv6Full(t *testing.T) {
-	// Full 32-nibble IPv6 reverse (2001:db8::1)
-	name := "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa."
-	ip := ParseReverseDNSName(name)
-	if ip == nil {
-		t.Fatal("expected valid IPv6")
-	}
 }
 
 func TestIsValidFilePath_NonExistent(t *testing.T) {

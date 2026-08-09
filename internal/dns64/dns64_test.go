@@ -71,16 +71,6 @@ func TestMapAddr_AllPrefixLens(t *testing.T) {
 	}
 }
 
-func TestIsSynthesized(t *testing.T) {
-	s, _ := New(defaultPrefix)
-	if !s.IsSynthesized(netip.MustParseAddr("64:ff9b::1")) {
-		t.Error("64:ff9b::1 should be in prefix")
-	}
-	if s.IsSynthesized(netip.MustParseAddr("2001:db8::1")) {
-		t.Error("2001:db8::1 should NOT be in prefix")
-	}
-}
-
 func TestSynthesize(t *testing.T) {
 	s, _ := New(defaultPrefix)
 	aAnswer := []dns.RR{

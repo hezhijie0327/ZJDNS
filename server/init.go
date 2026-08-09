@@ -88,8 +88,6 @@ func wireZoneDynamicContent(store cache.Store, rules []config.ZoneRule, resetDNS
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("cache") }, "flushed")
 		case dnsutil.Canonical(config.DefaultProjectName + ".stats.clear"):
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("stats") }, "reset")
-		case dnsutil.Canonical(config.DefaultProjectName + ".ptr.clear"):
-			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("ptr") }, "flushed")
 		case dnsutil.Canonical(config.DefaultProjectName + ".latency.clear"):
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("latency") }, "flushed")
 		case dnsutil.Canonical(config.DefaultProjectName + ".delegation.clear"):
