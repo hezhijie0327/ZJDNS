@@ -60,8 +60,21 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 				// quic-go does not take ownership of a caller-provided
 				// PacketConn on a failed dial — do not leak the UDP socket.
 				_ = pconn.Close()
+				return nil, err
 			}
-			return conn, err
+			// quic-go never closes a caller-provided PacketConn (createdConn
+			// is false) — the SOCKS5 UDP relay (2 fds + monitor goroutine)
+			// would leak on every connection teardown.  The conn's Context
+			// closes exactly when the connection ends (pool removal,
+			// CloseWithError, idle), so the relay's lifetime mirrors the
+			// connection's (H3).
+			done := conn.Context().Done()
+			go func() {
+				defer zdnsutil.HandlePanic("QUIC proxy relay release")
+				<-done
+				_ = pconn.Close()
+			}()
+			return conn, nil
 		}
 		conn, err := quic.DialAddrEarly(timeoutCtx, key, dialTLS, c.getQUICConfig(configKey, tlsConfig.InsecureSkipVerify))
 		if err == nil {

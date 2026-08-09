@@ -208,3 +208,88 @@ func TestUDPPool_AcquireReuses(t *testing.T) {
 		t.Errorf("dials = %d, want 1 (socket reused)", dials.Load())
 	}
 }
+
+// TestUDPPool_ReapDead removes idle-recycled dead sockets and empty keys from
+// the pool (H1): a socket closed by its readLoop stays pinned under its
+// address key until ReapDead runs.
+func TestUDPPool_ReapDead(t *testing.T) {
+	_, addr1 := startFakeUDPServer(t, 0)
+	_, addr2 := startFakeUDPServer(t, 0)
+	p := NewUDPPool(4, 16, testKeyExtractor)
+
+	dialFunc := func(ctx context.Context, a string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "udp", a)
+	}
+
+	// Two keys, one live socket each.
+	c1, err := p.Acquire(context.Background(), addr1, addr1, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 1: %v", err)
+	}
+	c2, err := p.Acquire(context.Background(), addr2, addr2, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 2: %v", err)
+	}
+
+	// Kill both sockets the way readLoop does — close() only, the pool never
+	// hears about it.
+	c1.close()
+	c2.close()
+	if !c1.IsDead() || !c2.IsDead() {
+		t.Fatal("sockets should be dead after close")
+	}
+
+	p.ReapDead()
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.conns) != 0 {
+		t.Errorf("ReapDead left %d keys behind, want 0", len(p.conns))
+	}
+	if len(p.dialing) != 0 {
+		t.Errorf("dialing map should be empty, got %d entries", len(p.dialing))
+	}
+}
+
+// TestUDPPool_ReapDeadKeepsLive keeps live sockets and prunes only dead ones
+// within a mixed pool.
+func TestUDPPool_ReapDeadKeepsLive(t *testing.T) {
+	_, addr := startFakeUDPServer(t, 0)
+	p := NewUDPPool(4, 16, testKeyExtractor)
+
+	dialFunc := func(ctx context.Context, a string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "udp", a)
+	}
+
+	c1, err := p.Acquire(context.Background(), addr, addr, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	// Second socket for the same key: cap 4 > 2, so both stay.
+	old := p.replaceDead(addr)
+	if old != nil {
+		t.Fatal("unexpected dead socket before any close")
+	}
+	dead := c1
+	dead.close()
+	// A fresh live socket — keep.
+	if _, err := p.Acquire(context.Background(), addr, addr, dialFunc); err != nil {
+		t.Fatalf("acquire live: %v", err)
+	}
+
+	p.ReapDead()
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	conns := p.conns[addr]
+	if len(conns) == 0 {
+		t.Fatal("live socket must survive ReapDead")
+	}
+	for _, c := range conns {
+		if c.IsDead() {
+			t.Error("dead socket survived ReapDead")
+		}
+	}
+}

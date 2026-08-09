@@ -293,6 +293,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 				// n<12).  ID/length validation also runs BEFORE HopGuard Feed
 				// so that stray datagrams never enter the TTL histogram (M1).
 				if len(pkt.Data) < 12 || uint16(pkt.Data[0])<<8|uint16(pkt.Data[1]) != trackingID {
+					pkt.Release() // M8: every rejected packet returns its tiered buffer
 					continue
 				}
 				// HopGuard: validate gates packet acceptance; Feed happens
@@ -301,6 +302,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					if hg.ShouldSampleRejected(server.Address) {
 						hg.Feed(server.Address, pkt.TTL)
 					}
+					pkt.Release() // M8
 					continue
 				}
 				ttlConfident := hg != nil && hg.Confident(server.Address) && pkt.TTL != 0

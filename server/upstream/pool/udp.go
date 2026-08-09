@@ -177,11 +177,14 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 		c.mu.Lock()
 		delete(c.inflight, matchKey)
 		c.mu.Unlock()
-		// Drain an orphaned response that arrived after ctx cancellation.
-		// The payload is a plain allocation (readLoop copies it out of its
-		// read buffer) — dropping it lets the GC reclaim it.
+		// Drain an orphaned response that arrived after ctx cancellation and
+		// return the tiered-pool payload buffer (M9).  A nil value marks
+		// connection close — nothing to release.
 		select {
-		case <-resultCh:
+		case resp := <-resultCh:
+			if resp != nil {
+				ReleaseUDPPayload(resp)
+			}
 		default:
 		}
 	}()
@@ -263,12 +266,20 @@ func (c *UDPConn) ExchangeCollect(ctx context.Context, payload []byte, matchKey 
 	return collectCh, nil
 }
 
-// ReleaseCollect unregisters matchKey and releases the capacity slot held by
-// an ExchangeCollect caller.
+// ReleaseCollect unregisters matchKey, returns the queued collect packets'
+// payload buffers to their tier pools, and releases the capacity slot held by
+// an ExchangeCollect caller (M8 — without the drain, up to 4 pooled buffers
+// were abandoned per collect round).  The entry is removed under the lock
+// (H2), so readLoop can no longer deliver to it; draining outside the lock
+// cannot race a new delivery.
 func (c *UDPConn) ReleaseCollect(matchKey string) {
 	c.mu.Lock()
+	p := c.inflight[matchKey]
 	delete(c.inflight, matchKey)
 	c.mu.Unlock()
+	if p != nil && p.collectCh != nil {
+		drainCollectCh(p.collectCh)
+	}
 	c.inFlight.Add(-1)
 	<-c.capacity
 }
@@ -335,10 +346,12 @@ func (c *UDPConn) readLoop() {
 		if !ok {
 			continue // not a response for any of our queries — drop
 		}
+		// Lookup AND delivery under RLock: close() closes collectChs under the
+		// write lock, so a send can never race a closed channel (H2).
 		c.mu.RLock()
 		p, ok := c.inflight[key]
-		c.mu.RUnlock()
 		if !ok {
+			c.mu.RUnlock()
 			continue // response for a query we no longer track — drop
 		}
 
@@ -358,6 +371,7 @@ func (c *UDPConn) readLoop() {
 				// collectCh full (4 candidates already queued) — drop.
 				release()
 			}
+			c.mu.RUnlock()
 			continue
 		}
 
@@ -367,6 +381,7 @@ func (c *UDPConn) readLoop() {
 			// Waiter already gave up (ctx cancelled) — drop.
 			release()
 		}
+		c.mu.RUnlock()
 	}
 }
 
@@ -460,7 +475,11 @@ func (p *UDPPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc fu
 			leastLoaded = c
 		}
 	}
-	p.conns[key] = liveConns
+	if len(liveConns) == 0 {
+		delete(p.conns, key)
+	} else {
+		p.conns[key] = liveConns
+	}
 
 	if len(liveConns)+p.dialing[key] < p.maxConns {
 		c, err := p.dialAndAdd(ctx, key, dialAddr, dialFunc)
@@ -556,6 +575,29 @@ func (p *UDPPool) replaceDead(key string) *UDPConn {
 		return c
 	}
 	return nil
+}
+
+// ReapDead drops dead connections from every pool key and deletes keys with
+// no live connections left.  Called periodically by the server — a socket
+// idle-recycled by its readLoop otherwise stays pinned under its address key
+// until that address is queried again, and the key space itself grows with
+// every distinct authoritative NS address ever seen (H1).
+func (p *UDPPool) ReapDead() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key, conns := range p.conns {
+		live := conns[:0]
+		for _, c := range conns {
+			if !c.IsDead() {
+				live = append(live, c)
+			}
+		}
+		if len(live) == 0 {
+			delete(p.conns, key)
+			continue
+		}
+		p.conns[key] = live
+	}
 }
 
 // Remove closes and removes a socket from the pool.

@@ -54,3 +54,12 @@ func (c *Client) Close() {
 		c.udpPool.Shutdown()
 	}
 }
+
+// ReapDeadUDP drops dead sockets from the UDP pool — an idle-recycled
+// readLoop socket otherwise stays pinned under its address key until that
+// address is queried again.  Called periodically by the server (H1).
+func (c *Client) ReapDeadUDP() {
+	if c != nil && c.udpPool != nil {
+		c.udpPool.ReapDead()
+	}
+}
