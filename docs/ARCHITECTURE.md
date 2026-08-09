@@ -15,7 +15,7 @@ identity + cert windows so restarts resume the same certificates.
 
 | Data | Structure | Lifetime |
 |------|-----------|----------|
-| DNS cache entries | `lrumap.Map[string, *cacheEntry]` — key = (qname, qtype, qclass, ecs, dnssec) flattened, value = pre-packed wire (format 0x02) + ts/ttl | LRU-bounded, TTL-expired lazily on read |
+| DNS cache entries | `lrumap.Map[string, *cacheEntry]` — key = (qname, qtype, qclass, ecs, dnssec) flattened, value = pre-packed wire (format 0x02) + ts/ttl | LRU-bounded, TTL-expired lazily on read; `state_file` empty (default) = no persistence, restart starts cold |
 | Query stats + per-RCODE journal | `statsjournal` (atomic counters + `topk.Map`) | Resets on restart |
 | Zone rules | `zoneTable` atomic.Pointer snapshot (exact/wildcard maps, compressed RR blobs) | Rebuilt from config at startup |
 | Ruleset rules | `ruleTable` atomic.Pointer snapshot (IP trie + domain suffix map) | Rebuilt from config at startup |
@@ -44,7 +44,7 @@ so cache hits serve the exact rcode.
 - **NS latency cache**: NS/Root addresses as TypeA/TypeAAAA entries. Latency probed via `ProbeNSAddrs`, reordered by `sortAnswerByLatency` at `Get()` time.
 - **Delegation cache**: Zone-cut delegations (zone to NS names + verified DS) in memory (LRU-bounded, lazy TTL expiry + periodic cleanup). Populated at every delegation crossing during recursive walks; only secure (verified DS) or insecure (authenticated no-DS) delegations are stored. On subsequent queries, a suffix-walk from the deepest ancestor finds the first fresh delegation and starts the walk from that zone instead of the root, skipping already-walked delegation levels. DNSKEYs are fetched fresh by `ensureZoneDNSKEYs` (verified against the cached DS); NS addresses are resolved from the existing TypeA/TypeAAAA cache with the stored address snapshot as a fallback.
 - **IP latency**: Per-IP keyed, in memory (LRU-bounded `lrumap.Map[string, latEntry]`). Background probes write latency + probe time; cache hits read it to reorder A/AAAA answers fastest-first. All domains sharing a CDN IP reuse the same entry. Entries expire lazily past the stale window.
-- **Dynamic queries**: `Store.Stats()` returns TXT records (overview, hits, errors, rcodes, poisoned, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.cache.clear` / `zjdns.stats.clear` / `zjdns.ptr.clear` / `zjdns.latency.clear` / `zjdns.dnscrypt.clear` (loopback-only).
+- **Dynamic queries**: `Store.Stats()` returns TXT records (overview, hits, errors, rcodes, poisoned, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.cache.clear` / `zjdns.stats.clear` / `zjdns.latency.clear` / `zjdns.querylog.clear` / `zjdns.dnscrypt.clear` (loopback-only).
 
 
 ## Defense Mechanisms

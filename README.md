@@ -156,8 +156,9 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
     "features": {
       "ecs_subnet": { "ipv4": "1.2.3.0/24", "ipv6": "2001:db8::/56" },
       "dns64": { "prefix": "64:ff9b::/96" },
-      "cache": { "state_file": "/var/lib/zjdns/zjdns.state.cache" },
-      "cache": { "max_entries": 10000, "prefer_stale": true },
+      "cache": {
+        "entries": { "limit": 10000, "prefer_stale": true, "state_file": "/var/lib/zjdns/zjdns.state.cache" }
+      },
       "ktls": { "kernel_tx": true, "kernel_rx": false }
     }
   }
@@ -168,6 +169,7 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 - **DNS64**：纯 IPv6/NAT64 网络必备，AAAA 无记录时从 A 合成
 - **ECS**：CIDR 格式指定子网（如 `"1.2.3.0/24"`），[RFC 7871](docs/rfc/rfc7871.txt) 建议 `/24`（IPv4）、`/56`（IPv6）。设为 `"auto"` 自动检测公网 IP
 - **prefer_stale**：上游不可达时优先返回过期缓存（[RFC 8767](docs/rfc/rfc8767.txt)）
+- **state_file**：默认**为空 = 不持久化**（纯内存，重启冷启动）；设置路径后启用快照持久化 —— 缓存/延迟/委派三个 store 各自独立开关，配置示例见上（`./zjdns.cache` 等）。DNSCrypt 的 `certificate.dnscrypt.state_file` 同理，默认空则每次重启更换证书窗口
 - **self_signed**：自动生成自签名证书，跳过 `cert_file`/`key_file`
 
 ### 协议监听示例

@@ -76,7 +76,7 @@ func NewHandler(defaultECS config.ECSConfig) (*Handler, error) {
 			} else {
 				ecs, err := h.parseECSConfig(defaultECS.IPv4, false)
 				if err != nil {
-					return nil, fmt.Errorf("parse default_ecs_subnet.ipv4: %w", err)
+					return nil, fmt.Errorf("parse ecs_subnet.ipv4: %w", err)
 				}
 				if ecs != nil {
 					h.defaultECSIPv4.Store(ecs)
@@ -90,7 +90,7 @@ func NewHandler(defaultECS config.ECSConfig) (*Handler, error) {
 			} else {
 				ecs, err := h.parseECSConfig(defaultECS.IPv6, true)
 				if err != nil {
-					return nil, fmt.Errorf("parse default_ecs_subnet.ipv6: %w", err)
+					return nil, fmt.Errorf("parse ecs_subnet.ipv6: %w", err)
 				}
 				if ecs != nil {
 					h.defaultECSIPv6.Store(ecs)

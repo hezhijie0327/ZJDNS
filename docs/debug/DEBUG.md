@@ -788,7 +788,6 @@ dig @127.0.0.1 -p 15353 zjdns.whoami CH TXT +short        # 客户端源 IP（a8
 dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.stats.clear CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.cache.clear CH TXT +short
-dig @127.0.0.1 -p 15353 zjdns.ptr.clear CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.latency.clear CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.querylog.clear CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.dnscrypt.clear CH TXT +short

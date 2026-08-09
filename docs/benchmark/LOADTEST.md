@@ -61,12 +61,12 @@ mkdir -p /tmp/zjdns-bench && cat > /tmp/zjdns-bench/server.json << 'EOF'
         "public_key": "1498ACC39ABEA9A0102FA655DA6BE74084CEF4AFC9992E43FDAE364ED156DE53"
       }
     },
-    "zone": [
-      { "name": "www.bench.test", "answer": [ { "type": 1, "ttl": 3600, "content": "1.2.3.4" } ] }
-    ],
     "features": { "cache": {} }
   },
-  "upstream": [{ "address": "223.5.5.5:53", "protocol": "udp" }]
+  "upstream": [{ "address": "223.5.5.5:53", "protocol": "udp" }],
+  "zone": [
+    { "name": "www.bench.test", "answer": [ { "type": 1, "ttl": 3600, "content": "1.2.3.4" } ] }
+  ]
 }
 EOF
 
@@ -132,6 +132,8 @@ go build -o /tmp/benchclient ./docs/benchmark/loadtest
 PK="1498ACC39ABEA9A0102FA655DA6BE74084CEF4AFC9992E43FDAE364ED156DE53"
 SN="2.dnscrypt-cert.zjdns-test.local"
 :> docs/benchmark/loadtest-baseline.txt  # truncate
+# NOTE: 显式分支而不是 `$args` 变量展开 —— zsh 默认不对未加引号的变量做
+# word-split，`$args` 会被当成单个参数导致 flag 解析失败（usage 输出）。
 for proto in udp tcp tls quic https http3 dtls tlcp http-tlcp dtlcp dnscrypt dnscrypt-tcp; do
   case "$proto" in
     udp|tcp) addr="127.0.0.1:10533" ;;
@@ -145,12 +147,13 @@ for proto in udp tcp tls quic https http3 dtls tlcp http-tlcp dtlcp dnscrypt dns
     dtlcp)   addr="127.0.0.1:8542" ;;
     dnscrypt|dnscrypt-tcp) addr="127.0.0.1:12443" ;;
   esac
-  args=""
-  case "$proto" in
-    dnscrypt|dnscrypt-tcp) args="-public-key $PK -servername $SN" ;;
-  esac
-  /tmp/benchclient -proto "$proto" -addr "$addr" -workers 32 -seconds 5 \
-    -o docs/benchmark/loadtest-baseline.txt $args
+  if [ "$proto" = "dnscrypt" ] || [ "$proto" = "dnscrypt-tcp" ]; then
+    /tmp/benchclient -proto "$proto" -addr "$addr" -workers 32 -seconds 5 \
+      -o docs/benchmark/loadtest-baseline.txt -public-key "$PK" -servername "$SN"
+  else
+    /tmp/benchclient -proto "$proto" -addr "$addr" -workers 32 -seconds 5 \
+      -o docs/benchmark/loadtest-baseline.txt
+  fi
 done
 ```
 

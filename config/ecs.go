@@ -107,16 +107,16 @@ func (c ECSConfig) ValueForQType(qtype uint16) string {
 // Validate checks that the ECS configuration contains valid subnet values.
 func (c ECSConfig) Validate() error {
 	if c.IPv4 == "" && c.IPv6 == "" {
-		return errors.New("default_ecs_subnet must specify ipv4 and/or ipv6")
+		return errors.New("ecs_subnet must specify ipv4 and/or ipv6")
 	}
 	if c.IPv4 != "" {
 		if err := validateECSConfigValue(c.IPv4); err != nil {
-			return fmt.Errorf("invalid default_ecs_subnet.ipv4: %w", err)
+			return fmt.Errorf("invalid ecs_subnet.ipv4: %w", err)
 		}
 	}
 	if c.IPv6 != "" {
 		if err := validateECSConfigValue(c.IPv6); err != nil {
-			return fmt.Errorf("invalid default_ecs_subnet.ipv6: %w", err)
+			return fmt.Errorf("invalid ecs_subnet.ipv6: %w", err)
 		}
 	}
 	return nil
@@ -128,7 +128,7 @@ func (c *ECSConfig) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	if data[0] != '{' {
-		return errors.New("default_ecs_subnet must be an object")
+		return errors.New("ecs_subnet must be an object")
 	}
 	var aux struct {
 		IPv4          string `json:"ipv4"`
