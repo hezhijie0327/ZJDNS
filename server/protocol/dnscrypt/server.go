@@ -592,7 +592,28 @@ func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
 
 	qName := dnsutil.Fqdn(q.Header().Name)
 	if dns.RRToType(q) != dns.TypeTXT || qName != providerName {
-		return nil, dnscryptcrypto.ErrInvalidQuery
+		// Only the configured provider's TXT query is answered.  Everything
+		// else is REFUSED explicitly, never silently dropped: a drop leaves
+		// the client waiting out its own timeout (a perceived hang), while
+		// an explicit REFUSED fails the fetch in one RTT.
+		refused := pool.DefaultMessage.Get()
+		dnsutil.SetReply(refused, m)
+		refused.Rcode = dns.RcodeRefused
+		// RA=1 like the cert path: this server is a recursive resolver, the
+		// REFUSED is policy, not lack of recursion.  AA stays 0 — a refusal is
+		// not an authoritative answer for the queried name.
+		refused.RecursionAvailable = true
+		if packErr := refused.Pack(); packErr != nil {
+			pool.DefaultMessage.Put(refused)
+			return nil, fmt.Errorf("packing refused handshake response: %w", packErr)
+		}
+		// Same copy discipline as the success path (M14): res must not alias
+		// refused.Data — the pool zeroes it on Put.
+		res = make([]byte, len(refused.Data))
+		copy(res, refused.Data)
+		pool.DefaultMessage.Put(refused)
+		log.Debugf("DNSCRYPT: refusing non-cert query %s (qtype=%s)", qName, dns.TypeToString[dns.RRToType(q)])
+		return res, nil
 	}
 
 	// Serve only the newest window's certificates (ref: serve_certificates

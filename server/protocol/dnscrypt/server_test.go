@@ -245,6 +245,86 @@ func TestHandshakeTTL(t *testing.T) {
 	}
 }
 
+func TestHandshakeRefusesNonProvider(t *testing.T) {
+	certificateCfg := testCfg()
+	srv, err := New(certificateCfg, "0", "2.dnscrypt-cert.example.com", nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// packQuery builds a single-question DNS query and returns its wire bytes.
+	packQuery := func(name string, qtype uint16) []byte {
+		m := new(dns.Msg)
+		hdr := dns.Header{Name: name, Class: dns.ClassINET}
+		switch qtype {
+		case dns.TypeTXT:
+			m.Question = []dns.RR{&dns.TXT{Hdr: hdr}}
+		case dns.TypeA:
+			m.Question = []dns.RR{&dns.A{Hdr: hdr}}
+		}
+		if err := m.Pack(); err != nil {
+			t.Fatalf("pack query: %v", err)
+		}
+		return m.Data
+	}
+
+	// unpackReply decodes a handshake response.
+	unpackReply := func(res []byte) *dns.Msg {
+		t.Helper()
+		reply := new(dns.Msg)
+		reply.Data = res
+		if err := reply.Unpack(); err != nil {
+			t.Fatalf("unpack reply: %v", err)
+		}
+		return reply
+	}
+
+	// TXT for another dnscrypt-cert name → explicit REFUSED, not silence.
+	res, err := srv.handleHandshake(packQuery("3.dnscrypt-cert.example.com.", dns.TypeTXT), false)
+	if err != nil {
+		t.Fatalf("handleHandshake wrong-name: %v", err)
+	}
+	reply := unpackReply(res)
+	if reply.Rcode != dns.RcodeRefused {
+		t.Errorf("wrong-name: want Rcode=REFUSED, got %s", dns.RcodeToString[reply.Rcode])
+	}
+	if !reply.Response {
+		t.Error("wrong-name: response is not flagged as a reply (QR=0)")
+	}
+	if !reply.RecursionAvailable {
+		t.Error("wrong-name: REFUSED must set RA (this is a recursive resolver)")
+	}
+	if reply.Authoritative {
+		t.Error("wrong-name: REFUSED must not set AA (not an authoritative answer)")
+	}
+	if len(reply.Answer) != 0 {
+		t.Errorf("wrong-name: want 0 answers, got %d", len(reply.Answer))
+	}
+
+	// Non-TXT query for the provider name → REFUSED too.
+	res, err = srv.handleHandshake(packQuery("2.dnscrypt-cert.example.com.", dns.TypeA), false)
+	if err != nil {
+		t.Fatalf("handleHandshake wrong-type: %v", err)
+	}
+	reply = unpackReply(res)
+	if reply.Rcode != dns.RcodeRefused {
+		t.Errorf("wrong-type: want Rcode=REFUSED, got %s", dns.RcodeToString[reply.Rcode])
+	}
+
+	// The provider's own TXT query still serves the certs.
+	res, err = srv.handleHandshake(packQuery("2.dnscrypt-cert.example.com.", dns.TypeTXT), false)
+	if err != nil {
+		t.Fatalf("handleHandshake provider: %v", err)
+	}
+	reply = unpackReply(res)
+	if reply.Rcode != dns.RcodeSuccess {
+		t.Errorf("provider: want Rcode=NOERROR, got %s", dns.RcodeToString[reply.Rcode])
+	}
+	if len(reply.Answer) != 2 {
+		t.Errorf("provider: want 2 cert TXT records, got %d", len(reply.Answer))
+	}
+}
+
 func TestSeedChain(t *testing.T) {
 	certificateCfg := testCfg()
 	srv, err := New(certificateCfg, "0", "2.dnscrypt-cert.example.com", nil)
