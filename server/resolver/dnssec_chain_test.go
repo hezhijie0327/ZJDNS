@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/netip"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"zjdns/config"
@@ -808,5 +810,62 @@ func TestIsValidWithDNSSEC_ClearsStickyEDE(t *testing.T) {
 	validated := rr.isValidWithDNSSEC(msg, zone+".", chain)
 	if validated && chain.lastEDECode != 0 {
 		t.Errorf("isValidWithDNSSEC succeeded but lastEDECode = %d, want 0", chain.lastEDECode)
+	}
+}
+
+// ── ensureZoneDNSKEYs singleflight ───────────────────────────────────────────
+
+// TestEnsureZoneDNSKEYs_Singleflight verifies that a cold-cache burst of
+// concurrent walks for the same zone issues exactly one DNSKEY query.  The
+// zone-key cache only deduplicates AFTER a successful fetch, so without the
+// per-zone flight every walk fires its own multi-NS DNSKEY fetch — the DNSSEC
+// burst amplifier behind multi-hundred-MB transient heap spikes (pprof
+// evidence, 2026-08).
+func TestEnsureZoneDNSKEYs_Singleflight(t *testing.T) {
+	zoneKey, zonePriv := genTestKey("example.com.", dns.FlagSEP|dns.FlagZONE)
+	zone := "example.com."
+	ds := zoneKey.ToDS(dns.SHA256)
+	ds.Hdr = dns.Header{Name: zone, Class: dns.ClassINET, TTL: 300}
+
+	var dnskeyQueries atomic.Int32
+	addr := startMockDNS(t, dns.HandlerFunc(func(ctx context.Context, w dns.ResponseWriter, req *dns.Msg) {
+		m := replyMsg(req)
+		if len(req.Question) == 1 && dns.RRToType(req.Question[0]) == dns.TypeDNSKEY {
+			dnskeyQueries.Add(1)
+			time.Sleep(100 * time.Millisecond) // widen the overlap window
+			rrsig := signRRset([]dns.RR{zoneKey}, zone, zonePriv, zoneKey.KeyTag())
+			m.Answer = []dns.RR{zoneKey, rrsig}
+		}
+		writeMsg(w, m)
+	}))
+
+	rr := newTestRecursive()
+	setTestBuildMsg(rr)
+
+	const concurrent = 16
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	chains := make([]*dnssecChain, concurrent)
+	for i := range chains {
+		chains[i] = &dnssecChain{childDS: []*dns.DS{ds}}
+	}
+	for i := range concurrent {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			rr.ensureZoneDNSKEYs(context.Background(), []string{addr}, zone, chains[i])
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	if got := dnskeyQueries.Load(); got != 1 {
+		t.Errorf("DNSKEY queries = %d, want 1 (singleflight dedup)", got)
+	}
+	for i, c := range chains {
+		if len(c.zoneDNSKEYs) != 1 {
+			t.Errorf("chain %d: got %d verified DNSKEYs, want 1", i, len(c.zoneDNSKEYs))
+		}
 	}
 }

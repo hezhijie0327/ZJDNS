@@ -11,6 +11,7 @@ import (
 	"zjdns/database"
 	"zjdns/edns"
 	"zjdns/internal/log"
+	"zjdns/internal/pending"
 	"zjdns/internal/pool"
 	"zjdns/server/defense"
 	"zjdns/server/resolver/dnssec"
@@ -44,6 +45,14 @@ type Recursive struct {
 	rootCacheMu   sync.Mutex
 	rootCache     []string
 	rootCacheTime int64 // log.NowUnix() of the cache fill
+
+	// dnskeyFlight deduplicates concurrent DNSKEY fetches per zone.  The
+	// zone-key cache only deduplicates AFTER a fetch succeeds, so a
+	// cold-cache burst of concurrent walks previously fired N×len(nameservers)
+	// parallel upstream DNSKEY queries — the DNSSEC burst amplifier behind
+	// multi-hundred-MB transient heap spikes under load.
+	dnskeyFlightOnce sync.Once
+	dnskeyFlight     *pending.ResultGroup[string, []*dns.DNSKEY]
 }
 
 // CNAME handles CNAME record chasing during DNS resolution, following the

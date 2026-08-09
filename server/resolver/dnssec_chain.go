@@ -7,6 +7,7 @@ import (
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
+	"zjdns/internal/pending"
 	"zjdns/internal/pool"
 	"zjdns/server/resolver/dnssec"
 
@@ -292,11 +293,31 @@ func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string,
 		return
 	}
 
-	// No singleflight dedup: each walk fetches DNSKEYs for the zones it
-	// crosses; the zone-key cache (CacheZoneKeys) deduplicates across walks
-	// once a fetch succeeds.  The dnskeyGroup promotion previously re-ran
-	// fetches without an overall deadline and amplified bottlenecks.
-	r.fetchZoneDNSKEYs(ctx, nameservers, zone, chain)
+	// Singleflight per zone: each walk fetches DNSKEYs for the zones it
+	// crosses, and the zone-key cache (CacheZoneKeys) deduplicates across
+	// walks once a fetch succeeds — but the cache only helps AFTER the first
+	// fetch completes.  Without a flight, a cold-cache burst of N concurrent
+	// walks each fires its own multi-NS DNSKEY query (N×len(nameservers)
+	// parallel upstream queries, contexts, timers and pool buffers), which
+	// amplified traffic bursts into multi-hundred-MB heap spikes (pprof
+	// evidence, 2026-08).  ResultGroup gives wait-for-result semantics: one
+	// leader fetches+verifies+caches; concurrent walkers receive the verified
+	// keys without duplicating the fetch.
+	r.dnskeyFlightOnce.Do(func() {
+		r.dnskeyFlight = pending.NewResultGroup[string, []*dns.DNSKEY]()
+	})
+	keys, _, _ := r.dnskeyFlight.Do(ctx, dnsutil.Canonical(dnsutil.Fqdn(zone)), func(ctx context.Context) ([]*dns.DNSKEY, error) {
+		// A concurrent walk may have populated the zone-key cache while we
+		// waited for leadership — re-check before fetching.
+		if cached := crypto.ZoneKeys(zone); len(cached) > 0 {
+			return cached, nil
+		}
+		r.fetchZoneDNSKEYs(ctx, nameservers, zone, chain)
+		return chain.zoneDNSKEYs, nil
+	})
+	if len(keys) > 0 {
+		chain.zoneDNSKEYs = keys
+	}
 }
 
 // fetchZoneDNSKEYs queries the zone's authoritative nameservers for DNSKEY
