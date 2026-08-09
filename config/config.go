@@ -80,7 +80,8 @@ type DNSCryptCertificate struct {
 	PrivateKey string `json:"private_key,omitzero"` // Ed25519 private key (hex, optional — auto-generated if empty)
 	PublicKey  string `json:"public_key,omitzero"`  // Ed25519 public key (hex, optional — auto-generated if empty)
 	// StateFile persists the DNSCrypt identity + cert windows across
-	// restarts (empty = "./zjdns.dnscrypt").
+	// restarts.  Empty (default) disables persistence — no file is created,
+	// cert windows are re-minted on every restart.
 	StateFile string `json:"state_file,omitzero"`
 }
 

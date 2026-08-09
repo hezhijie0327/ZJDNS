@@ -792,7 +792,8 @@ dig @127.0.0.1 -p 15353 zjdns.latency.clear CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.querylog.clear CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.dnscrypt.clear CH TXT +short
 
-# DNSCrypt 证书窗口持久化在 zjdns.dnscrypt（server/protocol/dnscrypt/persist_file.go）
+# DNSCrypt 证书窗口持久化：配置 certificate.dnscrypt.state_file 后写入该路径
+# （默认空 = 不持久化，重启重新铸窗口；server/protocol/dnscrypt/persist_file.go）
 ls -la /tmp/zjdns-persist/zjdns.dnscrypt
 ```
 

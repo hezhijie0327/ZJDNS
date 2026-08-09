@@ -15,22 +15,21 @@ type FileStore struct {
 	path string
 }
 
-// defaultPath is used when no path is configured — same naming style as the
-// cache store files (zjdns.cache / zjdns.latency / zjdns.delegation).
-const defaultPath = "./zjdns.dnscrypt"
-
-// NewFileStore creates a FileStore writing to path (empty applies the
-// default "./zjdns.dnscrypt").
+// NewFileStore creates a FileStore writing to path.  An empty path disables
+// persistence — the identity and cert windows are re-minted on every restart
+// and no file is created, matching the cache/latency/delegation stores'
+// empty-state_file semantics.
 func NewFileStore(path string) *FileStore {
-	if path == "" {
-		path = defaultPath
-	}
 	return &FileStore{path: path}
 }
 
 // LoadDNSCryptState returns the persisted identity and windows blobs.
-// Returns (nil, nil, nil) when no state file exists yet.
+// Returns (nil, nil, nil) when persistence is disabled or no state file
+// exists yet.
 func (s *FileStore) LoadDNSCryptState() (identity, windows []byte, err error) {
+	if s.path == "" {
+		return nil, nil, nil // persistence disabled — start fresh
+	}
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -51,7 +50,11 @@ func (s *FileStore) LoadDNSCryptState() (identity, windows []byte, err error) {
 }
 
 // SaveDNSCryptState writes the identity and windows blobs to the state file.
+// No-op when persistence is disabled.
 func (s *FileStore) SaveDNSCryptState(identity, windows []byte) error {
+	if s.path == "" {
+		return nil // persistence disabled
+	}
 	if len(identity) != 96 {
 		return errors.New("dnscryptstate: identity must be 96 bytes")
 	}

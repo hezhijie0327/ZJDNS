@@ -474,10 +474,16 @@ func (s *Server) Start() error {
 	// coordinator goroutine calls g.Wait(), and the pprof goroutine would
 	// be orphaned in the errgroup.
 	if len(s.pprofServers) > 0 {
+		// Aggregated one-line startup log, matching the protocol listeners
+		// (PLAIN/DNSCRYPT print all bound addresses in a single line).
+		addrs := make([]string, 0, len(s.pprofServers))
+		for _, p := range s.pprofServers {
+			addrs = append(addrs, p.Addr)
+		}
+		log.Infof("PPROF: pprof server started on %s", strings.Join(addrs, " "))
 		for _, p := range s.pprofServers {
 			g.Go(func() error {
 				defer zdnsutil.HandlePanic("pprof server")
-				log.Infof("PPROF: pprof server started on %s", p.Addr)
 				err := p.ListenAndServe()
 
 				if err != nil && err != http.ErrServerClosed {

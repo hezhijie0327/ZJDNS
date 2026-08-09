@@ -9,7 +9,9 @@ rules, ruleset, latency and delegation data all live in memory (lrumap for
 LRU maps for cache/latency/delegations, atomic.Pointer snapshots for
 zone/ruleset rules, atomic counters for stats).  The only persistence is the
 DNSCrypt state file (`dnscryptstate`), a ~300-byte blob holding the provider
-identity + cert windows so restarts resume the same certificates.
+identity + cert windows so restarts resume the same certificates. Like the
+other stores, `certificate.dnscrypt.state_file` is empty by default —
+persistence disabled, no file created, windows re-minted per restart.
 
 ### In-memory data
 
