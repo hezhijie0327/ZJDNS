@@ -119,30 +119,36 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 	}
 }
 
-// handleTCPConnection processes a single query on a TCP connection and then
-// returns, causing the connection to be closed.  This matches the reference
-// implementation (encrypted-dns-server) and draft-denis-dprive-dnscrypt-10
-// §5.4.4, which prohibits multiple transactions over the same connection.
+// handleTCPConnection processes queries on a TCP connection until the peer
+// closes it or a read error occurs.  The connection persists across queries
+// (RFC 7766 §4 — the DNSCrypt draft leaves connection lifetime unspecified;
+// §5.4.4 only specifies the framing).  Reuse amortises the per-query
+// connect + handshake that the pooled DNSCrypt TCP client depends on.
 func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
-	// ReadPrefixed requires a read deadline: without one, a peer that sends
-	// nothing occupies the worker slot indefinitely.
-	if err := conn.SetReadDeadline(time.Now().Add(defaultReadTimeout)); err != nil {
-		log.Debugf("DNSCRYPT: setting TCP read deadline for %s: %v", conn.RemoteAddr(), err)
-		_ = conn.Close()
-		return
-	}
-
-	b, err := dnscryptcrypto.ReadPrefixed(conn)
-	if err != nil {
-		if !s.isStarted() {
+	for {
+		// Re-arm the read deadline per frame: an idle-but-open connection
+		// must not die between queries, and a peer that sends nothing must
+		// not occupy the worker slot indefinitely.
+		if err := conn.SetReadDeadline(time.Now().Add(defaultReadTimeout)); err != nil {
+			log.Debugf("DNSCRYPT: setting TCP read deadline for %s: %v", conn.RemoteAddr(), err)
 			return
 		}
-		log.Debugf("DNSCRYPT: TCP read error from %s: %v", conn.RemoteAddr(), err)
-		return
-	}
 
-	if err := s.handleTCPMsg(ctx, b, conn); err != nil {
-		log.Debugf("DNSCRYPT: TCP message handling error: %v", err)
+		b, err := dnscryptcrypto.ReadPrefixed(conn)
+		if err != nil {
+			if !s.isStarted() {
+				return
+			}
+			log.Debugf("DNSCRYPT: TCP read error from %s: %v", conn.RemoteAddr(), err)
+			return
+		}
+
+		// A message-level error (malformed frame) leaves the stream suspect —
+		// close the connection rather than continuing to read from it.
+		if err := s.handleTCPMsg(ctx, b, conn); err != nil {
+			log.Debugf("DNSCRYPT: TCP message handling error: %v", err)
+			return
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package dnscrypt
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"net/netip"
@@ -298,9 +299,10 @@ func TestDNSCryptCertificateHandshake(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	resp, err := FetchCert(ctx, addr, msg.Data, false)
+	c := New(nil)
+	resp, err := c.fetchCert(ctx, addr, msg.Data, false)
 	if err != nil {
-		t.Fatalf("FetchCert: %v", err)
+		t.Fatalf("fetchCert: %v", err)
 	}
 	if len(resp.Answer) == 0 {
 		t.Fatal("cert TXT query returned no answers")
@@ -554,4 +556,41 @@ func TestDNSCrypt_TCTruncation_ClassicalOnly(t *testing.T) {
 		t.Errorf("want 40 answers, got %d", len(resp.Answer))
 	}
 	t.Logf("TC classical: got %d answers", len(resp.Answer))
+}
+
+// TestDNSCryptExtractKey verifies the shared dual extractor: DNSCrypt
+// responses (magic + client nonce prefix) route by the nonce prefix, plain
+// DNS cert responses by the echoed message ID, and short payloads match
+// nothing.
+func TestDNSCryptExtractKey(t *testing.T) {
+	// DNSCrypt response header shape: [resolver_magic(8)][client_nonce(12)]...
+	dnscryptResp := make([]byte, 32)
+	copy(dnscryptResp, dnscryptcrypto.ResolverMagic[:])
+	nonce := []byte("abcdefghijkl")
+	copy(dnscryptResp[8:], nonce)
+
+	key, ok := dnscryptExtractKey(dnscryptResp)
+	if !ok || key != string(nonce) {
+		t.Fatalf("DNSCrypt response: key=%q ok=%v, want nonce prefix %q", key, ok, nonce)
+	}
+
+	// Plain DNS response: ID 0x1234 + flags + rest.
+	plainResp := []byte{0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01}
+	key, ok = dnscryptExtractKey(plainResp)
+	if !ok || key != "\x12\x34" {
+		t.Fatalf("plain DNS response: key=%q ok=%v, want ID 0x1234", key, ok)
+	}
+
+	// A valid DNS response header can never match the resolver magic: byte 2
+	// (flags high, QR bit set) differs from ResolverMagic[2] (0x66, QR clear).
+	if bytes.Equal(plainResp[:dnscryptcrypto.ResolverMagicSize], dnscryptcrypto.ResolverMagic[:]) {
+		t.Fatal("test assumption broken: plain DNS response matches resolver magic")
+	}
+
+	if _, ok := dnscryptExtractKey([]byte{0x01}); ok {
+		t.Error("single-byte payload must not match")
+	}
+	if _, ok := dnscryptExtractKey(nil); ok {
+		t.Error("empty payload must not match")
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 	"zjdns/config"
 	"zjdns/internal/log"
+	zpool "zjdns/server/upstream/pool"
 
 	"codeberg.org/miekg/dns"
 )
@@ -21,17 +22,17 @@ import (
 // budget and the caller's deadline when one exists.
 var certFetchTimeout = config.DefaultDNSQueryTimeout
 
-// FetchCert sends a plain DNS query to addr and returns the unpacked response.
-// When preferTCP is true, the query goes directly over TCP — matching
-// dnscrypt-proxy's force_tcp behaviour.  Otherwise UDP is tried first; falls
-// back to TCP on error (firewall blocking UDP, NAT dropping fragments) or
-// truncation per §10.3 of draft-denis-dprive-dnscrypt-10.
-func FetchCert(ctx context.Context, addr string, query []byte, preferTCP bool) (*dns.Msg, error) {
+// fetchCert sends a plain DNS query to addr and returns the unpacked response.
+// When preferTCP is true, the query goes directly over TCP (pooled when
+// available) — matching dnscrypt-proxy's force_tcp behaviour.  Otherwise UDP
+// is tried first; falls back to TCP on error (firewall blocking UDP, NAT
+// dropping fragments) or truncation per §10.3 of draft-denis-dprive-dnscrypt-10.
+func (c *Client) fetchCert(ctx context.Context, addr string, query []byte, preferTCP bool) (*dns.Msg, error) {
 	if preferTCP {
-		return fetchCertOverTCP(ctx, addr, query)
+		return c.fetchCertTCP(ctx, addr, query)
 	}
 
-	resp, err := fetchCertOverUDP(ctx, addr, query)
+	resp, err := c.fetchCertUDP(ctx, addr, query)
 
 	// Fast path: UDP succeeded without truncation.
 	if err == nil && !resp.Truncated {
@@ -45,7 +46,7 @@ func FetchCert(ctx context.Context, addr string, query []byte, preferTCP bool) (
 		log.Debugf("UPSTREAM: DNSCrypt cert response truncated, retrying over TCP")
 	}
 
-	tcpResp, tcpErr := fetchCertOverTCP(ctx, addr, query)
+	tcpResp, tcpErr := c.fetchCertTCP(ctx, addr, query)
 	if tcpErr != nil {
 		if err != nil {
 			return nil, fmt.Errorf("udp: %w; tcp: %w", err, tcpErr)
@@ -55,6 +56,81 @@ func FetchCert(ctx context.Context, addr string, query []byte, preferTCP bool) (
 		return resp, nil
 	}
 	return tcpResp, nil
+}
+
+// fetchCertUDP fetches the certificate over UDP: pooled when available (the
+// socket routes the plain-DNS response by the echoed message ID — the shared
+// extractor handles both DNSCrypt and plain responses), raw per-fetch dial
+// otherwise.
+func (c *Client) fetchCertUDP(ctx context.Context, addr string, query []byte) (*dns.Msg, error) {
+	if c.udpPool != nil && len(query) >= 2 {
+		uc, err := c.udpPool.Acquire(ctx, addr, addr, func(dialCtx context.Context, a string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(dialCtx, "udp", a)
+		})
+		if err == nil {
+			respPayload, err := uc.Exchange(ctx, query, string(query[:2]))
+			if err == nil {
+				resp := &dns.Msg{}
+				resp.Data = respPayload
+				unpackErr := resp.Unpack()
+				resp.Data = nil
+				// Return the tiered-pool payload buffer (M-3-6) — the response
+				// records were copied out by the copy-based Unpack.
+				zpool.ReleaseUDPPayload(respPayload)
+				if unpackErr == nil {
+					return resp, nil
+				}
+				log.Debugf("UPSTREAM: DNSCrypt cert pooled UDP unpack failed: %v", unpackErr)
+			} else {
+				if uc.IsDead() {
+					c.udpPool.Remove(uc)
+				}
+				log.Debugf("UPSTREAM: DNSCrypt cert pooled UDP failed: %v, falling back to raw dial", err)
+			}
+		}
+	}
+	return fetchCertOverUDP(ctx, addr, query)
+}
+
+// fetchCertTCP fetches the certificate over TCP: pooled when available (the
+// raw pool frames the query and routes the response by its message ID),
+// raw per-fetch dial otherwise.  Cert fetches are rare (once per certificate
+// lifetime per server) — the pool is a connection-reuse bonus on top of the
+// singleflight dedup in state(), not a critical path.
+func (c *Client) fetchCertTCP(ctx context.Context, addr string, query []byte) (*dns.Msg, error) {
+	if c.tcpPool != nil && len(query) >= 2 {
+		rc, err := c.tcpPool.Acquire(ctx, addr, addr, func(dialCtx context.Context, a string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(dialCtx, "tcp", a)
+		})
+		if err == nil {
+			respPayload, err := rc.Exchange(ctx, query, string(query[:2]))
+			if err == nil {
+				resp, unpackErr := unpackCertResponse(respPayload)
+				if unpackErr == nil {
+					return resp, nil
+				}
+				log.Debugf("UPSTREAM: DNSCrypt cert pooled TCP unpack failed: %v", unpackErr)
+			} else {
+				if rc.IsDead() {
+					c.tcpPool.Remove(rc)
+				}
+				log.Debugf("UPSTREAM: DNSCrypt cert pooled TCP failed: %v, falling back to raw dial", err)
+			}
+		}
+	}
+	return fetchCertOverTCP(ctx, addr, query)
+}
+
+// unpackCertResponse unpacks a raw cert-fetch response payload.
+func unpackCertResponse(payload []byte) (*dns.Msg, error) {
+	resp := &dns.Msg{}
+	resp.Data = payload
+	if err := resp.Unpack(); err != nil {
+		return nil, fmt.Errorf("unpack: %w", err)
+	}
+	return resp, nil
 }
 
 // fetchCertOverUDP sends a single UDP DNS query and returns the unpacked response.

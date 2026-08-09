@@ -3,6 +3,7 @@
 package dnscrypt
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -37,6 +38,12 @@ type Client struct {
 	// header; decryption (nonce half check) + message-ID checks in executeOnce
 	// are the second line of defense against misrouted datagrams.
 	udpPool *zpool.UDPPool
+
+	// tcpPool multiplexes pipelined DNSCrypt-over-TCP frames per upstream
+	// (see pool/raw.go).  The encrypted query's DNS ID is unreachable, so
+	// responses are routed by the same client-nonce prefix as UDP; certificate
+	// fetches (plain DNS) share the pool, routed by their message ID.
+	tcpPool *zpool.RawPool
 }
 
 // maxTCRetries bounds the DNSCrypt TC escalation loop. Each escalation
@@ -59,15 +66,26 @@ func New(getProxy func(*config.UpstreamServer) *socks5.Dialer) *Client {
 		cache:      lrumap.New[string, *State](config.DefaultTransportMax * 2),
 		getProxy:   getProxy,
 		stateGroup: pending.NewResultGroup[string, *State](),
-		udpPool: zpool.NewUDPPool(config.DefaultMaxConns, config.DefaultMaxPipe, func(payload []byte) (string, bool) {
-			// DNSCrypt response header: [resolver_magic(8)][client_nonce(24)]...
-			// The first nonce half is the client's query nonce prefix.
-			if len(payload) < dnscryptcrypto.ResolverMagicSize+dnscryptcrypto.NonceSize/2 {
-				return "", false
-			}
-			return string(payload[dnscryptcrypto.ResolverMagicSize : dnscryptcrypto.ResolverMagicSize+dnscryptcrypto.NonceSize/2]), true
-		}),
+		udpPool:    zpool.NewUDPPool(config.DefaultMaxConns, config.DefaultMaxPipe, config.DefaultMaxUDPTotalConns, dnscryptExtractKey),
+		tcpPool:    zpool.NewRawPool(config.DefaultMaxConns, config.DefaultMaxPipe, dnscryptExtractKey),
 	}
+}
+
+// dnscryptExtractKey derives a response's pool match key.  DNSCrypt
+// responses (UDP and TCP alike) carry the client-nonce prefix at [8:20]
+// after the resolver magic; cert-fetch responses are plain DNS with the
+// echoed message ID at [0:2].  The magic check is unambiguous: byte 2 of
+// ResolverMagic (0x66) has the QR flag clear, so a valid DNS response
+// header can never match it.
+func dnscryptExtractKey(payload []byte) (string, bool) {
+	if len(payload) >= dnscryptcrypto.ResolverMagicSize+dnscryptcrypto.NonceSize/2 &&
+		bytes.Equal(payload[:dnscryptcrypto.ResolverMagicSize], dnscryptcrypto.ResolverMagic[:]) {
+		return string(payload[dnscryptcrypto.ResolverMagicSize : dnscryptcrypto.ResolverMagicSize+dnscryptcrypto.NonceSize/2]), true
+	}
+	if len(payload) >= 2 {
+		return string(payload[:2]), true
+	}
+	return "", false
 }
 
 // Execute sends an encrypted DNS query to a DNSCrypt resolver.
@@ -140,20 +158,35 @@ func (c *Client) executeOnce(
 	if useTCP {
 		network = "tcp"
 	}
-	// UDP without proxy: reuse a pooled connected socket — the per-query
+	// Without a proxy, reuse pooled connections — the per-query
 	// socket()/connect()/close() syscall churn was the outbound hot path's
-	// dominant cost.  The proxy and TCP paths keep their per-query dial.
-	var pooled *zpool.UDPConn
+	// dominant cost.  TCP is multiplexed through the raw frame pool (routed
+	// by the client-nonce prefix); the proxy and pool-unavailable paths keep
+	// their per-query dial.
+	var pooledUDP *zpool.UDPConn
+	var pooledTCP *zpool.RawConn
 	var conn net.Conn
 	if !useTCP && proxyDialer == nil && c.udpPool != nil {
-		pooled, err = c.udpPool.Acquire(ctx, state.serverAddress, state.serverAddress, func(dialCtx context.Context, addr string) (net.Conn, error) {
+		pooledUDP, err = c.udpPool.Acquire(ctx, state.serverAddress, state.serverAddress, func(dialCtx context.Context, addr string) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(dialCtx, "udp", addr)
 		})
 		if err != nil {
 			return nil, false, fmt.Errorf("acquiring dnscrypt udp socket %s: %w", state.serverAddress, err)
 		}
-	} else {
+	} else if useTCP && proxyDialer == nil && c.tcpPool != nil {
+		pooledTCP, err = c.tcpPool.Acquire(ctx, state.serverAddress, state.serverAddress, func(dialCtx context.Context, addr string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(dialCtx, "tcp", addr)
+		})
+		if err != nil {
+			// Pool saturated or dial failed — fall back to a per-query dial
+			// rather than failing the query (TCP is already the fallback
+			// path; the pool must not become a new failure mode).
+			log.Debugf("UPSTREAM: DNSCrypt TCP pool acquire failed for %s: %v", state.serverAddress, err)
+		}
+	}
+	if pooledUDP == nil && pooledTCP == nil {
 		if proxyDialer != nil {
 			if useTCP {
 				conn, err = proxyDialer.DialContext(ctx, "tcp", state.serverAddress)
@@ -181,6 +214,30 @@ func (c *Client) executeOnce(
 
 	var respPayload []byte
 	switch {
+	case pooledUDP != nil:
+		// Pooled UDP socket: route by the client-nonce prefix echoed in the
+		// response header.  Decrypt below re-checks the nonce half and the
+		// message ID — a misrouted datagram can never be served.
+		respPayload, err = pooledUDP.Exchange(ctx, encrypted, string(clientNonce[:dnscryptcrypto.NonceSize/2]))
+		if err != nil {
+			if pooledUDP.IsDead() {
+				c.udpPool.Remove(pooledUDP)
+			}
+			// Same as TCP: a read error is not a certificate problem.
+			return nil, false, fmt.Errorf("reading dnscrypt response: %w", err)
+		}
+	case pooledTCP != nil:
+		// Pooled TCP: the raw pool frames the encrypted query and routes the
+		// response by the client-nonce prefix — same header shape as UDP.
+		// Decrypt below re-checks the nonce half and the message ID.
+		respPayload, err = pooledTCP.Exchange(ctx, encrypted, string(clientNonce[:dnscryptcrypto.NonceSize/2]))
+		if err != nil {
+			if pooledTCP.IsDead() {
+				c.tcpPool.Remove(pooledTCP)
+			}
+			// Same as raw TCP: a read error is not a certificate problem.
+			return nil, false, fmt.Errorf("reading dnscrypt response: %w", err)
+		}
 	case useTCP:
 		if writeErr := dnscryptcrypto.WritePrefixed(encrypted, conn); writeErr != nil {
 			return nil, false, fmt.Errorf("writing dnscrypt TCP query: %w", writeErr)
@@ -191,18 +248,6 @@ func (c *Client) executeOnce(
 			// saturated server, network drop) leaves the cached state valid —
 			// invalidating it here would make every retry re-fetch the cert.
 			return nil, false, fmt.Errorf("reading dnscrypt TCP response: %w", err)
-		}
-	case pooled != nil:
-		// Pooled socket: route by the client-nonce prefix echoed in the
-		// response header.  Decrypt below re-checks the nonce half and the
-		// message ID — a misrouted datagram can never be served.
-		respPayload, err = pooled.Exchange(ctx, encrypted, string(clientNonce[:dnscryptcrypto.NonceSize/2]))
-		if err != nil {
-			if pooled.IsDead() {
-				c.udpPool.Remove(pooled)
-			}
-			// Same as TCP: a read error is not a certificate problem.
-			return nil, false, fmt.Errorf("reading dnscrypt response: %w", err)
 		}
 	default:
 		_, err = conn.Write(encrypted)
@@ -401,5 +446,8 @@ func (c *Client) Close() {
 	c.cacheMu.Unlock()
 	if c.udpPool != nil {
 		c.udpPool.Shutdown()
+	}
+	if c.tcpPool != nil {
+		c.tcpPool.Shutdown()
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -208,6 +209,10 @@ func (c *Client) fetchState(
 ) (*State, error) {
 	certQuery := &dns.Msg{}
 	certQuery.RecursionDesired = true
+	// Random ID: the pooled TCP cert fetch routes responses by the echoed
+	// message ID (2-byte key in the raw pool), so a fixed zero ID would make
+	// sequential fetches on the same connection indistinguishable from stale.
+	certQuery.ID = uint16(rand.Uint32()) //nolint:gosec // G404: DNS message ID — not cryptographic
 	txtRR := new(dns.TXT)
 	txtRR.Hdr = dns.Header{Name: providerName, Class: dns.ClassINET}
 	certQuery.Question = []dns.RR{txtRR}
@@ -216,7 +221,7 @@ func (c *Client) fetchState(
 		return nil, fmt.Errorf("packing cert query: %w", err)
 	}
 
-	resp, err := FetchCert(ctx, addr, certQuery.Data, preferTCP)
+	resp, err := c.fetchCert(ctx, addr, certQuery.Data, preferTCP)
 	if err != nil {
 		return nil, fmt.Errorf("fetching dnscrypt cert from %s: %w", addr, err)
 	}
