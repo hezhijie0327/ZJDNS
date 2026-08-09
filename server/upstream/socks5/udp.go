@@ -269,6 +269,14 @@ func (c *socks5PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 	// Zero only the used prefix, not the whole 64KB buffer (R3-L13).
 	defer func() { clear((*buf)[:nr]); socks5ReadBufPool.Put(buf) }()
 	if err != nil {
+		// Keep the net.Error identity (timeout) intact: gotlcp's DTLCP
+		// client type-asserts read timeouts with `err.(net.Error)` and
+		// retransmits only when the assertion succeeds.  Wrapping with
+		// fmt.Errorf breaks the assertion, so a proxied DTLCP handshake
+		// would fail instead of retransmitting.
+		if _, ok := err.(net.Error); ok { //nolint:errorlint // deliberate: the peer (gotlcp) type-asserts net.Error — wrapping would break its retransmit path
+			return 0, nil, err
+		}
 		return 0, nil, fmt.Errorf("socks5: read: %w", err)
 	}
 

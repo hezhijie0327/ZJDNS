@@ -322,7 +322,13 @@ func parseDatagram(b []byte) (*datagram, *net.UDPAddr, error) {
 	totalHeader := 4 + headerLen
 	d.data = b[totalHeader:]
 
-	srcAddr := &net.UDPAddr{IP: net.IP(d.dstAddr), Port: int(d.dstPort)}
+	// d.dstAddr aliases the pooled read buffer, which ReadFrom clears on
+	// return — copy the IP so the returned address survives the buffer
+	// recycle.  A zeroed IP broke source-address validation in DTLCP
+	// (gotlcp) client handshakes over a proxy: the response's source came
+	// back as 0.0.0.0, failed the server-address match, and the handshake
+	// stalled until timeout.
+	srcAddr := &net.UDPAddr{IP: append(net.IP(nil), d.dstAddr...), Port: int(d.dstPort)}
 	if d.atyp == socks5ATYPDomain {
 		host := string(d.dstAddr[1:])
 		if ip := net.ParseIP(host); ip != nil {
