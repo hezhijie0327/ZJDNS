@@ -1719,6 +1719,16 @@ BinaryStamp = [protocol:1][props:8][addr_len:1][addr:N][hashes...][path...]
 4. PQ 模式：首次查询后获得 ticket，后续查询可复用（类似 TLS 会话恢复）
 ```
 
+### 连接复用（§5.4.4 澄清）
+
+- §5.4.4 **只规定帧格式**（2 字节长度前缀 + 加密包），**不禁止同一 TCP
+  连接上的多个事务** —— 服务端旧实现"一次一连接"是对草案的误读
+- 服务端 TCP 连接持久化（RFC 7766 §4 语义），单连接服务握手 + 全部后续查询
+- 客户端 UDP/TCP 均池化：nonce 前缀路由（UDP 池）+ 长度前缀帧复用
+  （`RawPool`，不解析 DNS）；证书获取（明文 DNS）共享同一池，按随机
+  消息 ID 路由（双态提取器：resolver magic → nonce 前缀，否则 → ID）
+- 查询 4096 上限对 TCP 同样适用（§5.4.7 MUST）—— 大响应在 TCP 上也截断 + TC
+
 ### 新增 §5.4.5 确定性响应填充
 
 - 填充长度: SHA-256(sharedKey || clientNonce)[0] → 1-256 字节
@@ -1791,6 +1801,16 @@ Client ⇄ 数据透传 ⇄ Target
 ### 我们的实现
 
 - `server/upstream/socks5/`: TCP + UDP ASSOCIATE + 认证 ✓
+- **全协议池化**：12 种协议的代理路径共用池机制（key = `addr|proxy`，
+  dialFunc 建立 SOCKS5 中继）—— ASSOCIATE/TCP 握手每 socket 一次而非
+  每查询；证书获取同样走代理池化；裸拨号仅保留为池不可用回退
+- **guard 兼容性**：spoofguard/splitguard/poisonguard 完全支持（内容/
+  TCP 层机制与传输无关；poisonguard 经 `recursiveProxyURL` 走递归代理
+  链）；hopguard 降级 —— relay 不带 IP TTL 元数据，警告 + 无 TTL 模式，
+  与 spoofguard 同开时由内容校验兜底
+- **已知修复**：源地址生命周期（`srcAddr.IP` 指向池缓冲被清零）与
+  `net.Error` 身份保留（gotlcp 类型断言依赖）—— 两者曾使 DTLCP 代理
+  握手失败
 
 ---
 
@@ -1824,6 +1844,10 @@ Client ⇄ 数据透传 ⇄ Target
 - DTLCP 同样受 PMTU 限制（UDP），失败时自动 fallback 到 TLCP
 - 共享 UDP socket 同一时间仅一个连接（gotlcp 限制）
 - 证书：SM2 密钥对（签名+加密）与 TLCP 共用
+- **SOCKS5 代理兼容性**：gotlcp 客户端校验数据报源地址（必须等于服务器
+  地址）并用 `err.(net.Error)` 类型断言驱动重传 —— 代理 wrapper 曾破坏
+  这两者（源地址清零、超时错误被包装），已修复并验证代理下握手完整
+  工作（cookie 交换 + 握手）
 
 ### 我们的实现
 

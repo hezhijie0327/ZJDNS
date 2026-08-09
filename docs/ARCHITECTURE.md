@@ -53,6 +53,53 @@ so cache hits serve the exact rcode.
 - **Dynamic queries**: `Store.Stats()` returns TXT records (overview, hits, errors, rcodes, poisoned, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.cache.clear` / `zjdns.stats.clear` / `zjdns.latency.clear` / `zjdns.querylog.clear` / `zjdns.dnscrypt.clear` (loopback-only).
 
 
+## Connection Pools
+
+All outbound protocols multiplex over pooled connections
+(`server/upstream/pool/`), with a unified three-tier bound per pool instance.
+
+| Pool | Transport | Routing key | Used by |
+|------|-----------|-------------|---------|
+| `UDPPool` | UDP datagrams | plain: 2-byte message ID; DNSCrypt: nonce prefix | plain UDP, DNSCrypt UDP |
+| `ConnPool` | TCP/DoT/DTLS/TLCP/DTLCP streams | DNS message ID (rewritten + question re-check) | plain TCP, DoT, DTLS, TLCP, DTLCP |
+| `RawPool` | length-prefixed frames, no DNS parsing | DNSCrypt nonce prefix / plain ID (dual extractor) | DNSCrypt TCP + cert fetch |
+| `QUIC` | QUIC connections | none (streams multiplex internally) | DoQ |
+
+**Unified bounds** (per pool instance):
+- per-key `maxConns=4`, per-conn `maxPipe=16`, **global `maxTotal=128`**
+  (`DefaultMaxPoolTotalConns`)
+- Global-cap enforcement: `dialAndAdd` evicts via `evictOne` — dead conns
+  first, then idle-LRU, then any-LRU (`lastUsed` timestamp, zero-alloc
+  `log.NowUnix()`); closes run outside the lock (ABBA convention)
+- Idle recycling: UDP 30s, TCP-family 60s; dead conns pruned lazily on
+  Acquire, plus periodic `ReapDead` for UDP
+- Server-side concurrency caps derive from `DefaultServerGoroutineLimit`
+  (256): TLS/TLCP serverGroup, plain-TCP/DoH LimitListener, DNSCrypt
+  workerCap; QUIC connection admission at half (128)
+
+**SOCKS5 proxy support**: all 12 client protocols pool proxied connections —
+the pool key is `addr|proxy`, the dialFunc establishes the SOCKS5
+ASSOCIATE/TCP relay, so the handshake is paid once per socket.  Certificate
+fetches pool through the proxy too.  Raw per-query dials remain only as
+pool-unavailable fallbacks.  DoH/DoH3/HTTP-TLCP proxy via per-key transport
+caches.
+
+**Defense over SOCKS5**: spoofguard/splitguard/poisonguard are fully
+transport-agnostic; hopguard degrades (SOCKS5 relays carry no IP TTL
+metadata — `Capture()` is nil, a warning is logged, and spoofguard takes
+over content filtering when enabled).  Recursive mode routes the whole
+authority chain through a proxy when `protocol: recursive` upstream sets
+`proxy` (`recursiveProxyURL`, `server/resolver/resolver.go`).
+
+**Known bugs fixed in this area** (`server/upstream/socks5/`):
+- `socks5PacketConn.ReadFrom` returned a `srcAddr.IP` aliasing the pooled
+  read buffer (zeroed by the deferred clear) — the source came back as
+  0.0.0.0 and broke source-address validation in gotlcp DTLCP handshakes.
+  The IP is copied before return.
+- Read timeouts were wrapped in `fmt.Errorf`, breaking the `net.Error`
+  identity that gotlcp type-asserts to decide retransmission.  `net.Error`
+  values now pass through unwrapped.
+
 ## Defense Mechanisms
 
 ZJDNS implements four per-upstream defense mechanisms to detect and reject
@@ -76,6 +123,14 @@ DNS pollution attacks. Each is enabled via `UpstreamServer` flags.
 
 Learns per-upstream TTL baseline from verified responses. After 32 samples,
 enforces ±2 TTL tolerance. State stored in bounded LRU map (capacity 256).
+
+**Over SOCKS5**: degrades by design — a SOCKS5 UDP relay terminates the IP
+link, so the TTL the client socket observes is the relay-to-client hop, not
+the server-to-relay hop (and the relay protocol carries no TTL metadata).
+`Capture()` is nil on proxied sockets; a `hopguard TTL/HopLimit capture not
+available` warning is logged once, and TTL checks never arm.  When
+spoofguard is also enabled it takes over content filtering — the combined
+config keeps full protection over a proxy.
 
 ### Poisonguard
 
@@ -123,7 +178,10 @@ Full implementation with PQC support. Two crypto constructions: XWingPQ (default
 
 ### Server (`server/protocol/dnscrypt/`)
 
-- UDP+TCP listeners on independent port (default 8443)
+- UDP+TCP listeners on independent port (default 8443); TCP connections are
+  persistent (RFC 7766 §4 — the draft only specifies framing in §5.4.4; the
+  old single-transaction-per-connection behaviour was a misreading) — one
+  connection serves the handshake plus every subsequent query
 - Ed25519 identity key required in config (`certificate.dnscrypt.public_key`/`private_key`, like TLS); resolver encryption keys (X25519/X-Wing) always auto-generated
 - `keys []keyEntry` holds current + previous certs for rotation overlap
 - `updateKeys()` mints fresh resolver keys every 8h (cert TTL is 24h — the 8h interval creates the current+previous overlap window), signed with fixed Ed25519 identity; ticket keys are derived once from the signing key and **never rotate** (rotating would invalidate client-cached tickets)
@@ -140,6 +198,12 @@ Full implementation with PQC support. Two crypto constructions: XWingPQ (default
 - UDP→TCP fallback: TC bit, timeouts, padding failures all trigger TCP retry
 - Adaptive sizing (draft §5.4.2): per-response EWMA (decay 2/31) of encrypted wire sizes; TC doubles the padded budget (≤4096) and resets the EWMA; an average below half the budget halves it (floor 512) — mirrors dnscrypt-proxy's `QuestionSizeEstimator`. Estimator state is atomic (lock-free on the response path); the same budget drives the classical UDP padding floor and the PQ resumed floor
 - State caching: `State` with `pqPublicKey`, `pqCertContext`, `pqTicket`, `pqResumeSecret`, `pqTicketExpiry`
+- UDP and TCP queries multiplex over pooled sockets/conns (`UDPPool` +
+  `RawPool`), routed by the client-nonce prefix echoed in the response
+  header (a dual magic/ID extractor lets plain-DNS cert fetches share the
+  same pools, routed by their random message ID); certificate fetches
+  (UDP + TCP) pool through the proxy when configured — previously they
+  always dialed direct, which broke proxy-only servers
 
 ### Wire Formats
 
@@ -174,6 +238,12 @@ Reuses SM2 certificate pair from TLCP. Wire format = DTLS (RFC 8094): 2-byte big
 - **Server** (`server/protocol/tlcp/dtlcp.go`): `net.ListenUDP` + `acceptDTLCP()` feeds pre-read ClientHello through `dtlcp.Server`. Will be replaced with `dtlcp.Listen` when upstream fixes the connected-socket issue.
 - **Client** (`server/upstream/tlcp/dtlcp.go`): `net.ListenPacket` + `dtlcp.Client()` + `HandshakeContext()`. Will be replaced with `dtlcp.Dial` when upstream fixes.
 - **Synchronous handling**: gotlcp shares one `*net.UDPConn` across all connections. Only one connection at a time until upstream provides per-connection isolation.
+- **SOCKS5 proxy compatibility**: the client validates every datagram's
+  source address against the server address, and type-asserts read
+  timeouts as `net.Error` to drive retransmission — both were broken by
+  the SOCKS5 wrapper (zeroed source IP from the pooled read buffer; wrapped
+  timeout errors).  Fixed in `server/upstream/socks5/`; DTLCP-over-SOCKS5
+  is verified working (cookie exchange + full handshake).
 - Windows: IPv4 localhost DTLCP handshake unreliable — use `[::1]`.
 - **Deadlock fix**: `dtlcpListener.Close()` collects connections under the lock, unlocks, THEN closes — `dtlcpConnWrapper.Close()` also acquires the same mutex.
 - **Goroutine tracking**: TLCP server now has `serverGroup` (errgroup) tracking lifecycle goroutines (DoT accept, DTLCP accept, DoH serve). Shutdown waits for all via `serverGroup.Wait()`.

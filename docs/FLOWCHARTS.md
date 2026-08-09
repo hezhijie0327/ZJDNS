@@ -745,28 +745,44 @@ graph LR
     class UP ext
 ```
 
-> 每协议单连接复用（RFC 7766 管道化）：TCP/DoT/DTLS/TLCP/DTLCP 走 ConnPool、
-> UDP/DNSCrypt 走 UDPPool、DoQ 走 QUIC 流、DoH/DoH3 走 HTTP keep-alive。
+> 四种池类型（`server/upstream/pool/`）：TCP/DoT/DTLS/TLCP/DTLCP 走
+> **ConnPool**、UDP/DNSCrypt-UDP 走 **UDPPool**、DNSCrypt-TCP 走 **RawPool**
+> （长度前缀帧复用，不解析 DNS，nonce 前缀路由）、DoQ 走 **QUIC 连接池**、
+> DoH/DoH3/HTTP-TLCP 走 HTTP transport 缓存。
+>
+> **统一三层上限**（每池实例）：per-key 4 连接 × per-conn 16 在途 × **全局 128
+> live 连接**（`DefaultMaxPoolTotalConns`）。超限时 `dialAndAdd` 触发
+> `evictOne` 驱逐：死连接 → 空闲 LRU → 任意 LRU（`lastUsed` 时间戳，close
+> 在锁外）。空闲回收 UDP 30s / TCP 60s。服务端并发上限统一派生自
+> `DefaultServerGoroutineLimit`（256），QUIC 连接准入 128。
 
 ## SOCKS5 代理路径
 
 ```mermaid
 graph LR
     Q[Query] --> PROXY{Proxy?}
-    PROXY -->|No| DIRECT[Direct Dial]
-    PROXY -->|Yes| AUTH{Auth?}
-    AUTH -->|No| NOAUTH[TCP Connect<br/>+ UDP Associate]
-    AUTH -->|User/Pass| UPAUTH[TCP Connect<br/>+ Auth Negotiation<br/>+ UDP Associate]
-    NOAUTH --> UP[Upstream]
-    UPAUTH --> UP
-    DIRECT --> UP
+    PROXY -->|No| POOL[Pooled Direct<br/>key=addr]
+    PROXY -->|Yes| POOLP[Pooled Proxied<br/>key=addr&#124;proxy]
+    POOLP -->|TCP family| TCPR[Relay TCP<br/>Socks Handshake<br/>一次/连接]
+    POOLP -->|UDP family| UDPR[UDP ASSOCIATE<br/>relay 绑定<br/>一次/socket]
+    POOL --> UP[Upstream]
+    TCPR --> UP
+    UDPR --> UP
     classDef query fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     classDef proc fill:#fef3c7,stroke:#f59e0b,color:#78350f
     classDef ext fill:#e2e8f0,stroke:#64748b,color:#1e293b
     class Q query
-    class PROXY,AUTH,NOAUTH,UPAUTH,DIRECT proc
+    class PROXY,POOL,POOLP,TCPR,UDPR proc
     class UP ext
 ```
+
+> 全部 12 协议客户端支持 SOCKS5：代理连接与直连共用池机制，key 含代理
+> 标识（`addr|proxy`），dialFunc 建立 SOCKS5 ASSOCIATE/TCP relay —— 握手
+> 每 socket 一次而非每查询。证书获取（UDP+TCP）同样走代理池化。裸拨号
+> 仅保留为池不可用时的回退。**guard 兼容性**：spoofguard/splitguard/
+> poisonguard 完全支持（内容/TCP 层机制与传输无关；poisonguard 经
+> `recursiveProxyURL` 走递归代理链）；hopguard 降级（SOCKS5 relay 不带 IP
+> TTL 元数据，警告 + 无 TTL 模式，由 spoofguard 兜底内容防护）。
 
 ## 协议对照：标准加密 ↔ 国密
 

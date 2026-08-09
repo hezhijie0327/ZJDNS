@@ -7,7 +7,7 @@
 
 | 文档/目录 | 职责 | 何时看 |
 |-----------|------|--------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 架构参考：存储设计、中间件链、防御机制、类型参考、协议实现 | 理解系统设计 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | 架构参考：存储设计、中间件链、连接池（4 池 × 三层上限）、防御机制、类型参考、协议实现 | 理解系统设计 |
 | [FLOWCHARTS.md](FLOWCHARTS.md) | 核心功能/协议 mermaid 流程图 | 理解数据流与调用链 |
 | [AUDIT-METHODOLOGY.md](AUDIT-METHODOLOGY.md) | 审计框架：18 维度、并行 agent 编排、Sprint 修复流程、质量门禁、提交规范 | 做审计前必读 |
 | [audit/](audit/) | 每轮审计的详细报告与修复计划（命名 `YYYY-MM-主题/`，结构见方法论 §7） | 查历史审计结论 |
