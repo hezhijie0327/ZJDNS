@@ -76,39 +76,54 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 			dns.RRToType(msg.Question[0]) == dns.TypeAAAA)
 
 	if isAQtype && (server.Spoofguard || server.HopGuard) {
-		if proxyDialer != nil {
-			// Defense over SOCKS5: the multi-read loop runs on the proxy
-			// UDP socket.  HopGuard auto-disables here — SOCKS5 forwards
-			// datagrams without IP TTL metadata.
-			return c.executeUDPMultiRead(ctx, msg, server, proxyDialer)
-		}
 		if c.udpPool != nil {
 			// Pooled collect mode — readLoop captures the IP TTL via
 			// control messages, so both spoofguard and hopguard run over
-			// the pooled sockets.
+			// the pooled sockets (proxy ASSOCIATE sockets included; hopguard
+			// TTL capture degrades to unavailable over SOCKS5).
 			if resp, err := c.executeUDPCollect(ctx, msg, server); err == nil {
 				return resp, nil
 			}
-			// Pooled collect failed — fall through to fallback.
+			// Pooled collect failed — fall through to pooled single.
 		} else if server.HopGuard {
 			// No pool — hopguard needs the exclusive-socket TTL capture.
 			return c.executeUDPMultiRead(ctx, msg, server, proxyDialer)
 		}
 	}
 
-	if proxyDialer != nil {
-		return c.exchangeViaProxyUDP(ctx, msg, server.Address, proxyDialer)
-	}
-
-	// Pooled path: reuse connected UDP sockets (see pool/udp.go).
+	// Pooled path: reuse connected UDP sockets, proxied ASSOCIATE relays
+	// included (see pool/udp.go).
 	if c.udpPool != nil {
 		if resp, err := c.executeUDPPooled(ctx, msg, server); err == nil {
 			return resp, nil
 		}
 	}
 
+	// Pool unavailable or failed — per-query dials.
+	if proxyDialer != nil {
+		return c.exchangeViaProxyUDP(ctx, msg, server.Address, proxyDialer)
+	}
+
 	response, _, err := c.udpClient.Exchange(ctx, msg, config.ProtoUDP, server.Address)
 	return response, err
+}
+
+// acquireUDP gets a pooled UDP socket for the server, dialing through the
+// SOCKS5 proxy when configured.  The pool key includes the proxy so direct
+// and proxied sockets never share a relay, and the ASSOCIATE handshake is
+// paid once per socket instead of per query.
+func (c *Client) acquireUDP(ctx context.Context, addr, proxy string, proxyDialer *socks5.Dialer) (*zpool.UDPConn, error) {
+	key := addr
+	if proxy != "" {
+		key = addr + "|" + proxy
+	}
+	return c.udpPool.Acquire(ctx, key, addr, func(dialCtx context.Context, a string) (net.Conn, error) {
+		if proxyDialer != nil {
+			return proxyDialer.DialUDP(dialCtx, a)
+		}
+		var d net.Dialer
+		return d.DialContext(dialCtx, "udp", a)
+	})
 }
 
 // executeUDPPooled sends a query over a pooled UDP socket.  The query ID is
@@ -117,10 +132,7 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 // datagram (ID collision after wrap-around, or a buggy server echoing a stale
 // reply) can never be served as this query's response.
 func (c *Client) executeUDPPooled(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
-	uc, err := c.udpPool.Acquire(ctx, server.Address, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(dialCtx, "udp", addr)
-	})
+	uc, err := c.acquireUDP(ctx, server.Address, server.Proxy, c.getProxy(server))
 	if err != nil {
 		return nil, err
 	}
@@ -185,10 +197,7 @@ func matchQuestion(response, query *dns.Msg) bool {
 // readLoop captures the IP TTL via control messages); when capture is
 // unavailable (e.g. Windows), HopGuard degrades to TTL-less operation.
 func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
-	uc, err := c.udpPool.Acquire(ctx, server.Address, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(dialCtx, "udp", addr)
-	})
+	uc, err := c.acquireUDP(ctx, server.Address, server.Proxy, c.getProxy(server))
 	if err != nil {
 		return nil, err
 	}

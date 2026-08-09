@@ -158,24 +158,38 @@ func (c *Client) executeOnce(
 	if useTCP {
 		network = "tcp"
 	}
-	// Without a proxy, reuse pooled connections — the per-query
-	// socket()/connect()/close() syscall churn was the outbound hot path's
-	// dominant cost.  TCP is multiplexed through the raw frame pool (routed
-	// by the client-nonce prefix); the proxy and pool-unavailable paths keep
-	// their per-query dial.
+	// Reuse pooled connections — the per-query socket()/connect()/close()
+	// syscall churn was the outbound hot path's dominant cost.  TCP is
+	// multiplexed through the raw frame pool (routed by the client-nonce
+	// prefix).  Proxied sockets are pooled too: the pool key includes the
+	// proxy, and the dialFunc establishes the SOCKS5 ASSOCIATE/TCP relay —
+	// the handshake is paid once per socket instead of per query.  The
+	// pool-unavailable paths keep their per-query dial.
+	poolKey := state.serverAddress
+	if proxyDialer != nil {
+		poolKey += "|" + server.Proxy
+	}
 	var pooledUDP *zpool.UDPConn
 	var pooledTCP *zpool.RawConn
 	var conn net.Conn
-	if !useTCP && proxyDialer == nil && c.udpPool != nil {
-		pooledUDP, err = c.udpPool.Acquire(ctx, state.serverAddress, state.serverAddress, func(dialCtx context.Context, addr string) (net.Conn, error) {
+	if !useTCP && c.udpPool != nil {
+		pooledUDP, err = c.udpPool.Acquire(ctx, poolKey, state.serverAddress, func(dialCtx context.Context, addr string) (net.Conn, error) {
+			if proxyDialer != nil {
+				return proxyDialer.DialUDP(dialCtx, addr)
+			}
 			var d net.Dialer
 			return d.DialContext(dialCtx, "udp", addr)
 		})
 		if err != nil {
-			return nil, false, fmt.Errorf("acquiring dnscrypt udp socket %s: %w", state.serverAddress, err)
+			// Pool saturated or dial failed — fall back to a per-query dial
+			// rather than failing the query.
+			log.Debugf("UPSTREAM: DNSCrypt UDP pool acquire failed for %s: %v", state.serverAddress, err)
 		}
-	} else if useTCP && proxyDialer == nil && c.tcpPool != nil {
-		pooledTCP, err = c.tcpPool.Acquire(ctx, state.serverAddress, state.serverAddress, func(dialCtx context.Context, addr string) (net.Conn, error) {
+	} else if useTCP && c.tcpPool != nil {
+		pooledTCP, err = c.tcpPool.Acquire(ctx, poolKey, state.serverAddress, func(dialCtx context.Context, addr string) (net.Conn, error) {
+			if proxyDialer != nil {
+				return proxyDialer.DialContext(dialCtx, "tcp", addr)
+			}
 			var d net.Dialer
 			return d.DialContext(dialCtx, "tcp", addr)
 		})

@@ -221,7 +221,7 @@ func (c *Client) fetchState(
 		return nil, fmt.Errorf("packing cert query: %w", err)
 	}
 
-	resp, err := c.fetchCert(ctx, addr, certQuery.Data, preferTCP)
+	resp, err := c.fetchCert(ctx, addr, certQuery.Data, preferTCP, server)
 	if err != nil {
 		return nil, fmt.Errorf("fetching dnscrypt cert from %s: %w", addr, err)
 	}

@@ -27,12 +27,12 @@ var certFetchTimeout = config.DefaultDNSQueryTimeout
 // available) — matching dnscrypt-proxy's force_tcp behaviour.  Otherwise UDP
 // is tried first; falls back to TCP on error (firewall blocking UDP, NAT
 // dropping fragments) or truncation per §10.3 of draft-denis-dprive-dnscrypt-10.
-func (c *Client) fetchCert(ctx context.Context, addr string, query []byte, preferTCP bool) (*dns.Msg, error) {
+func (c *Client) fetchCert(ctx context.Context, addr string, query []byte, preferTCP bool, server *config.UpstreamServer) (*dns.Msg, error) {
 	if preferTCP {
-		return c.fetchCertTCP(ctx, addr, query)
+		return c.fetchCertTCP(ctx, addr, query, server)
 	}
 
-	resp, err := c.fetchCertUDP(ctx, addr, query)
+	resp, err := c.fetchCertUDP(ctx, addr, query, server)
 
 	// Fast path: UDP succeeded without truncation.
 	if err == nil && !resp.Truncated {
@@ -46,7 +46,7 @@ func (c *Client) fetchCert(ctx context.Context, addr string, query []byte, prefe
 		log.Debugf("UPSTREAM: DNSCrypt cert response truncated, retrying over TCP")
 	}
 
-	tcpResp, tcpErr := c.fetchCertTCP(ctx, addr, query)
+	tcpResp, tcpErr := c.fetchCertTCP(ctx, addr, query, server)
 	if tcpErr != nil {
 		if err != nil {
 			return nil, fmt.Errorf("udp: %w; tcp: %w", err, tcpErr)
@@ -62,9 +62,17 @@ func (c *Client) fetchCert(ctx context.Context, addr string, query []byte, prefe
 // socket routes the plain-DNS response by the echoed message ID — the shared
 // extractor handles both DNSCrypt and plain responses), raw per-fetch dial
 // otherwise.
-func (c *Client) fetchCertUDP(ctx context.Context, addr string, query []byte) (*dns.Msg, error) {
+func (c *Client) fetchCertUDP(ctx context.Context, addr string, query []byte, server *config.UpstreamServer) (*dns.Msg, error) {
 	if c.udpPool != nil && len(query) >= 2 {
-		uc, err := c.udpPool.Acquire(ctx, addr, addr, func(dialCtx context.Context, a string) (net.Conn, error) {
+		proxyDialer := c.proxyDialer(server)
+		key := addr
+		if proxyDialer != nil {
+			key += "|" + server.Proxy
+		}
+		uc, err := c.udpPool.Acquire(ctx, key, addr, func(dialCtx context.Context, a string) (net.Conn, error) {
+			if proxyDialer != nil {
+				return proxyDialer.DialUDP(dialCtx, a)
+			}
 			var d net.Dialer
 			return d.DialContext(dialCtx, "udp", a)
 		})
@@ -98,9 +106,17 @@ func (c *Client) fetchCertUDP(ctx context.Context, addr string, query []byte) (*
 // raw per-fetch dial otherwise.  Cert fetches are rare (once per certificate
 // lifetime per server) — the pool is a connection-reuse bonus on top of the
 // singleflight dedup in state(), not a critical path.
-func (c *Client) fetchCertTCP(ctx context.Context, addr string, query []byte) (*dns.Msg, error) {
+func (c *Client) fetchCertTCP(ctx context.Context, addr string, query []byte, server *config.UpstreamServer) (*dns.Msg, error) {
 	if c.tcpPool != nil && len(query) >= 2 {
-		rc, err := c.tcpPool.Acquire(ctx, addr, addr, func(dialCtx context.Context, a string) (net.Conn, error) {
+		proxyDialer := c.proxyDialer(server)
+		key := addr
+		if proxyDialer != nil {
+			key += "|" + server.Proxy
+		}
+		rc, err := c.tcpPool.Acquire(ctx, key, addr, func(dialCtx context.Context, a string) (net.Conn, error) {
+			if proxyDialer != nil {
+				return proxyDialer.DialContext(dialCtx, "tcp", a)
+			}
 			var d net.Dialer
 			return d.DialContext(dialCtx, "tcp", a)
 		})
