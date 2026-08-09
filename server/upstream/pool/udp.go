@@ -57,6 +57,7 @@ type UDPConn struct {
 	capacity  chan struct{}
 	inFlight  atomic.Int32
 	nextID    atomic.Uint32
+	lastUsed  atomic.Int64 // log.NowUnix() of the last query — LRU eviction key
 	maxPipe   int32
 	closed    atomic.Bool
 	closeOnce sync.Once
@@ -72,6 +73,8 @@ type UDPPool struct {
 	dialing    map[string]int
 	maxConns   int
 	maxPipe    int
+	maxTotal   int // global cap on live sockets across all keys (0 = unlimited)
+	total      int // live sockets currently tracked in conns
 	closed     bool
 	extractKey func(payload []byte) (string, bool)
 }
@@ -145,6 +148,7 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 	select {
 	case c.capacity <- struct{}{}:
 		c.inFlight.Add(1)
+		c.lastUsed.Store(log.NowUnix())
 		defer func() {
 			c.inFlight.Add(-1)
 			<-c.capacity
@@ -222,6 +226,7 @@ func (c *UDPConn) ExchangeCollect(ctx context.Context, payload []byte, matchKey 
 	select {
 	case c.capacity <- struct{}{}:
 		c.inFlight.Add(1)
+		c.lastUsed.Store(log.NowUnix())
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -420,20 +425,25 @@ func (c *UDPConn) Capture() *ipttl.Capture { return c.capture }
 // IsFull reports whether the connection has reached its in-flight cap.
 func (c *UDPConn) IsFull() bool { return c.inFlight.Load() >= c.maxPipe }
 
-// NewUDPPool creates a UDPPool.  extractKey derives a response's match key
-// from its raw payload.
-func NewUDPPool(maxConns, maxPipe int, extractKey func(payload []byte) (string, bool)) *UDPPool {
+// NewUDPPool creates a UDPPool.  maxTotal caps the live socket count across
+// all keys (0 = unlimited).  extractKey derives a response's match key from
+// its raw payload.
+func NewUDPPool(maxConns, maxPipe, maxTotal int, extractKey func(payload []byte) (string, bool)) *UDPPool {
 	if maxConns <= 0 {
 		maxConns = config.DefaultMaxConns
 	}
 	if maxPipe <= 0 {
 		maxPipe = config.DefaultMaxPipe
 	}
+	if maxTotal <= 0 {
+		maxTotal = config.DefaultMaxUDPTotalConns
+	}
 	return &UDPPool{
 		conns:      make(map[string][]*UDPConn),
 		dialing:    make(map[string]int),
 		maxConns:   maxConns,
 		maxPipe:    maxPipe,
+		maxTotal:   maxTotal,
 		extractKey: extractKey,
 	}
 }
@@ -538,6 +548,7 @@ func (p *UDPPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc
 		extractKey:  p.extractKey,
 		idleTimeout: config.DefaultUDPPoolIdleTimeout,
 	}
+	c.lastUsed.Store(log.NowUnix())
 	go c.readLoop()
 
 	if len(p.conns[key]) >= p.maxConns {
@@ -555,10 +566,88 @@ func (p *UDPPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc
 	}
 
 	p.conns[key] = append(p.conns[key], c)
-	n := len(p.conns[key]) // captured under the lock — the log below runs unlocked
+	p.total++
+	// Global cap (H1): a flood of distinct authoritative NS addresses must
+	// not grow the socket working set without bound.  Evict sockets to make
+	// room — dead ones first, then the least-recently-used — and close them
+	// after unlocking (ABBA convention, as in Remove/Shutdown).
+	var evicted []*UDPConn
+	for p.total > p.maxTotal {
+		victim, removed := p.evictOne(c)
+		if !removed {
+			break // nothing evictable — the new socket stays
+		}
+		if victim != nil {
+			evicted = append(evicted, victim)
+		}
+	}
+	n := len(p.conns[key]) // captured under the lock — the logs below run unlocked
+	total := p.total
 	p.mu.Unlock()
-	log.Debugf("UDPPOOL: dialed new socket to %s (pool=%d/%d)", key, n, p.maxConns)
+	for _, v := range evicted {
+		v.close()
+		log.Debugf("UDPPOOL: evicted %s for capacity (total=%d/%d)", v.addr, total, p.maxTotal)
+	}
+	log.Debugf("UDPPOOL: dialed new socket to %s (pool=%d/%d, total=%d/%d)", key, n, p.maxConns, total, p.maxTotal)
 	return c, nil
+}
+
+// evictOne removes one socket from the pool to make room for a new dial,
+// preferring (1) dead sockets awaiting the periodic ReapDead sweep (already
+// closed — nil victim), (2) idle live sockets (nothing in flight) oldest
+// first, (3) any live socket oldest first.  Must be called with p.mu held;
+// skip is never evicted.  The live victim is returned WITHOUT closing — the
+// caller closes it outside p.mu (ABBA convention, as in Remove/Shutdown).
+func (p *UDPPool) evictOne(skip *UDPConn) (victim *UDPConn, removed bool) {
+	// (1) Dead sockets cost a slot while waiting for ReapDead — drop them
+	// without closing anything (their readLoop already closed the conn).
+	for key, conns := range p.conns {
+		for i, c := range conns {
+			if !c.IsDead() {
+				continue
+			}
+			p.conns[key] = append(conns[:i], conns[i+1:]...)
+			if len(p.conns[key]) == 0 {
+				delete(p.conns, key)
+			}
+			p.total--
+			return nil, true
+		}
+	}
+	// (2)+(3): least-recently-used live socket.  Prefer idle sockets — an
+	// in-flight eviction costs its waiters a failed query; an idle one costs
+	// nothing.
+	for preferIdle := true; ; preferIdle = false {
+		var victimKey string
+		var victimIdx int
+		oldest := int64(math.MaxInt64)
+		for key, conns := range p.conns {
+			for i, c := range conns {
+				if c == skip || c.IsDead() {
+					continue
+				}
+				if preferIdle && c.inFlight.Load() > 0 {
+					continue
+				}
+				if last := c.lastUsed.Load(); last < oldest {
+					oldest = last
+					victim, victimKey, victimIdx = c, key, i
+				}
+			}
+		}
+		if victim == nil {
+			if preferIdle {
+				continue // second pass: in-flight sockets allowed
+			}
+			return nil, false
+		}
+		p.conns[victimKey] = append(p.conns[victimKey][:victimIdx], p.conns[victimKey][victimIdx+1:]...)
+		if len(p.conns[victimKey]) == 0 {
+			delete(p.conns, victimKey)
+		}
+		p.total--
+		return victim, true
+	}
 }
 
 // replaceDead removes and returns a dead socket from the pool.  Must be called
@@ -572,6 +661,7 @@ func (p *UDPPool) replaceDead(key string) *UDPConn {
 		if len(p.conns[key]) == 0 {
 			delete(p.conns, key)
 		}
+		p.total--
 		return c
 	}
 	return nil
@@ -591,6 +681,10 @@ func (p *UDPPool) ReapDead() {
 			if !c.IsDead() {
 				live = append(live, c)
 			}
+		}
+		removed := len(conns) - len(live)
+		if removed > 0 {
+			p.total -= removed
 		}
 		if len(live) == 0 {
 			delete(p.conns, key)
@@ -612,6 +706,7 @@ func (p *UDPPool) Remove(target *UDPConn) {
 		if len(p.conns[target.addr]) == 0 {
 			delete(p.conns, target.addr)
 		}
+		p.total--
 		p.mu.Unlock()
 		target.close()
 		return
@@ -628,6 +723,7 @@ func (p *UDPPool) Shutdown() {
 		all = append(all, conns...)
 	}
 	p.conns = make(map[string][]*UDPConn)
+	p.total = 0
 	p.mu.Unlock()
 
 	for _, c := range all {

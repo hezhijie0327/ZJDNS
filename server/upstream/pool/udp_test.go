@@ -181,7 +181,7 @@ func TestUDPConn_SocketReuse(t *testing.T) {
 // repeated acquires and dials at most once.
 func TestUDPPool_AcquireReuses(t *testing.T) {
 	_, addr := startFakeUDPServer(t, 0)
-	p := NewUDPPool(4, 16, testKeyExtractor)
+	p := NewUDPPool(4, 16, 0, testKeyExtractor)
 
 	var dials atomic.Int64
 	dialFunc := func(ctx context.Context, a string) (net.Conn, error) {
@@ -215,7 +215,7 @@ func TestUDPPool_AcquireReuses(t *testing.T) {
 func TestUDPPool_ReapDead(t *testing.T) {
 	_, addr1 := startFakeUDPServer(t, 0)
 	_, addr2 := startFakeUDPServer(t, 0)
-	p := NewUDPPool(4, 16, testKeyExtractor)
+	p := NewUDPPool(4, 16, 0, testKeyExtractor)
 
 	dialFunc := func(ctx context.Context, a string) (net.Conn, error) {
 		var d net.Dialer
@@ -256,7 +256,7 @@ func TestUDPPool_ReapDead(t *testing.T) {
 // within a mixed pool.
 func TestUDPPool_ReapDeadKeepsLive(t *testing.T) {
 	_, addr := startFakeUDPServer(t, 0)
-	p := NewUDPPool(4, 16, testKeyExtractor)
+	p := NewUDPPool(4, 16, 0, testKeyExtractor)
 
 	dialFunc := func(ctx context.Context, a string) (net.Conn, error) {
 		var d net.Dialer
@@ -291,5 +291,154 @@ func TestUDPPool_ReapDeadKeepsLive(t *testing.T) {
 		if c.IsDead() {
 			t.Error("dead socket survived ReapDead")
 		}
+	}
+}
+
+// TestUDPPool_GlobalCapEvictsLRU verifies the global live-socket cap (H1):
+// dialing a third key over maxTotal evicts the least-recently-used socket so
+// a flood of distinct authoritative addresses cannot grow the pool without
+// bound, and the new socket still serves queries.
+func TestUDPPool_GlobalCapEvictsLRU(t *testing.T) {
+	_, addr1 := startFakeUDPServer(t, 0)
+	_, addr2 := startFakeUDPServer(t, 0)
+	_, addr3 := startFakeUDPServer(t, 0)
+	p := NewUDPPool(4, 16, 2, testKeyExtractor) // maxTotal = 2
+
+	dialFunc := func(ctx context.Context, a string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "udp", a)
+	}
+
+	c1, err := p.Acquire(context.Background(), addr1, addr1, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 1: %v", err)
+	}
+	c2, err := p.Acquire(context.Background(), addr2, addr2, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 2: %v", err)
+	}
+	// Deterministic LRU order — dials all land in the same NowUnix() second.
+	c1.lastUsed.Store(100)
+	c2.lastUsed.Store(200)
+
+	c3, err := p.Acquire(context.Background(), addr3, addr3, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 3: %v", err)
+	}
+	if c3 == nil {
+		t.Fatal("acquire 3 returned nil socket")
+	}
+
+	if !c1.IsDead() {
+		t.Error("LRU socket (c1) must be evicted at the global cap")
+	}
+	if c2.IsDead() {
+		t.Error("c2 must survive — it is not the LRU")
+	}
+
+	// The evicted key is dropped from the pool entirely; total is back at cap.
+	p.mu.Lock()
+	total, keys := p.total, len(p.conns)
+	_, key1Present := p.conns[addr1]
+	p.mu.Unlock()
+	if total != 2 {
+		t.Errorf("total = %d, want 2", total)
+	}
+	if keys != 2 {
+		t.Errorf("keys = %d, want 2", keys)
+	}
+	if key1Present {
+		t.Error("evicted key's empty entry must be deleted")
+	}
+
+	// The new socket is fully usable.
+	if _, err := c3.Exchange(context.Background(), []byte("01query"), "01"); err != nil {
+		t.Fatalf("exchange on new socket: %v", err)
+	}
+}
+
+// TestUDPPool_GlobalCapPrefersIdle verifies eviction skips sockets with
+// queries in flight: an idle socket is evicted even when it is not the LRU.
+func TestUDPPool_GlobalCapPrefersIdle(t *testing.T) {
+	_, addr1 := startFakeUDPServer(t, 0)
+	_, addr2 := startFakeUDPServer(t, 0)
+	_, addr3 := startFakeUDPServer(t, 0)
+	p := NewUDPPool(4, 16, 2, testKeyExtractor)
+
+	dialFunc := func(ctx context.Context, a string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "udp", a)
+	}
+
+	c1, err := p.Acquire(context.Background(), addr1, addr1, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 1: %v", err)
+	}
+	c2, err := p.Acquire(context.Background(), addr2, addr2, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 2: %v", err)
+	}
+	// c1 is the LRU but has a query in flight — eviction must prefer c2.
+	c1.lastUsed.Store(100)
+	c2.lastUsed.Store(200)
+	c1.inFlight.Add(1)
+
+	if _, err := p.Acquire(context.Background(), addr3, addr3, dialFunc); err != nil {
+		t.Fatalf("acquire 3: %v", err)
+	}
+
+	if !c2.IsDead() {
+		t.Error("idle socket must be evicted before an in-flight one")
+	}
+	if c1.IsDead() {
+		t.Error("in-flight socket must survive eviction")
+	}
+	c1.inFlight.Add(-1)
+}
+
+// TestUDPPool_GlobalCapDeadFirst verifies eviction frees pinned dead sockets
+// (awaiting the periodic ReapDead sweep) before touching live ones.
+func TestUDPPool_GlobalCapDeadFirst(t *testing.T) {
+	_, addr1 := startFakeUDPServer(t, 0)
+	_, addr2 := startFakeUDPServer(t, 0)
+	_, addr3 := startFakeUDPServer(t, 0)
+	p := NewUDPPool(4, 16, 2, testKeyExtractor)
+
+	dialFunc := func(ctx context.Context, a string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "udp", a)
+	}
+
+	c1, err := p.Acquire(context.Background(), addr1, addr1, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 1: %v", err)
+	}
+	c2, err := p.Acquire(context.Background(), addr2, addr2, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 2: %v", err)
+	}
+	// Kill c1 the way readLoop does — close() only, the pool never hears.
+	c1.close()
+
+	c3, err := p.Acquire(context.Background(), addr3, addr3, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 3: %v", err)
+	}
+	if c3 == nil {
+		t.Fatal("acquire 3 returned nil socket")
+	}
+
+	if c2.IsDead() {
+		t.Error("live socket must survive when a dead one can be freed")
+	}
+	p.mu.Lock()
+	_, key1Present := p.conns[addr1]
+	total := p.total
+	p.mu.Unlock()
+	if key1Present {
+		t.Error("dead socket must be removed from the pool")
+	}
+	if total != 2 {
+		t.Errorf("total = %d, want 2", total)
 	}
 }

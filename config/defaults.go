@@ -177,8 +177,12 @@ const (
 // =============================================================================
 
 const (
-	DefaultMaxPipe              = 16    // max in-flight queries per TCP/DoT connection
-	DefaultMaxConns             = 4     // max connections per upstream
+	DefaultMaxPipe  = 16 // max in-flight queries per TCP/DoT connection
+	DefaultMaxConns = 4  // max connections per upstream
+	// DefaultMaxUDPTotalConns caps the total live pooled UDP sockets across
+	// ALL upstream keys — recursive resolution otherwise opens up to 4 sockets
+	// per distinct authoritative NS address with no global bound (H1).
+	DefaultMaxUDPTotalConns     = 128
 	DefaultMaxConcurrentNS      = 6     // max concurrent NS queries during resolution
 	DefaultMaxProbes            = 16    // max concurrent latency probes
 	DefaultMaxIncomingStreams   = 65535 // QUIC max incoming streams (RFC 9250: one stream per query — 256 exhausted a client's stream quota in seconds, then every query waited on MAX_STREAMS behind quic-go's 25ms ACK delay)

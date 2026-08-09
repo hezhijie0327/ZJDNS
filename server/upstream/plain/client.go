@@ -32,7 +32,7 @@ func New(udpClient, tcpClient *dns.Client, tcpPool *pool.ConnPool, getProxy func
 		udpClient: udpClient,
 		tcpClient: tcpClient,
 		tcpPool:   tcpPool,
-		udpPool: pool.NewUDPPool(config.DefaultMaxConns, config.DefaultMaxPipe, func(payload []byte) (string, bool) {
+		udpPool: pool.NewUDPPool(config.DefaultMaxConns, config.DefaultMaxPipe, config.DefaultMaxUDPTotalConns, func(payload []byte) (string, bool) {
 			// Plain DNS: the response echoes the query ID in the first two bytes.
 			if len(payload) < 2 {
 				return "", false
