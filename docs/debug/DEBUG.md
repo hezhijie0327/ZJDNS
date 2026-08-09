@@ -5,6 +5,7 @@
 ```
 docs/debug/
 ├── DEBUG.md                # this file
+├── pprof-dual.sh           # 双端压测 & pprof 采集脚本（见「双端压测」章节）
 ├── domains.txt             # 186 domains (sorted, deduped) for batch tests
 ├── loopback/               # ZJDNS ↔ ZJDNS protocol loopback tests
 │   ├── server.json         # server: all protocols + self-signed TLS + DNSCrypt + TLCP/DTLCP
@@ -16,13 +17,13 @@ docs/debug/
 │   ├── client-http3.json   # client: HTTP3 → server
 │   ├── client-quic.json    # client: QUIC → server
 │   ├── client-dtls.json    # client: DTLS → server
-│   ├── client-tlcp.json     # client: TLCP → server
-│   ├── client-http-tlcp.json  # client: HTTP over TLCP → server
+│   ├── client-tlcp.json    # client: TLCP → server
+│   ├── client-http-tlcp.json           # client: HTTP over TLCP → server
 │   ├── client-dtlcp.json   # client: DTLCP → server
-│   ├── client-dnscrypt.json              # client: DNSCrypt (PQ preferred) → server
-│   ├── client-dnscrypt-classic.json       # client: DNSCrypt (classical only) → server
-│   └── client-dnscrypt-ephemeral.json     # client: DNSCrypt + ephemeral_keys + PQ → server
-│   └── pprof-dual.sh                      # 双端压测 & pprof 采集脚本（见「双端压测」章节）
+│   ├── client-dnscrypt.json            # client: DNSCrypt (PQ preferred) → server
+│   ├── client-dnscrypt-classic.json    # client: DNSCrypt (classical only) → server
+│   ├── client-dnscrypt-ephemeral.json  # client: DNSCrypt + ephemeral_keys + PQ → server
+│   └── client-dnscrypt-ephemeral-classical.json  # client: DNSCrypt + ephemeral_keys (classical only) → server
 ├── routedns/               # ZJDNS ↔ RouteDNS tests
 │   └── dtls-client.toml    # RouteDNS DTLS client → ZJDNS DTLS server
 │                            #   Prerequisite: generate cert with the openssl
@@ -544,9 +545,9 @@ dig @127.0.0.1 -p 12053 www.baidu.com A +short
 | Server TC truncation | §5.4.6 | built-in | truncate + TC, never silent |
 | TCP 4096 response cap | §5.4.7 | built-in | enforced |
 | Cert TC + classical preserve | §5.5/§11.3 | built-in | PQ omitted → TC=true |
-| EWMA adaptive query sizing | §5.4.2 | built-in | decay minQueryLen on small responses |
-| Client TC doubling | §5.4.2 | built-in | O(log n) escalation |
-| Shared key cache | §8 | built-in | 2000-entry LRU |
+| EWMA adaptive query sizing | §5.4.2 | 未实现（死代码） | `ewmaQuerySize` 无读取/更新 |
+| Client TC doubling | §5.4.2 | built-in | O(log n) escalation, ≤4096, 7 次后 TCP |
+| Shared key cache | §8 | built-in | 2048-entry LRU |
 | PQ downgrade protection | §11.9 | `pqdnscrypt: true` | refuses classical fallback |
 | Ephemeral keys | dnscrypt-proxy | `ephemeral_keys: true` | per-query X25519 key pair |
 | Weak key rejection | §13.7 | built-in | all-zero X25519 point rejected |

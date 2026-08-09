@@ -132,7 +132,7 @@ go test -bench=. -short -benchtime=500ms ./...                 # stable numbers
 go test -bench=BenchmarkServerProcessQuery -benchtime=3s ./cmd/zjdns  # integration QPS
 ```
 
-**105 benchmarks** across 23 files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
+**106 benchmarks** across 25 test files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
 
 ```bash
 # Update baseline
@@ -221,7 +221,7 @@ zjdns/
 ├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, ...
 └── server/
     ├── handler/        ← query pipeline adapter + QueryContext
-    │   └── middleware/ ← 11 composable middleware + AssembleChain
+    │   └── middleware/ ← 9 composable middleware + AssembleChain
     ├── defense/        ← DNS anti-pollution (Detector, hopguard/poisonguard/spoofguard/splitguard)
     ├── protocol/       ← {plain,tls,tlcp,dnscrypt} server listeners
     ├── upstream/       ← {plain,tls,tlcp,dnscrypt} outbound client + pool + SOCKS5
@@ -263,8 +263,8 @@ Execution order (outermost → innermost):
 5. `ZoneMiddleware` — zone rule evaluation, synthetic response (runs before Any so rules win)
 6. `AnyMiddleware` — RFC 8482 minimal ANY response (HINFO "RFC8482")
 7. `CacheLookupMiddleware` — fresh→serve, stale→serve+refresh, miss→delegate
-9. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147)
-10. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive with singleflight dedup
+8. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147)
+9. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive with singleflight dedup
 
 All layers share a mutable `QueryContext`. Any layer may short-circuit by setting `qctx.Res`.
 
@@ -274,7 +274,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 - Upstream servers queried concurrently via `errgroup`; first NOERROR wins
 - NXDOMAIN stored as secondary fallback within each query group
 - No servers configured → built-in recursive (root→TLD→authoritative)
-- CNAME chain exceeded → SERVFAIL; FORMERR from auth → EDNS-free retry (RFC 6891 §6.2.2)
+- CNAME chain exceeded → return partial chain + warn (no SERVFAIL); FORMERR from auth → EDNS-free retry (RFC 6891 §6.2.2)
 
 ### Recursive Resolution
 - Root hints → TLD NS → authoritative NS walk with QNAME minimisation (RFC 9156 §2.3, max 10 iterations)
@@ -289,7 +289,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | **Hopguard** | UDP upstream | IP TTL fingerprint: auto-learn baseline, reject responses with TTL outside ±2 range |
 | **Spoofguard** | UDP upstream | Multi-read loop: reject `AR=0+NOERROR` without EDNS (bare A/AAAA, GFW signature); accept `AN>=2`/`NS>0`/`AD=1`; collect ambiguous (≤500ms) → pick richest |
 | **Poisonguard** | Recursive | Zone-authority cross-validation on resolved answers |
-| **Splitguard** | TCP upstream | Random [1,N] payload segmentation with jitter |
+| **Splitguard** | TCP upstream | Random [1,4] payload segmentation (no time jitter) |
 
 ## Key Types
 
@@ -323,7 +323,7 @@ All logs use `zjdns/internal/log` (package-level `Default` logger). Default leve
 
 **Component filtering:** `log_level` supports `"level:comp1,comp2"` syntax (e.g. `"debug:UPSTREAM,RECURSION"`).
 
-**canonical prefixes:** `TLS`, `CACHE`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `PLAIN`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PANIC`, `DNSCRYPT`, `TLCP`, `RULESET`, `DNS64`, `RESPONSE`, `ANY`, `IPDETECT`, `UDPPOOL`, `DOH`.
+**canonical prefixes:** `TLS`, `CACHE`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `PLAIN`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PANIC`, `DNSCRYPT`, `TLCP`, `RULESET`, `DNS64`, `RESPONSE`, `ANY`, `IPDETECT`, `UDPPOOL`, `DOH`, `RESOLVER` (27 total).
 
 Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECURITY:`. `DOT:`/`DOQ:`/`DOH:`/`DTLS:` → `TLS:`. `DTLCP:` → `TLCP:`. `UDP:`/`TCP:` → `PLAIN:`. Hot-path logs are `Debug` only.
 
@@ -343,5 +343,5 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECUR
 | [docs/benchmark/benchmark-baseline.txt](docs/benchmark/benchmark-baseline.txt) | `go test -bench` 基线（`-benchmem`，CLAUDE.md 命令刷新） |
 | [docs/benchmark/loadtest-baseline.txt](docs/benchmark/loadtest-baseline.txt) | benchclient 全协议 QPS/延迟基线数据（12 协议，每轮更新） |
 | [docs/poc/README.md](docs/poc/README.md) | 防御机制概念验证程序（hopguard/spoofguard/splitguard/poisonguard） |
-| [docs/rfc/](docs/rfc/) | Mirrored RFCs and drafts (116 total) |
+| [docs/rfc/](docs/rfc/) | Mirrored RFCs and drafts (117 txt files) |
 | [docs/rfc/GUIDELINE.md](docs/rfc/GUIDELINE.md) | RFC 精华指南 — 每个 RFC 的关键常量、协议流程、合规状态 |

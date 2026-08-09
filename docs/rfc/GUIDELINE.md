@@ -816,7 +816,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ### 我们的实现
 
-- ✓ 上游查询携带 DAU={8,10,13,14,15,16}、DHU={1,2,4}、N3U={1}（`edns/edns.go:ApplyToMessage`，仅请求方向）
+- ✓ 上游查询携带 DAU={8,10,13,14,15}（ED448 刻意排除——验证器无 ED448 支持）、DHU={1,2,4}、N3U={1}（`edns/edns.go:ApplyToMessage`，仅请求方向）
 
 ---
 
@@ -904,7 +904,7 @@ Client ← [2字节长度][DNS响应] ← Server  (按序)
 
 ### 我们的实现
 
-- `edns/edns.go:ApplyToMessage()` 支持 tcpKeepaliveTimeout 参数 ✓
+- ⚠️ `edns/edns.go:ApplyToMessage()` 支持 tcpKeepaliveTimeout 参数，但 `qctx.TCPKeepalive` 从未被赋值——实际从不发出该选项
 
 ---
 
@@ -957,8 +957,8 @@ Client ⇄ [2字节长度][DNS消息] ⇄ Server  (TLS 加密通道内)
 - `edns/ecs.go`: `DefaultECSv4Len=24`, `DefaultECSv6Len=56`, `DefaultECSScope=0`
 - ECS 选项格式: FAMILY(2) + SOURCE PREFIX-LENGTH(1) + SCOPE PREFIX-LENGTH(1) + ADDRESS(变长)
 - 缓存按 ECS 地址最长前缀匹配分桶；Additional/Authority Section 记录不绑定网络
-- Birthday Attack 缓解：响应 ECS 必须回显查询的 FAMILY/ADDRESS/SOURCE PREFIX（不匹配 → 丢弃）
-- 收到 REFUSED 时 MUST 去除 ECS 重试
+- Birthday Attack 缓解：响应 ECS 必须回显查询的 FAMILY/ADDRESS/SOURCE PREFIX（`VerifyECSResponse`，不匹配 → SERVFAIL，防投毒）
+- ⚠️ REFUSED 时去除 ECS 重试：**未实现**（RFC 7871 建议项，暂无部署需求）
 
 ---
 
@@ -1698,8 +1698,8 @@ BinaryStamp = [protocol:1][props:8][addr_len:1][addr:N][hashes...][path...]
 - 默认端口: **8443**（§5.2 SHOULD 443 — 与 dnscrypt-proxy 社区一致）
 - Client Magic: 8 字节；Classical=X25519 PK 前 8B, PQ=SHA-256(X-Wing PK)[:8]
 - UDP 查询最小: **512** 字节（§5.4.1 MAY，与 dnscrypt-proxy 对齐）
-- 证书轮换: **24h**（§8 MUST ≤24h）
-- 证书有效期: 48h（当前+前一个重叠）
+- 证书轮换: **8h** ticker（§8 MUST ≤24h —— 8h < 24h 有效期形成重叠窗口）
+- 证书有效期: 24h（8h 轮换 → 最多 3 份证书同时有效）
 - 查询上限: **4096** 字节（§5.2 MUST）
 - TCP 响应上限: **4096** 字节（§5.4.7 MUST）
 
@@ -1750,18 +1750,18 @@ BinaryStamp = [protocol:1][props:8][addr_len:1][addr:N][hashes...][path...]
 
 - `DefaultDNSCryptPort = "8443"` ✓
 - XWingPQ + XChacha20Poly1305 两种构造 ✓
-- 24h 证书轮换 ✓
+- 8h 轮换 / 24h 证书有效期 ✓
 - PQ Ticket 会话恢复 ✓
 - §5.4.5 确定性响应填充 ✓
 - §5.4.6 TC 截断（不静默丢弃）✓
 - §5.4.7 TCP 4096 字节限制 ✓
 - 证书 TC + Classical 保留 ✓
-- EWMA 自适应 sizing ✓
+- EWMA 自适应 sizing ✗（`ewmaQuerySize` 为死代码，未实现；minQueryLen 仅 TC 翻倍升级）
 - 临时密钥 ✓
 - PQ 降级保护 ✓
-- §8 共享密钥缓存 ✓
+- §8 共享密钥缓存（2048-entry LRU）✓
 - 弱密钥检查 ✓
-- 19/19 参考实现对齐 ✓
+- 18/19 参考实现对齐（EWMA 未实现）
 
 ---
 

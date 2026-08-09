@@ -7,11 +7,15 @@ Detailed technical reference for ZJDNS. For working guidelines, see [CLAUDE.md](
 ZJDNS is fully in-memory — there is no database.  The cache, stats, zone
 rules, ruleset, latency and delegation data all live in memory (lrumap for
 LRU maps for cache/latency/delegations, atomic.Pointer snapshots for
-zone/ruleset rules, atomic counters for stats).  The only persistence is the
-DNSCrypt state file (`dnscryptstate`), a ~300-byte blob holding the provider
-identity + cert windows so restarts resume the same certificates. Like the
-other stores, `certificate.dnscrypt.state_file` is empty by default —
-persistence disabled, no file created, windows re-minted per restart.
+zone/ruleset rules, atomic counters for stats).  Persistence is opt-in via
+`state_file`: cache, latency and delegation stores each persist when their
+`state_file` is configured (5-minute periodic save + save on shutdown,
+`internal/snapfile` temp+rename atomic writes).  The DNSCrypt state file
+(`dnscryptstate`) is a separate ~300-byte blob holding the provider identity
++ cert windows so restarts resume the same certificates. Like the other
+stores, all `state_file` keys are empty by default — persistence disabled,
+no file created, cold start per restart.  Stats are never persisted (reset
+on restart).
 
 ### In-memory data
 
@@ -35,14 +39,14 @@ so cache hits serve the exact rcode.
 - **Cache hit path**: pre-packed wire (format 0x02: TTL-offset table + packed
   response). `Get()` serves the wire directly — the Response middleware
   patches the message ID/RD bits and bridge.go writes it without any
-  Unpack/Pack round-trip (~20ns at the middleware layer, 0 allocs). TTL
+  Unpack/Pack round-trip (~14.4ns at the middleware layer, 0 allocs). TTL
   deduction happens in-place via the offset table; DNSSEC filtering for
   DO=0 clients uses a wire scan (WireHasDNSSEC). Entries below the
   compression threshold are stored uncompressed (no decompress either).
 - **RecordRequest**: All results → in-memory atomic counters (`cache/statsjournal.go`); non-hit events also enter a per-RCODE top-N domain journal (`topk.Map`, bounded). No SQL, no disk — pure memory, reset on restart.
 - **Stats aggregation**: `Stats()` reads the in-memory snapshot — O(1) counters + per-RCODE top-N sort. Output keeps the previous TXT layout plus `top-rcode<N>` lines.
 - **Pruning**: `PruneQueryJournal` is a no-op — the journal is bounded in memory, nothing to prune.
-- **Eviction**: On `Set()` when count > maxEntries. Prefers past serve-stale, then oldest. Latency and delegation entries expire lazily on read (past the stale window / TTL).
+- **Eviction**: Pure LRU — on `Set()` when count > maxEntries the least-recently-used entry is evicted (`lrumap`). Latency and delegation entries expire lazily on read (past the stale window / TTL); periodic cleanup runs only when their `state_file` is configured (5-min state-maintenance ticker).
 - **NS latency cache**: NS/Root addresses as TypeA/TypeAAAA entries. Latency probed via `ProbeNSAddrs`, reordered by `sortAnswerByLatency` at `Get()` time.
 - **Delegation cache**: Zone-cut delegations (zone to NS names + verified DS) in memory (LRU-bounded, lazy TTL expiry + periodic cleanup). Populated at every delegation crossing during recursive walks; only secure (verified DS) or insecure (authenticated no-DS) delegations are stored. On subsequent queries, a suffix-walk from the deepest ancestor finds the first fresh delegation and starts the walk from that zone instead of the root, skipping already-walked delegation levels. DNSKEYs are fetched fresh by `ensureZoneDNSKEYs` (verified against the cached DS); NS addresses are resolved from the existing TypeA/TypeAAAA cache with the stored address snapshot as a fallback.
 - **IP latency**: Per-IP keyed, in memory (LRU-bounded `lrumap.Map[string, latEntry]`). Background probes write latency + probe time; cache hits read it to reorder A/AAAA answers fastest-first. All domains sharing a CDN IP reuse the same entry. Entries expire lazily past the stale window.
@@ -57,9 +61,9 @@ DNS pollution attacks. Each is enabled via `UpstreamServer` flags.
 | Mechanism | Layer | Algorithm |
 |-----------|-------|-----------|
 | **Hopguard** | UDP upstream | IP TTL fingerprint: auto-learn baseline, reject responses with TTL outside ±2 range |
-| **Spoofguard** | UDP upstream | Multi-read loop: reject `AR=0+NOERROR` without EDNS (bare A/AAAA, GFW signature); accept `AN>=2`/`NS>0`/`AD=1`; collect ambiguous (≤500ms) → pick richest |
+| **Spoofguard** | UDP upstream | Multi-read loop (≤500ms): fast-accept `AN>=2`/`NS>0`/`AD=1`; EDNS responses are candidates (richness tie-break); bare single-answer A/AAAA → collect, re-query-confirm (≤3 rounds) |
 | **Poisonguard** | Recursive | Zone-authority cross-validation on resolved answers |
-| **Splitguard** | TCP upstream | Random [1,N] payload segmentation with jitter |
+| **Splitguard** | TCP upstream | Random [1,4]-byte payload segmentation (no time jitter) |
 
 **Implementation locations:**
 - `server/defense/hopguard.go` — HopGuard TTL learning + validation
@@ -90,17 +94,27 @@ hopguard still protect the authoritative query.
 
 ### Spoofguard
 
-Implements a multi-read UDP loop. After sending a query, it reads up to N
-responses within a configurable collect window. Candidates are classified:
-- Immediate-reject: `AR=0+NOERROR+EDNS` (GFW signature)
-- Immediate-accept: `AN≥2` or `NS>0` or `AD=1`
-- Ambiguous: collect all, pick richest (most answer records + authority)
+Implements a multi-read UDP loop. After sending a query, it reads responses
+within a 500ms collect window (100ms poll). Candidates are classified:
+- Fast-accept (checked on the bare header, before the EDNS gate): `AN≥2` or
+  `NS>0` or `AD=1`
+- EDNS response: a legitimate candidate (never rejected) — fast-accepted
+  when HopGuard is TTL-confident, otherwise collected
+- Non-EDNS bare single-answer A/AAAA: ambiguous — a lone response is served
+  directly; ≥2 responses (injection signal) trigger a re-query confirmation
+  (`DefaultSpoofguardConfirmRounds = 3`), a matching repeat confirms the
+  deterministic real answer
+- Selection: EDNS candidates preferred, most answer records wins, random
+  tie-break (answer count only — authority is not compared)
 
 ### Splitguard
 
-For TCP upstream queries, segments the DNS message into random [1,4] byte
-chunks with inter-segment jitter. Prevents GFW from fingerprinting DNS-over-TCP
-traffic by breaking the predictable 2-byte length prefix pattern.
+For TCP upstream queries, segments the DNS message into random [1,4]-byte
+chunks (each segment independently sized, first segment carries the 2-byte
+length prefix) with `TCP_NODELAY` so segments are sent immediately. Prevents
+GFW from fingerprinting DNS-over-TCP traffic by breaking the predictable
+2-byte length prefix pattern. There is no time-based jitter — segment-size
+randomness alone defeats DPI pattern matching.
 
 
 ## DNSCrypt v2
@@ -112,7 +126,7 @@ Full implementation with PQC support. Two crypto constructions: XWingPQ (default
 - UDP+TCP listeners on independent port (default 8443)
 - Ed25519 identity key required in config (`certificate.dnscrypt.public_key`/`private_key`, like TLS); resolver encryption keys (X25519/X-Wing) always auto-generated
 - `keys []keyEntry` holds current + previous certs for rotation overlap
-- `rotateKeys()` generates fresh resolver keys every 24h, signed with fixed Ed25519 identity; ticket keys rotate alongside (RFC §11.7)
+- `updateKeys()` mints fresh resolver keys every 8h (cert TTL is 24h — the 8h interval creates the current+previous overlap window), signed with fixed Ed25519 identity; ticket keys are derived once from the signing key and **never rotate** (rotating would invalidate client-cached tickets)
 - `decrypt()` tries keys newest-first; `decryptPQResumed()` validates tickets against all active certs
 - Persistence: identity + cert windows stored in the `dnscrypt_state` state file (`server/protocol/dnscrypt/persist_file.go`) — a restart resumes the exact same windows (client-cached certs stay valid); config key change drops the persisted state and mints fresh windows
 - CHAOS `zjdns.dnscrypt.clear` (loopback-only) regenerates all windows immediately (ResetKeys)
@@ -138,7 +152,7 @@ Full implementation with PQC support. Two crypto constructions: XWingPQ (default
 
 - **Classical (124B)**: `CertMagic(4) + ESVersion(2) + Minor(2) + Sig(64) + ResolverPk(32) + ClientMagic(8) + Serial(4) + TS-start(4) + TS-end(4)`
 - **PQ (1320B)**: Same header + `PqPublicKey(1216) + ClientMagic(8) + Serial(4) + TS-start(4) + TS-end(4) + Extensions(12)`
-- ClientMagic for PQ = bytes 72–79 of the X-Wing public key (official encrypted-dns-server derivation, `generate.go NewPQCert`)
+- ClientMagic for PQ = first 8 bytes of SHA-256(pq_public_key) (flipped first byte when it would collide with QUIC first-byte ranges or PQResumeMagic)
 - PqCertContext = HKDF("DNSCrypt-PQ-v1" + es-version + minor + pq-public-key + client-magic + serial + ts-start + ts-end + extensions)
 
 ### Ticket Resumption
@@ -176,7 +190,7 @@ Reuses SM2 certificate pair from TLCP. Wire format = DTLS (RFC 8094): 2-byte big
 
 ## EDNS Extensions & RFC Support
 
-The middleware chain (see CLAUDE.md for the full 11-layer pipeline) hosts the
+The middleware chain (see CLAUDE.md for the full 9-layer pipeline) hosts the
 recent RFC features:
 
 - **RFC 9824 Compact Denial**: upstream queries set the CO bit

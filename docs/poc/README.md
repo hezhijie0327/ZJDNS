@@ -165,8 +165,11 @@ at these levels is unambiguous.
      **UNCERTAIN** (the blind spot — covered by Spoofguard's re-query confirmation)
 2. **RRSIG exemption:** an answer carrying a matching RRSIG is DNSSEC-signed and
    cannot be forged → CLEAN.
-3. **TLD probe (`IsPoisonedByTLD`):** the full qname is sent to a TLD server; an
-   A/AAAA answer for it → **POISONED → force the whole walk over TCP**.
+3. **TLD probe (`IsPoisonedByTLD`):** the full qname (RD=0, UDP) is sent to a
+   TLD server; an A/AAAA answer for it → **POISONED → force the current
+   authoritative-layer query over TCP** (the whole walk restarts over TCP
+   only when a hop validation returns VerdictPoisoned; a poisoning seen at
+   any hop also forces subsequent CNAME targets over TCP).
 
 ### Demo Output (scenarios 1–7)
 ```

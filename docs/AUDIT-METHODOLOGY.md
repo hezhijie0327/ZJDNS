@@ -18,7 +18,7 @@
 
 ### 1.1 审计维度
 
-每个文件、每个包在以下 18 个维度接受审查：
+每个文件、每个包在以下 20 个维度接受审查：
 
 | 维度 | 关注点 |
 |------|--------|
@@ -57,7 +57,7 @@ Phase 1: 包级审计（7 agent 并行）
 ├── Handler audit:    server/handler/*
 └── Defense audit:    server/defense/*
 
-Phase 2: 交叉分析（18 agent 并行）
+Phase 2: 交叉分析（19 agent 并行）
 ├── CrossCut Locks:      全部 sync.Mutex / RWMutex / Once / atomic / channel / WaitGroup / Pool
 ├── CrossCut Memory:     goroutine 泄漏、无界增长、资源泄漏、池误用
 ├── CrossCut Panic:      nil 解引用、切片越界、空 map 写入、裸类型断言、死锁、除零
@@ -298,6 +298,8 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 | **Goroutine 无 owner** | goroutine 被 `go func()` 启动后无任何机制等待其退出；父函数返回后子 goroutine 成为孤儿 | `grep -rn 'go func' --include='*.go'` 排除 `_test.go`，审计每个 goroutine 是否被 errgroup/WaitGroup/channel 追踪 |
 | **Go 特性滞后** | 代码停留在旧版 Go 风格 — 手写模式已有标准库替代（如 `errors.As` 循环 → `errors.AsType[T]`、手写反向切片 → `slices.Reverse`/`slices.Backward`、`fmt.Errorf("x")` 可受益于新版分配优化） | `go fix ./...` 检查是否有未应用的现代器；`grep -rn 'errors\.As(' --include='*.go'` 检查可否替换为 `errors.AsType[T]`；`grep -rn 'for i := len' --include='*.go'` 检查手写反向迭代 |
 
+## 五、审计与修复工具
+
 ### 5.1 审计工具
 
 | 工具 | 用途 |
@@ -358,7 +360,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 5. **info/warn 刷屏**：热路径上的 `log.Infof` / `log.Warnf` 在高 QPS 下产生海量日志，淹没真正重要的信号。所有每查询日志必须是 Debug 级别
 6. **日志缺少上下文**：`log.Warnf("resolve failed: %v", err)` 不包含 qname/qtype/server，无法定位问题
 7. **错误级别膨胀**：可恢复的错误（超时、单次查询失败）用 Warn，不可恢复的（配置错误、快照损坏）用 Error。不要把每个 upstream 超时都打成 Error
-8. **格式不一致**：同一组件内混用 `log.Infof("TLS: ...")` 和 `log.Infof("[TLS] ...")` 和 `log.Infof("tls: ...")` — 应统一使用 29 个规范前缀
+8. **格式不一致**：同一组件内混用 `log.Infof("TLS: ...")` 和 `log.Infof("[TLS] ...")` 和 `log.Infof("tls: ...")` — 应统一使用 27 个规范前缀（清单见 CLAUDE.md「Logging」）
 9. **架构文档过时**：`ARCHITECTURE.md` 描述已删除的中间件/类型/表；类型引用表未随代码更新。每次重构后 grep 文档确认引用的符号仍存在
 10. **注释与代码矛盾**：注释说"Phase 3 会改回来"但 Phase 3 永远不会来；注释描述的行为与实际代码不一致。每个注释在所在函数修改后必须重新验证
 11. **公开 API 无 godoc**：导出的类型/函数/方法缺少文档注释，或 godoc 只重复函数名没有说明用途和参数含义
@@ -402,7 +404,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 - 每次审计包含 CrossCut Goroutine 阶段：`grep -rn 'go func' --include='*.go'` 排除 `_test.go`，审计每个 goroutine 是否有 owner（errgroup/WaitGroup/channel）、是否有 `defer HandlePanic`
 - 每次审计包含 CrossCut Resource 阶段：`grep -rn 'func.*Close()' --include='*.go'` 检查每个 `Close()` 是否有 `sync.Once` 或 atomic 守卫，确保幂等
 - 每次审计包含 CrossCut GoVersion 阶段：`go fix ./...` 应用所有现代器；`grep -rn 'for i := len.*-1\|for i := .*-1;.*>=' --include='*.go'` 找手写反向迭代 → `slices.Backward`；`grep -rn 'errors\.As(' --include='*.go'` 评估 → `errors.AsType[T]`
-- 每次审计包含 CrossCut Flowcharts 阶段：检查 `docs/FLOWCHARTS.md` 中的 mermaid 流程图是否覆盖了所有核心功能和协议 —— 整体架构、中间件管道、缓存查询、递归解析、DNSSEC 验证链、EDNS 处理、四层防御（含每种详解）、TC→TCP 回退、连接池与协议协商、SOCKS5 代理、Zone 规则、Singleflight 去重、DNS64 合成、DNSCrypt 密钥管理、异步统计写入、规则集引擎、延迟探测、服务生命周期。新增特性/协议/中间件时必须同步更新流程图。
+- 每次审计包含 CrossCut Flowcharts 阶段：检查 `docs/FLOWCHARTS.md` 中的 mermaid 流程图是否覆盖了所有核心功能和协议 —— 整体架构、服务生命周期、快照持久化、中间件管道、缓存查询、递归解析、DNSSEC 验证链、EDNS 处理、四层防御（含每种详解）、TC→TCP 回退、Zone 规则、Singleflight 去重、DNS64 合成、规则集引擎、延迟探测、连接池与协议协商、SOCKS5 代理、协议对照、DNSCrypt 密钥管理、DNSCrypt 加密流程、同步统计记录、UDP 响应截断（RFC 9715）。新增特性/协议/中间件时必须同步更新流程图。
 
 ---
 

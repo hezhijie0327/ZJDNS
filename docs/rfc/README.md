@@ -38,12 +38,14 @@ The DNSCrypt and DNS Stamps drafts were downloaded from the IETF archive.
 | rfc3110.txt | RSA/SHA-1 SIGs and RSA KEYs in the Domain Name System (DNS) |
 | rfc3123.txt | A DNS RR Type for Lists of Address Prefixes (APL RR) |
 | rfc3225.txt | Indicating Resolver Support of DNSSEC |
+| rfc3339.txt | Date and Time on the Internet: Timestamps |
 | rfc3401.txt | Dynamic Delegation Discovery System (DDDS) Part One: The Comprehensive DDDS |
 | rfc3402.txt | Dynamic Delegation Discovery System (DDDS) Part Two: The Algorithm |
 | rfc3403.txt | Dynamic Delegation Discovery System (DDDS) Part Three: The DNS Database |
 | rfc3445.txt | Limiting the Scope of the KEY Resource Record (RR) |
 | rfc3596.txt | DNS Extensions to Support IP Version 6 |
 | rfc3597.txt | Handling of Unknown DNS Resource Record (RR) Types |
+| rfc3986.txt | Uniform Resource Identifier (URI): Generic Syntax |
 | rfc4025.txt | A Method for Storing IPsec Keying Material in DNS |
 | rfc4033.txt | DNS Security Introduction and Requirements |
 | rfc4034.txt | Resource Records for the DNS Security Extensions |
@@ -61,6 +63,7 @@ The DNSCrypt and DNS Stamps drafts were downloaded from the IETF archive.
 | rfc5077.txt | Transport Layer Security (TLS) Session Resumption without Server-Side State |
 | rfc5155.txt | DNS Security (DNSSEC) Hashed Authenticated Denial of Existence |
 | rfc5205.txt | Host Identity Protocol (HIP) Domain Name System (DNS) Extension |
+| rfc5452.txt | Measures for Making DNS More Resilient against Forged Answers |
 | rfc5702.txt | Use of SHA-2 Algorithms with RSA in DNSKEY and RRSIG Resource Records for DNSSEC |
 | rfc5936.txt | DNS Zone Transfer Protocol (AXFR) |
 | rfc5966.txt | DNS Transport over TCP - Implementation Requirements |
@@ -73,6 +76,7 @@ The DNSCrypt and DNS Stamps drafts were downloaded from the IETF archive.
 | rfc6725.txt | DNS Security (DNSSEC) DNSKEY Algorithm IANA Registry Updates |
 | rfc6742.txt | DNS Resource Records for the Identifier-Locator Network Protocol (ILNP) |
 | rfc6761.txt | Special-Use Domain Names |
+| rfc6763.txt | DNS-Based Service Discovery |
 | rfc6840.txt | Clarifications and Implementation Notes for DNS Security (DNSSEC) |
 | rfc6844.txt | DNS Certification Authority Authorization (CAA) Resource Record |
 | rfc6891.txt | Extension Mechanisms for DNS (EDNS(0)) |
@@ -112,17 +116,20 @@ The DNSCrypt and DNS Stamps drafts were downloaded from the IETF archive.
 | rfc9077.txt | NSEC and NSEC3: TTLs and Aggressive Use |
 | rfc9103.txt | DNS Zone Transfer over TLS |
 | rfc9114.txt | HTTP/3 |
+| rfc9147.txt | The Datagram Transport Layer Security (DTLS) Protocol Version 1.3 |
 | rfc9156.txt | DNS Query Name Minimisation to Improve Privacy |
 | rfc9250.txt | DNS over Dedicated QUIC Connections |
 | rfc9460.txt | Service Binding and Parameter Specification via the DNS (SVCB and HTTPS Resource Records) |
 | rfc9461.txt | Service Binding Mapping for DNS Servers (SVCB for DoH/DoT discovery) |
 | rfc9462.txt | Discovery of Designated Resolvers (DDR) |
+| rfc9443.txt | Multiplexing Scheme Updates for QUIC |
 | rfc9567.txt | DNS Error Reporting |
 | rfc9606.txt | DNS Resolver Information (RESINFO RR) |
 | rfc9660.txt | DNS Zone Version (ZONEVERSION EDNS Option) |
 | rfc9715.txt | IP Fragmentation Avoidance in DNS over UDP |
 | rfc9824.txt | Compact Denial of Existence in DNSSEC |
 | rfc9859.txt | DNS Synchronization (DSYNC RR) |
+| rfc10029.txt | Multiple QTYPEs in a Single DNS Query (MQTYPE-Query/Response) |
 
 ## Update
 
@@ -138,4 +145,3 @@ curl -sL -o draft-denis-dprive-dnscrypt.txt \
 curl -sL -o draft-denis-dns-stamps.txt \
   "https://www.ietf.org/archive/id/draft-denis-dns-stamps-02.txt"
 ```
-| rfc10029.txt | Multiple QTYPEs in a Single DNS Query (MQTYPE-Query/Response) |
