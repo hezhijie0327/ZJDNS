@@ -31,7 +31,8 @@
       },
       "dnscrypt": {
         "private_key": "34E2546B6F4C1FCE695E0C62DD3D74D39CEA52C70A283E7615EF4B67F82178D51A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074",
-        "public_key": "1A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074"
+        "public_key": "1A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074",
+        "state_file": "./zjdns.dnscrypt"
       }
     },
     "features": {
@@ -41,22 +42,27 @@
       "dnssec_enforce": true,
       "ddr": {
         "ipv4": "127.0.0.1",
-        "ipv6": "::1",
-        "infourl": "https://example.com/dns-help"
+        "ipv6": "::1"
       },
       "ecs_subnet": {
         "ipv4": "auto",
         "ipv6": "auto",
         "prefer_ipv4": true
       },
-      "database": {
-        "db_path": "cache.db",
-        "mmap_size_mb": 16,
-        "cache_size_mb": 8
-      },
       "cache": {
-        "max_entries": 10000,
-        "prefer_stale": true
+        "entries": {
+          "limit": 10000,
+          "prefer_stale": true,
+          "state_file": "./zjdns.cache"
+        },
+        "latency": {
+          "limit": 5000,
+          "state_file": "./zjdns.latency"
+        },
+        "delegation": {
+          "limit": 10000,
+          "state_file": "./zjdns.delegation"
+        }
       },
       "latency_probe": [
         {

@@ -62,7 +62,6 @@ type Dependencies struct {
 //	Zone          — zone rule evaluation (short-circuit on match)
 //	Any           — RFC 8482 minimal ANY response (HINFO)
 //	CacheLookup   — cache lookup (short-circuit on hit)
-//	PTR           — reverse PTR from cache (cache-miss only)
 //	DNS64         — AAAA synthesis
 //	Resolution    — terminal: upstream / recursive resolution
 func AssembleChain(deps *Dependencies) handler.QueryHandler {
@@ -96,9 +95,6 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 		}).Wrap(h)
 	}
 
-	// PTR reverse lookup only fires on cache miss.
-	h = (&PTR{store: deps.Cache}).Wrap(h)
-
 	// Cache lookup: short-circuits on fresh/stale hit.
 	h = (&CacheLookup{
 		store:            deps.Cache,
@@ -107,7 +103,7 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 		pendingRefreshes: deps.PendingRefrs,
 		refreshGroup:     deps.RefreshGroup,
 		refreshCtx:       deps.RefreshCtx,
-		preferStale:      deps.Config.Server.Features.Cache.PreferStale,
+		preferStale:      deps.Config.Server.Features.Cache.Entries.PreferStale,
 		resolver:         deps.Resolver,
 	}).Wrap(h)
 

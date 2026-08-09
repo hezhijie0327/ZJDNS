@@ -1,18 +1,13 @@
 package cache
 
 import (
-	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
-	"zjdns/config"
-	"zjdns/database"
 	"zjdns/internal/log"
-	"zjdns/internal/ttl"
-
-	"codeberg.org/miekg/dns"
+	"zjdns/internal/lrumap"
+	"zjdns/internal/topk"
 )
 
 // statsMetric is a single (name, count, percentage) entry for the stats TXT
@@ -23,179 +18,59 @@ type statsMetric struct {
 	pct   float64
 }
 
-// RecordRequest upserts the request into query_stats (per-day aggregated
-// counters) and, for non-hit results, inserts a row into query_log for the
-// audit trail.  Hits are only in query_stats.
-//
-// When the async writer's channel is full the record is silently dropped —
-// stats are best-effort and must never block the query hot path.
-//
-// When the async writer is nil (e.g. in tests), RecordRequest falls back to
-// synchronous writes so callers can observe results immediately.
-// RecordRequest logs a request outcome asynchronously. The caller must pass
-// a canonical qname (dnsutil.Canonical) in r.Qname.
-func (s *SQLiteCache) RecordRequest(r *RequestRecord) {
-	if r == nil {
+// RecordRequest updates the in-memory query statistics (atomic counters) and,
+// for non-hit results, the per-RCODE top-N domain journal. Pure memory — no
+// SQL, no allocation beyond the journal map — so it never blocks or fails the
+// query hot path. Stats are not persisted: counters reset on restart. The
+// caller must pass a canonical qname (dnsutil.Canonical) in r.Qname.
+func (s *Cache) RecordRequest(r *RequestRecord) {
+	if r == nil || s.statsMgr == nil {
 		return
 	}
-	if s.statsWriter != nil {
-		s.statsWriter.Enqueue(*r)
-		return
-	}
-
-	// Synchronous fallback when no async writer is configured.
-	if s.db.IsClosed() {
-		return
-	}
-	ctx, cancel := s.db.WriteContext()
-	defer cancel()
-	_, _ = s.db.StmtQueryStats.ExecContext(ctx, r.Result, r.Protocol, r.Rcode, r.DNSSECStatus,
-		database.BoolToInt(r.Poisoned), r.ResponseTime)
-	if r.Result != "hit" {
-		_, _ = s.db.StmtQueryLog.ExecContext(ctx,
-			log.NowUnix(), r.Qname, int(r.Qtype), int(r.Qclass),
-			r.Protocol, r.Result, r.Rcode, r.ResponseTime, r.Server,
-			database.BoolToInt(r.Poisoned), r.DNSSECStatus,
-		)
-	}
+	s.statsMgr.Record(&Record{
+		Qname:        r.Qname,
+		Result:       r.Result,
+		Protocol:     r.Protocol,
+		Rcode:        r.Rcode,
+		ResponseTime: r.ResponseTime,
+		DNSSECStatus: r.DNSSECStatus,
+		Poisoned:     r.Poisoned,
+	})
 }
 
-// ReverseLookup returns all cached domain names mapped to the given IP address.
-func (s *SQLiteCache) ReverseLookup(ip string) []LookupResult {
-	if ip == "" {
-		return nil
-	}
-
-	// Precompute the serve-stale cutoff so the comparison e.expires_at >= ?
-	// avoids a per-row arithmetic expression and can use idx_entries_expires.
-	staleCutoff := log.NowUnix() - defaultStaleMaxAge
-	// Use a correlated subquery to pick the row with the latest expiry for each
-	// name, avoiding the non-deterministic GROUP BY on unaggregated columns.
-	ctx, cancel := s.db.ReadContext()
-	defer cancel()
-	rows, err := s.db.SQ.QueryContext(ctx,
-		`SELECT pm.name, pm.ttl, e.timestamp, pm.entry_id
-		 FROM ptr_map pm
-		 JOIN entries e ON pm.entry_id = e.id
-		 WHERE pm.rdata_ip = ? AND e.expires_at >= ?
-		 AND (e.timestamp + pm.ttl) = (
-		     SELECT MAX(e2.timestamp + pm2.ttl)
-		     FROM ptr_map pm2
-		     JOIN entries e2 ON pm2.entry_id = e2.id
-		     WHERE pm2.name = pm.name AND pm2.rdata_ip = ?
-		 )
-		 ORDER BY pm.name`,
-		ip, staleCutoff, ip,
-	)
-	if err != nil {
-		log.Warnf("CACHE: PTR lookup failed for %s: %v", ip, err)
-		return nil
-	}
-	defer func() { _ = rows.Close() }()
-
-	var results []LookupResult
-	for rows.Next() {
-		var name string
-		var rawTTL int
-		var ts int64
-		var entryID int64
-		if err := rows.Scan(&name, &rawTTL, &ts, &entryID); err != nil {
-			continue
-		}
-		results = append(results, LookupResult{
-			Name: name,
-			TTL:  ttl.RemainingTTL(ts, rawTTL, uint32(config.DefaultStaleTTL)),
-		})
-	}
-	if err := rows.Err(); err != nil {
-		log.Warnf("CACHE: PTR rows iteration failed for %s: %v", ip, err)
-		return nil
-	}
-	return results
-}
-
-// FlushDB truncates a single table: "stats" (query_stats), "querylog" (query_log),
-// "cache" (entries), "latency" (ip_latency), "delegation" (delegations),
-// "zone" (zone_entries), or "ruleset" (ruleset_entries).
-func (s *SQLiteCache) FlushDB(target string) (int64, error) {
-	if s.db.IsClosed() {
-		return 0, errors.New("cache closed")
-	}
-	// Flush the owning batch writer BEFORE deleting: its in-memory items
-	// would otherwise be committed after the DELETE and resurrect the rows
-	// (H2).  Drop the pending read-through layer too so Get() cannot serve
-	// entries whose rows were just deleted, and entryCount cannot be
-	// re-inflated by the flush-time counter path.
-	switch target {
-	case "stats", "querylog":
-		if s.statsWriter != nil {
-			s.statsWriter.Flush()
-		}
-	case "cache", "ptr":
-		if s.cacheWriter != nil {
-			s.cacheWriter.Flush()
-		}
-		if s.pending != nil {
-			s.pending.Clear()
-		}
-	}
-	var result sql.Result
-	var err error
+// FlushDB resets a single store: "stats" (in-memory counters), "querylog"
+// (in-memory per-RCODE journal), "cache" (entries), "latency" (in-memory
+// latency map), "delegation" (in-memory delegation cache), or "zone"
+// (in-memory zone rules).
+func (s *Cache) FlushDB(target string) (int64, error) {
+	// All stores are pure memory.
 	switch target {
 	case "stats":
-		ctx, cancel := s.db.WriteContext()
-		defer cancel()
-		result, err = s.db.SQ.ExecContext(ctx, `DELETE FROM query_stats`)
-		if err != nil {
-			return 0, fmt.Errorf("flushDB stats: %w", err)
+		if s.statsMgr != nil {
+			s.statsMgr.ResetCounters()
 		}
 	case "querylog":
-		ctx, cancel := s.db.WriteContext()
-		defer cancel()
-		result, err = s.db.SQ.ExecContext(ctx, `DELETE FROM query_log`)
-		if err != nil {
-			return 0, fmt.Errorf("flushDB querylog: %w", err)
+		if s.statsMgr != nil {
+			s.statsMgr.ResetJournal()
 		}
 	case "cache":
-		ctx, cancel := s.db.WriteContext()
-		defer cancel()
-		result, err = s.db.SQ.ExecContext(ctx, `DELETE FROM entries`)
-		if err == nil {
-			s.db.SetEntryCount(0)
-		}
+		s.entries.Clear()
 	case "latency":
-		ctx, cancel := s.db.WriteContext()
-		defer cancel()
-		result, err = s.db.SQ.ExecContext(ctx, `DELETE FROM ip_latency`)
-	case "ptr":
-		ctx, cancel := s.db.WriteContext()
-		defer cancel()
-		result, err = s.db.SQ.ExecContext(ctx, `DELETE FROM ptr_map`)
-	case "zone":
-		ctx, cancel := s.db.WriteContext()
-		defer cancel()
-		result, err = s.db.SQ.ExecContext(ctx, `DELETE FROM zone_entries`)
-	case "delegation":
-		ctx, cancel := s.db.WriteContext()
-		defer cancel()
-		result, err = s.db.SQ.ExecContext(ctx, `DELETE FROM delegations`)
-	case "ruleset":
-		ctx, cancel := s.db.WriteContext()
-		defer cancel()
-		result, err = s.db.SQ.ExecContext(ctx, `DELETE FROM ruleset_entries`)
+		// Replace with a fresh empty map.  The old map is dropped once no
+		// reader holds it.
+		s.latencies = lrumap.New[string, latEntry](s.latencyMax)
+		s.hasLatencyData.Store(false)
+	case "delegation", "zone":
+		// Not owned by the cache store — no-op (kept for interface parity).
 	default:
 		return 0, fmt.Errorf("flushDB: unknown target %q", target)
 	}
-	if err != nil {
-		return 0, fmt.Errorf("flushDB %s: %w", target, err)
-	}
-	n, _ := result.RowsAffected()
-	log.Infof("CACHE: flushDB %s: %d rows", target, n)
-	return n, nil
+	return 0, nil
 }
 
-// Clear truncates all tables: entries, delegations, query_stats, query_log, ip_latency.
-func (s *SQLiteCache) Clear() (int64, error) {
+// Clear resets the whole store: entries, delegations, ip_latency, plus the
+// in-memory stats counters and per-RCODE journal.
+func (s *Cache) Clear() (int64, error) {
 	n1, err := s.FlushDB("cache")
 	if err != nil {
 		return 0, err
@@ -221,78 +96,16 @@ func (s *SQLiteCache) Clear() (int64, error) {
 
 // Stats returns aggregated cache statistics as formatted TXT records.
 //
-// Uses a single scan of query_stats — the per-day aggregated table.  query_stats
-// is bounded at ~500 rows (DefaultQueryJournalRetention × ~72 combinations/day), so Stats() is O(1)
-// regardless of query volume.
-func (s *SQLiteCache) Stats() []string {
-	if s.db.IsClosed() {
+// Reads the in-memory statsjournal snapshot — no SQL.  O(1) counters plus a
+// per-RCODE top-N sort, so Stats() is cheap regardless of query volume.
+func (s *Cache) Stats() []string {
+	if s.statsMgr == nil {
 		return nil
 	}
 
-	entries := s.db.EntryCount()
-
-	var total, hits, misses, stales, zones, errCount, blockedCount, badcookieCount int64
-	var udp, tcp, tls, quic, https, http3, dtls, dnscrypt, dnscryptTCP, tlcp, httpTLCP, dtlcp int64
-	var noerr, formerr, servfail, nxdomain, notimp, refused, other int64
-	var secureCount, insecureCount, bogusCount, poisoned int64
-	var totalMS int64
-
-	// Single scan of query_stats — result+protocol+rcode breakdown + totals.
-	ctx, cancel := s.db.ReadContext()
-	defer cancel()
-	err := s.db.SQ.QueryRowContext(ctx,
-		"SELECT COALESCE(SUM(query_count), 0),"+
-			// result breakdown
-			" COALESCE(SUM(CASE WHEN result='hit' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN result='miss' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN result='stale' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN result='zone' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN result='error' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN result='blocked' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN result='badcookie' THEN query_count ELSE 0 END), 0),"+
-			// protocol breakdown
-			" COALESCE(SUM(CASE WHEN protocol='udp' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='tcp' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='tls' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='quic' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='https' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='http3' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='dtls' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='dnscrypt' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='dnscrypt-tcp' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='tlcp' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='http-tlcp' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN protocol='dtlcp' THEN query_count ELSE 0 END), 0),"+
-			// rcode distribution
-			" COALESCE(SUM(CASE WHEN rcode=0 THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode=1 THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode=2 THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode=3 THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode=4 THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode=5 THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN rcode NOT IN (0,1,2,3,4,5) THEN query_count ELSE 0 END), 0),"+
-			// DNSSEC (non-hit only; hits always have dnssec='')
-			" COALESCE(SUM(CASE WHEN dnssec='"+config.DNSSECStatusSecure+"' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN dnssec='"+config.DNSSECStatusInsecure+"' THEN query_count ELSE 0 END), 0),"+
-			" COALESCE(SUM(CASE WHEN dnssec='"+config.DNSSECStatusBogus+"' THEN query_count ELSE 0 END), 0),"+
-			// misc
-			" COALESCE(SUM(CASE WHEN poisoned THEN query_count ELSE 0 END), 0),"+
-			// total response time
-			" COALESCE(SUM(total_ms), 0)"+
-			" FROM query_stats",
-	).Scan(
-		&total,
-		&hits, &misses, &stales, &zones, &errCount, &blockedCount, &badcookieCount,
-		&udp, &tcp, &tls, &quic, &https, &http3, &dtls, &dnscrypt, &dnscryptTCP, &tlcp, &httpTLCP, &dtlcp,
-		&noerr, &formerr, &servfail, &nxdomain, &notimp, &refused, &other,
-		&secureCount, &insecureCount, &bogusCount, &poisoned,
-		&totalMS,
-	)
-	if err != nil {
-		// The whole scan failed — only the entry-count line is trustworthy.
-		log.Warnf("CACHE: stats query failed: %v", err)
-		return []string{fmt.Sprintf("entries=%d total=%d avg=%.1fms", entries, 0, 0.0)}
-	}
+	snap := s.statsMgr.Snapshot(int64(s.entries.Len()))
+	total := snap.Total
+	totalMS := snap.TotalMS
 
 	var avgMs float64
 	if total > 0 {
@@ -307,74 +120,106 @@ func (s *SQLiteCache) Stats() []string {
 		}
 		return float64(v) / float64(total) * 100
 	}
-	hitR, missR, staleR, zoneR := pct(hits), pct(misses), pct(stales), pct(zones)
-	blockedR, badcookieR, errorR := pct(blockedCount), pct(badcookieCount), pct(errCount)
-	noerrR, formerrR, servfailR := pct(noerr), pct(formerr), pct(servfail)
-	nxR, nimpR, refR, otherR := pct(nxdomain), pct(notimp), pct(refused), pct(other)
-	udpR, tcpR, tlsR, quicR := pct(udp), pct(tcp), pct(tls), pct(quic)
-	httpsR, http3R, dtlsR := pct(https), pct(http3), pct(dtls)
-	dnscryptR, dnscryptTCPR, tlcpR, httpTLCPR, dtlcpR := pct(dnscrypt), pct(dnscryptTCP), pct(tlcp), pct(httpTLCP), pct(dtlcp)
-	dnssecTotal := secureCount + insecureCount + bogusCount
-	poisonedR := pct(poisoned)
+	hitR, missR, staleR, zoneR := pct(snap.Hits), pct(snap.Misses), pct(snap.Stales), pct(snap.Zones)
+	blockedR, badcookieR, errorR := pct(snap.Blocked), pct(snap.Badcookie), pct(snap.Errors)
+	noerrR, formerrR, servfailR := pct(snap.Noerr), pct(snap.Formerr), pct(snap.Servfail)
+	nxR, nimpR, refR, otherR := pct(snap.NXDomain), pct(snap.Notimp), pct(snap.Refused), pct(snap.Other)
+	udpR, tcpR, tlsR, quicR := pct(snap.UDP), pct(snap.TCP), pct(snap.TLS), pct(snap.QUIC)
+	httpsR, http3R, dtlsR := pct(snap.HTTPS), pct(snap.HTTP3), pct(snap.DTLS)
+	dnscryptR, dnscryptTCPR, tlcpR, httpTLCPR, dtlcpR := pct(snap.DNSCrypt), pct(snap.DNSCryptTCP), pct(snap.TLCP), pct(snap.HTTPTLCP), pct(snap.DTLCP)
+	dnssecTotal := snap.Secure + snap.Insecure + snap.Bogus
+	poisonedR := pct(snap.Poisoned)
 	var dnssecR, dnssecIR, dnssecBR float64
 	if dnssecTotal > 0 {
 		dt := float64(dnssecTotal)
-		dnssecR = float64(secureCount) / dt * 100
-		dnssecIR = float64(insecureCount) / dt * 100
-		dnssecBR = float64(bogusCount) / dt * 100
+		dnssecR = float64(snap.Secure) / dt * 100
+		dnssecIR = float64(snap.Insecure) / dt * 100
+		dnssecBR = float64(snap.Bogus) / dt * 100
 	}
 
 	out := make([]string, 0, 7)
 	out = append(out, fmt.Sprintf("entries=%d total=%d avg=%.1fms",
-		entries, total, avgMs))
+		snap.Entries, total, avgMs))
 
 	// Results — omit zero-count entries (selfdb stats format).
 	if s := formatStatsLine(
-		statsMetric{"hit", hits, hitR}, statsMetric{"miss", misses, missR},
-		statsMetric{"stale", stales, staleR}, statsMetric{"zone", zones, zoneR},
-		statsMetric{"blocked", blockedCount, blockedR}, statsMetric{"badcookie", badcookieCount, badcookieR},
-		statsMetric{"error", errCount, errorR},
+		statsMetric{"hit", snap.Hits, hitR}, statsMetric{"miss", snap.Misses, missR},
+		statsMetric{"stale", snap.Stales, staleR}, statsMetric{"zone", snap.Zones, zoneR},
+		statsMetric{"blocked", snap.Blocked, blockedR}, statsMetric{"badcookie", snap.Badcookie, badcookieR},
+		statsMetric{"error", snap.Errors, errorR},
 	); s != "" {
 		out = append(out, s)
 	}
 
 	// Rcodes.
 	if s := formatStatsLine(
-		statsMetric{"noerr", noerr, noerrR}, statsMetric{"formerr", formerr, formerrR},
-		statsMetric{"servfail", servfail, servfailR}, statsMetric{"nx", nxdomain, nxR},
-		statsMetric{"nimp", notimp, nimpR}, statsMetric{"ref", refused, refR},
-		statsMetric{"other", other, otherR},
+		statsMetric{"noerr", snap.Noerr, noerrR}, statsMetric{"formerr", snap.Formerr, formerrR},
+		statsMetric{"servfail", snap.Servfail, servfailR}, statsMetric{"nx", snap.NXDomain, nxR},
+		statsMetric{"nimp", snap.Notimp, nimpR}, statsMetric{"ref", snap.Refused, refR},
+		statsMetric{"other", snap.Other, otherR},
 	); s != "" {
 		out = append(out, s)
 	}
 
 	// Transport protocols.
 	if s := formatStatsLine(
-		statsMetric{"udp", udp, udpR}, statsMetric{"tcp", tcp, tcpR},
-		statsMetric{"tls", tls, tlsR}, statsMetric{"quic", quic, quicR},
-		statsMetric{"https", https, httpsR}, statsMetric{"http3", http3, http3R},
-		statsMetric{"dtls", dtls, dtlsR}, statsMetric{"dnscrypt", dnscrypt, dnscryptR},
-		statsMetric{"dnscrypt-tcp", dnscryptTCP, dnscryptTCPR}, statsMetric{"tlcp", tlcp, tlcpR},
-		statsMetric{"http-tlcp", httpTLCP, httpTLCPR}, statsMetric{"dtlcp", dtlcp, dtlcpR},
+		statsMetric{"udp", snap.UDP, udpR}, statsMetric{"tcp", snap.TCP, tcpR},
+		statsMetric{"tls", snap.TLS, tlsR}, statsMetric{"quic", snap.QUIC, quicR},
+		statsMetric{"https", snap.HTTPS, httpsR}, statsMetric{"http3", snap.HTTP3, http3R},
+		statsMetric{"dtls", snap.DTLS, dtlsR}, statsMetric{"dnscrypt", snap.DNSCrypt, dnscryptR},
+		statsMetric{"dnscrypt-tcp", snap.DNSCryptTCP, dnscryptTCPR}, statsMetric{"tlcp", snap.TLCP, tlcpR},
+		statsMetric{"http-tlcp", snap.HTTPTLCP, httpTLCPR}, statsMetric{"dtlcp", snap.DTLCP, dtlcpR},
 	); s != "" {
 		out = append(out, s)
 	}
 
 	// DNSSEC — percentages relative to the DNSSEC-validated subset.
 	if s := formatStatsLine(
-		statsMetric{"secure", secureCount, dnssecR}, statsMetric{"insecure", insecureCount, dnssecIR},
-		statsMetric{"bogus", bogusCount, dnssecBR},
+		statsMetric{"secure", snap.Secure, dnssecR}, statsMetric{"insecure", snap.Insecure, dnssecIR},
+		statsMetric{"bogus", snap.Bogus, dnssecBR},
 	); s != "" {
 		out = append(out, s)
 	}
 
 	// Poisoned stands alone — it is orthogonal to DNSSEC status, so mixing
 	// it into the DNSSEC line would break that line's 100% invariant.
-	if s := formatStatsLine(statsMetric{"poisoned", poisoned, poisonedR}); s != "" {
+	if s := formatStatsLine(statsMetric{"poisoned", snap.Poisoned, poisonedR}); s != "" {
 		out = append(out, s)
 	}
 
 	return out
+}
+
+// StatsRcode returns the per-RCODE top-N domain journal lines — the
+// highest-count domain names per RCODE, for debugging which domains produce
+// the most NXDOMAIN/SERVFAIL etc.  Served by the zjdns.stats.rcode CHAOS
+// query, separate from the aggregated Stats() output.
+func (s *Cache) StatsRcode() []string {
+	if s.statsMgr == nil {
+		return nil
+	}
+	snap := s.statsMgr.Snapshot(0)
+	var out []string
+	for _, rcode := range sortedRcodes(snap.TopByRcode) {
+		var b strings.Builder
+		fmt.Fprintf(&b, "top-rcode%d:", rcode)
+		for _, e := range snap.TopByRcode[rcode] {
+			fmt.Fprintf(&b, " %s=%d", e.Key, e.Count)
+		}
+		out = append(out, b.String())
+	}
+	return out
+}
+
+// sortedRcodes returns the journal RCODE keys in ascending order so repeated
+// Stats() output is stable.
+func sortedRcodes(byRcode map[int][]topk.Entry[string]) []int {
+	rcodes := make([]int, 0, len(byRcode))
+	for rc := range byRcode {
+		rcodes = append(rcodes, rc)
+	}
+	slices.Sort(rcodes)
+	return rcodes
 }
 
 // formatStatsLine renders a partitioned stats line: zero-count entries are
@@ -404,44 +249,40 @@ func formatStatsLine(metrics ...statsMetric) string {
 }
 
 // UpdateLatency stores a latency measurement keyed by IP only. All domains
-// sharing the same IP reuse the same row — latency is measured once, not
-// once per domain. qtype is inferred from the IP address format.
-func (s *SQLiteCache) UpdateLatency(ip string, latencyMS int) {
+// sharing the same IP reuse the same entry — latency is measured once, not
+// once per domain.  In-memory only (no SQL, no disk); the entry is lazily
+// expired on read past DefaultStaleMaxAge.
+func (s *Cache) UpdateLatency(ip string, latencyMS int) {
 	s.hasLatencyData.Store(true)
 	if latencyMS < 0 {
 		latencyMS = 0
 	}
-	if s.db.IsClosed() {
+	if net.ParseIP(ip) == nil {
 		return
 	}
-	parsedIP := net.ParseIP(ip)
-	if parsedIP == nil {
-		return
-	}
-	qtype := dns.TypeAAAA
-	if parsedIP.To4() != nil {
-		qtype = dns.TypeA
-	}
-	// Bounded like the other cache writes: a saturated DB must not stall the
-	// latency probe that triggered this write.
-	ctx, cancel := context.WithTimeout(context.Background(), config.DefaultCacheWriteTimeout)
-	defer cancel()
-	_, _ = s.db.StmtInsertLatency.ExecContext(ctx, ip, qtype, latencyMS) // _, _ = result, error: latency write is best-effort, not query-critical
+	s.latencies.Set(ip, latEntry{latency: latencyMS, lastProbe: log.NowUnix()})
 }
 
 // LatencyLastProbe returns the last probe time for an IP. Returns (0, false)
-// if the IP has never been probed.
-func (s *SQLiteCache) LatencyLastProbe(ip string) (int64, bool) {
-	if s.db.IsClosed() {
+// if the IP has never been probed or its entry is older than the stale
+// window (lazy expiry — the former eviction-time DELETE FROM ip_latency).
+func (s *Cache) LatencyLastProbe(ip string) (int64, bool) {
+	e, ok := s.latencies.Get(ip)
+	if !ok {
 		return 0, false
 	}
-	ctx, cancel := s.db.ReadContext()
-	defer cancel()
-	var ts int64
-	// Note: ts==0 is ambiguous (no row vs. fresh row with last_probe_time=0).
-	// Both cases trigger a probe, which is harmless for fresh rows.
-	if err := s.db.StmtLastProbe.QueryRowContext(ctx, ip).Scan(&ts); err != nil || ts == 0 {
+	// Note: lastProbe==0 is ambiguous (never probed vs. fresh entry) — both
+	// trigger a probe, which is harmless for fresh entries.
+	if e.lastProbe == 0 || e.lastProbe < log.NowUnix()-defaultStaleMaxAge {
 		return 0, false
 	}
-	return ts, true
+	return e.lastProbe, true
+}
+
+// PruneQueryJournal is a no-op: the query journal is pure memory (per-RCODE
+// top-N counters, bounded by topk capacity) and never grows beyond its bound,
+// so there is nothing to prune.  Kept to satisfy StoreLifecycle and its
+// existing callers.
+func (s *Cache) PruneQueryJournal(retentionSec int64) (int64, error) {
+	return 0, nil
 }

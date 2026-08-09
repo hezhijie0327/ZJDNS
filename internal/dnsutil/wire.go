@@ -8,6 +8,13 @@ import (
 
 const zstdCompressLevel = zstd.SpeedDefault
 
+// zstdEncoderConcurrency caps the encoder pool size.  klauspost's Encoder
+// keeps one ~1MB encoder per concurrent EncodeAll (default: GOMAXPROCS) —
+// DNS wire messages are tiny and compress in microseconds, so 4 concurrent
+// compressors are far beyond the actual need; the cap bounds resident
+// memory to ~4MB instead of ~20MB+ on multi-core hosts.
+const zstdEncoderConcurrency = 4
+
 // zstd encoder/decoder for wire format compression. Created once, reused forever.
 var (
 	zstdEncoder *zstd.Encoder
@@ -16,7 +23,10 @@ var (
 
 func init() {
 	var err error
-	zstdEncoder, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstdCompressLevel))
+	zstdEncoder, err = zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(zstdCompressLevel),
+		zstd.WithEncoderConcurrency(zstdEncoderConcurrency),
+	)
 	if err != nil {
 		panic(fmt.Sprintf("zstd encoder init: %v", err))
 	}

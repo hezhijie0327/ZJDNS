@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	"zjdns/cache"
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	zdnsutil "zjdns/internal/dnsutil"
@@ -19,8 +20,48 @@ func (s *Server) startBackgroundTasks() {
 	s.startECSRefresh()
 	s.startPrefetchCooldownCleanup()
 	s.startTCPWriteMuSweep()
-	s.startQueryJournalCleanup()
+	s.startStateMaintenance()
 	s.setupSignalHandling()
+}
+
+// startStateMaintenance periodically persists all three state stores
+// (cache/latency/delegation) and physically removes expired entries, when
+// any state file is configured.  Shutdown snapshots are taken separately in
+// shutdownServer.
+func (s *Server) startStateMaintenance() {
+	feats := s.config.Server.Features
+	cachePath, latencyPath, delegationPath := feats.CacheStateFile(), feats.LatencyStateFile(), feats.DelegationStateFile()
+	if cachePath == "" && latencyPath == "" && delegationPath == "" {
+		return
+	}
+	cacheStore := s.handler.CacheStore()
+	if cacheStore == nil {
+		return
+	}
+	cc, ok := cacheStore.(*cache.Cache)
+	if !ok {
+		return
+	}
+
+	s.runBackgroundTicker("state maintenance", config.DefaultCacheSnapshotInterval, func() {
+		if cachePath != "" {
+			if err := cc.SaveSnapshot(cachePath); err != nil {
+				log.Warnf("CACHE: periodic snapshot failed: %v", err)
+			}
+			cc.CleanupLatency()
+		}
+		if latencyPath != "" {
+			if err := cc.SaveLatencySnapshot(latencyPath); err != nil {
+				log.Warnf("CACHE: periodic latency snapshot failed: %v", err)
+			}
+		}
+		if delegationPath != "" {
+			if err := s.dnsResolver.SaveDelegationSnapshot(delegationPath); err != nil {
+				log.Warnf("RESOLVER: periodic delegation snapshot failed: %v", err)
+			}
+			s.dnsResolver.CleanupDelegations()
+		}
+	})
 }
 
 // runBackgroundTicker runs fn on each tick of a time.Ticker with the given
@@ -144,26 +185,6 @@ func (s *Server) sweepTCPWriteMu(cutoff int64) {
 		}
 		shard.mu.Unlock()
 	}
-}
-
-// startQueryJournalCleanup periodically removes stale query_stats and query_log
-// rows to prevent unbounded disk growth.  Interval and retention are controlled
-// by config.DefaultPruneInterval and config.DefaultQueryJournalRetention.
-func (s *Server) startQueryJournalCleanup() {
-	if s.handler == nil || s.handler.CacheStore() == nil {
-		return
-	}
-	s.runBackgroundTicker("query journal cleanup", config.DefaultPruneInterval, func() {
-		store := s.handler.CacheStore()
-		n, err := store.PruneQueryJournal(config.DefaultQueryJournalRetention)
-		if err != nil {
-			log.Warnf("CACHE: query journal cleanup failed: %v", err)
-			return
-		}
-		if n > 0 {
-			log.Debugf("CACHE: cleaned up %d stale rows (query_stats + query_log)", n)
-		}
-	})
 }
 
 func (s *Server) setupSignalHandling() {
@@ -300,6 +321,25 @@ func (s *Server) shutdownServer() {
 	}
 
 	if cacheStore := s.handler.CacheStore(); cacheStore != nil {
+		// Persist all state stores before closing.
+		if cc, ok := cacheStore.(*cache.Cache); ok {
+			feats := s.config.Server.Features
+			if path := feats.CacheStateFile(); path != "" {
+				if err := cc.SaveSnapshot(path); err != nil {
+					log.Warnf("CACHE: snapshot save failed: %v", err)
+				}
+			}
+			if path := feats.LatencyStateFile(); path != "" {
+				if err := cc.SaveLatencySnapshot(path); err != nil {
+					log.Warnf("CACHE: latency snapshot save failed: %v", err)
+				}
+			}
+			if path := feats.DelegationStateFile(); path != "" {
+				if err := s.dnsResolver.SaveDelegationSnapshot(path); err != nil {
+					log.Warnf("RESOLVER: delegation snapshot save failed: %v", err)
+				}
+			}
+		}
 		zdnsutil.CloseWithLog(cacheStore, "Cache store", "SERVER")
 	}
 

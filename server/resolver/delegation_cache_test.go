@@ -1,11 +1,11 @@
 package resolver
 
 import (
-	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"zjdns/config"
-	"zjdns/database"
+	"zjdns/internal/lrumap"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -158,22 +158,10 @@ func TestNSNamesFrom(t *testing.T) {
 	}
 }
 
-// ── Store / Lookup round-trip with in-memory SQLite ─────────────────────────
-
-func newTestDB(t *testing.T) *database.DB {
-	t.Helper()
-	database.Version = "0.0.0"
-	db, err := database.Open(":memory:", 0, database.Options{})
-	if err != nil {
-		t.Fatalf("database.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	return db
-}
+// ── Store / Lookup round-trip (in-memory delegation cache) ────────────────
 
 func TestStoreAndLookupDelegation(t *testing.T) {
-	db := newTestDB(t)
-	r := &Recursive{db: db, resolver: &Resolver{}}
+	r := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](10000)}
 
 	nsRecords := []*dns.NS{
 		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: "ns1.baidu.com."}},
@@ -185,10 +173,10 @@ func TestStoreAndLookupDelegation(t *testing.T) {
 	addrs := []string{"1.2.3.4:53", "5.6.7.8:53"}
 	chain := &dnssecChain{childDS: dsRecords}
 
-	r.storeDelegation(context.Background(), "baidu.com.", "com.", nsRecords, addrs, chain, 0)
+	r.storeDelegation("baidu.com.", "com.", nsRecords, addrs, chain, 0)
 
 	// Lookup should find it
-	record, ok := r.lookupDelegation(context.Background(), "www.baidu.com.", dns.TypeA)
+	record, ok := r.lookupDelegation("www.baidu.com.", dns.TypeA)
 	if !ok {
 		t.Fatal("lookupDelegation should find the stored delegation")
 	}
@@ -206,36 +194,35 @@ func TestStoreAndLookupDelegation(t *testing.T) {
 	}
 
 	// Lookup with qname exactly at the zone (non-parent-side type)
-	_, ok = r.lookupDelegation(context.Background(), "baidu.com.", dns.TypeA)
+	_, ok = r.lookupDelegation("baidu.com.", dns.TypeA)
 	if !ok {
 		t.Error("lookupDelegation for zone=A type=A should find self")
 	}
 
 	// Lookup with root qname
-	_, ok = r.lookupDelegation(context.Background(), ".", dns.TypeA)
+	_, ok = r.lookupDelegation(".", dns.TypeA)
 	if ok {
 		t.Error("lookupDelegation for root should return nothing")
 	}
 }
 
 func TestLookupDelegationParentSideType(t *testing.T) {
-	db := newTestDB(t)
-	r := &Recursive{db: db, resolver: &Resolver{}}
+	r := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](10000)}
 
 	nsRecords := []*dns.NS{
 		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: "ns1.baidu.com."}},
 	}
 	chain := &dnssecChain{} // insecure delegation
-	r.storeDelegation(context.Background(), "baidu.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
+	r.storeDelegation("baidu.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
 
 	// DS qtype at zone boundary should skip the cached zone
-	_, ok := r.lookupDelegation(context.Background(), "baidu.com.", dns.TypeDS)
+	_, ok := r.lookupDelegation("baidu.com.", dns.TypeDS)
 	if ok {
 		t.Error("lookupDelegation for zone=baidu.com. type=DS should skip the cached zone (parent-side)")
 	}
 
 	// DS qtype at a subdomain should still work (deepest match is baidu.com.)
-	record, ok := r.lookupDelegation(context.Background(), "www.baidu.com.", dns.TypeDS)
+	record, ok := r.lookupDelegation("www.baidu.com.", dns.TypeDS)
 	if !ok {
 		t.Error("lookupDelegation for www.baidu.com. type=DS should find baidu.com. delegation")
 	}
@@ -245,28 +232,26 @@ func TestLookupDelegationParentSideType(t *testing.T) {
 }
 
 func TestStoreDelegationSkipsUnverifiable(t *testing.T) {
-	db := newTestDB(t)
-	r := &Recursive{db: db, resolver: &Resolver{}}
+	r := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](10000)}
 
 	nsRecords := []*dns.NS{
 		{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: "ns1.example.com."}},
 	}
 	chain := &dnssecChain{dsPresentButUnverified: true}
-	r.storeDelegation(context.Background(), "example.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
+	r.storeDelegation("example.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
 
-	_, ok := r.lookupDelegation(context.Background(), "www.example.com.", dns.TypeA)
+	_, ok := r.lookupDelegation("www.example.com.", dns.TypeA)
 	if ok {
 		t.Error("unverifiable delegation should not be stored")
 	}
 }
 
-func TestStoreDelegationSkipsNilDB(t *testing.T) {
-	r := &Recursive{db: nil, resolver: &Resolver{}}
-	// Should not panic
-	r.storeDelegation(context.Background(), "example.com.", "com.", nil, nil, &dnssecChain{}, 0)
-	_, ok := r.lookupDelegation(context.Background(), "www.example.com.", dns.TypeA)
-	if ok {
-		t.Error("nil db should return no results")
+func TestStoreDelegationSkipsEmptyNS(t *testing.T) {
+	r := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](10000)}
+	// No NS records — nothing to store, must not panic.
+	r.storeDelegation("example.com.", "com.", nil, nil, &dnssecChain{}, 0)
+	if r.delegations.Len() != 0 {
+		t.Error("delegation with no NS records should not be stored")
 	}
 }
 
@@ -293,10 +278,57 @@ func TestAncestorZonesMaxLimit(t *testing.T) {
 	}
 }
 
-// TestStmtDelegationLookupZoneCount guards the zone IN-clause placeholder count
-// in database.StmtDelegationLookup against config.DefaultDelegationLookupZones.
-func TestStmtDelegationLookupZoneCount(t *testing.T) {
-	if got, want := database.DelegationLookupZones, config.DefaultDelegationLookupZones; got != want {
-		t.Errorf("database.DelegationLookupZones = %d, want %d (config.DefaultDelegationLookupZones)", got, want)
+// TestDelegationSnapshotRoundTrip verifies the delegation cache persists
+// through the snapshot file, including NS names, addresses and DS records.
+func TestDelegationSnapshotRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "delegation.snap")
+
+	r1 := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](100)}
+	nsRecords := []*dns.NS{
+		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: "ns1.baidu.com."}},
+	}
+	dsRecords := []*dns.DS{
+		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 1800}, DS: rdata.DS{KeyTag: 11111, Algorithm: dns.ECDSAP256SHA256, DigestType: dns.SHA256, Digest: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"}},
+	}
+	chain := &dnssecChain{childDS: dsRecords}
+	r1.storeDelegation("baidu.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
+	if err := r1.SaveDelegationSnapshot(path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	r2 := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](100)}
+	if err := r2.LoadDelegationSnapshot(path); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	rec, ok := r2.lookupDelegation("www.baidu.com.", dns.TypeA)
+	if !ok {
+		t.Fatal("delegation not restored")
+	}
+	if len(rec.nsNames) != 1 || rec.nsNames[0] != "ns1.baidu.com." {
+		t.Errorf("nsNames = %v, want [ns1.baidu.com.]", rec.nsNames)
+	}
+	if len(rec.addrs) != 1 || rec.addrs[0] != "1.2.3.4:53" {
+		t.Errorf("addrs = %v, want [1.2.3.4:53]", rec.addrs)
+	}
+	if len(rec.ds) != 1 || rec.ds[0].KeyTag != 11111 {
+		t.Errorf("ds = %v, want keytag 11111", rec.ds)
+	}
+}
+
+// TestCleanupDelegations verifies expired entries are physically removed.
+func TestCleanupDelegations(t *testing.T) {
+	r := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](100)}
+	nsRecords := []*dns.NS{
+		{Hdr: dns.Header{Name: "old.com.", Class: dns.ClassINET, TTL: 1}, NS: rdata.NS{Ns: "ns1.old.com."}},
+	}
+	chain := &dnssecChain{}
+	r.storeDelegation("old.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
+	// Backdate the entry so it is already expired.
+	if e, ok := r.delegations.Get("old.com."); ok {
+		e.ts -= 3600
+	}
+	r.CleanupDelegations()
+	if r.delegations.Len() != 0 {
+		t.Error("expired delegation should be physically removed")
 	}
 }

@@ -77,10 +77,10 @@ func TestUpstreamServer_IsRecursive(t *testing.T) {
 }
 
 func TestCacheSettings_MaxEntriesDefaults(t *testing.T) {
-	// MaxEntries 0 should be handled by the cache package (defaults to DefaultMaxCacheEntries)
-	s := ServerSettings{Features: FeatureFlags{Cache: CacheSettings{MaxEntries: 0}}}
-	if s.Features.Cache.MaxEntries != 0 {
-		t.Error("MaxEntries=0 should be allowed (cache will default to DefaultMaxCacheEntries)")
+	// Limit 0 should be handled by the cache package (defaults to the config default).
+	s := ServerSettings{Features: FeatureFlags{Cache: CacheSettings{Entries: CacheStoreSettings{Limit: 0}}}}
+	if s.Features.Cache.Entries.Limit != 0 {
+		t.Error("Limit=0 should be allowed (cache will default)")
 	}
 }
 

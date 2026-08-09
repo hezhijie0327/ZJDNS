@@ -2,10 +2,10 @@ package dnscrypt
 
 import (
 	"bytes"
+	"path/filepath"
 	"testing"
 	"time"
 	"zjdns/config"
-	"zjdns/database"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 
 	"github.com/cloudflare/circl/sign/ed25519"
@@ -183,28 +183,24 @@ func TestPersistConfigIdentityChange(t *testing.T) {
 	}
 }
 
-// TestPersistSQLite verifies the full SQLite round-trip through the real
-// database package.
-func TestPersistSQLite(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
-	if err != nil {
-		t.Fatalf("database.Open: %v", err)
-	}
-	defer func() { _ = db.Close() }()
+// TestPersistFileStore verifies the file-backed state round-trip: a restart
+// through the same state file resumes the same cert windows.
+func TestPersistFileStore(t *testing.T) {
+	store := NewFileStore(filepath.Join(t.TempDir(), "state.bin"))
 
 	cfg := testCfg()
-	srv1, err := New(cfg, "0", "2.dnscrypt-cert.example.com", db)
+	srv1, err := New(cfg, "0", "2.dnscrypt-cert.example.com", store)
 	if err != nil {
 		t.Fatalf("New (first start): %v", err)
 	}
 	serial1 := srv1.current().Classical.Serial
 
-	srv2, err := New(cfg, "0", "2.dnscrypt-cert.example.com", db)
+	srv2, err := New(cfg, "0", "2.dnscrypt-cert.example.com", store)
 	if err != nil {
 		t.Fatalf("New (restart): %v", err)
 	}
 	if srv2.current().Classical.Serial != serial1 {
-		t.Errorf("SQLite restart: serial changed (%d → %d)", serial1, srv2.current().Classical.Serial)
+		t.Errorf("file restart: serial changed (%d → %d)", serial1, srv2.current().Classical.Serial)
 	}
 }
 

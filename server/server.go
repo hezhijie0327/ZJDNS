@@ -15,7 +15,6 @@ import (
 	"sync"
 	"zjdns/cache"
 	"zjdns/config"
-	"zjdns/database"
 	"zjdns/edns"
 	"zjdns/internal/dns64"
 	"zjdns/internal/log"
@@ -47,7 +46,7 @@ type Server struct {
 	config      *config.ServerConfig
 	handler     *handler.Handler
 	queryClient *upstream.Client
-	db          *database.DB
+	dnsResolver *resolver.Resolver
 
 	tls            *tls.Server
 	tlcpServer     *servertlcp.Server
@@ -90,15 +89,22 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		tcpSem:          make(chan struct{}, config.DefaultServerGoroutineLimit),
 	}
 
-	db, err := s.initDatabase(cfg)
-	if err != nil {
-		cancel(err)
-		return nil, fmt.Errorf("database init: %w", err)
+	cacheStore := cache.New(cfg.Server.Features.Cache.Entries.Limit, cfg.Server.Features.Cache.Latency.Limit)
+	if path := cfg.Server.Features.CacheStateFile(); path != "" {
+		if err := cacheStore.LoadSnapshot(path); err != nil {
+			log.Warnf("CACHE: snapshot load failed (starting cold): %v", err)
+		} else {
+			log.Infof("CACHE: loaded %d entries from snapshot", cacheStore.EntryCount())
+		}
 	}
-	s.db = db
-
-	cacheStore := cache.New(db)
-	zoneEvaluator := zone.New(db)
+	if path := cfg.Server.Features.LatencyStateFile(); path != "" {
+		if err := cacheStore.LoadLatencySnapshot(path); err != nil {
+			log.Warnf("CACHE: latency snapshot load failed (starting cold): %v", err)
+		} else {
+			log.Infof("CACHE: latency table loaded from snapshot")
+		}
+	}
+	zoneEvaluator := zone.New()
 
 	ednsH, err := s.initEDNS(cfg)
 	if err != nil {
@@ -106,7 +112,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("EDNS handler init: %w", err)
 	}
 
-	rulesetEngine, err := s.initZoneAndRulesets(cfg, cacheStore, zoneEvaluator, db)
+	rulesetEngine, err := s.initZoneAndRulesets(cfg, cacheStore, zoneEvaluator)
 	if err != nil {
 		cancel(err)
 		return nil, err
@@ -119,6 +125,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		cancel(err)
 		return nil, fmt.Errorf("resolver init: %w", err)
 	}
+	s.dnsResolver = dnsResolver
 
 	s.warmUpConnections(cfg, queryClient)
 
@@ -138,17 +145,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	return s, nil
 }
 
-// initDatabase opens the SQLite database with configured pragmas.
-func (s *Server) initDatabase(cfg *config.ServerConfig) (*database.DB, error) {
-	return database.Open(
-		cfg.Server.Features.Database.DBPath,
-		cfg.Server.Features.Cache.MaxEntries,
-		database.Options{
-			MMapSizeMB:  cfg.Server.Features.Database.MMapSizeMB,
-			CacheSizeMB: cfg.Server.Features.Database.CacheSizeMB,
-		})
-}
-
 // initEDNS creates the EDNS handler and auto-detects ECS subnets.
 func (s *Server) initEDNS(cfg *config.ServerConfig) (*edns.Handler, error) {
 	return edns.NewHandler(cfg.Server.Features.ECS)
@@ -157,7 +153,7 @@ func (s *Server) initEDNS(cfg *config.ServerConfig) (*edns.Handler, error) {
 // initZoneAndRulesets loads zone-file rules and CIDR/domain matching rulesets
 // from config.  Returns the ruleset engine (nil if none configured) and any
 // fatal error from loading.
-func (s *Server) initZoneAndRulesets(cfg *config.ServerConfig, cacheStore cache.Store, zoneEvaluator *zone.Evaluator, db *database.DB) (*ruleset.Engine, error) {
+func (s *Server) initZoneAndRulesets(cfg *config.ServerConfig, cacheStore cache.Store, zoneEvaluator *zone.Evaluator) (*ruleset.Engine, error) {
 	wireZoneDynamicContent(cacheStore, cfg.Zone, func() error {
 		// Resolved lazily: the DNSCrypt server is constructed after zone wiring.
 		if s.dnscryptServer == nil {
@@ -174,7 +170,7 @@ func (s *Server) initZoneAndRulesets(cfg *config.ServerConfig, cacheStore cache.
 
 	var engine *ruleset.Engine
 	if len(cfg.RuleSet) > 0 {
-		engine = ruleset.New(db)
+		engine = ruleset.New()
 		if err := engine.LoadRules(cfg.RuleSet); err != nil {
 			return nil, fmt.Errorf("load ruleset: %w", err)
 		}
@@ -232,7 +228,7 @@ func (s *Server) initDNSResolver(cfg *config.ServerConfig, queryClient *upstream
 		cidrMatcher = rulesetEngine
 	}
 
-	r, err := initResolver(cfg, s.db, queryClient, cryptoValidator, poisonDetector, ednsH, cidrMatcher, cacheStore,
+	r, err := initResolver(cfg, queryClient, cryptoValidator, poisonDetector, ednsH, cidrMatcher, cacheStore,
 		func(q resolver.Question, ecs *edns.ECSOption, rd, secure bool) *dns.Msg {
 			return handler.BuildQueryMsg(ednsH, q, ecs, rd, secure)
 		}, s.backgroundCtx)
@@ -355,7 +351,8 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 
 	if cfg.Server.Protocol.DNSCrypt != "" {
 		providerName := cfg.Server.Certificate.DNSCrypt.ProviderName(cfg.Server.Certificate.Domain)
-		dnscryptSrv, err := serverdnscrypt.New(&cfg.Server.Certificate.DNSCrypt, cfg.Server.Protocol.DNSCrypt, providerName, s.db)
+		stateStore := serverdnscrypt.NewFileStore(cfg.Server.Certificate.DNSCrypt.StateFile)
+		dnscryptSrv, err := serverdnscrypt.New(&cfg.Server.Certificate.DNSCrypt, cfg.Server.Protocol.DNSCrypt, providerName, stateStore)
 		if err != nil {
 			return fmt.Errorf("DNSCrypt server init: %w", err)
 		}

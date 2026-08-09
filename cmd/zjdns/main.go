@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"zjdns/cmd/zjdns/cli"
 	"zjdns/config"
-	"zjdns/database"
 	"zjdns/internal/log"
 	"zjdns/server"
 )
@@ -41,11 +40,6 @@ func run(configFile, versionStr string) error {
 
 	config.DefaultProjectName = ProjectName
 	config.DefaultVersion = versionStr
-	// Wire the pure semantic version (no "v" prefix, no build metadata) into
-	// the database package so Open() runs incremental migrations on existing
-	// databases. Prior to this, database.Version stayed at its "0.0.0"
-	// sentinel and migrations never ran (H8).
-	database.Version = Version
 
 	cfg, err := config.LoadConfig(configFile)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"testing"
 	"zjdns/edns"
+	"zjdns/internal/lrumap"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -14,7 +15,7 @@ import (
 
 // newTestRecursiveWithHelpers creates a minimal Recursive for testing helpers.
 func newTestRecursiveWithHelpers() *Recursive {
-	return &Recursive{}
+	return &Recursive{delegations: lrumap.New[string, *delegationEntry](10000)}
 }
 
 // ── applyQnameMinimisation ──────────────────────────────────────────────────

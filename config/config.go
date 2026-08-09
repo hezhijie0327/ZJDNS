@@ -79,6 +79,9 @@ type TLCPCertificate struct {
 type DNSCryptCertificate struct {
 	PrivateKey string `json:"private_key,omitzero"` // Ed25519 private key (hex, optional — auto-generated if empty)
 	PublicKey  string `json:"public_key,omitzero"`  // Ed25519 public key (hex, optional — auto-generated if empty)
+	// StateFile persists the DNSCrypt identity + cert windows across
+	// restarts (empty = "./zjdns.dnscrypt").
+	StateFile string `json:"state_file,omitzero"`
 }
 
 // FeatureFlags enables optional features: KTLS, DDR, ECS, database,
@@ -88,7 +91,6 @@ type FeatureFlags struct {
 	DNSSECEnforce bool               `json:"dnssec_enforce,omitzero"`
 	DDR           DDRSettings        `json:"ddr,omitzero"`
 	ECS           ECSConfig          `json:"ecs_subnet,omitzero"`
-	Database      DatabaseSettings   `json:"database,omitzero"`
 	Cache         CacheSettings      `json:"cache,omitzero"`
 	LatencyProbe  []LatencyProbeStep `json:"latency_probe,omitzero"`
 	DNS64         *DNS64Config       `json:"dns64,omitzero"`
@@ -116,17 +118,22 @@ type DDRSettings struct {
 	InfoURL string `json:"infourl,omitzero"`
 }
 
-// DatabaseSettings configures the shared SQLite database backing cache and zone.
-type DatabaseSettings struct {
-	DBPath      string `json:"db_path,omitzero"`       // database file path
-	MMapSizeMB  int    `json:"mmap_size_mb,omitzero"`  // SQLite mmap_size PRAGMA
-	CacheSizeMB int    `json:"cache_size_mb,omitzero"` // SQLite cache_size PRAGMA
+// CacheSettings configures DNS response cache size and stale serving.
+// CacheSettings configures the cache subsystem's three stores (entries,
+// latency, delegation), each with its own limit and persistence.
+type CacheSettings struct {
+	Entries    CacheStoreSettings `json:"entries,omitzero"`
+	Latency    CacheStoreSettings `json:"latency,omitzero"`
+	Delegation CacheStoreSettings `json:"delegation,omitzero"`
 }
 
-// CacheSettings configures DNS response cache size and stale serving.
-type CacheSettings struct {
-	MaxEntries  int  `json:"max_entries,omitzero"`
-	PreferStale bool `json:"prefer_stale,omitzero"`
+// CacheStoreSettings bounds and persists one cache-store: limit (<= 0
+// applies the config default) and state_file (empty = not persisted).
+// PreferStale is entries-only — it is ignored by latency/delegation.
+type CacheStoreSettings struct {
+	Limit       int    `json:"limit,omitzero"`
+	PreferStale bool   `json:"prefer_stale,omitzero"`
+	StateFile   string `json:"state_file,omitzero"`
 }
 
 // UpstreamServer defines a single upstream DNS server with address, protocol,
@@ -197,6 +204,18 @@ type LatencyProbeStep struct {
 
 // DNSCryptV2Prefix is the provider name prefix for DNSCrypt v2 certificates.
 const DNSCryptV2Prefix = "2.dnscrypt-cert."
+
+// CacheStateFile returns the entries store persistence path ("" = pure
+// memory).
+func (f *FeatureFlags) CacheStateFile() string { return f.Cache.Entries.StateFile }
+
+// LatencyStateFile returns the latency store persistence path ("" = pure
+// memory).
+func (f *FeatureFlags) LatencyStateFile() string { return f.Cache.Latency.StateFile }
+
+// DelegationStateFile returns the delegation store persistence path
+// ("" = pure memory).
+func (f *FeatureFlags) DelegationStateFile() string { return f.Cache.Delegation.StateFile }
 
 // IsEnabled reports whether explicit DNSCrypt identity keys are provided in
 // config. Returns false when keys are empty (auto-generation applies at startup).

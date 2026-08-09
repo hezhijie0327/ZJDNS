@@ -17,14 +17,14 @@ func init() {
 	log.Default.SetLevel(log.Error)
 }
 
-// setLegacyWire replaces the msg_wire of an existing entry with a legacy
-// format blob (<= v3.11.11: zstd-compressed or raw DNS wire, no 0x02 marker),
-// simulating a database written by an older version.
-func setLegacyWire(t *testing.T, mc *SQLiteCache, qname string, blob []byte) {
+// setLegacyWire replaces the stored entry with a legacy format blob
+// (<= v3.11.11: zstd-compressed or raw DNS wire, no 0x02 marker), simulating
+// an entry written by an older version.  The in-memory cache never produces
+// this format, but buildEntry must still serve it defensively.
+func setLegacyWire(t *testing.T, mc *Cache, qname string, blob []byte) {
 	t.Helper()
-	if _, err := mc.db.SQ.Exec("UPDATE entries SET msg_wire = ? WHERE qname = ?", blob, qname); err != nil {
-		t.Fatalf("UPDATE entries msg_wire: %v", err)
-	}
+	key := buildCacheKey(qname, dns.TypeA, dns.ClassINET, "", 0, 0)
+	mc.entries.Set(key, &cacheEntry{msgWire: blob, ts: 1, ttl: 300, validated: false})
 }
 
 // packLegacyResponse builds a packed DNS response for the given qname.

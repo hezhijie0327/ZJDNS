@@ -1,4 +1,4 @@
-// Package cache provides the DNS response cache interface backed by SQLite.
+// Package cache provides the DNS response cache interface, backed by an in-memory LRU map.
 package cache
 
 import (
@@ -11,9 +11,9 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// RequestRecord captures per-request metadata. Every request upserts into
-// query_stats (per-day aggregated counters). Non-hit results also insert a
-// row into query_log for the audit trail.
+// RequestRecord captures per-request metadata. Every request updates the
+// in-memory stats counters; non-hit results also enter the per-RCODE top-N
+// domain journal (see internal/statsjournal).
 type RequestRecord struct {
 	Qname        string // normalized FQDN
 	Qtype        uint16
@@ -37,7 +37,6 @@ type StoreReader interface {
 	// parallel slices of entry / found / expired.
 	GetTypes(qname string, qclass uint16, qtypes [2]uint16, dnssecOK bool) (entries [2]*Entry, found, expired [2]bool)
 	LatencyLastProbe(ip string) (int64, bool)
-	ReverseLookup(ip string) []LookupResult
 }
 
 // StoreWriter is the write subset of Store.  Consumers that only need to
@@ -55,6 +54,7 @@ type StoreLifecycle interface {
 	Clear() (int64, error)
 	PruneQueryJournal(retentionSec int64) (int64, error)
 	Stats() []string
+	StatsRcode() []string
 	Close() error
 }
 
@@ -72,7 +72,6 @@ type Store interface {
 // Unpack+Pack.  Answer/Authority/Additional are nil until Unpack is called
 // (the latency-sorting path in Get unpacks; everyone else serves the wire).
 type Entry struct {
-	ID         int64    `json:"id"`
 	Answer     []dns.RR `json:"answer"`
 	Authority  []dns.RR `json:"authority"`
 	Additional []dns.RR `json:"additional"`
@@ -85,12 +84,6 @@ type Entry struct {
 	// the byte offsets of each TTL field within ResponseWire.
 	ResponseWire []byte
 	TTLOffsets   []uint16
-}
-
-// LookupResult holds a PTR reverse-lookup result.
-type LookupResult struct {
-	Name string
-	TTL  uint32
 }
 
 // requestRecordPool reuses RequestRecord values on the per-query hot path.

@@ -6,7 +6,6 @@ import (
 	"testing"
 	"zjdns/cache"
 	"zjdns/config"
-	"zjdns/database"
 	"zjdns/ruleset"
 	"zjdns/server/handler"
 	"zjdns/zone"
@@ -18,13 +17,7 @@ import (
 // exempts tagged clients: clients WITH the tag never match the rule and fall
 // through to normal resolution; clients WITHOUT the tag match and are blocked.
 func TestZone_MatchNegation(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = db.Close() }()
-
-	engine := ruleset.New(db)
+	engine := ruleset.New()
 	if err := engine.LoadRules([]config.RuleSet{
 		{Tag: "admin", Type: "ip", Rule: []string{"127.0.0.1/32"}},
 	}); err != nil {
@@ -32,7 +25,7 @@ func TestZone_MatchNegation(t *testing.T) {
 	}
 
 	// No bypass_tags — use match=!admin on the zone rule.
-	evaluator := zone.New(db)
+	evaluator := zone.New()
 	if err := evaluator.LoadRules([]config.ZoneRule{
 		{Name: "example.com", Match: []string{"!admin"}, Rcode: dns.RcodeNameError},
 	}); err != nil {
@@ -43,7 +36,7 @@ func TestZone_MatchNegation(t *testing.T) {
 		return engine.Match(qname, ip.String())
 	}
 
-	z := &Zone{evaluator: evaluator, tagMatcher: tagMatcher, cache: cache.New(db)}
+	z := &Zone{evaluator: evaluator, tagMatcher: tagMatcher, cache: cache.New(0, 0)}
 
 	nextCalled := false
 	h := z.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
@@ -81,13 +74,7 @@ func TestZone_MatchNegation(t *testing.T) {
 // two /32 gateway IPs share a tag, zone rules use match=!tag to block
 // everyone except the gateways.
 func TestZone_MatchNegation_TwoIPs(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = db.Close() }()
-
-	engine := ruleset.New(db)
+	engine := ruleset.New()
 	if err := engine.LoadRules([]config.RuleSet{
 		{Tag: "net_gateway", Type: "ip", Rule: []string{
 			"10.192.0.1/32",
@@ -97,7 +84,7 @@ func TestZone_MatchNegation_TwoIPs(t *testing.T) {
 		t.Fatalf("LoadRules: %v", err)
 	}
 
-	evaluator := zone.New(db)
+	evaluator := zone.New()
 	if err := evaluator.LoadRules([]config.ZoneRule{
 		{Name: "example.com", Match: []string{"!net_gateway"}, Rcode: dns.RcodeNameError},
 	}); err != nil {
@@ -108,7 +95,7 @@ func TestZone_MatchNegation_TwoIPs(t *testing.T) {
 		return engine.Match(qname, ip.String())
 	}
 
-	z := &Zone{evaluator: evaluator, tagMatcher: tagMatcher, cache: cache.New(db)}
+	z := &Zone{evaluator: evaluator, tagMatcher: tagMatcher, cache: cache.New(0, 0)}
 
 	nextCalled := false
 	h := z.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {

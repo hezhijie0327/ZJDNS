@@ -6,7 +6,6 @@ import (
 	"net"
 	"zjdns/cache"
 	"zjdns/config"
-	"zjdns/database"
 	"zjdns/edns"
 	"zjdns/server/defense"
 	"zjdns/server/resolver"
@@ -22,7 +21,6 @@ import (
 // be injected into the middleware chain without two-phase init.
 func initResolver(
 	cfg *config.ServerConfig,
-	db *database.DB,
 	queryClient *upstream.Client,
 	cryptoValidator *dnssec.CryptoValidator,
 	poisonDetector defense.Detector,
@@ -33,16 +31,16 @@ func initResolver(
 	backgroundCtx context.Context,
 ) (*resolver.Resolver, error) {
 	r, err := resolver.New(&resolver.Config{
-		QueryClient:    queryClient,
-		Crypto:         cryptoValidator,
-		PoisonDetector: poisonDetector,
-		EDNS:           ednsHandler,
-		CIDRMatcher:    cidrMatcher,
-		BuildMsg:       buildMsg,
-		Cache:          cacheStore,
-		DB:             db,
-		DNSSECEnforce:  cfg.Server.Features.DNSSECEnforce,
-		Ctx:            backgroundCtx,
+		QueryClient:          queryClient,
+		Crypto:               cryptoValidator,
+		PoisonDetector:       poisonDetector,
+		EDNS:                 ednsHandler,
+		CIDRMatcher:          cidrMatcher,
+		BuildMsg:             buildMsg,
+		Cache:                cacheStore,
+		DNSSECEnforce:        cfg.Server.Features.DNSSECEnforce,
+		DelegationMaxEntries: cfg.Server.Features.Cache.Delegation.Limit,
+		Ctx:                  backgroundCtx,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create resolver: %w", err)
@@ -77,6 +75,8 @@ func wireZoneDynamicContent(store cache.Store, rules []config.ZoneRule, resetDNS
 		switch dnsutil.Canonical(rules[i].Name) {
 		case dnsutil.Canonical(config.DefaultProjectName + ".stats"):
 			rules[i].DynamicContent = func(net.IP) []string { return store.Stats() }
+		case dnsutil.Canonical(config.DefaultProjectName + ".stats.rcode"):
+			rules[i].DynamicContent = func(net.IP) []string { return store.StatsRcode() }
 		case dnsutil.Canonical(config.DefaultProjectName + ".whoami"):
 			rules[i].DynamicContent = func(clientIP net.IP) []string {
 				if clientIP == nil {

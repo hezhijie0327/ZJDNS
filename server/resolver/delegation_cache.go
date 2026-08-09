@@ -1,11 +1,9 @@
 package resolver
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"zjdns/config"
-	"zjdns/database"
 	"zjdns/internal/log"
 	"zjdns/server/defense"
 
@@ -13,16 +11,24 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
-// delegationRecord is a row from the delegations table, parsed into Go types.
-// ds is nil for insecure delegations (authenticated no-DS denial).
-// Freshness is enforced in SQL via expires_at — timestamp/ttl are not
-// scanned (M-low).
-type delegationRecord struct {
+// delegationEntry is one cached zone-cut delegation in memory (LRU-backed,
+// like the latency table).  ds is nil for insecure delegations (authenticated
+// no-DS denial).  Freshness is enforced lazily on read: an entry whose
+// ts+ttl has passed is treated as absent.
+type delegationEntry struct {
 	zone    string
 	parent  string
 	nsNames []string
 	addrs   []string // snapshot fallback when NS-address cache is cold
 	ds      []*dns.DS
+	ts      int64 // log.NowUnix() at store
+	ttl     int   // min(NS, DS) TTL, floor 10s, cap 7d
+}
+
+// fresh reports whether the entry has not yet expired (lazy expiry — the
+// former SQL `expires_at > unixepoch()` filter).
+func (e *delegationEntry) fresh() bool {
+	return e.ts+int64(e.ttl) > log.NowUnix()
 }
 
 // ancestorZones returns the ancestor zones of qname from deepest to shallowest,
@@ -134,12 +140,7 @@ func unpackDS(wire []byte) []*dns.DS {
 // storeDelegation persists a zone-cut delegation discovered during a recursive
 // walk.  Only verified delegations (secure DS verified, or authenticated
 // no-DS) are stored; unverifiable and poisoned delegations are skipped.
-func (r *Recursive) storeDelegation(ctx context.Context, zone, parent string, nsRecords []*dns.NS, addrs []string, chain *dnssecChain, verdict defense.Verdict) {
-	if r.db == nil {
-		return
-	}
-	writeCtx, writeCancel := r.db.WriteContext()
-	defer writeCancel()
+func (r *Recursive) storeDelegation(zone, parent string, nsRecords []*dns.NS, addrs []string, chain *dnssecChain, verdict defense.Verdict) {
 	if verdict == defense.VerdictPoisoned {
 		return
 	}
@@ -154,33 +155,22 @@ func (r *Recursive) storeDelegation(ctx context.Context, zone, parent string, ns
 		return
 	}
 
-	nsNamesStr := strings.Join(nsNames, "\n")
-	addrsStr := strings.Join(addrs, "\n")
-	ttl := minDelegationTTL(nsRecords, chain.childDS)
-	ts := log.NowUnix()
-
-	var dsWire []byte
-	if len(chain.childDS) > 0 {
-		dsWire = packDS(chain.childDS)
-	}
-	// dsWire is nil for insecure delegations (authenticated no-DS denial).
-
-	if _, err := r.db.StmtDelegationStore.ExecContext(writeCtx, zone, parent, nsNamesStr, addrsStr, dsWire, ts, ttl, ts+int64(ttl)); err != nil {
-		log.Debugf("RECURSION: store delegation %s: %v", zone, err)
-	}
+	r.delegations.Set(zone, &delegationEntry{
+		zone:    zone,
+		parent:  parent,
+		nsNames: nsNames,
+		addrs:   addrs,
+		ds:      chain.childDS,
+		ts:      log.NowUnix(),
+		ttl:     minDelegationTTL(nsRecords, chain.childDS),
+	})
 }
 
 // lookupDelegation searches for the deepest fresh delegation whose zone is an
 // ancestor of (or equal to) qname.  Parent-side qtypes (DS, NSEC, NSEC3) skip
 // a delegation whose zone matches the qname exactly, because the parent — not
 // the child — is authoritative for those records (RFC 4035 §1).
-func (r *Recursive) lookupDelegation(ctx context.Context, qname string, qtype uint16) (*delegationRecord, bool) {
-	if r.db == nil {
-		return nil, false
-	}
-	readCtx, readCancel := r.db.ReadContext()
-	defer readCancel()
-
+func (r *Recursive) lookupDelegation(qname string, qtype uint16) (*delegationEntry, bool) {
 	zones := ancestorZones(qname)
 	if len(zones) == 0 {
 		return nil, false
@@ -194,37 +184,21 @@ func (r *Recursive) lookupDelegation(ctx context.Context, qname string, qtype ui
 		}
 	}
 
-	// Bind zones to the IN clause; pad remaining placeholders with empty string.
-	args := make([]any, database.DelegationLookupZones)
-	for i, z := range zones {
-		args[i] = z
+	// Deepest fresh match wins — walking zones deepest-first reproduces the
+	// former SQL ORDER BY LENGTH(zone) DESC LIMIT 1.
+	for _, z := range zones {
+		if e, ok := r.delegations.Get(z); ok && e.fresh() {
+			return e, true
+		}
 	}
-	for i := len(zones); i < database.DelegationLookupZones; i++ {
-		args[i] = ""
-	}
-
-	row := r.db.StmtDelegationLookup.QueryRowContext(readCtx, args...)
-	var rec delegationRecord
-	var nsNamesStr, addrsStr string
-	var dsWire []byte
-	if err := row.Scan(&rec.zone, &rec.parent, &nsNamesStr, &addrsStr, &dsWire); err != nil {
-		return nil, false
-	}
-
-	rec.nsNames = strings.Split(nsNamesStr, "\n")
-	rec.addrs = strings.Split(addrsStr, "\n")
-	if len(dsWire) > 0 {
-		rec.ds = unpackDS(dsWire)
-	}
-
-	return &rec, true
+	return nil, false
 }
 
 // resolveDelegationAddrs resolves the NS names in a delegation record to
 // "ip:port" addresses.  The NS-address cache is checked first (latency-sorted,
 // probe-refreshed); the stored snapshot is used as a fallback when the cache
 // is cold.
-func (r *Recursive) resolveDelegationAddrs(record *delegationRecord) []string {
+func (r *Recursive) resolveDelegationAddrs(record *delegationEntry) []string {
 	var addrs []string
 	for _, nsName := range record.nsNames {
 		addrs = append(addrs, r.lookupNSAddrsFromCache(nsName, nil)...)
@@ -238,7 +212,7 @@ func (r *Recursive) resolveDelegationAddrs(record *delegationRecord) []string {
 // applyDelegationStart seeds the walk state from a cached delegation record.
 // The DNSSEC chain is rebuilt so that downstream validation proceeds exactly as
 // if the walk had reached this zone organically.
-func (r *Recursive) applyDelegationStart(nameservers *[]string, currentDomain *string, tldServers *[]string, chain *dnssecChain, record *delegationRecord) error {
+func (r *Recursive) applyDelegationStart(nameservers *[]string, currentDomain *string, tldServers *[]string, chain *dnssecChain, record *delegationEntry) error {
 	addrs := r.resolveDelegationAddrs(record)
 	if len(addrs) == 0 {
 		return fmt.Errorf("delegation %s: no addresses available", record.zone)

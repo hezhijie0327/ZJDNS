@@ -62,7 +62,7 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			rec.Qclass = qclass
 			rec.Protocol = qctx.Protocol
 			rec.Result = "hit"
-			rec.Rcode = dns.RcodeSuccess
+			rec.Rcode = int(qctx.Res.Rcode) // cached entry's real rcode (negative-cache NXDOMAIN → rcode 3)
 			m.store.RecordRequest(rec)
 			cache.ReleaseRequestRecord(rec)
 
@@ -118,7 +118,7 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				rec.Qclass = qclass
 				rec.Protocol = qctx.Protocol
 				rec.Result = "stale"
-				rec.Rcode = dns.RcodeSuccess
+				rec.Rcode = int(qctx.Res.Rcode) // stale entry's real rcode
 				m.store.RecordRequest(rec)
 				cache.ReleaseRequestRecord(rec)
 				return nil
@@ -133,7 +133,7 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				rec.Qclass = qclass
 				rec.Protocol = qctx.Protocol
 				rec.Result = "stale"
-				rec.Rcode = dns.RcodeSuccess
+				rec.Rcode = int(qctx.Res.Rcode) // stale entry's real rcode
 				m.store.RecordRequest(rec)
 				cache.ReleaseRequestRecord(rec)
 				return nil
@@ -235,7 +235,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(qctx *handler.QueryContext, qname 
 			rec.Qclass = qctx.Req.Question[0].Header().Class
 			rec.Protocol = qctx.Protocol
 			rec.Result = "miss"
-			rec.Rcode = dns.RcodeSuccess
+			rec.Rcode = int(qr.Rcode) // fresh resolution rcode (msg.Rcode was aligned to it above)
 			m.store.RecordRequest(rec)
 			cache.ReleaseRequestRecord(rec)
 		} else {
@@ -246,7 +246,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(qctx *handler.QueryContext, qname 
 			rec.Qclass = qclass
 			rec.Protocol = qctx.Protocol
 			rec.Result = "stale"
-			rec.Rcode = dns.RcodeSuccess
+			rec.Rcode = int(qctx.Res.Rcode) // stale entry's real rcode
 			m.store.RecordRequest(rec)
 			cache.ReleaseRequestRecord(rec)
 		}
@@ -258,7 +258,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(qctx *handler.QueryContext, qname 
 		rec.Qclass = qclass
 		rec.Protocol = qctx.Protocol
 		rec.Result = "stale"
-		rec.Rcode = dns.RcodeSuccess
+		rec.Rcode = int(qctx.Res.Rcode) // stale entry's real rcode
 		m.store.RecordRequest(rec)
 		cache.ReleaseRequestRecord(rec)
 		// TryGo, not Go: this call sits on the per-query path and Go blocks

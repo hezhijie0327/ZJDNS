@@ -33,28 +33,9 @@ const (
 // =============================================================================
 
 const (
-	DefaultMaxCacheEntries   = 10000
-	DefaultCacheMMapSizeMB   = 16
-	DefaultCacheCacheSizeMB  = 8
-	DefaultCacheMaxOpenConns = 6 // SQLite WAL: single writer, readers served concurrently
-	// DefaultCacheMaxIdleConns is aligned with MaxOpenConns: with idle < open,
-	// the pool closes the surplus returned connection under sustained load and
-	// immediately dials a replacement, churning connections and re-preparing
-	// statements on every new connection (observed: thousands of retained
-	// prepared statements, then pool exhaustion wedging every query).
-	DefaultCacheMaxIdleConns = DefaultCacheMaxOpenConns
-
-	// DefaultCacheQueryTimeout bounds every SQLite READ on the query hot path.
-	// All cache/zone/ruleset lookups run through context-bounded calls so a
-	// momentarily exhausted pool fails fast instead of blocking on a
-	// context.Background wait forever (the old behaviour wedged the entire
-	// process — every handler queued on database/sql.DB.conn, only a restart
-	// recovered it).
-	DefaultCacheQueryTimeout = 2 * time.Second
-
-	DefaultQueryJournalRetention = 3 * 86400     // seconds — auto-cleanup window for query_stats + query_log
-	DefaultPruneInterval         = 1 * time.Hour // interval between PruneQueryJournal runs
-	DefaultPruneBatchSize        = 10000         // rows per iteration during prune
+	DefaultMaxCacheEntries      = 10000
+	DefaultMaxLatencyEntries    = 5000  // per-IP latency table bound
+	DefaultMaxDelegationEntries = 10000 // zone-cut delegation cache bound
 
 	DefaultTTL         = 10
 	DefaultStaleTTL    = 30
@@ -80,6 +61,10 @@ const (
 	// When exceeded, the oldest half of entries are evicted to prevent
 	// unbounded growth under sustained diverse-query load.
 	DefaultPrefetchCooldownMaxEntries = 10000
+
+	// DefaultCacheSnapshotInterval is the periodic cache snapshot ticker
+	// (used only when features.cache.state_file is configured).
+	DefaultCacheSnapshotInterval = 5 * time.Minute
 )
 
 // =============================================================================
@@ -185,14 +170,6 @@ const (
 	DefaultSweepInterval         = 5 * time.Minute        // periodic cleanup sweep
 	DefaultTCPWriteMuStaleCutoff = 2 * time.Minute        // stale TCP write mutex cutoff
 
-	// DefaultCacheWriteTimeout bounds every best-effort SQLite write (cache
-	// Set, eviction, stats flush, latency).  A saturated write-lock convoy
-	// must degrade to dropped writes — never a hang of the query path.
-	DefaultCacheWriteTimeout = 5 * time.Second
-	// DefaultCacheOptimizeInterval refreshes SQLite planner statistics in the
-	// background; PRAGMA optimize previously ran inline on the Set() hot path.
-	DefaultCacheOptimizeInterval = 10 * time.Minute
-
 	DefaultCookieSecretRotationInterval = 24 * time.Hour // RFC 7873 §7.1: default lifetime 1 day
 	DefaultECSRefreshInterval           = 15 * time.Minute
 
@@ -224,19 +201,6 @@ const (
 
 	DefaultServerGoroutineLimit = 1024
 	DefaultMinConcurrencyLimit  = 8
-
-	DefaultAsyncStatsBufferSize = 64 // async stats writer channel capacity
-	DefaultAsyncStatsBatchSize  = 64 // stats records per flush transaction
-
-	// DefaultAsyncCacheBatchSize is the cache-entry flush threshold: entries
-	// are written to SQLite in transactions of this many rows, amortising
-	// BEGIN/COMMIT + index-seek overhead across the batch.
-	DefaultAsyncCacheBatchSize = 128
-	// DefaultAsyncCacheBufferSize caps the cache-entry write queue (full → drop).
-	DefaultAsyncCacheBufferSize = 4096
-	// DefaultCachePendingCapacity bounds the in-memory read-through layer
-	// (entries awaiting their batch commit).
-	DefaultCachePendingCapacity = 4096
 
 	DefaultTransportMax          = 64
 	DefaultQUICConfigCacheSize   = 128 // max cached QUIC configs (LRU)

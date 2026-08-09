@@ -145,8 +145,18 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	}
 	log.Debugf("UPSTREAM: querying %s (%s) for %s", server.Address, server.Protocol, qname)
 
-	queryCtx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
+	// Avoid a nested timeout timer when the caller already carries a tighter
+	// deadline (recursive resolution wraps every NS query in a 9s deadline) —
+	// a second WithTimeout duplicated the timer + context per query (a
+	// dominant allocation under full guards).
+	queryCtx := ctx
+	var cancel context.CancelFunc
+	if dl, ok := ctx.Deadline(); !ok || time.Until(dl) > c.timeout {
+		queryCtx, cancel = context.WithTimeout(ctx, c.timeout)
+	}
+	if cancel != nil {
+		defer cancel()
+	}
 
 	// Protocol is normalized to lowercase at registration (ConfigureServers);
 	// the per-query ToLower scan is gone from the upstream hot path.

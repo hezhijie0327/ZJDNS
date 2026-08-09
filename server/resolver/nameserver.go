@@ -95,11 +95,11 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			// reached the authoritative servers (geo-aware resolution broke).
 			msg.Pseudo = append(msg.Pseudo, baseMsg.Pseudo...)
 			// ExecuteQuery reads msg via Pack()/Data — caller retains ownership.
-
-			subCtx, subCancel := context.WithTimeout(queryCtx, config.DefaultDNSQueryTimeout)
-			defer subCancel()
-
-			result := r.resolver.queryClient.ExecuteQuery(subCtx, msg, server)
+			// No per-NS sub-context: ExecuteQuery applies its own timeout, and
+			// queryCtx already carries the 9s deadline — a nested WithTimeout
+			// duplicated the timer and context per NS (a dominant allocation
+			// under full guards, where every recursion level fans out here).
+			result := r.resolver.queryClient.ExecuteQuery(queryCtx, msg, server)
 			if result.Error == nil && result.Response != nil {
 				// RFC 5452 §9.3: reject responses that do not echo the query's
 				// question — a replayed signed response for a different name

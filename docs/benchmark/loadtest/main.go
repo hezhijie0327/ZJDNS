@@ -138,7 +138,7 @@ func main() {
 					qn = qnameList[int(qc.Add(1))%len(qnameList)]
 				}
 				msg := new(dns.Msg)
-				dnsutil.SetQuestion(msg, qn, dns.TypeA)
+				dnsutil.SetQuestion(msg, dnsutil.Fqdn(qn), dns.TypeA)
 				msg.UDPSize = 1232
 
 				start := time.Now()

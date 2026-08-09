@@ -3,20 +3,11 @@ package ruleset
 import (
 	"testing"
 	"zjdns/config"
-	"zjdns/database"
 )
 
 func testEngine(t *testing.T, rules []config.RuleSet) *Engine {
 	t.Helper()
-	origVersion := database.Version
-	database.Version = "3.2.12"
-	t.Cleanup(func() { database.Version = origVersion })
-	db, err := database.Open(":memory:", 100, database.Options{MMapSizeMB: 1, CacheSizeMB: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	e := New(db)
+	e := New()
 	if err := e.LoadRules(rules); err != nil {
 		t.Fatal(err)
 	}

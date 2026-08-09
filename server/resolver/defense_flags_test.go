@@ -5,6 +5,7 @@ import (
 	"testing"
 	"zjdns/config"
 	"zjdns/edns"
+	"zjdns/internal/lrumap"
 	"zjdns/server/defense"
 	"zjdns/server/upstream"
 
@@ -70,8 +71,9 @@ func TestConfigureServers_DefenseFlagPropagation(t *testing.T) {
 				upstream: &upstreamSet{},
 			}
 			r.recursive = &Recursive{
-				resolver: r,
-				ctx:      context.Background(),
+				delegations: lrumap.New[string, *delegationEntry](10000),
+				resolver:    r,
+				ctx:         context.Background(),
 			}
 			r.cname = &CNAME{resolver: r}
 
@@ -98,7 +100,7 @@ func TestConfigureServers_DefaultProtocolUDP(t *testing.T) {
 	r := &Resolver{
 		upstream: &upstreamSet{},
 	}
-	r.recursive = &Recursive{resolver: r, ctx: context.Background()}
+	r.recursive = &Recursive{delegations: lrumap.New[string, *delegationEntry](10000), resolver: r, ctx: context.Background()}
 	r.cname = &CNAME{resolver: r}
 
 	servers := []config.UpstreamServer{
@@ -119,7 +121,7 @@ func TestConfigureServers_RecursiveProxyURL(t *testing.T) {
 	r := &Resolver{
 		upstream: &upstreamSet{},
 	}
-	r.recursive = &Recursive{resolver: r, ctx: context.Background()}
+	r.recursive = &Recursive{delegations: lrumap.New[string, *delegationEntry](10000), resolver: r, ctx: context.Background()}
 	r.cname = &CNAME{resolver: r}
 
 	// Recursive server sets proxy URL.

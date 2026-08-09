@@ -55,7 +55,7 @@ func LoadConfig(configFile string) (*ServerConfig, error) {
 	log.Debugf("CONFIG: upstream=%d recursive=%t dnssec_enforce=%t cache_entries=%d log_level=%s",
 		len(cfg.Upstream), len(cfg.Upstream) == 0,
 		cfg.Server.Features.DNSSECEnforce,
-		cfg.Server.Features.Cache.MaxEntries, cfg.Server.LogLevel)
+		cfg.Server.Features.Cache.Entries.Limit, cfg.Server.LogLevel)
 	log.Infof("CONFIG: Configuration loaded successfully")
 	return cfg, nil
 }

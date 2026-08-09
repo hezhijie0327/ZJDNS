@@ -72,6 +72,13 @@ func buildFromPrePacked(entry *cache.Entry, isExpired bool) *dns.Msg {
 	msg.Authoritative = false
 	msg.RecursionAvailable = true
 
+	// The pre-packed wire is served verbatim, so the msg fields are never
+	// Unpacked.  Sync the rcode from the wire header (byte 3, low nibble)
+	// so code reading msg.Rcode — the stats journal groups by it — sees the
+	// cached entry's real rcode (negative-cache NXDOMAIN → 3) instead of 0.
+	// Extended EDNS rcodes (>= 16) do not occur in cached responses.
+	msg.Rcode = uint16(wire[3] & 0x0F) //nolint:gosec // G115: rcode < 16, wire format bounded
+
 	if entry.Validated {
 		msg.AuthenticatedData = true
 	}

@@ -37,17 +37,24 @@ func generateExampleConfig() (string, error) {
 	cfg.Server.Certificate.DNSCrypt = config.DNSCryptCertificate{
 		PublicKey:  "1A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074",
 		PrivateKey: "34E2546B6F4C1FCE695E0C62DD3D74D39CEA52C70A283E7615EF4B67F82178D51A10FA5B04BC9188691C303960080BC93CCE83E7BC922AA5E59C49C34D675074",
+		StateFile:  "./zjdns.dnscrypt",
 	}
 
 	cfg.Server.Features.KTLS = &config.KTLSSettings{KernelTX: true}
-	cfg.Server.Features.Database = config.DatabaseSettings{
-		DBPath:      "cache.db",
-		MMapSizeMB:  config.DefaultCacheMMapSizeMB,
-		CacheSizeMB: config.DefaultCacheCacheSizeMB,
-	}
 	cfg.Server.Features.Cache = config.CacheSettings{
-		MaxEntries:  config.DefaultMaxCacheEntries,
-		PreferStale: true,
+		Entries: config.CacheStoreSettings{
+			Limit:       config.DefaultMaxCacheEntries,
+			PreferStale: true,
+			StateFile:   "./zjdns.cache",
+		},
+		Latency: config.CacheStoreSettings{
+			Limit:     config.DefaultMaxLatencyEntries,
+			StateFile: "./zjdns.latency",
+		},
+		Delegation: config.CacheStoreSettings{
+			Limit:     config.DefaultMaxDelegationEntries,
+			StateFile: "./zjdns.delegation",
+		},
 	}
 	cfg.Server.Features.ECS = config.ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.LatencyProbe = []config.LatencyProbeStep{

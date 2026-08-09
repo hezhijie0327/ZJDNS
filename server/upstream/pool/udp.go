@@ -295,7 +295,12 @@ func (c *UDPConn) readLoop() {
 	defer zdnsutil.HandlePanic("UDP pool reader")
 	defer c.close()
 
-	buf := make([]byte, 65535) // max UDP payload; one allocation per conn
+	// Read buffer: 16KB covers every realistic DNS response — DNSSEC-signed
+	// referrals rarely exceed 8KB, oversized responses trigger TC and are
+	// retried over TCP.  The previous 64KB (max UDP payload) cost 4x the
+	// memory per connection, and with recursive resolution holding one
+	// connection per authoritative server, the working set scaled badly.
+	buf := make([]byte, 16384) // one allocation per conn
 
 	for {
 		_ = c.conn.SetReadDeadline(time.Now().Add(c.idleTimeout))

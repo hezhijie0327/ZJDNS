@@ -8,9 +8,9 @@ import (
 	"sync"
 	"zjdns/cache"
 	"zjdns/config"
-	"zjdns/database"
 	"zjdns/edns"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 	"zjdns/internal/pending"
 	"zjdns/internal/pool"
 	"zjdns/server/defense"
@@ -32,12 +32,12 @@ import (
 type Recursive struct {
 	resolver    *Resolver
 	cache       cache.Store
-	db          *database.DB    // delegation cache (zone → NS names + DS); nil in tests
-	ctx         context.Context // lifecycle context for background probes
-	spoofguard  bool            // from protocol=recursive upstream
-	splitguard  bool            // from protocol=recursive upstream
-	poisonguard bool            // from protocol=recursive upstream
-	hopguard    bool            // from protocol=recursive upstream
+	ctx         context.Context                       // lifecycle context for background probes
+	delegations *lrumap.Map[string, *delegationEntry] // zone-cut delegation cache (zone → NS names + DS)
+	spoofguard  bool                                  // from protocol=recursive upstream
+	splitguard  bool                                  // from protocol=recursive upstream
+	poisonguard bool                                  // from protocol=recursive upstream
+	hopguard    bool                                  // from protocol=recursive upstream
 
 	// rootCache memoizes getRootServers' result: the root set changes at
 	// most monthly, but the uncached path issues 13 names × 2 types = 26
@@ -138,7 +138,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 	// Delegation cache: if a cached zone cut exists for an ancestor of the
 	// qname, start the walk from the deepest fresh zone instead of the root.
-	if record, ok := r.lookupDelegation(ctx, qname, question.Qtype); ok {
+	if record, ok := r.lookupDelegation(qname, question.Qtype); ok {
 		if err := r.applyDelegationStart(&nameservers, &currentDomain, &tldServers, chain, record); err == nil {
 			minimiseSteps = 0 // restart minimisation schedule from new zone
 			log.Debugf("RECURSION: delegation cache hit for %s — starting walk at zone=%s", question.Name, currentDomain)
@@ -334,7 +334,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		}
 
 		r.cacheGlueRecords(nsResult.glue)
-		r.storeDelegation(ctx, currentDomain, parentDomain, bestNSRecords, nsResult.addrs, chain, verdict)
+		r.storeDelegation(currentDomain, parentDomain, bestNSRecords, nsResult.addrs, chain, verdict)
 
 		pool.DefaultMessage.Put(response)
 		nameservers = nsResult.addrs

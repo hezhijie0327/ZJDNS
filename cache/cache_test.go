@@ -2,17 +2,12 @@ package cache
 
 import (
 	"bytes"
-	"context"
-	"database/sql"
 	"fmt"
 	"net/netip"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 	"zjdns/config"
-	"zjdns/database"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
@@ -21,14 +16,8 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 )
 
-func testStore() *SQLiteCache {
-	db, err := database.Open("", 0, database.Options{})
-	if err != nil {
-		panic(err)
-	}
-	// Don't use the async stats writer in tests — RecordRequest falls back to
-	// synchronous SQLite writes so callers can observe results immediately.
-	return &SQLiteCache{db: db}
+func testStore() *Cache {
+	return New(0, 0)
 }
 
 // ── Get / Set ─────────────────────────────────────────────────────────────────
@@ -446,7 +435,7 @@ func TestSet_Get_NSAddrTXT(t *testing.T) {
 	}
 }
 
-// ── RecordRequest (query_stats + query_log) ──────────────────────────────
+// ── RecordRequest (in-memory stats + per-RCODE journal) ─────────────────────
 
 func TestRecordRequest_Hit(t *testing.T) {
 	mc := testStore()
@@ -461,19 +450,16 @@ func TestRecordRequest_Hit(t *testing.T) {
 		Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess,
 	})
 
-	var protocol string
-	var hitCount int64
-	err := mc.db.SQ.QueryRow(
-		"SELECT protocol, query_count FROM query_stats WHERE result='hit'",
-	).Scan(&protocol, &hitCount)
-	if err != nil {
-		t.Fatalf("query_counters query: %v", err)
+	snap := mc.statsMgr.Snapshot(0)
+	if snap.Total != 1 || snap.Hits != 1 {
+		t.Fatalf("counters total/hits = %d/%d, want 1/1", snap.Total, snap.Hits)
 	}
-	if protocol != "udp" {
-		t.Errorf("protocol = %s, want udp", protocol)
+	if snap.UDP != 1 {
+		t.Errorf("udp = %d, want 1", snap.UDP)
 	}
-	if hitCount != 1 {
-		t.Errorf("query_count = %d, want 1", hitCount)
+	// Hits must not enter the per-RCODE journal.
+	if len(snap.TopByRcode) != 0 {
+		t.Errorf("journal has entries for hits: %+v", snap.TopByRcode)
 	}
 }
 
@@ -490,18 +476,13 @@ func TestRecordRequest_Stale(t *testing.T) {
 		Protocol: "tcp", Result: "stale", Rcode: dns.RcodeSuccess,
 	})
 
-	var protocol, result string
-	err := mc.db.SQ.QueryRow(
-		"SELECT protocol, result FROM query_log WHERE qname='example.com.'",
-	).Scan(&protocol, &result)
-	if err != nil {
-		t.Fatalf("query_log query: %v", err)
+	snap := mc.statsMgr.Snapshot(0)
+	if snap.Stales != 1 || snap.TCP != 1 {
+		t.Fatalf("counters stales/tcp = %d/%d, want 1/1", snap.Stales, snap.TCP)
 	}
-	if protocol != "tcp" {
-		t.Errorf("protocol = %s, want tcp", protocol)
-	}
-	if result != "stale" {
-		t.Errorf("result = %s, want stale", result)
+	top := snap.TopByRcode[dns.RcodeSuccess]
+	if len(top) != 1 || top[0].Key != "example.com." || top[0].Count != 1 {
+		t.Fatalf("journal top = %+v, want [example.com. 1]", top)
 	}
 }
 
@@ -516,18 +497,15 @@ func TestRecordRequest_MultipleResults(t *testing.T) {
 	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
 	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "https", Result: "hit", Rcode: dns.RcodeSuccess})
 
-	var udpHits, dohHits int64
-	err := mc.db.SQ.QueryRow(
-		"SELECT COALESCE(SUM(CASE WHEN protocol='udp' THEN query_count ELSE 0 END), 0), COALESCE(SUM(CASE WHEN protocol='https' THEN query_count ELSE 0 END), 0) FROM query_stats WHERE result='hit'",
-	).Scan(&udpHits, &dohHits)
-	if err != nil {
-		t.Fatalf("query_counters query: %v", err)
+	snap := mc.statsMgr.Snapshot(0)
+	if snap.Hits != 3 {
+		t.Errorf("hits = %d, want 3", snap.Hits)
 	}
-	if udpHits != 2 {
-		t.Errorf("udp hits = %d, want 2", udpHits)
+	if snap.UDP != 2 {
+		t.Errorf("udp hits = %d, want 2", snap.UDP)
 	}
-	if dohHits != 1 {
-		t.Errorf("doh hits = %d, want 1", dohHits)
+	if snap.HTTPS != 1 {
+		t.Errorf("doh hits = %d, want 1", snap.HTTPS)
 	}
 }
 
@@ -540,54 +518,17 @@ func TestRecordRequest_Zone(t *testing.T) {
 	mc.RecordRequest(&RequestRecord{Qname: "blocked.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 	mc.RecordRequest(&RequestRecord{Qname: "blocked.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 
-	var count int64
-	err := mc.db.SQ.QueryRow(
-		"SELECT COUNT(*) FROM query_log WHERE qname='blocked.com.' AND result='zone'",
-	).Scan(&count)
-	if err != nil {
-		t.Fatalf("query_log query: %v", err)
+	snap := mc.statsMgr.Snapshot(0)
+	if snap.Zones != 2 {
+		t.Errorf("zones = %d, want 2", snap.Zones)
 	}
-	if count != 2 {
-		t.Errorf("zone count = %d, want 2", count)
+	top := snap.TopByRcode[dns.RcodeRefused]
+	if len(top) != 1 || top[0].Key != "blocked.com." || top[0].Count != 2 {
+		t.Fatalf("journal top = %+v, want [blocked.com. 2]", top)
 	}
 }
 
-// ── ReverseLookup (ptr_map) ──────────────────────────────────────────────────
-
-func TestReverseLookup(t *testing.T) {
-	mc := testStore()
-	defer func() { _ = mc.Close() }()
-
-	aRec := &dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.1")}}
-	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{aRec}, nil, nil, false, 0)
-
-	results := mc.ReverseLookup("192.0.2.1")
-	if len(results) == 0 {
-		t.Fatal("ReverseLookup returned no results")
-	}
-	found := false
-	for _, r := range results {
-		if r.Name == "www.example.com." {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("ReverseLookup should find www.example.com for 192.0.2.1")
-	}
-}
-
-func TestReverseLookup_EmptyIP(t *testing.T) {
-	mc := testStore()
-	defer func() { _ = mc.Close() }()
-
-	results := mc.ReverseLookup("")
-	if results != nil {
-		t.Error("ReverseLookup with empty IP should return nil")
-	}
-}
-
-// ── UpdateLatency (ip_latency table) ─────────────────────────────────────
+// ── UpdateLatency (in-memory latency map) ─────────────────────────────────
 
 func TestUpdateLatency(t *testing.T) {
 	mc := testStore()
@@ -598,13 +539,18 @@ func TestUpdateLatency(t *testing.T) {
 
 	mc.UpdateLatency("8.8.8.8", 42)
 
-	var lat int
-	err := mc.db.SQ.QueryRow("SELECT latency_ms FROM ip_latency WHERE rdata_ip='8.8.8.8'").Scan(&lat)
-	if err != nil {
-		t.Fatalf("ip_latency query: %v", err)
+	e, ok := mc.latencies.Get("8.8.8.8")
+	if !ok {
+		t.Fatal("latency entry not stored")
 	}
-	if lat != 42 {
-		t.Errorf("latency_ms = %d, want 42", lat)
+	if e.latency != 42 {
+		t.Errorf("latency = %d, want 42", e.latency)
+	}
+	if ts, ok := mc.LatencyLastProbe("8.8.8.8"); !ok || ts == 0 {
+		t.Errorf("LatencyLastProbe = (%d, %v), want (probe time, true)", ts, ok)
+	}
+	if _, ok := mc.LatencyLastProbe("9.9.9.9"); ok {
+		t.Error("LatencyLastProbe for unknown IP should return false")
 	}
 }
 
@@ -651,19 +597,15 @@ func TestSet_RoundTrip(t *testing.T) {
 	rr := &dns.A{Hdr: dns.Header{Name: "meta.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.1.1.1")}}
 	mc.Set("meta.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, true, 0)
 
-	var validated int
-	var msgWire []byte
-	err := mc.db.SQ.QueryRow(
-		"SELECT e.validated, e.msg_wire FROM entries e WHERE e.qname='meta.example.com.' AND e.qtype=1",
-	).Scan(&validated, &msgWire)
-	if err != nil {
-		t.Fatalf("entries query: %v", err)
+	entry, found, _ := mc.Get("meta.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	if !found || entry == nil {
+		t.Fatal("entry not found after Set")
 	}
-	if validated != 1 {
-		t.Errorf("validated = %d, want 1", validated)
+	if !entry.Validated {
+		t.Error("Validated flag not preserved")
 	}
-	if len(msgWire) == 0 {
-		t.Error("msg_wire should not be empty")
+	if len(entry.ResponseWire) == 0 {
+		t.Error("ResponseWire should not be empty")
 	}
 }
 
@@ -722,23 +664,16 @@ func TestRecordRequest_Error(t *testing.T) {
 		Server: "1.2.3.4:53 (UDP)", ResponseTime: 500,
 	})
 
-	var protocol, result string
-	var rcode, respTime int
-	var server string
-	err := mc.db.SQ.QueryRow(
-		"SELECT protocol, result, rcode, response_ms, server FROM query_log WHERE qname='error.example.com.'",
-	).Scan(&protocol, &result, &rcode, &respTime, &server)
-	if err != nil {
-		t.Fatalf("query_log query: %v", err)
+	snap := mc.statsMgr.Snapshot(0)
+	if snap.Errors != 1 || snap.UDP != 1 {
+		t.Fatalf("counters errors/udp = %d/%d, want 1/1", snap.Errors, snap.UDP)
 	}
-	if result != "error" {
-		t.Errorf("result = %s, want error", result)
+	if snap.TotalMS != 500 {
+		t.Errorf("TotalMS = %d, want 500", snap.TotalMS)
 	}
-	if rcode != dns.RcodeServerFailure {
-		t.Errorf("rcode = %d, want %d", rcode, dns.RcodeServerFailure)
-	}
-	if server != "1.2.3.4:53 (UDP)" {
-		t.Errorf("server = %s", server)
+	top := snap.TopByRcode[dns.RcodeServerFailure]
+	if len(top) != 1 || top[0].Key != "error.example.com." || top[0].Count != 1 {
+		t.Fatalf("journal top = %+v, want [error.example.com. 1]", top)
 	}
 }
 
@@ -767,13 +702,7 @@ func TestStats(t *testing.T) {
 // ── E2E: full lifecycle with disk-backed DB and real DNS records ─────────────
 
 func TestE2E_FullLifecycle(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "e2e.db")
-	db, err := database.Open(dbPath, 500, database.Options{MMapSizeMB: 4, CacheSizeMB: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mc := &SQLiteCache{db: db}
+	mc := New(0, 0)
 	defer func() { _ = mc.Close() }()
 
 	// ── Phase 1: Insert varied DNS records ──────────────────────────────────
@@ -852,13 +781,14 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		t.Errorf("authority count = %d, want 2 (SOA+NSEC)", len(entry.Authority))
 	}
 
-	// ── Phase 4: Verify query_log has error record ────────────────────────
-	var errCount int64
-	err = mc.db.SQ.QueryRow("SELECT COUNT(*) FROM query_log WHERE qname='error.example.com.' AND result='error'").Scan(&errCount)
-	if err != nil {
-		t.Errorf("error log count query: %v", err)
-	} else if errCount != 1 {
-		t.Errorf("error log count = %d, want 1", errCount)
+	// ── Phase 4: Verify error record in the per-RCODE journal ──────────────
+	errSnap := mc.statsMgr.Snapshot(0)
+	if errSnap.Errors != 1 {
+		t.Errorf("error count = %d, want 1", errSnap.Errors)
+	}
+	errorTop := errSnap.TopByRcode[dns.RcodeServerFailure]
+	if len(errorTop) != 1 || errorTop[0].Key != "error.example.com." {
+		t.Errorf("error journal top = %+v, want [error.example.com. 1]", errorTop)
 	}
 
 	// ── Phase 5: RecordRequest logs queries ────────────────────────────────
@@ -869,88 +799,51 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	mc.RecordRequest(&RequestRecord{Qname: "github.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
 	mc.RecordRequest(&RequestRecord{Qname: "github.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "stale", Rcode: dns.RcodeSuccess})
 
-	var udpHits, dohHits, doqStale int64
-	err = mc.db.SQ.QueryRow(
-		`SELECT COALESCE(SUM(CASE WHEN protocol='udp' THEN query_count ELSE 0 END), 0),
-		        COALESCE(SUM(CASE WHEN protocol='https' THEN query_count ELSE 0 END), 0)
-		 FROM query_stats WHERE result='hit'`,
-	).Scan(&udpHits, &dohHits)
-	if err != nil {
-		t.Fatalf("query_log query: %v", err)
+	snap := mc.statsMgr.Snapshot(0)
+	if snap.Hits != 4 {
+		t.Errorf("hits = %d, want 4", snap.Hits)
 	}
-	err = mc.db.SQ.QueryRow(
-		`SELECT COALESCE(COUNT(*), 0) FROM query_log WHERE qname='www.example.com.' AND result='stale'`,
-	).Scan(&doqStale)
-	if err != nil {
-		t.Errorf("doq stale query: %v", err)
+	if snap.UDP != 2 {
+		t.Errorf("udp hits = %d, want 2", snap.UDP)
 	}
-	if udpHits != 2 {
-		t.Errorf("udp hits = %d, want 2", udpHits)
+	if snap.HTTPS != 1 {
+		t.Errorf("doh hits = %d, want 1", snap.HTTPS)
 	}
-	if dohHits != 1 {
-		t.Errorf("doh hits = %d, want 1", dohHits)
+	// tcp covers hit + stale + error records (protocol totals span results).
+	if snap.TCP != 3 {
+		t.Errorf("tcp = %d, want 3", snap.TCP)
 	}
-	if doqStale != 1 {
-		t.Errorf("doq stale = %d, want 1", doqStale)
+	if snap.Stales != 2 {
+		t.Errorf("stales = %d, want 2", snap.Stales)
 	}
-
-	var gitTCP, gitStale int64
-	err = mc.db.SQ.QueryRow(
-		`SELECT COALESCE(SUM(CASE WHEN protocol='tcp' THEN query_count ELSE 0 END), 0)
-		 FROM query_stats WHERE result='hit'`,
-	).Scan(&gitTCP)
-	if err != nil {
-		t.Errorf("github tcp query: %v", err)
+	top := snap.TopByRcode[dns.RcodeSuccess]
+	counts := map[string]uint64{}
+	for _, e := range top {
+		counts[e.Key] = e.Count
 	}
-	err = mc.db.SQ.QueryRow(
-		`SELECT COALESCE(COUNT(*), 0) FROM query_log WHERE qname='github.com.' AND result='stale'`,
-	).Scan(&gitStale)
-	if err != nil {
-		t.Errorf("github stale query: %v", err)
+	if counts["www.example.com."] != 1 {
+		t.Errorf("www.example.com. stale journal count = %d, want 1", counts["www.example.com."])
 	}
-	if gitTCP != 1 {
-		t.Errorf("github.com tcp hit = %d, want 1", gitTCP)
-	}
-	if gitStale != 1 {
-		t.Errorf("github.com tcp stale = %d, want 1", gitStale)
+	if counts["github.com."] != 1 {
+		t.Errorf("github.com. stale journal count = %d, want 1", counts["github.com."])
 	}
 
-	// ── Phase 6: ReverseLookup (ptr_map) ────────────────────────────────────
-	results := mc.ReverseLookup("93.184.216.34")
-	foundIP := false
-	for _, r := range results {
-		if r.Name == "www.example.com." {
-			foundIP = true
-			break
-		}
-	}
-	if !foundIP {
-		t.Error("ReverseLookup should find www.example.com for 93.184.216.34")
-	}
-
-	// ── Phase 7: UpdateLatency (ip_latency) ─────────────────────────────
+	// ── Phase 6: UpdateLatency (in-memory latency map) ─────────────────────
 	mc.UpdateLatency("93.184.216.34", 15)
 	mc.UpdateLatency("93.184.216.35", 42)
 	mc.UpdateLatency("198.41.0.4", 8)
 
-	var latA, latB int
-	err = mc.db.SQ.QueryRow(`SELECT latency_ms FROM ip_latency WHERE rdata_ip='93.184.216.34'`).Scan(&latA)
-	if err != nil {
-		t.Errorf("latency 34 query: %v", err)
+	lat34, ok34 := mc.latencies.Get("93.184.216.34")
+	lat35, ok35 := mc.latencies.Get("93.184.216.35")
+	if !ok34 || lat34.latency != 15 {
+		t.Errorf("latency 93.184.216.34 = %+v (ok=%v), want latency 15", lat34, ok34)
 	}
-	err = mc.db.SQ.QueryRow(`SELECT latency_ms FROM ip_latency WHERE rdata_ip='93.184.216.35'`).Scan(&latB)
-	if err != nil {
-		t.Errorf("latency 35 query: %v", err)
-	}
-	if latA != 15 {
-		t.Errorf("latency 93.184.216.34 = %d, want 15", latA)
-	}
-	if latB != 42 {
-		t.Errorf("latency 93.184.216.35 = %d, want 42", latB)
+	if !ok35 || lat35.latency != 42 {
+		t.Errorf("latency 93.184.216.35 = %+v (ok=%v), want latency 42", lat35, ok35)
 	}
 
-	// ── Phase 8: Entry overwrite (INSERT OR REPLACE) ────────────────────────
-	// Re-insert; wire format + ptr_map should update atomically.
+	// ── Phase 7: Entry overwrite (INSERT OR REPLACE) ────────────────────────
+	// Re-insert; the wire format should update atomically.
 	aNew := &dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 600}, A: rdata.A{Addr: netip.MustParseAddr("93.184.216.99")}}
 	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false,
 		[]dns.RR{aNew}, nil, nil, false, 0)
@@ -970,28 +863,18 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		t.Errorf("IP after overwrite = %s, want 93.184.216.99", overwrittenIP)
 	}
 
-	// Old IPs should be gone from ptr_map (deleted by REPLACE + ON DELETE CASCADE).
-	results = mc.ReverseLookup("93.184.216.34")
-	if len(results) != 0 {
-		t.Errorf("stale ptr_map entries for 93.184.216.34: got %d, want 0", len(results))
-	}
-	results = mc.ReverseLookup("93.184.216.99")
-	if len(results) == 0 {
-		t.Error("new ptr_map entry for 93.184.216.99 not found")
-	}
-
 	// ── Phase 9: RecordRequest Zone ──────────────────────────────────────
 	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 
-	var rwCount int64
-	err = mc.db.SQ.QueryRow(`SELECT COUNT(*) FROM query_log WHERE qname='zone.test.' AND result='zone'`).Scan(&rwCount)
-	if err != nil {
-		t.Errorf("zone count query: %v", err)
+	snap2 := mc.statsMgr.Snapshot(0)
+	if snap2.Zones != 3 {
+		t.Errorf("zone_count = %d, want 3", snap2.Zones)
 	}
-	if rwCount != 3 {
-		t.Errorf("zone_count = %d, want 3", rwCount)
+	zoneTop := snap2.TopByRcode[dns.RcodeRefused]
+	if len(zoneTop) != 1 || zoneTop[0].Key != "zone.test." || zoneTop[0].Count != 3 {
+		t.Errorf("zone journal top = %+v, want [zone.test. 3]", zoneTop)
 	}
 
 	// ── Phase 10: Summary ───────────────────────────────────────────────────
@@ -1002,16 +885,6 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	for i, line := range s {
 		t.Logf("Stats[%d]: %s", i, line)
 	}
-
-	// ── Phase 11: Verify DB file exists and has content ─────────────────────
-	info, err := os.Stat(dbPath)
-	if err != nil {
-		t.Fatalf("db file stat: %v", err)
-	}
-	if info.Size() == 0 {
-		t.Error("db file is empty")
-	}
-	t.Logf("DB file size: %d bytes", info.Size())
 
 	// ── Phase 12: Close and verify clean shutdown ───────────────────────────
 	if err := mc.Close(); err != nil {
@@ -1098,13 +971,7 @@ func TestE2E_LatencyOrdering(t *testing.T) {
 // ── E2E: Compression efficacy ────────────────────────────────────────────────
 
 func TestE2E_CompressionEfficacy(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "compression.db")
-	db, err := database.Open(dbPath, 100, database.Options{MMapSizeMB: 4, CacheSizeMB: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mc := &SQLiteCache{db: db}
+	mc := New(0, 0)
 	defer func() { _ = mc.Close() }()
 
 	// Insert 50 realistic A-record responses (different domain names, multiple IPs).
@@ -1136,26 +1003,16 @@ func TestE2E_CompressionEfficacy(t *testing.T) {
 		}
 	}
 
-	info, err := os.Stat(dbPath)
-	if err != nil {
-		t.Fatalf("stat db path: %v", err)
-	}
-	t.Logf("50 entries (3 A records each), DB size: %d bytes (%.1f KB)", info.Size(), float64(info.Size())/1024)
-
 	// Verify hit counters
-	var total, udp, tcp int64
 	mc.RecordRequest(&RequestRecord{Qname: "host-00.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
 	mc.RecordRequest(&RequestRecord{Qname: "host-01.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
 
-	err = mc.db.SQ.QueryRow(`SELECT COUNT(*), COALESCE(SUM(CASE WHEN protocol='udp' THEN query_count ELSE 0 END),0), COALESCE(SUM(CASE WHEN protocol='tcp' THEN query_count ELSE 0 END),0) FROM query_stats WHERE result='hit'`).Scan(&total, &udp, &tcp)
-	if err != nil {
-		t.Errorf("stats query: %v", err)
+	snap := mc.statsMgr.Snapshot(0)
+	if snap.Total != 2 {
+		t.Errorf("total = %d, want 2", snap.Total)
 	}
-	if total != 2 {
-		t.Errorf("total hit counter rows = %d, want 2", total)
-	}
-	if udp != 1 || tcp != 1 {
-		t.Errorf("udp=%d tcp=%d, want udp=1 tcp=1", udp, tcp)
+	if snap.UDP != 1 || snap.TCP != 1 {
+		t.Errorf("udp=%d tcp=%d, want udp=1 tcp=1", snap.UDP, snap.TCP)
 	}
 }
 
@@ -1174,12 +1031,7 @@ func netParseIP(s string) netip.Addr {
 // entry counter — otherwise the counter drifts above the real row count and
 // evictIfNeeded deletes valid entries prematurely.
 func TestSetReplacesExistingKeyWithoutCounterInflation(t *testing.T) {
-	dir := t.TempDir()
-	db, err := database.Open(filepath.Join(dir, "h7.db"), 500, database.Options{MMapSizeMB: 4, CacheSizeMB: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mc := &SQLiteCache{db: db}
+	mc := New(0, 0)
 	defer func() { _ = mc.Close() }()
 
 	a1 := &dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("93.184.216.34")}}
@@ -1190,24 +1042,9 @@ func TestSetReplacesExistingKeyWithoutCounterInflation(t *testing.T) {
 	mc.Set("other.example.com.", dns.TypeA, dns.ClassINET, nil, false,
 		[]dns.RR{a1}, nil, nil, true, 0)
 
-	if got := db.EntryCount(); got != 2 {
-		t.Errorf("EntryCount = %d after 3 refreshes of one key + 1 new key, want 2", got)
-	}
-	var rows int
-	if err := db.SQ.QueryRow("SELECT COUNT(*) FROM entries").Scan(&rows); err != nil {
-		t.Fatal(err)
-	}
-	if got := db.EntryCount(); got != int64(rows) {
-		t.Errorf("EntryCount = %d, SELECT COUNT(*) = %d — counter drifted from row count", got, rows)
-	}
-}
-
-// TestStmtIPLatencyPlaceholderCount guards the rdata_ip IN-clause placeholder
-// count in database.StmtIPLatency against cache.maxLatencyLookupIPs — a
-// mismatch silently drops or truncates batch lookup IPs.
-func TestStmtIPLatencyPlaceholderCount(t *testing.T) {
-	if got, want := database.IPLatencyPlaceholders, maxLatencyLookupIPs; got != want {
-		t.Errorf("database.IPLatencyPlaceholders = %d, want %d (cache.maxLatencyLookupIPs)", got, want)
+	// LRU map keeps exactly the two distinct keys — no counter drift possible.
+	if got := mc.entries.Len(); got != 2 {
+		t.Errorf("entry count = %d after 3 refreshes of one key + 1 new key, want 2", got)
 	}
 }
 
@@ -1312,111 +1149,26 @@ func TestGetTypes_Miss(t *testing.T) {
 	}
 }
 
-// ── PruneQueryJournal (batched cleanup) ─────────────────────────────────────
+// ── PruneQueryJournal (no-op: journal is pure memory) ────────────────────────
 
 func TestPruneQueryJournal(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	// Insert one stale and one fresh row into both journal tables.
-	oldDay := log.NowUnix()/86400 - 10
-	nowDay := log.NowUnix() / 86400
-	for _, day := range []int64{oldDay, nowDay} {
-		if _, err := mc.db.SQ.Exec(
-			"INSERT INTO query_stats (stat_day, result, protocol, rcode, dnssec, poisoned, query_count, total_ms) VALUES (?, 'hit', 'udp', 0, '', 0, 1, 1)",
-			day,
-		); err != nil {
-			t.Fatalf("insert query_stats: %v", err)
-		}
-	}
-	oldTS := log.NowUnix() - 10*86400
-	nowTS := log.NowUnix()
-	for _, ts := range []int64{oldTS, nowTS} {
-		if _, err := mc.db.SQ.Exec(
-			"INSERT INTO query_log (timestamp, qname, qtype, qclass, protocol, result, rcode, response_ms, server, poisoned, dnssec) VALUES (?, 'example.com.', 1, 1, 'udp', 'hit', 0, 1, '', 0, '')",
-			ts,
-		); err != nil {
-			t.Fatalf("insert query_log: %v", err)
-		}
-	}
+	mc.RecordRequest(&RequestRecord{Qname: "stale.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "miss", Rcode: dns.RcodeNameError})
 
+	// The journal is pure memory and bounded, so pruning is a no-op that must
+	// neither error nor clear the journal.
 	n, err := mc.PruneQueryJournal(2 * 86400)
 	if err != nil {
 		t.Fatalf("PruneQueryJournal: %v", err)
 	}
-	if n != 2 {
-		t.Errorf("deleted %d rows, want 2 (one stale per table)", n)
+	if n != 0 {
+		t.Errorf("deleted %d rows, want 0 (no-op)", n)
 	}
-
-	// Stale rows gone, fresh rows kept.
-	var staleStats int
-	if err := mc.db.SQ.QueryRow(
-		"SELECT COUNT(*) FROM query_stats WHERE stat_day = ?", oldDay,
-	).Scan(&staleStats); err != nil {
-		t.Fatalf("stale stats count: %v", err)
-	}
-	if staleStats != 0 {
-		t.Errorf("stale query_stats rows = %d, want 0", staleStats)
-	}
-	var freshStats int
-	if err := mc.db.SQ.QueryRow(
-		"SELECT COUNT(*) FROM query_stats WHERE stat_day = ?", nowDay,
-	).Scan(&freshStats); err != nil {
-		t.Fatalf("fresh stats count: %v", err)
-	}
-	if freshStats != 1 {
-		t.Errorf("fresh query_stats rows = %d, want 1", freshStats)
-	}
-	var staleLog int
-	if err := mc.db.SQ.QueryRow(
-		"SELECT COUNT(*) FROM query_log WHERE timestamp < unixepoch() - 86400",
-	).Scan(&staleLog); err != nil {
-		t.Fatalf("stale log count: %v", err)
-	}
-	if staleLog != 0 {
-		t.Errorf("stale query_log rows = %d, want 0", staleLog)
-	}
-}
-
-// TestGet_BoundedPoolWait guards the SQLite pool-exhaustion regression: every
-// cache read must fail fast within DefaultCacheQueryTimeout when all
-// connections are checked out, instead of blocking on a context.Background
-// wait forever (the old context-less queries wedged the whole process — every
-// handler queued on database/sql.DB.conn until a restart).
-func TestGet_BoundedPoolWait(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
-	if err != nil {
-		t.Fatalf("database.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-
-	// Exhaust every pooled connection with unfinished transactions.
-	var txs []*sql.Tx
-	for range config.DefaultCacheMaxOpenConns {
-		tx, err := db.BeginTx(context.Background())
-		if err != nil {
-			t.Fatalf("BeginTx: %v", err)
-		}
-		txs = append(txs, tx)
-	}
-	t.Cleanup(func() {
-		for _, tx := range txs {
-			_ = tx.Rollback()
-		}
-	})
-
-	s := New(db)
-	start := time.Now()
-	entry, found, _ := s.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
-	elapsed := time.Since(start)
-	if found || entry != nil {
-		t.Fatalf("expected cache miss on exhausted pool, got found=%v entry=%v", found, entry)
-	}
-	if elapsed > config.DefaultCacheQueryTimeout+time.Second {
-		t.Fatalf("Get blocked on the exhausted pool for %v — bounded context missing", elapsed)
-	}
-	if elapsed < config.DefaultCacheQueryTimeout-500*time.Millisecond {
-		t.Fatalf("Get returned too early (%v) — pool wait not bounded as expected", elapsed)
+	snap := mc.statsMgr.Snapshot(0)
+	if top := snap.TopByRcode[dns.RcodeNameError]; len(top) != 1 || top[0].Key != "stale.com." {
+		t.Errorf("journal after prune = %+v, want [stale.com. 1] (prune must not clear)", top)
 	}
 }
 
@@ -1427,13 +1179,7 @@ func TestGet_BoundedPoolWait(t *testing.T) {
 // connection-pool exhaustion: if any path leaks a Rows/Tx, InUse stays > 0
 // (or OpenConnections stays pinned) after quiescence.
 func TestPoolReturnsToIdleAfterLoad(t *testing.T) {
-	db, err := database.Open("", 0, database.Options{})
-	if err != nil {
-		t.Fatalf("database.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-
-	s := New(db)
+	s := New(0, 0)
 
 	var wg sync.WaitGroup
 	for range 32 {
@@ -1458,18 +1204,10 @@ func TestPoolReturnsToIdleAfterLoad(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Let the async writers drain their buffers.
+	// The cache is pure memory — no pool to leak.  The test still hammers the
+	// hot paths concurrently; this just exercises the race detector.
 	s.Flush()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		st := db.SQ.Stats()
-		if st.InUse == 0 && st.OpenConnections <= config.DefaultCacheMaxOpenConns {
-			// Healthy: pool fully idle.
-			t.Logf("pool returned to idle: %+v", st)
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
+	if got := s.entries.Len(); got == 0 {
+		t.Error("expected entries to be populated by the load")
 	}
-	st := db.SQ.Stats()
-	t.Fatalf("pool did not return to idle after load quiesced: %+v", st)
 }

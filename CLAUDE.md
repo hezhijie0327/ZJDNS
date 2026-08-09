@@ -97,10 +97,6 @@ Use `sh scripts/bump-version.sh <patch|minor|major> <slug>`.
 
 **Default to Z (patch).** Only bump Y for substantial features (new protocol, major config surface).
 
-**After bumping (if schema changed):**
-- New tables/columns via `CREATE TABLE IF NOT EXISTS` → no migration needed; use `--no-migration`
-- `ALTER TABLE` / data migrations → add migration func to `database/migration.go` + entry in `migrations` slice + SQL file in `database/migrations/`
-
 **Always amend the version bump into the feature commit:**
 ```bash
 git reset --soft HEAD~2 && git commit  # or git commit --amend for single commit
@@ -150,9 +146,6 @@ go test -bench=. -short -benchtime=500ms ./... \
 ### CLI Tools
 
 ```bash
-# SQL query (read-only; add --rw for writes)
-./zjdns --sql cache.db "SELECT e.qname, e.rcode, e.validated, e.msg_wire FROM entries e"
-
 # DNS Stamp
 ./zjdns --dnsstamp --decode "sdns://..."       # decode to upstream JSON
 ./zjdns --dnsstamp --encode --proto doh \      # encode to sdns:// stamp
@@ -174,7 +167,7 @@ pwsh scripts/install-hook.ps1                  # Windows
 
 Module path: `zjdns` (Go 1.26.4, pure Go — `CGO_ENABLED=0` compatible).
 
-Key dependencies: `codeberg.org/miekg/dns` (DNS), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/http` (eHTTP — net/http with native eTLS for DoH), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/pion/dtls/v3` (DTLS 1.2+), `modernc.org/sqlite` (pure-Go SQLite), `github.com/cloudflare/circl` (X-Wing PQ/T KEM for DNSCrypt), `gitee.com/Trisia/gotlcp` (TLCP + DTLCP — SM2/SM3/SM4, pure Go).
+Key dependencies: `codeberg.org/miekg/dns` (DNS), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/http` (eHTTP — net/http with native eTLS for DoH), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/pion/dtls/v3` (DTLS 1.2+), `github.com/cloudflare/circl` (X-Wing PQ/T KEM for DNSCrypt), `gitee.com/Trisia/gotlcp` (TLCP + DTLCP — SM2/SM3/SM4, pure Go).
 
 ## Coding Standards
 
@@ -207,7 +200,7 @@ Key dependencies: `codeberg.org/miekg/dns` (DNS), `github.com/quic-go/quic-go` (
 - No rate limiting or per-IP connection limits. No `Get`/`Mgr`/`Manager`/`Handler` prefixes.
 - No Hungarian notation, no `snake_case`/`UPPER_SNAKE_CASE`. Use `any` not `interface{}`.
 - No `server/` sub-package importing `server/` parent (except `handler/middleware → handler`).
-- No domain↔domain imports (except `edns→config`, `cache→database`, `zone→database`, `ruleset→database`).
+- No domain↔domain imports (except `edns→config`).
 - No `internal/`→domain imports (except `internal/latency→config`).
 
 ## Architecture
@@ -222,8 +215,7 @@ zjdns/
 ├── cmd/zjdns/          ← binary + CLI
 ├── config/             ← ServerConfig, ProtocolSettings, UpstreamServer, defaults
 ├── edns/               ← EDNS handler (ECS, Cookie, EDE, Padding)
-├── database/           ← Unified SQLite DB (schema, migration, prepared stmts)
-├── cache/              ← DNS response cache (Store interface, SQLiteCache, BatchWriter)
+├── cache/              ← DNS response cache (Store interface, LRU-backed)
 ├── ruleset/            ← CIDR + domain tag matching (binary radix trie)
 ├── zone/               ← DNS zone rules (Evaluator, zone-file import)
 ├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, ...
@@ -245,7 +237,7 @@ Foundation (zero zjdns imports):
 Layer 1–2: internal/dnsutil, config, internal/latency
 
 Layer 3 (domain packages — never import each other):
-  database, edns, cache, ruleset, zone
+  edns, cache, ruleset, zone
 
 Layer 4 (server sub-packages — never import server/ parent):
   server/resolver, server/handler, server/upstream, server/protocol/*, server/defense
@@ -256,7 +248,7 @@ Top layer (wiring):
 ```
 
 Key rules:
-- Domain packages never import other domain packages (known exceptions: `edns→config`, `cache→database`, `cache→config`, `zone→database`, `zone→config`, `ruleset→database`, `ruleset→config`)
+- Domain packages never import other domain packages (exception: `edns→config`).
 - `internal/` packages never import domain packages (except `internal/latency→config`)
 - Type aliases: `edns.ECSOption = config.ECSOption`, `handler.Question = resolver.Question` (intentional — avoids conversion at boundaries)
 
@@ -287,7 +279,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 
 ### Recursive Resolution
 - Root hints → TLD NS → authoritative NS walk with QNAME minimisation (RFC 9156 §2.3, max 10 iterations)
-- **Delegation cache**: zone-cut delegations (zone → NS names + verified DS) persisted in SQLite `delegations` table; subsequent queries for subdomains start from the deepest cached zone instead of root
+- **Delegation cache**: zone-cut delegations (zone → NS names + verified DS) in memory (LRU, lazy TTL expiry); subsequent queries for subdomains start from the deepest cached zone instead of root
 - NS address latency-sorted cache; DNSSEC chain-of-trust at each delegation
 - Zone cut detection, lame delegation detection, glue record validation
 
@@ -307,16 +299,14 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | `ServerConfig` | `config` | Top-level config; owns `ECSConfig`, `ProtocolSettings`, `CertificateSettings` |
 | `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `SkipCache`, `Match`, `Proxy`, defense flags |
 | `ProtocolSettings` | `config` | Per-protocol port/endpoint: `UDP`, `TCP`, `TLS`, `QUIC`, `HTTPS`, `HTTP3`, `TLCP`, `DTLS`, `DTLCP`, `DNSCrypt` |
-| `DB` | `database` | Unified SQLite DB; WAL mode, 15 prepared stmts |
-| `Store` | `cache` | Interface: Get/Set/RecordRequest/ReverseLookup/FlushDB/Stats/Close |
+| `Store` | `cache` | Interface: Get/Set/RecordRequest/FlushDB/Stats/Close |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL |
-| `BatchWriter[T]` | `cache` | Background goroutine: channel → batched SQLite writes (100ms/64 items, best-effort drop) |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `QueryContext` | `server/handler` | Mutable struct carrying all request state through the middleware chain |
 | `QueryHandler` | `server/handler` | Interface: `ServeDNS(ctx, qctx) error` |
 | `Wrapper` | `server/handler` | Interface: `Wrap(next QueryHandler) QueryHandler` |
 | `Resolver` | `server/resolver` | Upstream + recursive resolution; constructed via `New(Config)` |
-| `Recursive` | `server/resolver` | Built-in recursive walk with DNSSEC validation; delegation cache (`delegations` table) for zone-cut skipping |
+| `Recursive` | `server/resolver` | Built-in recursive walk with DNSSEC validation; in-memory delegation cache (LRU) for zone-cut skipping |
 | `Client` | `server/upstream` | Outbound queries: all protocols (UDP/TCP/DoT/DoQ/DoH/DoH3/DTLS/DTLCP/TLCP/DNSCrypt/SOCKS5) |
 | `Conn` / `ConnPool` | `server/upstream/pool` | RFC 7766 pipelined TCP/DoT connection pool |
 | `Detector` | `server/defense` | DNS poison detection; `Verdict` type (Clean/Poisoned/Uncertain) |

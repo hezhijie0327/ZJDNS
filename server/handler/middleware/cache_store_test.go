@@ -2,10 +2,10 @@ package middleware
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 	"zjdns/cache"
-	"zjdns/database"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
 
@@ -15,11 +15,7 @@ import (
 
 func testStore(t *testing.T) cache.Store {
 	t.Helper()
-	db, err := database.Open("", 0, database.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return cache.New(db)
+	return cache.New(0, 0)
 }
 
 func testQuery(t *testing.T) *dns.Msg {
@@ -253,5 +249,43 @@ func TestCacheStore_UnvalidatedBogusEDENotCached(t *testing.T) {
 				t.Fatalf("unvalidated %s must NOT be cached", c.name)
 			}
 		})
+	}
+}
+
+// TestCacheStore_MissRecordsRealRcode verifies the miss path records the real
+// resolution rcode into the in-memory stats journal: an NXDOMAIN must land in
+// the top-rcode3 group, not top-rcode0 (the pre-fix behaviour hardcoded
+// RcodeSuccess, hiding SERVFAIL/NXDOMAIN domains from the debug journal).
+func TestCacheStore_MissRecordsRealRcode(t *testing.T) {
+	store := testStore(t)
+	defer func() { _ = store.Close() }()
+
+	qctx := &handler.QueryContext{
+		Req:       testQuery(t),
+		Qname:     "example.com.",
+		Qtype:     dns.TypeA,
+		StartTime: time.Now().Unix(),
+		Protocol:  "udp",
+		ResolutionResult: &resolver.QueryResult{
+			Rcode:     dns.RcodeNameError, // NXDOMAIN
+			Cacheable: true,
+		},
+	}
+	m := &CacheStore{store: store}
+	m.buildSuccess(qctx)
+
+	lines := store.StatsRcode()
+	var journalLine string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "top-rcode3:") {
+			journalLine = line
+			break
+		}
+	}
+	if journalLine == "" {
+		t.Fatalf("no top-rcode3 journal line in StatsRcode(): %v", lines)
+	}
+	if !strings.Contains(journalLine, "example.com.=1") {
+		t.Errorf("top-rcode3 line = %q, want it to contain example.com.=1", journalLine)
 	}
 }

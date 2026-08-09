@@ -13,6 +13,7 @@ import (
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 	"zjdns/server/defense"
 	"zjdns/server/resolver/dnssec"
 	"zjdns/server/upstream"
@@ -83,7 +84,7 @@ func newTestRecursive() *Recursive {
 			Poisonguard: defense.Detector{},
 		},
 	}
-	return &Recursive{resolver: r}
+	return &Recursive{delegations: lrumap.New[string, *delegationEntry](10000), resolver: r}
 }
 
 // ── isZoneCut / getZoneCutSigner ──────────────────────────────────────────────

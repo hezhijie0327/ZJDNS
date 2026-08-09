@@ -672,7 +672,7 @@ For interactive debugging, create `config.debug.json` (not committed):
     },
     "features": {
       "dnssec_enforce": true,
-      "database": { "db_path": "/tmp/zjdns-persist/cache.db" },
+
       "latency_probe": [
         { "protocol": "ping", "timeout": 200 },
         { "protocol": "tcp", "port": 443, "timeout": 200 }
@@ -692,8 +692,6 @@ Port 15353 (non-privileged), pure recursive, cache enabled with latency probing.
 | 键 | 位置 | 说明 |
 |----|------|------|
 | `features.dns64.prefer_ipv4`（默认 true） | `config/ecs.go:95,136` | ECS 查询偏好 IPv4（缺失时默认 true） |
-| `features.database.mmap_size_mb` | `config/config.go:122` | SQLite `mmap_size` PRAGMA |
-| `features.database.cache_size_mb` | `config/config.go:123` | SQLite `cache_size` PRAGMA |
 
 ### Test Domains
 
@@ -726,59 +724,40 @@ dig @127.0.0.1 -p 15353 zjdns.latency.clear CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.querylog.clear CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.dnscrypt.clear CH TXT +short
 
-# 缓存/统计/DNSCrypt 证书窗口持久化在 SQLite (db_path)
-./zjdns --sql /tmp/zjdns-persist/cache.db "SELECT length(identity), length(windows) FROM dnscrypt_state"
+# DNSCrypt 证书窗口持久化在 zjdns.dnscrypt（server/protocol/dnscrypt/persist_file.go）
+ls -la /tmp/zjdns-persist/zjdns.dnscrypt
 ```
 
-## SQL Debug Queries
+## Query Stats & Debug
 
-日常排查用 SQL 查询，直接对 cache.db 执行（服务运行中可读，加 `--rw` 可写）：
+查询统计（`query_stats`）和查询日志（`query_log`）是纯内存实现（`internal/statsjournal`）：原子计数器 + 每种 RCODE 的 top-N 域名 journal，重启后归零。整个服务器无 SQLite——缓存/延迟/委派（lrumap）、规则（快照）全部内存化，唯一的持久化是 DNSCrypt 状态文件（`zjdns.dnscrypt`）。
 
 ```bash
-# 必须指定 --sql 参数格式：./zjdns --sql <db_path> "<query>"
-# 或者 docker exec -it zjdns /zjdns --sql /data/cache.db "<query>"
+# 实时统计（聚合计数）
+dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short
+# 示例输出：
+# "entries=4 total=6 avg=0.0ms"
+# "hit=2(33.3%) miss=4(66.7%)"
 
-./zjdns --sql cache.db "SELECT qname, COUNT(*) AS cnt FROM query_log GROUP BY qname ORDER BY cnt DESC LIMIT 20"
+# 每 RCODE top-N 域名（NXDOMAIN/SERVFAIL 排查）
+dig @127.0.0.1 -p 15353 zjdns.stats.rcode CH TXT +short
+# 示例输出：
+# "top-rcode0: www.baidu.com.=1 www.qq.com.=1 ..."
+# "top-rcode3: nonexistent.example.com.=3"
+
+# 重置计数器 / 清空 journal（CHAOS 控制端点，仅限回环地址）
+dig @127.0.0.1 -p 15353 zjdns.stats.clear CH TXT +short
+dig @127.0.0.1 -p 15353 zjdns.querylog.clear CH TXT +short
 ```
+
+整个服务器**无数据库、无 SQL 工具**——所有数据在内存（`lrumap` 缓存/延迟/委派 + `statsjournal` 统计 + 快照规则）。日常排查全部通过 `zjdns.stats` 完成。
 
 ### 排查 SERVFAIL 域名
 
-找出**只出 SERVFAIL 从未成功**的域名——这种往往是被误判的 DNSSEC bogus、上游不通等问题：
+找出**只出 SERVFAIL 从未成功**的域名——这种往往是被误判的 DNSSEC bogus、上游不通等问题。先用 `.stats` 看 `top-rcode2`（SERVFAIL）的域名，再确认对应缓存条目：
 
 ```bash
-docker exec -it zjdns /zjdns --sql /data/cache.db "
-    SELECT qname, COUNT(*) AS servfail_count
-    FROM query_log
-    WHERE rcode = 2
-        AND qname NOT IN (
-            SELECT DISTINCT qname FROM query_log WHERE rcode = 0
-        )
-    GROUP BY qname
-    ORDER BY servfail_count DESC
-"
-```
-
-### 按 rcode 分布
-
-```bash
-./zjdns --sql cache.db "
-    SELECT rcode, COUNT(*) AS cnt
-    FROM query_log
-    GROUP BY rcode
-    ORDER BY cnt DESC
-"
-```
-
-### 最近 SERVFAIL 详情
-
-```bash
-./zjdns --sql cache.db "
-    SELECT timestamp, qname, qtype, server, response_ms
-    FROM query_log
-    WHERE rcode = 2
-    ORDER BY timestamp DESC
-    LIMIT 20
-"
+dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short | grep top-rcode2
 ```
 
 ### TLCP (Guomi / Shangmi) Test

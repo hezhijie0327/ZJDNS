@@ -55,9 +55,6 @@ func validateConfig(cfg *ServerConfig) error {
 	if err := validateDDR(cfg); err != nil {
 		return err
 	}
-	if err := validateDatabase(cfg); err != nil {
-		return err
-	}
 	if err := validateCache(cfg); err != nil {
 		return err
 	}
@@ -260,16 +257,18 @@ func validateDDR(cfg *ServerConfig) error {
 	return nil
 }
 
-func validateDatabase(cfg *ServerConfig) error {
-	if strings.Contains(cfg.Server.Features.Database.DBPath, "..") {
-		return errors.New("server.features.database.db_path must not contain '..'")
-	}
-	return nil
-}
-
 func validateCache(cfg *ServerConfig) error {
-	if cfg.Server.Features.Cache.MaxEntries < 0 {
-		return errors.New("server.features.cache.max_entries must be zero or positive")
+	for _, store := range []struct {
+		name  string
+		limit int
+	}{
+		{"entries", cfg.Server.Features.Cache.Entries.Limit},
+		{"latency", cfg.Server.Features.Cache.Latency.Limit},
+		{"delegation", cfg.Server.Features.Cache.Delegation.Limit},
+	} {
+		if store.limit < 0 {
+			return fmt.Errorf("server.features.cache.%s.limit must be zero or positive", store.name)
+		}
 	}
 	return nil
 }

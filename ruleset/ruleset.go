@@ -1,80 +1,56 @@
 // Package ruleset provides tag-based matching for client IP (CIDR) and query
-// domain (suffix). Both match types are backed by SQLite for consistent
-// querying and persistence. Rules are loaded at startup from config and
-// reloaded on restart — there is no in-memory rebuild step.
+// domain (suffix).  Matching is in-memory: a binary radix trie for CIDRs and
+// a suffix map for domains, both built from config at LoadRules time.  The
+// config file is the authoritative source — nothing is persisted.
 package ruleset
 
 import (
-	"context"
-	"database/sql"
 	"net"
 	"os"
 	"strings"
+	"sync/atomic"
 	"zjdns/config"
 	"zjdns/internal/log"
 )
 
-// RuleSetStorage provides SQL operations needed by the ruleset engine.
-// *database.DB satisfies this interface implicitly.
-type RuleSetStorage interface {
-	SQLExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	SQLQueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-	SQLQueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	BeginTx(ctx context.Context) (*sql.Tx, error)
-	// RulesetDomainStmt returns the prepared domain-tag lookup statement —
-	// the per-query Match() hot path must not prepare a statement per call.
-	RulesetDomainStmt() *sql.Stmt
-	// ReadContext returns a bounded context for a hot-path read (a free
-	// connection may take time under load — the wait must never block
-	// forever).
-	ReadContext() (context.Context, context.CancelFunc)
-	// WriteContext returns a bounded context for a best-effort write.
-	WriteContext() (context.Context, context.CancelFunc)
+// ruleTable is one immutable snapshot of the loaded rules.  LoadRules builds
+// a fresh table and publishes it via atomic.Pointer.Swap; Match reads the
+// current table lock-free.
+type ruleTable struct {
+	tags        map[string]bool     // all known tags from config
+	ipTrie      ipTrie              // binary radix trie for O(128) CIDR matching
+	domainRules map[string][]string // TLD+1 domain key → tags; empty short-circuits Match
 }
 
 // Engine matches queries against rule sets to produce tags.
-// All matching is done via SQLite queries with PK-optimised index seeks.
-// The ruleset_entries PK is (type, tag, value), so WHERE type=? uses a PK
-// prefix seek (not a full scan).
+// IP rules are matched via an in-memory binary radix trie; domain rules via
+// an in-memory suffix map.
 type Engine struct {
-	db          RuleSetStorage
-	tags        map[string]bool // all known tags from config
-	ipTrie      ipTrie          // binary radix trie for O(128) CIDR matching
-	domainRules int             // count of type='domain' rules; 0 short-circuits Match
+	table atomic.Pointer[ruleTable]
 }
 
-// New creates an Engine backed by the given database.
-// New creates a ruleset Engine backed by the given database.
-// Panics if db is nil (caller must provide a valid store).
-func New(db RuleSetStorage) *Engine {
-	if db == nil {
-		panic("ruleset: nil database")
-	}
-	return &Engine{
-		db:   db,
-		tags: make(map[string]bool),
-	}
+// New creates an Engine with an empty rule table.
+func New() *Engine {
+	e := &Engine{}
+	e.table.Store(&ruleTable{
+		tags:        make(map[string]bool),
+		domainRules: make(map[string][]string),
+	})
+	return e
 }
 
-// LoadRules stores RuleSet configurations into SQLite.  Rules are reloaded
-// from config on every startup — SQLite is the authoritative store.
+// LoadRules builds the in-memory rule table from config.  Rules always come
+// from config at startup (or a config reload) — nothing is persisted.
 func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
-	ctx, cancel := e.db.WriteContext()
-	defer cancel()
-	tx, err := e.db.BeginTx(ctx)
-	if err != nil {
-		return err
+	table := &ruleTable{
+		tags:        make(map[string]bool),
+		domainRules: make(map[string][]string),
 	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM ruleset_entries`); err != nil {
-		return err
-	}
-
+	ruleCount := 0
 	for _, rs := range rulesets {
 		for _, v := range rs.Rule {
-			if err := insertRule(ctx, tx, rs.Tag, rs.Type, v); err != nil {
-				return err
+			if addRule(table, rs.Tag, rs.Type, v) {
+				ruleCount++
 			}
 		}
 		if rs.File != "" {
@@ -83,54 +59,38 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 				return err
 			}
 			for _, line := range lines {
-				if err := insertRule(ctx, tx, rs.Tag, rs.Type, line); err != nil {
-					return err
+				if addRule(table, rs.Tag, rs.Type, line) {
+					ruleCount++
 				}
 			}
 		}
-		e.tags[rs.Tag] = true
+		table.tags[rs.Tag] = true
 	}
 
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-
-	// Reload tag set from committed rules.
-	var n, domainN int
-	if err := e.db.SQLQueryRowContext(ctx, "SELECT COUNT(*) FROM ruleset_entries").Scan(&n); err != nil {
-		log.Warnf("RULESET: count query: %v", err)
-	}
-	if err := e.db.SQLQueryRowContext(ctx, "SELECT COUNT(*) FROM ruleset_entries WHERE type='domain'").Scan(&domainN); err != nil {
-		log.Warnf("RULESET: domain count query: %v", err)
-	}
-	e.domainRules = domainN
-	log.Infof("RULESET: %d rules loaded into %d tags", n, len(e.tags))
-
-	// Preload all CIDR rules into memory to avoid SQL queries on the hot path.
-	e.loadIPRules(ctx)
-
+	e.table.Store(table)
+	log.Infof("RULESET: %d rules loaded into %d tags", ruleCount, len(table.tags))
 	return nil
 }
 
-// loadIPRules loads all CIDR rules from SQLite into memory.
-func (e *Engine) loadIPRules(ctx context.Context) {
-	rows, err := e.db.SQLQueryContext(ctx, "SELECT tag, value FROM ruleset_entries WHERE type='ip'")
-	if err != nil {
-		return
-	}
-	defer func() { _ = rows.Close() }()
-
-	e.ipTrie.reset()
-	for rows.Next() {
-		var tag, cidr string
-		if err := rows.Scan(&tag, &cidr); err != nil {
-			continue
+// addRule registers a single rule (inline or file line) into the table being
+// built.  Returns true when the rule was accepted.  Invalid CIDRs are
+// skipped and logged, matching the former SQL-insert behaviour.
+func addRule(table *ruleTable, tag, typ, value string) bool {
+	switch typ {
+	case "ip":
+		if _, _, err := net.ParseCIDR(value); err != nil {
+			log.Warnf("RULESET: skipping invalid CIDR rule %s=%s: %v", tag, value, err)
+			return false
 		}
-		_, n, err := net.ParseCIDR(cidr)
-		if err != nil {
-			continue
-		}
-		e.ipTrie.insert(n, tag)
+		_, n, _ := net.ParseCIDR(value)
+		table.ipTrie.insert(n, tag)
+		return true
+	case "domain":
+		key := domainKey(value)
+		table.domainRules[key] = append(table.domainRules[key], tag)
+		return true
+	default:
+		return false
 	}
 }
 
@@ -138,29 +98,16 @@ func (e *Engine) loadIPRules(ctx context.Context) {
 func (e *Engine) Match(qname, ip string) map[string]bool {
 	var tags map[string]bool
 
-	// Domain: TLD+1 suffix lookup via the prepared statement; short-circuit
-	// when no domain rules are configured (the prepare-per-call cost of a raw
-	// query would otherwise hit every query even on an empty table). The IP
-	// trie match below still runs.
+	// Domain: TLD+1 suffix lookup via the in-memory map.  Short-circuits when
+	// no domain rules are configured.  The IP trie match below still runs.
+	table := e.table.Load()
 	key := tldPlusOne(qname)
-	if e.domainRules > 0 {
-		ctx, cancel := e.db.ReadContext()
-		defer cancel()
-		domainRows, err := e.db.RulesetDomainStmt().QueryContext(ctx, key)
-		if err == nil {
-			defer func() { _ = domainRows.Close() }()
-			for domainRows.Next() {
-				var tag string
-				if domainRows.Scan(&tag) == nil && tag != "" {
-					if tags == nil {
-						tags = make(map[string]bool)
-					}
-					tags[tag] = true
-				}
+	for _, tag := range table.domainRules[key] {
+		if tag != "" {
+			if tags == nil {
+				tags = make(map[string]bool)
 			}
-			if err := domainRows.Err(); err != nil {
-				log.Debugf("RULESET: domain match rows error for %s: %v", key, err)
-			}
+			tags[tag] = true
 		}
 	}
 
@@ -170,7 +117,7 @@ func (e *Engine) Match(qname, ip string) map[string]bool {
 		return tags
 	}
 
-	for _, t := range e.ipTrie.match(parsedIP) {
+	for _, t := range table.ipTrie.match(parsedIP) {
 		if tags == nil {
 			tags = make(map[string]bool)
 		}
@@ -182,7 +129,7 @@ func (e *Engine) Match(qname, ip string) map[string]bool {
 
 // HasIPTag reports whether a tag has CIDR rules for IP-based filtering.
 func (e *Engine) HasIPTag(tag string) bool {
-	return e.ipTrie.hasTag(tag)
+	return e.table.Load().ipTrie.hasTag(tag)
 }
 
 // MatchIP checks whether an IP matches a specific tag's CIDR rules.
@@ -193,10 +140,11 @@ func (e *Engine) MatchIP(ip, tag string) (matched, exists bool) {
 		negate = true
 		tag = tag[1:]
 	}
-	if !e.tags[tag] {
+	table := e.table.Load()
+	if !table.tags[tag] {
 		return false, false
 	}
-	if !e.HasIPTag(tag) {
+	if !table.ipTrie.hasTag(tag) {
 		return false, true
 	}
 
@@ -205,7 +153,7 @@ func (e *Engine) MatchIP(ip, tag string) (matched, exists bool) {
 		return false, true
 	}
 
-	matched = e.ipTrie.matchTag(parsedIP, tag)
+	matched = table.ipTrie.matchTag(parsedIP, tag)
 
 	if negate {
 		return !matched, true
@@ -216,27 +164,6 @@ func (e *Engine) MatchIP(ip, tag string) (matched, exists bool) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-// insertRule validates and inserts a single ruleset entry into a transaction.
-// For IP rules it validates the CIDR; for domain rules it normalises to a
-// TLD+1 key before insertion.
-func insertRule(ctx context.Context, tx *sql.Tx, tag, typ, value string) error {
-	if typ == "ip" {
-		if _, _, err := net.ParseCIDR(value); err != nil {
-			log.Warnf("RULESET: skipping invalid CIDR rule %s=%s: %v", tag, value, err)
-			return nil //nolint:nilerr // invalid CIDRs are skipped, same as original continue
-		}
-	}
-	key := value
-	if typ == "domain" {
-		key = domainKey(value)
-	}
-	_, err := tx.ExecContext(ctx,
-		`INSERT OR REPLACE INTO ruleset_entries (tag, type, value) VALUES (?, ?, ?)`,
-		tag, typ, key,
-	)
-	return err
-}
 
 // readDomainFile reads a line-delimited domain file, skipping comments.
 func readDomainFile(path string) ([]string, error) {
@@ -263,25 +190,18 @@ func domainKey(p string) string {
 	return p
 }
 
-// tldPlusOne extracts the effective TLD+1 (registrable domain) for domain
-// matching.  It takes the last two labels of the fully-qualified name.
-//
-// Note: this approach does not handle multi-part TLDs (e.g. "example.co.uk"
-// would return "co.uk" instead of "example.co.uk").  A complete solution
-// requires a Public Suffix List (https://publicsuffix.org/) which is ~10k
-// entries — out of scope for this project.  Domain rules targeting ccTLDs
-// with multi-part suffixes should use explicit subdomain patterns.
-func tldPlusOne(name string) string {
-	n := strings.TrimSuffix(strings.ToLower(name), ".")
-
-	last := strings.LastIndexByte(n, '.')
-	if last < 0 {
-		return n
+// tldPlusOne extracts the effective TLD+1 from a query name.
+// "www.google.com." → "google.com"; "google.com." → "google.com".
+// Multi-part TLDs are not handled (documented limitation).
+func tldPlusOne(qname string) string {
+	qname = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(qname)), ".")
+	idx := strings.LastIndex(qname, ".")
+	if idx < 0 {
+		return qname
 	}
-
-	secondLast := strings.LastIndexByte(n[:last], '.')
-	if secondLast < 0 {
-		return n
+	prev := strings.LastIndex(qname[:idx], ".")
+	if prev < 0 {
+		return qname
 	}
-	return n[secondLast+1:]
+	return qname[prev+1:]
 }

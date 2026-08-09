@@ -2,8 +2,6 @@ package zone
 
 import (
 	"bufio"
-	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -26,8 +24,8 @@ type recordGroup struct {
 // Zone file import — domain headers + record lines
 // ---------------------------------------------------------------------------
 
-// loadFile parses a zone file and inserts entries directly into SQL.
-func (e *Evaluator) loadFile(ctx context.Context, tx *sql.Tx, parent *config.ZoneRule) (int, error) {
+// loadFile parses a zone file and registers entries in memory.
+func (e *Evaluator) loadFile(table *zoneTable, parent *config.ZoneRule) (int, error) {
 	//nolint:gosec // G304: user-configured file path
 	f, err := os.Open(parent.File)
 	if err != nil {
@@ -43,7 +41,7 @@ func (e *Evaluator) loadFile(ctx context.Context, tx *sql.Tx, parent *config.Zon
 		curRawName  string // un-normalized, for buildRecord
 		curWildcard bool
 		curRcode    int
-		curTags     string
+		curTags     []matchTag
 		curRecords  []config.ZoneRecord
 		curAuth     []config.ZoneRecord
 		curAddl     []config.ZoneRecord
@@ -59,20 +57,22 @@ func (e *Evaluator) loadFile(ctx context.Context, tx *sql.Tx, parent *config.Zon
 				aw := packRRs(curRawName, g.records)
 				auth := packRRs(curRawName, curAuth)
 				addl := packRRs(curRawName, curAddl)
-				if err := e.insertRow(ctx, tx, curDomain, g.qtype, g.qclass, curRcode, aw, auth, addl, curTags, curWildcard); err != nil {
-					log.Warnf("ZONE: insert row failed: %v", err)
-				} else {
-					count++
-				}
+				addRule(table, &zoneRule{
+					qname: curDomain, qtype: g.qtype, qclass: g.qclass, rcode: curRcode,
+					answer: aw, authority: auth, additional: addl,
+					matchTags: curTags, isWildcard: curWildcard,
+				})
+				count++
 			}
 		} else if curRcode != dns.RcodeSuccess {
 			auth := packRRs(curRawName, curAuth)
 			addl := packRRs(curRawName, curAddl)
-			if err := e.insertRow(ctx, tx, curDomain, 0, 0, curRcode, nil, auth, addl, curTags, curWildcard); err != nil {
-				log.Warnf("ZONE: insert row failed: %v", err)
-			} else {
-				count++
-			}
+			addRule(table, &zoneRule{
+				qname: curDomain, qtype: 0, qclass: 0, rcode: curRcode,
+				authority: auth, additional: addl,
+				matchTags: curTags, isWildcard: curWildcard,
+			})
+			count++
 		}
 	}
 
@@ -104,7 +104,7 @@ func (e *Evaluator) loadFile(ctx context.Context, tx *sql.Tx, parent *config.Zon
 			}
 			curWildcard = isWildcard
 			curRcode = parent.Rcode
-			curTags = serializeMatchTags(parent.Match)
+			curTags, _ = parseMatchTags(parent.Match)
 			curRecords = nil
 			curAuth = nil
 			curAddl = nil
@@ -115,7 +115,12 @@ func (e *Evaluator) loadFile(ctx context.Context, tx *sql.Tx, parent *config.Zon
 						curRcode = n
 					}
 				} else if strings.HasPrefix(f, "match=") {
-					curTags = f[6:] // store raw, validated at query time
+					tags, err := parseMatchTags(strings.Split(f[6:], ","))
+					if err != nil {
+						log.Warnf("ZONE: invalid match tags %q in %s", f[6:], curDomain)
+						tags = nil
+					}
+					curTags = tags
 				}
 			}
 			continue

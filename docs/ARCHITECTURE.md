@@ -2,138 +2,31 @@
 
 Detailed technical reference for ZJDNS. For working guidelines, see [CLAUDE.md](../CLAUDE.md).
 
-## DB Schema
+## Storage
 
-The unified database (`database/`) contains ten SQLite tables (`modernc.org/sqlite`, WAL mode, mmap, zstd compression):
+ZJDNS is fully in-memory — there is no database.  The cache, stats, zone
+rules, ruleset, latency and delegation data all live in memory (lrumap for
+LRU maps for cache/latency/delegations, atomic.Pointer snapshots for
+zone/ruleset rules, atomic counters for stats).  The only persistence is the
+DNSCrypt state file (`dnscryptstate`), a ~300-byte blob holding the provider
+identity + cert windows so restarts resume the same certificates.
 
-```sql
--- Project version (singleton row). Set at build time via database.Version.
-CREATE TABLE version (version TEXT NOT NULL);
+### In-memory data
 
--- DNS response cache. Uniqueness: (qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok).
--- msg_wire holds the pre-packed response (format 0x02): [0x02][2:num TTL
--- offsets][2 each:offset][wire], where wire may be zstd-compressed above the
--- compression threshold.  The wire carries the full response header —
--- including the RCODE (e.g. NXDOMAIN) — so cache hits serve the exact rcode.
-CREATE TABLE entries (
-    qname      TEXT NOT NULL,
-    qtype      INTEGER NOT NULL,
-    qclass     INTEGER NOT NULL DEFAULT 1,
-    ecs_addr   TEXT NOT NULL DEFAULT '',
-    ecs_prefix INTEGER NOT NULL DEFAULT 0,
-    dnssec_ok  INTEGER NOT NULL DEFAULT 0 CHECK (dnssec_ok IN (0, 1)),
-    timestamp  INTEGER NOT NULL,
-    ttl        INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL DEFAULT 0,
-    validated  INTEGER NOT NULL DEFAULT 0 CHECK (validated IN (0, 1)),
-    msg_wire   BLOB,
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    UNIQUE(qname, qtype, qclass, ecs_addr, ecs_prefix, dnssec_ok)
-);
-CREATE INDEX idx_entries_expires_ts ON entries(expires_at, timestamp);
-CREATE INDEX idx_entries_timestamp ON entries(timestamp);
+| Data | Structure | Lifetime |
+|------|-----------|----------|
+| DNS cache entries | `lrumap.Map[string, *cacheEntry]` — key = (qname, qtype, qclass, ecs, dnssec) flattened, value = pre-packed wire (format 0x02) + ts/ttl | LRU-bounded, TTL-expired lazily on read |
+| Query stats + per-RCODE journal | `statsjournal` (atomic counters + `topk.Map`) | Resets on restart |
+| Zone rules | `zoneTable` atomic.Pointer snapshot (exact/wildcard maps, compressed RR blobs) | Rebuilt from config at startup |
+| Ruleset rules | `ruleTable` atomic.Pointer snapshot (IP trie + domain suffix map) | Rebuilt from config at startup |
+| IP latency | `lrumap.Map[string, latEntry]` | LRU-bounded, lazy expiry + periodic cleanup |
+| Delegations | `lrumap.Map[string, *delegationEntry]` | LRU-bounded, lazy TTL expiry + periodic cleanup |
+| DNSCrypt state | `dnscryptstate.FileStore` — ~300B blob: identity (96B) + cert windows | Persisted across restarts |
 
--- Query statistics: per-day aggregated counters for all results.  Auto-pruned
--- by config.DefaultQueryJournalRetention.  Stats() reads this single table.
-CREATE TABLE query_stats (
-    stat_day    INTEGER NOT NULL,   -- unixepoch() / 86400
-    result      TEXT NOT NULL,      -- 'hit','miss','stale','zone','error','blocked','badcookie'
-    protocol    TEXT NOT NULL,
-    rcode       INTEGER NOT NULL DEFAULT 0,
-    dnssec      TEXT NOT NULL DEFAULT '',  -- 'secure','insecure','bogus','' for hits
-    poisoned      INTEGER NOT NULL DEFAULT 0,
-    query_count INTEGER NOT NULL DEFAULT 0,
-    total_ms    INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (stat_day, result, protocol, rcode, dnssec, poisoned)
-) WITHOUT ROWID;
-
--- Query log: per-event audit trail for non-hit queries.  qname/qtype/qclass
--- stored directly (denormalized) — no JOIN needed for debugging.
-CREATE TABLE query_log (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp   INTEGER NOT NULL,
-    qname       TEXT NOT NULL DEFAULT '',
-    qtype       INTEGER NOT NULL DEFAULT 0,
-    qclass      INTEGER NOT NULL DEFAULT 1,
-    protocol    TEXT NOT NULL,
-    result      TEXT NOT NULL,
-    rcode       INTEGER NOT NULL DEFAULT 0,
-    response_ms INTEGER NOT NULL DEFAULT 0,
-    server      TEXT NOT NULL DEFAULT '',
-    poisoned    INTEGER NOT NULL DEFAULT 0,
-    dnssec      TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX idx_query_log_ts ON query_log(timestamp);
-
--- PTR reverse-lookup (IP → domain).
-CREATE TABLE ptr_map (
-    rdata_ip TEXT NOT NULL,
-    entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-    name     TEXT NOT NULL,
-    ttl      INTEGER NOT NULL,
-    PRIMARY KEY (rdata_ip, entry_id, name)
-) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS idx_ptr_map_entry_id ON ptr_map(entry_id);
-
--- Per-IP latency measurements. Keyed by rdata_ip only.
-CREATE TABLE ip_latency (
-    rdata_ip        TEXT NOT NULL,
-    qtype           INTEGER NOT NULL DEFAULT 0,
-    latency_ms      INTEGER NOT NULL,
-    last_probe_time INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (rdata_ip)
-) WITHOUT ROWID;
-CREATE INDEX idx_ip_latency_probe ON ip_latency(last_probe_time);
-
--- Resolver-internal zone-cut delegation cache. Stores NS target names,
--- a small address snapshot, and verified DS records (NULL = insecure)
--- per zone. Lookup is suffix-based: for "www.baidu.com.", ancestor zones
--- "baidu.com." and "com." are probed; deepest fresh match wins.
--- Survives restarts; complements NS-address cache (TypeA/TypeAAAA entries)
--- and DNSKEY cache (TypeDNSKEY entries).
-CREATE TABLE delegations (
-    zone       TEXT NOT NULL PRIMARY KEY,
-    parent     TEXT NOT NULL DEFAULT '',
-    ns_names   TEXT NOT NULL,
-    addrs      TEXT NOT NULL DEFAULT '',
-    ds_wire    BLOB,               -- wire-format DS; NULL = insecure delegation
-    timestamp  INTEGER NOT NULL,
-    ttl        INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX idx_delegations_expires ON delegations(expires_at);
-
--- Ruleset entries loaded from config. PK (type, tag, value) enables a prefix
--- seek for WHERE type='domain' AND tag=?. IP entries are CIDR strings.
-CREATE TABLE ruleset_entries (
-    tag   TEXT NOT NULL,
-    type  TEXT NOT NULL,
-    value TEXT NOT NULL,
-    PRIMARY KEY (type, tag, value)
-) WITHOUT ROWID;
-
--- Zone entries (same DB file, shared zstd compression).
-CREATE TABLE zone_entries (
-    is_wildcard INTEGER NOT NULL DEFAULT 0,
-    qname      TEXT NOT NULL,
-    qtype      INTEGER NOT NULL DEFAULT 0,
-    qclass     INTEGER NOT NULL DEFAULT 0,
-    rcode      INTEGER NOT NULL DEFAULT 0,
-    answer     BLOB,               -- zstd-compressed answer RRs
-    authority  BLOB,               -- zstd-compressed authority RRs
-    additional BLOB,               -- zstd-compressed additional RRs
-    match_tags TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (is_wildcard, qname, qtype, qclass, match_tags)
-) WITHOUT ROWID;
-
--- DNSCrypt state (singleton): Ed25519 identity (96B) + serialized cert
--- windows. Persisted so a restart resumes the same windows (v3.7.17).
-CREATE TABLE dnscrypt_state (
-    id       INTEGER PRIMARY KEY CHECK (id = 1),
-    identity BLOB NOT NULL,
-    windows  BLOB NOT NULL
-);
-```
+The cache entry value is the pre-packed response (format 0x02: [0x02][2:num
+TTL offsets][2 each:offset][wire], zstd-compressed above the threshold).  The
+wire carries the full response header — including the RCODE (e.g. NXDOMAIN) —
+so cache hits serve the exact rcode.
 
 ### Key Patterns
 
@@ -144,13 +37,13 @@ CREATE TABLE dnscrypt_state (
   deduction happens in-place via the offset table; DNSSEC filtering for
   DO=0 clients uses a wire scan (WireHasDNSSEC). Entries below the
   compression threshold are stored uncompressed (no decompress either).
-- **RecordRequest**: All results → `query_stats` (per-day upsert, ~500 row sliding window). Non-hit events also → `query_log` (audit trail with denormalized qname/qtype/qclass, no JOIN needed).
-- **Stats aggregation**: `Stats()` uses a single scan of `query_stats` with CASE expressions (result + protocol + rcode + dnssec + poisoned distributions computed inline). ~500 rows regardless of query volume.
-- **Pruning**: `PruneQueryJournal` runs at `config.DefaultPruneInterval`, deleting `query_stats` rows past `config.DefaultQueryJournalRetention` (PK prefix seek) and `query_log` rows via batched delete (`config.DefaultPruneBatchSize` rows per iteration, using `idx_query_log_ts`). Fallback cleanup via `config.DefaultStaleMaxAge` in `evictOldest`.
-- **Eviction**: On `Set()` when count > maxEntries. Prefers past serve-stale, then oldest. `ON DELETE CASCADE` for ptr_map. Stale ip_latency + query_log rows pruned during eviction.
+- **RecordRequest**: All results → in-memory atomic counters (`internal/statsjournal`); non-hit events also enter a per-RCODE top-N domain journal (`topk.Map`, bounded). No SQL, no disk — pure memory, reset on restart.
+- **Stats aggregation**: `Stats()` reads the in-memory snapshot — O(1) counters + per-RCODE top-N sort. Output keeps the previous TXT layout plus `top-rcode<N>` lines.
+- **Pruning**: `PruneQueryJournal` is a no-op — the journal is bounded in memory, nothing to prune.
+- **Eviction**: On `Set()` when count > maxEntries. Prefers past serve-stale, then oldest. Latency and delegation entries expire lazily on read (past the stale window / TTL).
 - **NS latency cache**: NS/Root addresses as TypeA/TypeAAAA entries. Latency probed via `ProbeNSAddrs`, reordered by `sortAnswerByLatency` at `Get()` time.
-- **Delegation cache**: Zone-cut delegations (zone to NS names + verified DS) in `delegations` table. Populated at every delegation crossing during recursive walks; only secure (verified DS) or insecure (authenticated no-DS) delegations are stored. On subsequent queries, suffix-lookup finds the deepest fresh delegation for the qname and starts the walk from that zone instead of the root, skipping already-walked delegation levels. DNSKEYs are fetched fresh by `ensureZoneDNSKEYs` (verified against the cached DS); NS addresses are resolved from the existing TypeA/TypeAAAA cache with the stored address snapshot as a fallback.
-- **IP latency**: Per-IP keyed. `INSERT OR REPLACE` writes latency_ms + last_probe_time. All domains sharing a CDN IP reuse the same row.
+- **Delegation cache**: Zone-cut delegations (zone to NS names + verified DS) in memory (LRU-bounded, lazy TTL expiry + periodic cleanup). Populated at every delegation crossing during recursive walks; only secure (verified DS) or insecure (authenticated no-DS) delegations are stored. On subsequent queries, a suffix-walk from the deepest ancestor finds the first fresh delegation and starts the walk from that zone instead of the root, skipping already-walked delegation levels. DNSKEYs are fetched fresh by `ensureZoneDNSKEYs` (verified against the cached DS); NS addresses are resolved from the existing TypeA/TypeAAAA cache with the stored address snapshot as a fallback.
+- **IP latency**: Per-IP keyed, in memory (LRU-bounded `lrumap.Map[string, latEntry]`). Background probes write latency + probe time; cache hits read it to reorder A/AAAA answers fastest-first. All domains sharing a CDN IP reuse the same entry. Entries expire lazily past the stale window.
 - **Dynamic queries**: `Store.Stats()` returns TXT records (overview, hits, errors, rcodes, poisoned, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.cache.clear` / `zjdns.stats.clear` / `zjdns.ptr.clear` / `zjdns.latency.clear` / `zjdns.dnscrypt.clear` (loopback-only).
 
 
@@ -219,7 +112,7 @@ Full implementation with PQC support. Two crypto constructions: XWingPQ (default
 - `keys []keyEntry` holds current + previous certs for rotation overlap
 - `rotateKeys()` generates fresh resolver keys every 24h, signed with fixed Ed25519 identity; ticket keys rotate alongside (RFC §11.7)
 - `decrypt()` tries keys newest-first; `decryptPQResumed()` validates tickets against all active certs
-- Persistence: identity + cert windows stored in the `dnscrypt_state` SQLite table — a restart resumes the exact same windows (client-cached certs stay valid); config key change drops the persisted state and mints fresh windows
+- Persistence: identity + cert windows stored in the `dnscrypt_state` state file (`internal/dnscryptstate`) — a restart resumes the exact same windows (client-cached certs stay valid); config key change drops the persisted state and mints fresh windows
 - CHAOS `zjdns.dnscrypt.clear` (loopback-only) regenerates all windows immediately (ResetKeys)
 - Config generator: `GenerateDNSCryptConfig()` in `generate.go` → called from `cmd/zjdns/cli/generate.go`
 
@@ -270,7 +163,7 @@ Reuses SM2 certificate pair from TLCP. Wire format = DTLS (RFC 8094): 2-byte big
 
 ## Zone Rules (`zone/`)
 
-- **ZoneStorage interface**: `Evaluator` depends on `ZoneStorage` (not concrete `*database.DB`), following the same pattern as `ruleset.RuleSetStorage`. The interface provides `Exec`, `Begin`, `QueryZoneExact`, `QueryZoneWildcard`, and `Close`.
+- **Zone evaluator**: in-memory maps (exact/wildcard) behind an atomic.Pointer snapshot; rules come from config at startup.
 - **Wildcard matching**: Batch IN query with fixed 16 placeholders via `StmtZoneWildcard` prepared statement — single query replaces the old per-label N-query loop.
 - **Synthetic zone rules**: config load injects zone rules for local answers —
   CHAOS introspection (`config/chaos.go`: id.server/hostname.bind/version.*,

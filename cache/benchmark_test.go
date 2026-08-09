@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/netip"
 	"testing"
-	"zjdns/database"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
@@ -13,8 +12,7 @@ import (
 
 func BenchmarkStoreSetGet(b *testing.B) {
 	log.Default.SetLevel(log.Error)
-	db, _ := database.Open("", 0, database.Options{})
-	c := New(db)
+	c := New(0, 0)
 	defer func() { _ = c.Close() }()
 
 	a := &dns.A{
@@ -31,8 +29,7 @@ func BenchmarkStoreSetGet(b *testing.B) {
 
 func BenchmarkStoreParallel(b *testing.B) {
 	log.Default.SetLevel(log.Error)
-	db, _ := database.Open("", 0, database.Options{})
-	c := New(db)
+	c := New(0, 0)
 	defer func() { _ = c.Close() }()
 
 	b.ResetTimer()

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"zjdns/cache"
 	"zjdns/config"
-	"zjdns/database"
 	"zjdns/edns"
+	"zjdns/internal/lrumap"
 	"zjdns/server/defense"
 	"zjdns/server/resolver/dnssec"
 	"zjdns/server/upstream"
@@ -109,9 +109,11 @@ type Config struct {
 	CIDRMatcher    CIDRMatcher
 	BuildMsg       BuildQueryFunc
 	Cache          cache.Store
-	DB             *database.DB // delegation cache (zone → NS names + DS)
 	DNSSECEnforce  bool
-	Ctx            context.Context // lifecycle context propagated to Recursive for probes
+	// DelegationMaxEntries bounds the in-memory zone-cut delegation cache
+	// (<= 0 applies the config default).
+	DelegationMaxEntries int
+	Ctx                  context.Context // lifecycle context propagated to Recursive for probes
 }
 
 // concurrencyTier1/2/3 define server-count thresholds for adaptive concurrency
@@ -181,15 +183,35 @@ func New(cfg *Config) (*Resolver, error) {
 		upstream:      &upstreamSet{},
 		cache:         cfg.Cache,
 	}
+	delegationMax := cfg.DelegationMaxEntries
+	if delegationMax <= 0 {
+		delegationMax = config.DefaultMaxDelegationEntries
+	}
 	r.recursive = &Recursive{
-		resolver: r,
-		cache:    cfg.Cache,
-		db:       cfg.DB,
-		ctx:      cfg.Ctx,
+		resolver:    r,
+		cache:       cfg.Cache,
+		delegations: lrumap.New[string, *delegationEntry](delegationMax),
+		ctx:         cfg.Ctx,
 	}
 	r.cname = &CNAME{resolver: r}
 	r.validator = &Validator{Crypto: cfg.Crypto, Poisonguard: cfg.PoisonDetector}
 	return r, nil
+}
+
+// LoadDelegationSnapshot restores the zone-cut delegation cache from a
+// snapshot file (persistence bridge for the server lifecycle).
+func (r *Resolver) LoadDelegationSnapshot(path string) error {
+	return r.recursive.LoadDelegationSnapshot(path)
+}
+
+// SaveDelegationSnapshot persists the zone-cut delegation cache.
+func (r *Resolver) SaveDelegationSnapshot(path string) error {
+	return r.recursive.SaveDelegationSnapshot(path)
+}
+
+// CleanupDelegations physically removes expired delegation entries.
+func (r *Resolver) CleanupDelegations() {
+	r.recursive.CleanupDelegations()
 }
 
 // ConfigureServers initializes the upstream server list.

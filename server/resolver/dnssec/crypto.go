@@ -9,6 +9,7 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
+	dnspool "codeberg.org/miekg/dns/pkg/pool"
 
 	zdnsutil "zjdns/internal/dnsutil"
 )
@@ -46,6 +47,12 @@ var (
 // NewCryptoValidator creates a CryptoValidator for DNSSEC validation. The
 // cache store is used to persist verified zone DNSKEYs. Call LoadTrustAnchors
 // to populate root trust anchors when recursive resolution is needed.
+// sigBufPool is the shared buffer pool for RRSIG signature verification.
+// miekg/dns defaults to a Noop pooler (a fresh 8KB buffer per call — 109MB
+// cumulative allocations on a recursive server) unless SignOption.Pooler is
+// provided; the real sync.Pool keeps allocations to pool misses only.
+var sigBufPool = dnspool.New(8192)
+
 func NewCryptoValidator(store cache.Store) *CryptoValidator {
 	return &CryptoValidator{cache: store}
 }
@@ -121,7 +128,7 @@ func (c *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey *
 	// 5/7, DS digest 1) is deliberately accepted for VERIFICATION: RFC 8624
 	// §3.1 deprecates SHA-1 for signers, not validators — existing zones
 	// signed before the transition must still validate.
-	if err := rrsig.Verify(dnskey, rrset, &dns.SignOption{}); err != nil {
+	if err := rrsig.Verify(dnskey, rrset, &dns.SignOption{Pooler: sigBufPool}); err != nil {
 		if errors.Is(err, dns.ErrAlg) {
 			// EDE 1: the RRSIG uses an algorithm the library cannot verify
 			// (e.g. DSA, GOST, or an unknown algorithm) — report precisely

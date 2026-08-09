@@ -154,7 +154,7 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	rec.Protocol = qctx.Protocol
 	rec.Result = "miss"
 	rec.ResponseTime = handler.ElapsedMS(qctx.StartTime)
-	rec.Rcode = dns.RcodeSuccess
+	rec.Rcode = int(qr.Rcode) // real resolution rcode (NXDOMAIN/SERVFAIL land in the right journal group)
 	rec.Server = qr.Server
 	rec.Poisoned = qr.Poisoned
 	rec.DNSSECStatus = dnssecStatus

@@ -1,21 +1,17 @@
-// Package zone provides DNS zone-file-style query matching backed by SQLite.
-// Rules are loaded into a SQLite database at startup and queried
-// via B-tree indexed prepared statements — O(log n) per lookup with near-zero
-// Go heap footprint regardless of rule count.
+// Package zone provides DNS zone-file-style query matching backed by
+// in-memory maps.  Rules are loaded at startup from config (LoadRules) into
+// exact/wildcard lookup maps — no SQL on the query path.
 package zone
 
 import (
-	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"zjdns/config"
-	"zjdns/database"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
@@ -48,6 +44,7 @@ type Result struct {
 	CreatedAt  int64 // LoadRules timestamp for TTL cycling
 
 	cachable bool // internal: true when the winning rule has no match_tags
+	score    int  // internal: winning rule's matchScore (cross-suffix comparison)
 }
 
 // dynamicEntry holds a dynamic content function and its record configs.
@@ -56,35 +53,55 @@ type dynamicEntry struct {
 	configs []config.ZoneRecord
 }
 
-// ZoneStorage is the interface for zone rule storage, following the same
-// pattern as ruleset.RuleSetStorage.  It allows zone.Evaluator to depend on
-// an abstraction rather than the concrete *database.DB type.
-type ZoneStorage interface {
-	Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
-	Begin(ctx context.Context) (*sql.Tx, error)
-	QueryZoneExact(ctx context.Context, qname string, qtype, qclass int) (*sql.Rows, error)
-	QueryZoneWildcard(ctx context.Context, args []any) (*sql.Rows, error)
-	Close() error
-	// ReadContext returns a bounded context for a hot-path read (a free
-	// connection may take time under load — the wait must never block
-	// forever).
-	ReadContext() (context.Context, context.CancelFunc)
-	// WriteContext returns a bounded context for a best-effort write.
-	WriteContext() (context.Context, context.CancelFunc)
+// exactKey is the composite lookup key for exact (non-wildcard) rules.
+// Sentinel rules (rcode-only, no answer records) use qtype=0, qclass=0.
+type exactKey struct {
+	qname  string
+	qtype  uint16
+	qclass uint16
 }
 
-// Evaluator manages zone rules backed by a ZoneStorage implementation.
+// zoneRule is one rule in memory.  Answer/Authority/Additional are kept as
+// zstd-compressed wire blobs (packRRs) so every match decompresses a fresh
+// copy — the zone middleware mutates the returned RRs in place
+// (rewriteOwnerNames, TTL deduction), so shared RRs would corrupt each other
+// across queries.  matchTags is pre-parsed at load time.
+type zoneRule struct {
+	qname      string
+	qtype      uint16
+	qclass     uint16
+	rcode      int
+	answer     []byte
+	authority  []byte
+	additional []byte
+	matchTags  []matchTag
+	isWildcard bool
+}
 
-type Evaluator struct {
-	db        ZoneStorage
-	loadedAt  atomic.Int64
-	ruleCount atomic.Int64
-	// rulesMu guards dynamics/bypass: LoadRules rewrites them, Evaluate
-	// reads them on the query path (RLock). A runtime reload must not race
-	// in-flight queries (M27).
-	rulesMu  sync.RWMutex
+// zoneTable is one immutable snapshot of all loaded rules.  LoadRules builds
+// a fresh table and publishes it via atomic.Pointer.Swap; Evaluate reads the
+// current table lock-free (an in-flight query keeps the old table alive
+// until it finishes — no reader/writer race possible).
+type zoneTable struct {
 	dynamics map[string]*dynamicEntry // qname → dynamic content
 	bypass   [][]matchTag             // global bypass rules (only Match, no Name/File)
+	// exactRules: (qname, qtype, qclass) → rules (sentinel rules use
+	// qtype=0,qclass=0).  Buckets are sorted by match_tags at load so
+	// equal-score ties resolve deterministically.
+	exactRules map[exactKey][]*zoneRule
+	// wildcardRules: wildcard suffix qname → rules (sorted by qtype DESC —
+	// concrete qtype rows win ties against sentinel rows, matching the
+	// former SQL ORDER BY qtype DESC).
+	wildcardRules map[string][]*zoneRule
+}
+
+// Evaluator manages zone rules as an immutable snapshot.  Evaluate reads the
+// current table with a single atomic load — no lock on the query path.
+
+type Evaluator struct {
+	loadedAt  atomic.Int64
+	ruleCount atomic.Int64
+	table     atomic.Pointer[zoneTable]
 }
 
 // ---------------------------------------------------------------------------
@@ -94,31 +111,15 @@ type Evaluator struct {
 // wildcardPrefix marks a domain as a wildcard rule.
 const wildcardPrefix = "*."
 
-// maxWildcardLabels caps the number of suffix candidates in a wildcard batch
-// query.  DNS hostnames have at most 127 labels; 16 is a practical bound.  The
-// SQL statement uses a fixed placeholder count so SQLite can reuse the compiled
-// query plan across calls (P4).
-const maxWildcardLabels = 16
-
-var wildcardArgsPool = sync.Pool{New: func() any { a := make([]any, maxWildcardLabels+2); return &a }}
-
-// New creates an Evaluator backed by the given database.
-// The caller is responsible for opening the database via database.Open()
-// before calling New. Panics if db is nil (caller must provide a valid
-// database handle).
-func New(db *database.DB) *Evaluator {
-	if db == nil {
-		panic("zone: nil database")
-	}
-	return &Evaluator{
-		db:       db,
-		dynamics: make(map[string]*dynamicEntry),
-	}
-}
-
-// Close releases SQLite resources.
-func (e *Evaluator) Close() error {
-	return e.db.Close()
+// New creates an in-memory Evaluator with an empty rule table.
+func New() *Evaluator {
+	e := &Evaluator{}
+	e.table.Store(&zoneTable{
+		dynamics:      make(map[string]*dynamicEntry),
+		exactRules:    make(map[exactKey][]*zoneRule),
+		wildcardRules: make(map[string][]*zoneRule),
+	})
+	return e
 }
 
 // HasRules reports whether any zone rules are currently loaded.
@@ -128,28 +129,18 @@ func (e *Evaluator) HasRules() bool { return e.ruleCount.Load() > 0 }
 // LoadRules
 // ---------------------------------------------------------------------------
 
-// LoadRules validates and loads zone rules into the SQLite database.
+// LoadRules validates and loads zone rules into memory, building a fresh
+// snapshot table and publishing it atomically.  In-flight queries keep
+// reading the previous table until they finish.  Rules always come from
+// config at startup (or a config reload) — nothing is persisted.
 func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
-	e.rulesMu.Lock()
-	defer e.rulesMu.Unlock()
-
-	ctx, cancel := e.db.WriteContext()
-	defer cancel()
-
-	if _, err := e.db.Exec(ctx, `DELETE FROM zone_entries`); err != nil {
-		return fmt.Errorf("zone: clear: %w", err)
+	table := &zoneTable{
+		dynamics:      make(map[string]*dynamicEntry),
+		exactRules:    make(map[exactKey][]*zoneRule),
+		wildcardRules: make(map[string][]*zoneRule),
 	}
-	// Clear dynamic content registrations.
-	e.dynamics = make(map[string]*dynamicEntry)
-
-	tx, err := e.db.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("zone: begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 
 	// Collect global bypass rules: only Match, no Name/File/Answer/DynamicContent.
-	var bypass [][]matchTag
 	var content []config.ZoneRule
 	for i := range rules {
 		r := &rules[i]
@@ -160,21 +151,20 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 			if err != nil {
 				return fmt.Errorf("zone bypass rule: %w", err)
 			}
-			bypass = append(bypass, tags)
+			table.bypass = append(table.bypass, tags)
 			continue
 		}
 		content = append(content, *r)
 	}
-	e.bypass = bypass
-	if len(bypass) > 0 {
-		log.Infof("ZONE: %d bypass rule(s) loaded", len(bypass))
+	if len(table.bypass) > 0 {
+		log.Infof("ZONE: %d bypass rule(s) loaded", len(table.bypass))
 	}
 
 	total := int64(0)
 	for i := range content {
 		rule := &content[i]
 		if rule.File != "" {
-			n, err := e.loadFile(ctx, tx, rule)
+			n, err := e.loadFile(table, rule)
 			if err != nil {
 				return fmt.Errorf("zone file %q: %w", rule.File, err)
 			}
@@ -182,24 +172,42 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 			log.Infof("ZONE: loaded %d entries from %s", n, rule.File)
 			continue
 		}
-		n, err := e.loadInline(ctx, tx, rule)
+		n, err := e.loadInline(table, rule)
 		if err != nil {
 			return err
 		}
 		total += int64(n)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("zone: commit: %w", err)
+	// Sort each bucket so equal-score ties resolve deterministically:
+	// exact buckets by match_tags text (the former SQLite PK order), wildcard
+	// buckets by qtype DESC (concrete qtype rows before sentinel rows, the
+	// former SQL ORDER BY qtype DESC).
+	for _, rules := range table.exactRules {
+		slices.SortStableFunc(rules, func(a, b *zoneRule) int {
+			return strings.Compare(matchTagKey(a.matchTags), matchTagKey(b.matchTags))
+		})
+	}
+	for _, rules := range table.wildcardRules {
+		slices.SortStableFunc(rules, func(a, b *zoneRule) int {
+			if a.qtype != b.qtype {
+				if a.qtype > b.qtype {
+					return -1
+				}
+				return 1
+			}
+			return strings.Compare(matchTagKey(a.matchTags), matchTagKey(b.matchTags))
+		})
 	}
 
+	e.table.Store(table)
 	e.ruleCount.Store(total)
 	e.loadedAt.Store(log.NowUnix())
 	log.Infof("ZONE: %d zone entries loaded", total)
 	return nil
 }
 
-func (e *Evaluator) loadInline(ctx context.Context, tx *sql.Tx, rule *config.ZoneRule) (int, error) {
+func (e *Evaluator) loadInline(table *zoneTable, rule *config.ZoneRule) (int, error) {
 	if rule.Name == "" {
 		return 0, errors.New("zone rule: name is required")
 	}
@@ -216,9 +224,12 @@ func (e *Evaluator) loadInline(ctx context.Context, tx *sql.Tx, rule *config.Zon
 	normalizedName := dnsutil.Canonical(rule.Name)
 
 	if rule.DynamicContent != nil {
-		e.dynamics[normalizedName] = &dynamicEntry{fn: rule.DynamicContent, configs: rule.Answer}
+		table.dynamics[normalizedName] = &dynamicEntry{fn: rule.DynamicContent, configs: rule.Answer}
 	}
-	matchTags := serializeMatchTags(rule.Match)
+	tags, err := parseMatchTags(rule.Match)
+	if err != nil {
+		return 0, fmt.Errorf("zone rule %q: %w", rule.Name, err)
+	}
 	isWildcard := strings.HasPrefix(rule.Name, wildcardPrefix)
 	if isWildcard {
 		normalizedName = normalizedName[len(wildcardPrefix):]
@@ -232,36 +243,43 @@ func (e *Evaluator) loadInline(ctx context.Context, tx *sql.Tx, rule *config.Zon
 			aw := packRRs(rule.Name, g.records)
 			auth := packRRs(rule.Name, rule.Authority)
 			addl := packRRs(rule.Name, rule.Additional)
-			if err := e.insertRow(ctx, tx, normalizedName, g.qtype, g.qclass, rule.Rcode, aw, auth, addl, matchTags, isWildcard); err != nil {
-				return 0, err
-			}
+			addRule(table, &zoneRule{
+				qname: normalizedName, qtype: g.qtype, qclass: g.qclass,
+				rcode: rule.Rcode, answer: aw, authority: auth, additional: addl,
+				matchTags: tags, isWildcard: isWildcard,
+			})
 			count++
 		}
 	} else if rule.Rcode != dns.RcodeSuccess || rule.DynamicContent != nil {
 		// Sentinel entry for rcode-only or dynamic rules.
 		auth := packRRs(rule.Name, rule.Authority)
 		addl := packRRs(rule.Name, rule.Additional)
-		if err := e.insertRow(ctx, tx, normalizedName, 0, 0, rule.Rcode, nil, auth, addl, matchTags, isWildcard); err != nil {
-			return 0, err
-		}
+		addRule(table, &zoneRule{
+			qname: normalizedName, qtype: 0, qclass: 0,
+			rcode: rule.Rcode, authority: auth, additional: addl,
+			matchTags: tags, isWildcard: isWildcard,
+		})
 		count++
 	}
 
 	return count, nil
 }
 
-func (e *Evaluator) insertRow(ctx context.Context, tx *sql.Tx, qname string, qtype, qclass uint16, rcode int, answer, authority, additional []byte, matchTags string, isWildcard bool) error {
-	w := 0
-	if isWildcard {
-		w = 1
+// ruleTypeMatches reports whether a wildcard rule's (qtype, qclass) matches
+// the query — the rule must match exactly, or be a sentinel rule (0, 0).
+func ruleTypeMatches(r *zoneRule, qtype, qclass uint16) bool {
+	return (r.qtype == qtype && r.qclass == qclass) || (r.qtype == 0 && r.qclass == 0)
+}
+
+// addRule registers a rule into the correct lookup map of a table being
+// built.  The table is not published yet — no locking needed.
+func addRule(table *zoneTable, r *zoneRule) {
+	if r.isWildcard {
+		table.wildcardRules[r.qname] = append(table.wildcardRules[r.qname], r)
+		return
 	}
-	_, err := tx.ExecContext(ctx,
-		`INSERT OR REPLACE INTO zone_entries
-		 (is_wildcard, qname, qtype, qclass, rcode, answer, authority, additional, match_tags)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		w, qname, qtype, qclass, rcode, answer, authority, additional, matchTags,
-	)
-	return err
+	key := exactKey{qname: r.qname, qtype: r.qtype, qclass: r.qclass}
+	table.exactRules[key] = append(table.exactRules[key], r)
 }
 
 // ---------------------------------------------------------------------------
@@ -279,11 +297,10 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 		return Result{Rcode: dns.RcodeSuccess}
 	}
 
-	e.rulesMu.RLock()
-	defer e.rulesMu.RUnlock()
+	table := e.table.Load()
 
 	// 0. Check global bypass rules — if any matches, skip zone entirely.
-	for i, tags := range e.bypass {
+	for i, tags := range table.bypass {
 		score := matchScore(tags, matchedTags)
 		log.Debugf("ZONE: bypass[%d] tags=%v client_tags=%v score=%d", i, tags, matchedTags, score)
 		if score > 0 {
@@ -292,7 +309,7 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 		}
 	}
 
-	if e.ruleCount.Load() == 0 && len(e.bypass) == 0 {
+	if e.ruleCount.Load() == 0 && len(table.bypass) == 0 {
 		return Result{Rcode: dns.RcodeSuccess}
 	}
 
@@ -303,82 +320,82 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 	qname = strings.ToLower(dnsutil.Fqdn(qname))
 
 	// 1. Check dynamic content (Go map, not SQL).
-	if de, ok := e.dynamics[qname]; ok {
+	if de, ok := table.dynamics[qname]; ok {
 		return e.evalDynamic(qname, qtype, qclass, de, clientIP)
 	}
 
 	loadedAt := e.loadedAt.Load()
-	readCtx, readCancel := e.db.ReadContext()
-	defer readCancel()
 
-	// 3. Exact composite key lookup.
-	if r := e.queryExact(readCtx, qname, qtype, qclass, matchedTags, loadedAt); r.Matched {
+	// 2. Exact composite key lookup.
+	if r := e.lookupExact(table, qname, qtype, qclass, matchedTags, loadedAt); r.Matched {
 		return r
 	}
 
-	// 4. Sentinel key (rcode-only rules).
-	if r := e.queryExact(readCtx, qname, 0, 0, matchedTags, loadedAt); r.Matched {
+	// 3. Sentinel key (rcode-only rules).
+	if r := e.lookupExact(table, qname, 0, 0, matchedTags, loadedAt); r.Matched {
 		return r
 	}
 
-	// 5. Wildcard suffix batch — single IN query replaces N per-label queries.
-	// ORDER BY length(qname) DESC, qtype DESC ensures the most specific
-	// suffix and the concrete qtype match (over qtype=0 sentinel) win.
-	r := e.queryWildcardBatch(readCtx, qname, qtype, qclass, matchedTags, loadedAt)
-
-	return r
+	// 4. Wildcard suffix walk — deepest suffix first (the former SQL ORDER
+	// BY length(qname) DESC tiebreak: the most specific suffix wins equal
+	// scores).  Per-suffix buckets are pre-sorted by qtype DESC so concrete
+	// qtype rows win ties against sentinel rows.
+	return e.lookupWildcard(table, qname, qtype, qclass, matchedTags, loadedAt)
 }
 
-func (e *Evaluator) queryExact(ctx context.Context, qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
-	rows, err := e.db.QueryZoneExact(ctx, qname, int(qtype), int(qclass))
-	if err != nil {
-		return Result{Rcode: dns.RcodeSuccess}
-	}
-	defer func() { _ = rows.Close() }()
-
+// bestMatch scores the candidate rules for a lookup key and returns the
+// highest-scoring match.  Bucket order is deterministic (sorted at load), so
+// equal-score ties resolve the same way on every query.  When wildcard is
+// true, only rules whose (qtype, qclass) matches the query — or sentinel
+// rules (0, 0) — are considered, mirroring the former SQL
+// `((qtype = ? AND qclass = ?) OR (qtype = 0 AND qclass = 0))`.
+func (e *Evaluator) bestMatch(rules []*zoneRule, qname string, wildcard bool, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
 	var bestScore int
 	var best Result
-	for rows.Next() {
-		var rcode int
-		var answerBlob, authBlob, addlBlob []byte
-		var tagsText string
-		if err := rows.Scan(&rcode, &answerBlob, &authBlob, &addlBlob, &tagsText); err != nil {
+	for _, r := range rules {
+		if wildcard && !ruleTypeMatches(r, qtype, qclass) {
 			continue
 		}
-
-		score := matchScore(parseMatchTagsText(tagsText), matchedTags)
+		score := matchScore(r.matchTags, matchedTags)
 		if score < 0 {
 			continue
 		}
 		if score <= bestScore && best.Matched {
 			continue // not better than current best
 		}
-
 		bestScore = score
 		best = Result{
-			Domain:     qname,
+			Domain:     r.qname,
 			Matched:    true,
-			Rcode:      rcode,
-			Answer:     unpackRRs(answerBlob),
-			Authority:  unpackRRs(authBlob),
-			Additional: unpackRRs(addlBlob),
+			Wildcard:   wildcard,
+			Rcode:      r.rcode,
+			Answer:     unpackRRs(r.answer),
+			Authority:  unpackRRs(r.authority),
+			Additional: unpackRRs(r.additional),
 			CreatedAt:  loadedAt,
 			cachable:   score == 0,
+			score:      score,
 		}
 	}
-
 	if !best.Matched {
 		return Result{Rcode: dns.RcodeSuccess}
 	}
 	return best
 }
 
-// queryWildcardBatch collects all suffix candidates from qname, issues a single
-// IN query ordered by specificity, and returns the first tag-matching row.
-// Replaces the per-label N-query loop (2 per suffix level) with one SQL query.
-func (e *Evaluator) queryWildcardBatch(ctx context.Context, qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
-	// Collect suffix candidates (e.g. "b.c.example.com", "c.example.com", "example.com").
-	suffixes := make([]string, 0, 8)
+func (e *Evaluator) lookupExact(table *zoneTable, qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
+	return e.bestMatch(table.exactRules[exactKey{qname: qname, qtype: qtype, qclass: qclass}], qname, false, 0, 0, matchedTags, loadedAt)
+}
+
+// lookupWildcard walks the suffix candidates of qname from deepest to
+// shallowest and returns the best wildcard match across all of them.
+// Untagged rules score 0, so bestScore starts at -1 — the first (deepest)
+// match is always accepted, equal scores keep the deeper suffix, and only a
+// strictly higher score replaces it (the former SQL ORDER BY length DESC
+// tiebreak).
+func (e *Evaluator) lookupWildcard(table *zoneTable, qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
+	bestScore := -1
+	var best Result
 	rest := qname
 	for {
 		idx := strings.IndexByte(rest, '.')
@@ -389,75 +406,12 @@ func (e *Evaluator) queryWildcardBatch(ctx context.Context, qname string, qtype,
 		if rest == "" {
 			break
 		}
-		suffixes = append(suffixes, rest)
-	}
-	if len(suffixes) == 0 {
-		return Result{Rcode: dns.RcodeSuccess}
-	}
-
-	// Cap at maxWildcardLabels and pad with empty strings so SQLite can
-	// reuse the compiled query plan across calls with different suffix counts.
-	if len(suffixes) > maxWildcardLabels {
-		suffixes = suffixes[:maxWildcardLabels]
-	}
-	argsPtr, ok := wildcardArgsPool.Get().(*[]any)
-	if !ok {
-		a := make([]any, maxWildcardLabels+2)
-		argsPtr = &a
-	}
-	args := (*argsPtr)[:maxWildcardLabels+2]
-	defer func() { wildcardArgsPool.Put(argsPtr) }()
-	for i := range maxWildcardLabels {
-		if i < len(suffixes) {
-			args[i] = suffixes[i]
-		} else {
-			args[i] = ""
+		if r := e.bestMatch(table.wildcardRules[rest], rest, true, qtype, qclass, matchedTags, loadedAt); r.Matched {
+			if r.score > bestScore {
+				bestScore = r.score
+				best = r
+			}
 		}
-	}
-	args[maxWildcardLabels] = int(qtype)
-	args[maxWildcardLabels+1] = int(qclass)
-
-	rows, err := e.db.QueryZoneWildcard(ctx, args)
-	if err != nil {
-		return Result{Rcode: dns.RcodeSuccess}
-	}
-	defer func() { _ = rows.Close() }()
-
-	var bestScore int
-	var best Result
-	for rows.Next() {
-		var matchedQname string
-		var rcode int
-		var answerBlob, authBlob, addlBlob []byte
-		var tagsText string
-		if err := rows.Scan(&matchedQname, &rcode, &answerBlob, &authBlob, &addlBlob, &tagsText); err != nil {
-			continue
-		}
-
-		score := matchScore(parseMatchTagsText(tagsText), matchedTags)
-		if score < 0 {
-			continue
-		}
-		if score <= bestScore && best.Matched {
-			continue // not better than current best
-		}
-
-		bestScore = score
-		best = Result{
-			Domain:     matchedQname,
-			Matched:    true,
-			Wildcard:   true, // every row of the wildcard IN query is a "*." rule
-			Rcode:      rcode,
-			Answer:     unpackRRs(answerBlob),
-			Authority:  unpackRRs(authBlob),
-			Additional: unpackRRs(addlBlob),
-			CreatedAt:  loadedAt,
-			cachable:   score == 0,
-		}
-	}
-
-	if !best.Matched {
-		return Result{Rcode: dns.RcodeSuccess}
 	}
 	return best
 }
@@ -536,26 +490,18 @@ func matchScore(entryTags []matchTag, matchedTags map[string]bool) int {
 // Match tag helpers
 // ---------------------------------------------------------------------------
 
-func serializeMatchTags(raw []string) string {
-	if len(raw) == 0 {
-		return ""
+// matchTagKey renders parsed tags in the load config order ("tag1,!tag2,") —
+// used as the deterministic sort key for equal-score tie-breaking.
+func matchTagKey(tags []matchTag) string {
+	var b strings.Builder
+	for _, t := range tags {
+		if t.negate {
+			b.WriteByte('!')
+		}
+		b.WriteString(t.tag)
+		b.WriteByte(',')
 	}
-	return strings.Join(raw, ",")
-}
-
-func parseMatchTagsText(text string) []matchTag {
-	if text == "" {
-		return nil
-	}
-	parts := strings.Split(text, ",")
-	tags, err := parseMatchTags(parts)
-	if err != nil {
-		// Debug, not Warn: this sits on the per-query path (rule rows are
-		// parsed for every matching query) — malformed tags are already
-		// reported at rule load time (R3-M8).
-		log.Debugf("ZONE: invalid match tags %q: %v", text, err)
-	}
-	return tags
+	return b.String()
 }
 
 func parseMatchTags(raw []string) ([]matchTag, error) {
