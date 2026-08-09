@@ -204,6 +204,9 @@ func (r *Resolver) LoadDelegationSnapshot(path string) error {
 	return r.recursive.LoadDelegationSnapshot(path)
 }
 
+// DelegationCount returns the number of cached zone-cut delegations.
+func (r *Resolver) DelegationCount() int { return r.recursive.delegations.Len() }
+
 // SaveDelegationSnapshot persists the zone-cut delegation cache.
 func (r *Resolver) SaveDelegationSnapshot(path string) error {
 	return r.recursive.SaveDelegationSnapshot(path)

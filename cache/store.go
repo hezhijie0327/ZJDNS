@@ -214,6 +214,9 @@ func (s *Cache) Flush() {}
 // EntryCount returns the number of cached entries.
 func (s *Cache) EntryCount() int { return s.entries.Len() }
 
+// LatencyCount returns the number of per-IP latency entries.
+func (s *Cache) LatencyCount() int { return s.latencies.Len() }
+
 // buildCacheKey is the exact cache key: the composite (qname, qtype, qclass,
 // ecs_addr, ecs_prefix, dnssec_ok) flattened to a string for the LRU map.
 func buildCacheKey(qname string, qtype, qclass uint16, ecsAddr string, ecsPrefix, dnssecInt int) string {

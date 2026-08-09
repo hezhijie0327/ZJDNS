@@ -94,14 +94,14 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		if err := cacheStore.LoadSnapshot(path); err != nil {
 			log.Warnf("CACHE: snapshot load failed (starting cold): %v", err)
 		} else {
-			log.Infof("CACHE: loaded %d entries from snapshot", cacheStore.EntryCount())
+			log.Infof("CACHE: restored %d entries from snapshot", cacheStore.EntryCount())
 		}
 	}
 	if path := cfg.Server.Features.LatencyStateFile(); path != "" {
 		if err := cacheStore.LoadLatencySnapshot(path); err != nil {
 			log.Warnf("CACHE: latency snapshot load failed (starting cold): %v", err)
 		} else {
-			log.Infof("CACHE: latency table loaded from snapshot")
+			log.Infof("CACHE: restored %d latency entries from snapshot", cacheStore.LatencyCount())
 		}
 	}
 	zoneEvaluator := zone.New()
@@ -133,7 +133,7 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		if err := dnsResolver.LoadDelegationSnapshot(path); err != nil {
 			log.Warnf("RESOLVER: delegation snapshot load failed (starting cold): %v", err)
 		} else {
-			log.Infof("RESOLVER: delegation cache restored from snapshot")
+			log.Infof("RESOLVER: restored %d delegations from snapshot", dnsResolver.DelegationCount())
 		}
 	}
 

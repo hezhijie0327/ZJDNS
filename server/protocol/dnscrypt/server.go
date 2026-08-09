@@ -127,9 +127,7 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, 
 				persistedWindows, err = decodeWindows(windowsBlob)
 				if err != nil {
 					log.Warnf("DNSCRYPT: corrupt persisted windows, starting fresh: %v", err)
-				} else {
-					log.Infof("DNSCRYPT: loaded persisted identity (%d cert window(s))", len(persistedWindows))
-				}
+				} // else: window count is logged once below (restored N from snapshot)
 			}
 		}
 	}
@@ -141,7 +139,7 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, 
 			log.Warnf("DNSCRYPT: restoring windows failed (starting fresh): %v", err)
 		} else {
 			entries = restored
-			log.Infof("DNSCRYPT: restored %d cert window(s)", len(restored))
+			log.Infof("DNSCRYPT: restored %d cert window(s) from snapshot", len(restored))
 		}
 	}
 	if len(entries) == 0 {
