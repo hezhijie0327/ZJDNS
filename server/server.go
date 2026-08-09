@@ -562,10 +562,6 @@ func (s *Server) logServer(role string, server *config.UpstreamServer) {
 }
 
 func (s *Server) displayExtras() {
-	if len(s.pprofServers) > 0 {
-		log.Infof("PPROF: pprof server enabled on: %s, via: %s", s.config.Server.Pprof, config.DefaultPprofPath)
-	}
-
 	if s.tls != nil {
 		if runtime.GOOS == "linux" {
 			ktlsTX, ktlsRX := false, false

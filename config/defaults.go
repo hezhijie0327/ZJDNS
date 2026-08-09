@@ -25,7 +25,6 @@ const (
 	DefaultPprofPort = "6060"
 
 	DefaultQueryPath = "/dns-query"
-	DefaultPprofPath = "/debug/pprof/"
 )
 
 // =============================================================================
