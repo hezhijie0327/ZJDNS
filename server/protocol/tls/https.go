@@ -43,15 +43,19 @@ func (s *Server) startDOHServer(port string) error {
 		}
 
 		rawListener := &debugListener{Listener: &zdnsutil.TCPKeepAliveListener{Listener: listener, KeepAlivePeriod: config.DefaultTCPKeepAlivePeriod}, name: "DoH"}
+		// http.Server spawns its own per-connection goroutines (not through
+		// serverGroup) — cap concurrent connections at the listener instead.
+		// The cap wraps the RAW listener: the eHTTP fork detects eTLS
+		// connections by conn type (*tls.Conn) in its accept path, so a
+		// wrapper between http.Server and the eTLS listener would break
+		// that assertion and serve TLS bytes as plain HTTP.
+		limited := zdnsutil.NewLimitListener(rawListener, config.DefaultServerGoroutineLimit)
 
 		tlsConfig := s.tlsConfig.Clone()
 		tlsConfig.NextProtos = config.NextProtoDOH
 		tlsConfig.GetConfigForClient = s.getConfigForClient(config.NextProtoDOH)
 
-		httpsListener := eTLS.NewListener(rawListener, tlsConfig)
-		// http.Server spawns its own per-connection goroutines (not through
-		// serverGroup) — cap concurrent connections at the listener instead.
-		httpsListener = zdnsutil.NewLimitListener(httpsListener, config.DefaultServerGoroutineLimit)
+		httpsListener := eTLS.NewListener(limited, tlsConfig)
 		s.listenerMu.Lock()
 		s.httpsListeners = append(s.httpsListeners, httpsListener)
 		s.listenerMu.Unlock()
