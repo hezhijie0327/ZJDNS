@@ -331,12 +331,17 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECUR
 
 | Doc | Content |
 |-----|---------|
+| [docs/README.md](docs/README.md) | **文档索引** — 导航树、压测文档边界、约定（新文件先看这里） |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full architecture, storage design, type reference |
+| [docs/FLOWCHARTS.md](docs/FLOWCHARTS.md) | 核心功能/协议 mermaid 流程图 |
 | [docs/AUDIT-METHODOLOGY.md](docs/AUDIT-METHODOLOGY.md) | Audit framework, severity definitions, fix Sprint process |
-| [docs/audit/](docs/audit/) | Per-audit detailed findings and fix plans |
-| [docs/debug/DEBUG.md](docs/debug/DEBUG.md) | Debug config, test domains, TLCP/DTLCP E2E tests |
+| [docs/audit/](docs/audit/) | Per-audit detailed findings and fix plans (`YYYY-MM-主题/`, see methodology §7) |
+| [docs/debug/DEBUG.md](docs/debug/DEBUG.md) | Debug config, test domains, TLCP/DTLCP E2E tests, 双端压测判定标准 |
+| [docs/debug/pprof-dual.sh](docs/debug/pprof-dual.sh) | 双端压测 & pprof 采集脚本（审计修复后泄漏复核） |
 | [docs/benchmark/BENCHMARK.md](docs/benchmark/BENCHMARK.md) | Benchmark & E2E test guide (dnsperf, DNSCrypt, defense) |
-| [docs/benchmark/LOADTEST.md](docs/benchmark/LOADTEST.md) | 全协议压测方法指南（pprof 双端采集、瓶颈分析、已发现问题归档） |
-| [docs/benchmark/loadtest-baseline.txt](docs/benchmark/loadtest-baseline.txt) | 全协议 QPS/延迟基线数据（12 协议，每轮更新） |
+| [docs/benchmark/LOADTEST.md](docs/benchmark/LOADTEST.md) | 全协议压测方法指南（benchclient 直连单端、pprof 双端采集、瓶颈分析） |
+| [docs/benchmark/benchmark-baseline.txt](docs/benchmark/benchmark-baseline.txt) | `go test -bench` 基线（`-benchmem`，CLAUDE.md 命令刷新） |
+| [docs/benchmark/loadtest-baseline.txt](docs/benchmark/loadtest-baseline.txt) | benchclient 全协议 QPS/延迟基线数据（12 协议，每轮更新） |
+| [docs/poc/README.md](docs/poc/README.md) | 防御机制概念验证程序（hopguard/spoofguard/splitguard/poisonguard） |
 | [docs/rfc/](docs/rfc/) | Mirrored RFCs and drafts (116 total) |
 | [docs/rfc/GUIDELINE.md](docs/rfc/GUIDELINE.md) | RFC 精华指南 — 每个 RFC 的关键常量、协议流程、合规状态 |

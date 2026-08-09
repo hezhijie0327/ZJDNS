@@ -45,5 +45,6 @@ Run locally: `./zjdns --config config.example.json`.
 
 ## Additional Guidance
 
-- Architecture: `docs/ARCHITECTURE.md`; audit methodology: `docs/AUDIT-METHODOLOGY.md`.
+- Start at `docs/README.md` — the docs index (navigation, test-doc boundaries, conventions).
+- Architecture: `docs/ARCHITECTURE.md`; audit methodology: `docs/AUDIT-METHODOLOGY.md`; flowcharts: `docs/FLOWCHARTS.md`.
 - `CLAUDE.md` holds agent behavioral guidelines — read it before large changes. Check `docs/rfc/` before implementing protocol behavior.

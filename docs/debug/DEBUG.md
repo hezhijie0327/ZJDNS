@@ -22,6 +22,7 @@ docs/debug/
 │   ├── client-dnscrypt.json              # client: DNSCrypt (PQ preferred) → server
 │   ├── client-dnscrypt-classic.json       # client: DNSCrypt (classical only) → server
 │   └── client-dnscrypt-ephemeral.json     # client: DNSCrypt + ephemeral_keys + PQ → server
+│   └── pprof-dual.sh                      # 双端压测 & pprof 采集脚本（见「双端压测」章节）
 ├── routedns/               # ZJDNS ↔ RouteDNS tests
 │   └── dtls-client.toml    # RouteDNS DTLS client → ZJDNS DTLS server
 │                            #   Prerequisite: generate cert with the openssl
@@ -205,6 +206,74 @@ pkill -f "client-https"
 > [!NOTE]
 > 日志里的 "ERROR" 匹配多为 `rcode=NOERROR` 误匹配——统计前先 `grep -i "error" | grep -v NOERROR` 排除。
 > DTLS 的连接复用在 Windows 上无 control-message 支持（hopguard 降级），但连接池本身不受影响。
+
+### 双端压测 & pprof 采集（ZJDNS ↔ ZJDNS）
+
+与 [LOADTEST.md](../benchmark/LOADTEST.md)（benchclient 直连单端）互补：本方法走
+`docs/debug/loopback` 的**完整协议链路** —— ZJDNS 转发客户端（12 种协议 +
+DNSCrypt 4 变体）→ ZJDNS 全协议服务端，两端都开 pprof。用于验证协议栈
+E2E 正确性、连接池复用和内存/goroutine 泄漏。**审计修复后按此流程复核**。
+
+#### 一键脚本（推荐）
+
+```bash
+bash docs/debug/pprof-dual.sh           # 全部 14 个协议客户端
+bash docs/debug/pprof-dual.sh tls quic  # 指定协议
+```
+
+脚本自动：生成双端配置（server/client 各注入独立 pprof 端口，server 附带
+快照持久化）→ 启动 server → 逐协议 dig 冒烟 + benchclient 压测 → 双端
+pprof 采样 → 停止并输出汇总（panic / falling back / 池 dialed 计数）。
+产物存 `/tmp/zjdns-pprof/`（g-\<proto\>.prof = client goroutine、
+h-\<proto\>.prof = client heap、hs-\<proto\>.prof = server heap、各端日志）。
+
+#### 手动流程
+
+```bash
+# 1. 构建
+go build -o /tmp/zjdns ./cmd/zjdns
+go build -o /tmp/benchclient ./docs/benchmark/loadtest
+
+# 2. 生成双端配置：从 loopback 复制并注入 pprof（端口见下）
+#    server:  pprof=16060, features.cache 三个 state_file
+#    client-*: 各自独立 pprof（17061-17074）
+# 3. 启动 server + 逐个 client，dig 冒烟 + 压测 + 采样：
+/tmp/zjdns -config /tmp/zjdns-pprof/server.json &
+/tmp/zjdns -config /tmp/zjdns-pprof/client-tls.json &
+sleep 2.5
+dig @127.0.0.1 -p 10753 www.baidu.com A +short        # 冒烟
+/tmp/benchclient -proto udp -addr 127.0.0.1:10753 -workers 8 -seconds 8
+curl -s "http://127.0.0.1:17063/debug/pprof/heap" -o /tmp/h.prof
+curl -s "http://127.0.0.1:17063/debug/pprof/goroutine" -o /tmp/g.prof
+# 4. 分析（同 LOADTEST.md §4-5：inuse_space / goroutine / 内存收敛对比）
+go tool pprof -top -inuse_space /tmp/h.prof
+go tool pprof -top /tmp/g.prof
+```
+
+#### 判定标准
+
+| 指标 | 通过标准 | 检查命令 |
+|------|----------|----------|
+| 协议连通 | 14/14 dig 冒烟成功 | 脚本输出 smoke 列 |
+| 压测 | ok>0 且 fail=0 | 脚本输出 ok/fail 列 |
+| goroutine | 压测后与前次采样一致（±协议固有结构） | `go tool pprof -top g-*.prof` |
+| 内存收敛 | 同端两轮压测 inuse_space 精确一致（warm-up 后零增长） | 前后两次 `-inuse_space` 对比 |
+| 无 panic | 全部日志 `PANIC` 计数 = 0 | `grep -c PANIC /tmp/zjdns-pprof/*.log` |
+| 池复用 | 每协议 "dialed" = 1、"falling back" = 0 | 见「Connection Pool Tests」统计口径 |
+
+> [!IMPORTANT]
+> **内存收敛是泄漏判定的核心**：第一轮压测的内存增长是 warm-up（zstd
+> encoder、lrumap 容量预分配、dns 包池），第二轮必须与第一轮**精确一致**。
+> 2026-08 审计实践：round1=16.59MB → round2=16.08MB → idle=16.08MB。
+> 若第二轮仍增长，先 `go tool pprof -top -inuse_space` 看增长构成再定位。
+
+#### 已发现问题（参考）
+
+| 日期 | 问题 | 修复 |
+|------|------|------|
+| 2026-08 | 递归模式 UDP 池按权威 NS 地址无界建键、死连接钉住（H1） | `ReapDead` 周期回收 + 空键删除（pool/udp.go） |
+| 2026-08 | 代理 DoQ/DoH3 泄漏 SOCKS5 relay：2 fd + 1 goroutine/连接（H3） | quic.Conn Context.Done 钩子关闭 pconn（tls/quic.go） |
+| 2026-08 | 快照保存持 LRU 锁跨磁盘写，周期保存停顿全部缓存（H5） | 锁内收集、锁外序列化（cache/snapshot.go） |
 
 ### RFC Feature Tests
 

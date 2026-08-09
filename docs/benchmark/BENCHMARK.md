@@ -1,5 +1,10 @@
 # Benchmark & E2E Test Guide
 
+> **定位**：Go 单元/集成 benchmark + 外部客户端（dnsperf / DNSCrypt-proxy）的 E2E。
+> 全协议出口压测见 [LOADTEST.md](LOADTEST.md)（benchclient 直连单端）；
+> ZJDNS 客户端 ↔ 服务端全链路压测见 [DEBUG.md 双端压测章节](../debug/DEBUG.md#双端压测--pprof-采集zjdns--zjdns)。
+> 三份文档的边界见 [docs/README.md](../README.md)。
+
 ## Prerequisites
 
 ```bash

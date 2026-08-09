@@ -1,5 +1,10 @@
 # 全协议压测指南（LOADTEST）
 
+> **定位**：benchclient **直连单端**的全协议出口压测。ZJDNS 客户端 → 服务端的
+> **全链路** E2E 压测见 [DEBUG.md 双端压测章节](../debug/DEBUG.md#双端压测--pprof-采集zjdns--zjdns)
+> （`pprof-dual.sh`）；Go benchmark 见 [BENCHMARK.md](BENCHMARK.md)。三份文档的边界见
+> [docs/README.md](../README.md)。
+
 本指南描述如何对 ZJDNS 做**全协议负载压测**并分析瓶颈 / 泄漏。压测工具 `benchclient`
 复用生产代码路径（`server/upstream.Client` —— 与真实转发/递归流量相同的出口），
 服务端与客户端各开一个 pprof 端点，可同时抓取两侧 profile 做对照分析。

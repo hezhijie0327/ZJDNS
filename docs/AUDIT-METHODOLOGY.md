@@ -6,6 +6,12 @@
 
 每次审计的详细发现和修复计划存档于 [`docs/audit/`](audit/)。
 
+### 历史记录
+
+| 轮次 | 时间 | 主题 | 报告 | 状态 |
+|------|------|------|------|------|
+| 1 | 2026-08 | 全内存迁移后首次大审计（SQLite 移除 + 快照持久化），重点：内存泄漏 corner case | `docs/audit/2026-08-memory-audit/` | ✅ 全部修复（21/21）+ pprof 验证通过 |
+
 ---
 
 ## 一、审计流程
@@ -17,11 +23,11 @@
 | 维度 | 关注点 |
 |------|--------|
 | **代码质量** | 死代码、冗余代码、重复代码、低效代码 |
-| **内存安全** | 泄漏、无界增长、sync.Pool 误用、缓冲区未归还 |
+| **内存安全** | 泄漏、无界增长、sync.Pool 误用、缓冲区未归还、快照保存队列/goroutine 泄漏 |
 | **锁正确性** | data race、死锁、竞态、锁顺序 |
 | **耦合度** | 导入分层违规、不必要依赖、接口放置 |
 | **架构设计** | God package、命名一致性、类型别名合理性 |
-| **性能** | QPS 瓶颈、SQL 模式、热路径分配 |
+| **性能** | QPS 瓶颈、快照序列化开销、热路径分配 |
 | **Panic 检测** | nil 解引用、切片越界、空 map 写入、裸类型断言、通道关闭、除零、use-after-Put |
 | **错误处理** | `%w` 包装链路完整；`errors.Is`/`As` 使用正确；sentinel error vs custom type 选择合理；同一函数内包装策略一致（要么全 Wrap 要么全不 Wrap） |
 | **Context 传播** | 所有 I/O 函数第一参数为 `context.Context`；取消信号正确传播到下游；无 `context.TODO()` 出现在生产代码；`WithoutCancel`/`WithTimeout` 使用场景正确 |
@@ -44,7 +50,7 @@
 ```
 Phase 1: 包级审计（7 agent 并行）
 ├── Foundation audit: internal/* 基础包
-├── Domain audit:     config / database / cache / edns / zone / ruleset
+├── Domain audit:     config / cache / edns / zone / ruleset / internal/snapfile
 ├── Protocol audit:   server/protocol/{plain,tls,tlcp,dnscrypt}
 ├── Upstream audit:   server/upstream/*
 ├── Resolver audit:   server/resolver/*
@@ -61,7 +67,7 @@ Phase 2: 交叉分析（18 agent 并行）
 ├── CrossCut Resource:   Close() 幂等性（sync.Once/atomic）、New/Close 对称性、Close 内不阻塞 IO
 ├── CrossCut Validation: 公开函数参数未校验（nil/空字符串/零值）、错误被 _ 丢弃、构造函数未验证字段
 ├── CrossCut DeadCode:   未用符号、重复代码、不必要接口
-├── CrossCut Perf:       SQL N+1、热路径分配、索引缺失
+├── CrossCut Perf:       快照序列化开销、热路径分配、原子快照替换竞态
 ├── CrossCut Arch:       导入分层验证、循环依赖风险、接口契约满足性
 ├── CrossCut Logging:    日志级别审计、info/warn 热路径刷屏、错误路径缺失日志、格式一致性
 ├── CrossCut Docs:       全部 .md 文件与代码一致性、CLAUDE.md 准确性、注释是否过时、godoc 覆盖率
@@ -82,7 +88,7 @@ Phase 3: 综合报告
 
 - **文件路径 + 行号**
 - **严重程度**：CRITICAL / HIGH / MEDIUM / LOW
-- **类别标签**：pool-leak / lock / memory / sql / dead-code / inefficiency / coupling / ...
+- **类别标签**：pool-leak / lock / memory / snapshot / dead-code / inefficiency / coupling / ...
 - **问题描述**：具体的技术问题
 - **风险说明**：如果未修复会产生的后果
 - **修复建议**：具体的代码变更方向
@@ -105,7 +111,7 @@ Phase 3: 综合报告
 
 在同一 Sprint 内，按以下顺序修复：
 
-1. **单字符/单行修复** — SQL 分隔符、切片复制、条件取反等
+1. **单字符/单行修复** — 快照写入竞态、切片复制、条件取反等
 2. **模式匹配修复** — 池 defer Put、锁内不 IO 等可模板化的缺陷
 3. **逻辑重写** — 状态机修正、并发结构重构
 4. **死代码删除** — 未用函数/类型/导入
@@ -197,10 +203,11 @@ git diff HEAD~1 -- docs/benchmark/benchmark-baseline.txt
 **Good（描述具体修复内容）**：
 
 ```
-fix: add SQL separator in stale entry cleanup (C1)
+fix: clear Data before pool.Put on serve-stale miss (C1)
 
-Two DELETE statements concatenated without semicolon produced
-invalid SQL, silently breaking ip_latency/query_log cleanup.
+The stale-refresh path returned the pooled message without clearing
+Data, leaving the buffer reachable after Put and serving stale
+payload on the next Get.
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
@@ -255,7 +262,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 
 | 等级 | 定义 | 示例 |
 |------|------|------|
-| **CRITICAL** | 数据损坏、崩溃、panic、安全绕过、数据丢失 | SQL 静默失败、nil-map panic、池双重归还导致连接损坏、参数 nil 未检查导致 panic |
+| **CRITICAL** | 数据损坏、崩溃、panic、安全绕过、数据丢失 | 快照损坏/静默降级、nil-map panic、池双重归还导致连接损坏、参数 nil 未检查导致 panic |
 | **HIGH** | 资源耗尽、goroutine 泄漏、竞态、缓存损坏、死锁 | 池泄漏导致 QPS 下降、goroutine 无界增长、浅拷贝共享底层数组、mutex 成功路径未解锁、错误被 `_` 丢弃导致基于零值的错误逻辑 |
 | **MEDIUM** | 维护性、边际正确性问题、次优分配、日志质量、文档质量 | 耦合违规、死代码、不必要的堆分配、配置验证缺失、info/warn 热路径刷屏、错误路径无日志、架构文档与代码不一致、空字符串/零值参数未经校验传入深层调用 |
 | **LOW** | 文档、微优化、代码异味 | 误导性注释、重复逻辑、脆弱的假设注释、Debug 日志格式不一致 |
@@ -270,7 +277,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 | **并发安全** | 临界区过窄或缺失（锁-drop 窗口、无锁写入） | 锁保护区域明确注释；`go test -race` 作为 CI 必需项 |
 | **防御算法** | 状态机缺少逃逸路径、过度拒绝合法响应 | 每个防御模块必须有 fuzz 测试和边界条件用例 |
 | **死代码/冗余** | 重构后遗留（中间件、迁移、未用字段） | `staticcheck -checks U1000` 集成 CI |
-| **SQL 正确性** | 字符串拼接无分隔符、语义歧义 | 使用 prepared statements；SQL 拼接统一通过 `strings.Join` |
+| **快照持久化** | `snapfile.Save` 与并发写入竞态（保存期间条目被淘汰/修改）、保存失败静默忽略（`_ = Save(...)`）、`Load` 中 readEntry 出错中止后部分加载、保存路径持有锁导致阻塞 | 保存前取一致性快照（拷贝/序列化到缓冲）再写盘；Save 错误必须记日志（周期保存可降级为 warn）；Load 返回 err 时上层必须处理而非静默继续；temp+rename 原子替换（`internal/snapfile` 已实现） |
 | **跨协议一致性** | 同类型 bug 在不同协议处理器中重复出现（DTLS/DTLCP 固定缓冲区） | 修复一个协议 bug 后，全局搜索相同模式到所有协议处理器 |
 | **Pool buffer 生命周期** | `response.Data` 指向已归还的 pool buffer（use-after-free） | `pool.Put` 前必须 `response.Data = nil`，参考 `tcp.go` 的 `resp.Data = nil` 模式 |
 | **TODO 管理** | TODO 注释累积但不实现，变成虚假安全感 | 每个 TODO 要么实现、要么改为 NOTE 并说明原因、要么删除 |
@@ -322,7 +329,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 2. **锁内不要做 IO**：在锁外关闭旧连接，在锁内操作数据结构
 3. **切片共享底层数组**：从 atomic pointer 获取的切片在修改前必须复制
 4. **多读循环必须检查 ctx.Done()**：每个 poll 迭代都应可取消
-5. **SQL 字符串拼接需要分隔符**：反引号字符串拼接不会自动添加空格或分号
+5. **快照保存必须 temp+rename 原子替换**：`snapfile.Save` 先写 `.tmp` 再 `os.Rename`，崩溃不会破坏上一份快照；保存错误不能静默丢弃（周期保存至少 warn），加载错误不能静默降级（要区分"文件不存在"冷启动与"文件损坏"两类情况）
 6. **每查询一条日志原则**：hot-path（每次查询都经过的路径）只用 Debug；Info 仅用于状态变更（启动/关闭/重载）；Warn 用于可恢复异常且应带采样或限流；Error 仅用于不可恢复
 7. **日志必须含定位信息**：错误/Warn 日志至少包含 qname/qtype/server/error 中与上下文相关的字段；不要打印"query failed"而没说哪个查询
 8. **禁止 info/warn 在热路径**：`log.Infof` / `log.Warnf` 不得出现在每次查询都会执行的代码路径中（如 ServeDNS、middleware Wrap、upstream Exchange）。每查询超过一条 info/warn 即为刷屏
@@ -350,7 +357,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 4. **`_` 丢弃值不注释**：`_` 丢弃的值必须注释类型和原因（如 `// _ = error: DNSKEY query best-effort`）。不注释的 `_` 在函数签名重构时是定时炸弹——返回值从 `(T, error)` 变为 `(T, Cleanup)` 时编译通过，但 `_` 静默丢弃了 Cleanup 导致资源泄漏。裸类型断言 `v := x.(*T)` 应改用 comma-ok。**`func f(_, name string)` 将参数改名 `_` 而非从签名中删除——如果这不是接口实现，应直接删参并更新所有调用方**
 5. **info/warn 刷屏**：热路径上的 `log.Infof` / `log.Warnf` 在高 QPS 下产生海量日志，淹没真正重要的信号。所有每查询日志必须是 Debug 级别
 6. **日志缺少上下文**：`log.Warnf("resolve failed: %v", err)` 不包含 qname/qtype/server，无法定位问题
-7. **错误级别膨胀**：可恢复的错误（超时、单次查询失败）用 Warn，不可恢复的（配置错误、数据库损坏）用 Error。不要把每个 upstream 超时都打成 Error
+7. **错误级别膨胀**：可恢复的错误（超时、单次查询失败）用 Warn，不可恢复的（配置错误、快照损坏）用 Error。不要把每个 upstream 超时都打成 Error
 8. **格式不一致**：同一组件内混用 `log.Infof("TLS: ...")` 和 `log.Infof("[TLS] ...")` 和 `log.Infof("tls: ...")` — 应统一使用 29 个规范前缀
 9. **架构文档过时**：`ARCHITECTURE.md` 描述已删除的中间件/类型/表；类型引用表未随代码更新。每次重构后 grep 文档确认引用的符号仍存在
 10. **注释与代码矛盾**：注释说"Phase 3 会改回来"但 Phase 3 永远不会来；注释描述的行为与实际代码不一致。每个注释在所在函数修改后必须重新验证
@@ -406,7 +413,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 ```
 docs/audit/<YYYY-MM>-<主题>/
 ├── 01-foundation.md     ← internal/* 包审计
-├── 02-domain.md         ← config / database / cache / edns / zone / ruleset
+├── 02-domain.md         ← config / cache / edns / zone / ruleset / snapfile
 ├── 03-protocol.md       ← server/protocol/*
 ├── 04-upstream.md       ← server/upstream/*
 ├── 05-resolver.md       ← server/resolver/*
