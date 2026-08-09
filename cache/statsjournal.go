@@ -69,12 +69,28 @@ type Manager struct {
 	journal *rcodeJournal
 }
 
+// maxRcodeBucket is the fold-in bucket for all extended RCODEs (24..4095,
+// e.g. bits carried by the OPT record).  Bounding the bucket space keeps the
+// journal immune to attacker-influenced RCODE diversity (M2).
+const maxRcodeBucket = 24
+
+// rcodeBucket folds an extended RCODE into the bounded bucket space: the
+// standard RCODEs 0-23 keep their own journal, everything else shares one
+// bucket so the map can never grow with RCODE diversity (M2).
+func rcodeBucket(rcode int) int {
+	if rcode > maxRcodeBucket {
+		return maxRcodeBucket
+	}
+	return rcode
+}
+
 func (j *rcodeJournal) record(rcode int, qname string) {
+	bucket := rcodeBucket(rcode)
 	j.mu.Lock()
-	m, ok := j.byRcode[rcode]
+	m, ok := j.byRcode[bucket]
 	if !ok {
 		m = topk.New[string](j.capacity)
-		j.byRcode[rcode] = m
+		j.byRcode[bucket] = m
 	}
 	j.mu.Unlock()
 	m.Inc(qname)

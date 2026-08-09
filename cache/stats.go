@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 	"zjdns/internal/log"
-	"zjdns/internal/lrumap"
 	"zjdns/internal/topk"
 )
 
@@ -56,9 +55,10 @@ func (s *Cache) FlushDB(target string) (int64, error) {
 	case "cache":
 		s.entries.Clear()
 	case "latency":
-		// Replace with a fresh empty map.  The old map is dropped once no
-		// reader holds it.
-		s.latencies = lrumap.New[string, latEntry](s.latencyMax)
+		// Clear in place (lrumap is internally locked) — replacing the map
+		// pointer unsynchronized would race the cache-hit hot path and the
+		// latency-probe goroutines (H4).
+		s.latencies.Clear()
 		s.hasLatencyData.Store(false)
 	case "delegation", "zone":
 		// Not owned by the cache store — no-op (kept for interface parity).
