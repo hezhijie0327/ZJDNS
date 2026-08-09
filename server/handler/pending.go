@@ -66,48 +66,48 @@ func NewRefreshGroup() *pending.Group[PendingKey] {
 
 // Join checks whether an identical query is already in flight.  If so, it
 // blocks until the leader finishes and returns the shared result with
-// follower=true.  If not, the caller becomes the leader: it must call Done
-// with the result after the upstream query completes, and Join returns
-// follower=false.
-func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool) (*resolver.QueryResult, bool) {
+// follower=true.  If not, the caller becomes the leader: Join returns
+// (token, nil, false) and the leader must call Done with that same token
+// after the upstream query completes.
+func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool) (pending.Token[PendingKey, *resolver.QueryResult], *resolver.QueryResult, bool) {
 	key := BuildPendingKey(qname, qtype, qclass, ecsOpt, dnssecOK)
 
-	qr, err, follower := p.cg.Join(key)
+	tok, qr, err, follower := p.cg.Join(key)
 	if !follower {
-		return nil, false // leader
+		return tok, nil, false // leader
 	}
 
 	if errors.Is(err, pending.ErrTimeout) {
 		log.Debugf("CACHE: pending-request follower timeout for %s (type=%s)", qname, dns.TypeToString[qtype])
-		return &resolver.QueryResult{Err: fmt.Errorf("pending request timeout for %s %s", qname, dns.TypeToString[qtype])}, true
+		return pending.Token[PendingKey, *resolver.QueryResult]{}, &resolver.QueryResult{Err: fmt.Errorf("pending request timeout for %s %s", qname, dns.TypeToString[qtype])}, true
 	}
 	if errors.Is(err, pending.ErrEvicted) {
-		return &resolver.QueryResult{Err: errPendingEvicted}, true
+		return pending.Token[PendingKey, *resolver.QueryResult]{}, &resolver.QueryResult{Err: errPendingEvicted}, true
 	}
 	// Normal follower: leader completed and shared the result.
 	if qr == nil {
-		return &resolver.QueryResult{Err: errors.New("pending request returned nil result")}, true
+		return pending.Token[PendingKey, *resolver.QueryResult]{}, &resolver.QueryResult{Err: errors.New("pending request returned nil result")}, true
 	}
-	return qr, true
+	return pending.Token[PendingKey, *resolver.QueryResult]{}, qr, true
 }
 
-// Done stores the result and wakes all waiting followers.  Must only be
-// called by the leader (i.e. after Join returned follower=false).
-func (p *PendingRequests) Done(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool, result *resolver.QueryResult) {
-	key := BuildPendingKey(qname, qtype, qclass, ecsOpt, dnssecOK)
-	p.cg.Done(key, result, nil)
+// Done stores the result and wakes all waiting followers under the leader
+// token from Join (M6 — publishing by key would let an evicted leader's
+// result land in a replacement entry).
+func (p *PendingRequests) Done(tok pending.Token[PendingKey, *resolver.QueryResult], result *resolver.QueryResult) {
+	p.cg.Done(tok, result, nil)
 }
 
 // DoJoin handles the leader/follower pattern for singleflight dedup.  If a
 // follower, it returns the shared result from an in-flight query.  If the
-// caller is the leader, it executes fn, stores the result via Done, and
-// returns the result.
+// caller is the leader, it executes fn, stores the result, and returns it.
 func (p *PendingRequests) DoJoin(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool, fn func() *resolver.QueryResult) *resolver.QueryResult {
-	if qr, follower := p.Join(qname, qtype, qclass, ecsOpt, dnssecOK); follower {
+	tok, qr, follower := p.Join(qname, qtype, qclass, ecsOpt, dnssecOK)
+	if follower {
 		return qr
 	}
 	result := fn()
-	p.Done(qname, qtype, qclass, ecsOpt, dnssecOK, result)
+	p.Done(tok, result)
 	return result
 }
 

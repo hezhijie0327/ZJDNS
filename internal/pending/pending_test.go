@@ -416,7 +416,7 @@ func TestCallGroup_LeaderAndFollower(t *testing.T) {
 	cg := NewCallGroup[string, int](100, 5*time.Second, nil)
 
 	// Leader.
-	_, _, follower := cg.Join("k")
+	tok, _, _, follower := cg.Join("k")
 	if follower {
 		t.Fatal("expected leader")
 	}
@@ -428,14 +428,14 @@ func TestCallGroup_LeaderAndFollower(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		close(followerStarted)
-		v, _, f := cg.Join("k")
+		_, v, _, f := cg.Join("k")
 		gotV = v
 		gotFollower = f
 	})
 
 	<-followerStarted
 	time.Sleep(30 * time.Millisecond)
-	cg.Done("k", 42, nil)
+	cg.Done(tok, 42, nil)
 
 	wg.Wait()
 	if !gotFollower {
@@ -454,13 +454,13 @@ func TestCallGroup_CloneIsCalled(t *testing.T) {
 		return &n
 	})
 
-	_, _, follower := cg.Join("k")
+	tok, _, _, follower := cg.Join("k")
 	if follower {
 		t.Fatal("expected leader")
 	}
 
 	original := 42
-	cg.Done("k", &original, nil)
+	cg.Done(tok, &original, nil)
 
 	if !cloneCalled {
 		t.Fatal("clone should have been called on Done")
@@ -471,51 +471,53 @@ func TestCallGroup_FollowerTimeout(t *testing.T) {
 	cg := NewCallGroup[string, int](100, 50*time.Millisecond, nil)
 
 	// Leader acquires the key but never calls Done.
-	_, _, follower := cg.Join("k")
+	tok, _, _, follower := cg.Join("k")
 	if follower {
 		t.Fatal("expected leader")
 	}
 
 	// Follower times out.
-	_, err, follower := cg.Join("k")
+	_, _, err, follower := cg.Join("k")
 	if !follower {
 		t.Fatal("expected follower")
 	}
 	if !errors.Is(err, ErrTimeout) {
 		t.Fatalf("expected ErrTimeout, got %v", err)
 	}
+	_ = tok
 }
 
 func TestCallGroup_DoneThenRejoin(t *testing.T) {
 	cg := NewCallGroup[string, int](100, 5*time.Second, nil)
 
-	_, _, follower := cg.Join("a")
+	tokA, _, _, follower := cg.Join("a")
 	if follower {
 		t.Fatal("expected leader for first call")
 	}
-	cg.Done("a", 1, nil)
+	cg.Done(tokA, 1, nil)
 
 	// After Done, a new call should be leader again.
-	_, _, follower = cg.Join("a")
+	tokB, _, _, follower := cg.Join("a")
 	if follower {
 		t.Fatal("expected leader after Done")
 	}
+	cg.Done(tokB, 2, nil)
 }
 
 func TestCallGroup_DifferentKeys(t *testing.T) {
 	cg := NewCallGroup[string, int](100, 5*time.Second, nil)
 
-	_, _, f := cg.Join("a")
+	tokA, _, _, f := cg.Join("a")
 	if f {
 		t.Fatal("expected leader for key a")
 	}
-	_, _, f = cg.Join("b")
+	tokB, _, _, f := cg.Join("b")
 	if f {
 		t.Fatal("expected leader for key b")
 	}
 
-	cg.Done("a", 1, nil)
-	cg.Done("b", 2, nil)
+	cg.Done(tokA, 1, nil)
+	cg.Done(tokB, 2, nil)
 }
 
 func TestCallGroup_EvictionWakesFollower(t *testing.T) {
@@ -523,7 +525,7 @@ func TestCallGroup_EvictionWakesFollower(t *testing.T) {
 	cg := NewCallGroup[string, int](1, 10*time.Second, nil)
 
 	// Leader acquires "a" — never calls Done.
-	_, _, follower := cg.Join("a")
+	tokA, _, _, follower := cg.Join("a")
 	if follower {
 		t.Fatal("expected leader for key a")
 	}
@@ -531,15 +533,17 @@ func TestCallGroup_EvictionWakesFollower(t *testing.T) {
 	// Follower for "a".
 	followerWoke := make(chan error, 1)
 	go func() {
-		_, err, _ := cg.Join("a")
+		_, _, err, _ := cg.Join("a")
 		followerWoke <- err
 	}()
 	time.Sleep(30 * time.Millisecond)
 
 	// Store "b" — evicts "a".
-	if _, _, follower := cg.Join("b"); !follower {
-		cg.Done("b", 1, nil)
+	tokB, _, _, follower := cg.Join("b")
+	if follower {
+		t.Fatal("expected leader for key b")
 	}
+	cg.Done(tokB, 1, nil)
 
 	select {
 	case err := <-followerWoke:
@@ -549,11 +553,66 @@ func TestCallGroup_EvictionWakesFollower(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("follower was never woken after eviction")
 	}
+	_ = tokA
+}
+
+// TestCallGroup_StaleLeaderToken: a leader whose entry was LRU-evicted and
+// replaced must not publish its result into the replacement entry nor delete
+// it (M6).
+func TestCallGroup_StaleLeaderToken(t *testing.T) {
+	cg := NewCallGroup[string, int](1, 10*time.Second, nil)
+
+	tokA, _, _, follower := cg.Join("a")
+	if follower {
+		t.Fatal("expected leader for key a")
+	}
+
+	// Store "b" — evicts "a".
+	tokB, _, _, follower := cg.Join("b")
+	if follower {
+		t.Fatal("expected leader for key b")
+	}
+
+	// Re-join "a" — installs a replacement entry.
+	tokA2, _, _, follower := cg.Join("a")
+	if follower {
+		t.Fatal("expected leader for the re-joined key a")
+	}
+
+	// Follower blocks on the replacement entry.
+	followerDone := make(chan int, 1)
+	go func() {
+		_, v, _, f := cg.Join("a")
+		if f {
+			followerDone <- v
+		} else {
+			followerDone <- -1
+		}
+	}()
+	time.Sleep(30 * time.Millisecond)
+
+	// Stale leader A finishes: must NOT wake the follower (the replacement
+	// entry owns the Done channel) and must NOT delete the replacement
+	// entry (CompareAndDelete is keyed to the stale entry only).
+	cg.Done(tokA, 999, nil)
+
+	// Replacement leader publishes — the follower receives 42, not 999.
+	cg.Done(tokA2, 42, nil)
+
+	select {
+	case v := <-followerDone:
+		if v != 42 {
+			t.Fatalf("follower must receive the replacement leader's result, got %d", v)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("follower never woke after replacement leader's Done")
+	}
+	_ = tokB
 }
 
 func TestCallGroup_DoneWithoutJoin(t *testing.T) {
 	cg := NewCallGroup[string, int](100, time.Second, nil)
-	cg.Done("no-such-key", 0, nil) // must not panic
+	cg.Done(Token[string, int]{}, 0, nil) // must not panic
 }
 
 func TestCallGroup_ConcurrentSameKey(t *testing.T) {
@@ -564,6 +623,7 @@ func TestCallGroup_ConcurrentSameKey(t *testing.T) {
 	var followers atomic.Int32
 	entered := make(chan struct{}, goroutines)
 	allSpawned := make(chan struct{})
+	leaderDone := make(chan Token[string, int], 1)
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
@@ -572,11 +632,12 @@ func TestCallGroup_ConcurrentSameKey(t *testing.T) {
 			defer wg.Done()
 			<-allSpawned
 			entered <- struct{}{}
-			_, _, f := cg.Join("k")
+			tok, _, _, f := cg.Join("k")
 			if f {
 				followers.Add(1)
 			} else {
 				leaders.Add(1)
+				leaderDone <- tok
 			}
 		}()
 	}
@@ -591,7 +652,7 @@ func TestCallGroup_ConcurrentSameKey(t *testing.T) {
 		t.Errorf("expected exactly 1 leader, got %d", n)
 	}
 
-	cg.Done("k", 42, nil)
+	cg.Done(<-leaderDone, 42, nil)
 
 	wg.Wait()
 	if n := followers.Load(); n != int32(goroutines-1) {

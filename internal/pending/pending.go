@@ -73,11 +73,21 @@ type resultCall[V any] struct {
 
 // callEntry holds one in-flight key for CallGroup.  The leader writes val/err
 // then closes done; followers observe them through the channel.
-type callEntry[V any] struct {
+type callEntry[K comparable, V any] struct {
 	Done chan struct{}
 	Once sync.Once
 	Val  V
 	Err  error
+	key  K
+}
+
+// Token identifies the leader's own entry in the group.  Join returns it
+// when the caller becomes the leader, and Done must receive the same token
+// back — publishing or deleting by key instead would let an evicted
+// leader's result land in a replacement entry installed for the same key
+// (M6).
+type Token[K comparable, V any] struct {
+	entry *callEntry[K, V]
 }
 
 // CallGroup deduplicates concurrent calls by key with LRU eviction safety and
@@ -89,7 +99,7 @@ type callEntry[V any] struct {
 //
 // The zero value is not usable; use NewCallGroup to create a valid group.
 type CallGroup[K comparable, V any] struct {
-	mmap            *lrumap.Map[K, *callEntry[V]]
+	mmap            *lrumap.Map[K, *callEntry[K, V]]
 	followerTimeout time.Duration
 	clone           func(V) V // nil means no clone
 }
@@ -235,11 +245,11 @@ func NewCallGroup[K comparable, V any](capacity int, followerTimeout time.Durati
 		capacity = maxPending
 	}
 	cg := &CallGroup[K, V]{
-		mmap:            lrumap.New[K, *callEntry[V]](capacity),
+		mmap:            lrumap.New[K, *callEntry[K, V]](capacity),
 		followerTimeout: followerTimeout,
 		clone:           clone,
 	}
-	cg.mmap.SetOnEvict(func(_ K, entry *callEntry[V]) {
+	cg.mmap.SetOnEvict(func(_ K, entry *callEntry[K, V]) {
 		entry.Once.Do(func() {
 			entry.Err = ErrEvicted
 			close(entry.Done)
@@ -251,13 +261,14 @@ func NewCallGroup[K comparable, V any](capacity int, followerTimeout time.Durati
 // Join checks whether an identical call is already in flight.  If so, it
 // blocks until the leader finishes (or the fixed timeout expires) and returns
 // the shared result with follower=true.  If not, the caller becomes the
-// leader and Join returns (zero, nil, false).
-func (g *CallGroup[K, V]) Join(key K) (V, error, bool) {
-	entry := &callEntry[V]{Done: make(chan struct{})}
+// leader and Join returns (token, zero, nil, false) — Done must be called
+// with that same token.
+func (g *CallGroup[K, V]) Join(key K) (Token[K, V], V, error, bool) {
+	entry := &callEntry[K, V]{Done: make(chan struct{}), key: key}
 	existing, loaded := g.mmap.LoadOrStore(key, entry)
 	if !loaded {
 		var zero V
-		return zero, nil, false // leader
+		return Token[K, V]{entry: entry}, zero, nil, false // leader
 	}
 
 	// Follower: wait for leader with fixed timeout.
@@ -267,7 +278,7 @@ func (g *CallGroup[K, V]) Join(key K) (V, error, bool) {
 		if !timer.Stop() {
 			<-timer.C
 		}
-		return existing.Val, existing.Err, true
+		return Token[K, V]{}, existing.Val, existing.Err, true
 	case <-timer.C:
 		// Read nothing from the entry: the leader's Once.Do write of
 		// existing.Err has no happens-before edge with this branch (the
@@ -275,17 +286,18 @@ func (g *CallGroup[K, V]) Join(key K) (V, error, bool) {
 		// so reading it here is a data race.  The follower timed out — the
 		// leader's error would be misattributed anyway (H1).
 		var zero V
-		return zero, ErrTimeout, true
+		return Token[K, V]{}, zero, ErrTimeout, true
 	}
 }
 
 // Done stores the result and wakes all waiting followers.  Must only be
-// called by the leader (i.e. after Join returned follower=false).  When clone
-// is set, it is applied to val before sharing with followers — this prevents
-// concurrent mutation of the shared value.
-func (g *CallGroup[K, V]) Done(key K, val V, err error) {
-	entry, ok := g.mmap.Get(key)
-	if !ok {
+// called by the leader (i.e. after Join returned follower=false), with the
+// token Join returned.  When clone is set, it is applied to val before
+// sharing with followers — this prevents concurrent mutation of the shared
+// value.
+func (g *CallGroup[K, V]) Done(tok Token[K, V], val V, err error) {
+	entry := tok.entry
+	if entry == nil {
 		return
 	}
 	shared := val
@@ -301,7 +313,8 @@ func (g *CallGroup[K, V]) Done(key K, val V, err error) {
 		entry.Err = err
 		close(entry.Done)
 	})
-	// CompareAndDelete: a replacement call for the same key (installed by a
-	// concurrent Join after this entry was LRU‑evicted) must not be deleted.
-	g.mmap.CompareAndDelete(key, entry)
+	// Delete the leader's own entry only — a replacement call for the same
+	// key (installed by a concurrent Join after this entry was LRU-evicted)
+	// is never published into or deleted by a stale leader (M6).
+	g.mmap.CompareAndDelete(entry.key, entry)
 }

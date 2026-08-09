@@ -121,9 +121,7 @@ func (r *Recursive) getRootServers() []string {
 			// Cold start for this name: write + probe + read back.
 			cacheRootHint(r.cache, name, addrs)
 			if probe.TryProbeNSAddrs(r.cache, addrs) {
-				if probe.TryProbeNSAddrs(r.cache, addrs) {
-					go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
-				}
+				go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
 			}
 			cached = r.lookupNSAddrsFromCache(name, nil)
 		}
@@ -238,6 +236,16 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) [
 	// One query fetches both the A and AAAA entries (NS address lookups
 	// never carry ECS).
 	entries, found, expired := r.cache.GetTypes(nsName, dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA}, false)
+	// GetTypes hands out pool-owned TTL-offset slices — return them exactly
+	// once on every exit path (M1; the recursive hot path would otherwise
+	// permanently drain the ttloOffsetsPool).
+	defer func() {
+		for _, e := range entries {
+			if e != nil {
+				cache.ReleaseTTLOffsets(e.TTLOffsets)
+			}
+		}
+	}()
 	addrs := make([]string, 0, 4)
 	needsRefresh := false
 	for i, entry := range entries {

@@ -235,7 +235,18 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		if poisonRejected.Load() {
 			verdict = defense.VerdictPoisoned
 		}
-		return resp, verdict, nil
+		// A second goroutine can slip a response into the buffer between the
+		// winner's send and cancel() propagation — return the orphan so the
+		// pooled message is not dropped when the channel goes out of scope
+		// (M10).
+		for {
+			select {
+			case m := <-resultChan:
+				pool.DefaultMessage.Put(m)
+			default:
+				return resp, verdict, nil
+			}
+		}
 	case <-errgroupDone:
 	case <-ctx.Done():
 	}
