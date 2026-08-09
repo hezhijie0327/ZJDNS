@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
@@ -35,8 +37,15 @@ type State struct {
 	esVersion     dnscryptcrypto.CryptoConstruction
 	expires       time.Time
 
-	minQueryLen   int
-	ewmaQuerySize float64                      // EWMA of encrypted response size
+	// minQueryLen is the padded UDP query budget.  Grows on TC (blindAdjust),
+	// shrinks when responses stay well below it (adjustQuerySize) — the
+	// "MAY increase or decrease this value over time" of draft §5.4.2.  Atomic:
+	// the estimator runs lock-free on the per-response hot path while the rest
+	// of State stays behind mu.
+	minQueryLen atomic.Int32
+	// ewmaQuerySize holds the EWMA of encrypted response wire sizes as
+	// float64 bits (sync/atomic has no float type).
+	ewmaQuerySize atomic.Uint64
 	ephemeralKeys bool                         // per-query X25519 keys for forward secrecy (default true)
 	resolverPK    [dnscryptcrypto.KeySize]byte // resolver X25519 public key
 
@@ -48,6 +57,52 @@ type State struct {
 	pqTicketExpiry    time.Time
 	pqCiphertext      []byte
 	pqEncapsulatedKey [dnscryptcrypto.SharedKeySize]byte
+}
+
+// ewmaDecay is the SimpleEWMA decay factor of the response-size estimator.
+// Mirrors dnscrypt-proxy's VividCortex/ewma DECAY = 2/(age+1) with the
+// default 30-sample window (estimators.go).
+const ewmaDecay = 2.0 / 31.0
+
+// adjustQuerySize feeds the observed encrypted response wire size into the
+// EWMA and shrinks minQueryLen when responses stay well below the padded
+// query budget — the "decrease over time" branch of draft §5.4.2
+// (dnscrypt-proxy QuestionSizeEstimator.adjust).  Shrink only fires once the
+// average is below half the current budget (hysteresis) and never below the
+// initial 512-byte floor.  Lock-free: a CAS loop keeps the per-response hot
+// path free of mutex contention (responses arrive on the read path, which
+// otherwise never touches state.mu).
+func (s *State) adjustQuerySize(wireLen int) {
+	for {
+		old := math.Float64frombits(s.ewmaQuerySize.Load())
+		next := old*(1-ewmaDecay) + float64(wireLen)*ewmaDecay
+		if !s.ewmaQuerySize.CompareAndSwap(math.Float64bits(old), math.Float64bits(next)) {
+			continue
+		}
+		if budget := s.minQueryLen.Load(); next > float64(config.DefaultDNSCryptMinQueryLen) && next < float64(budget)/2 {
+			s.minQueryLen.Store(max(config.DefaultDNSCryptMinQueryLen, budget/2))
+		}
+		return
+	}
+}
+
+// blindAdjust doubles minQueryLen on a truncated response and resets the EWMA
+// to the new value, so a shrink cannot immediately undo the growth — the
+// "increase" branch of draft §5.4.2 (dnscrypt-proxy QuestionSizeEstimator
+// blindAdjust).  Returns false when already at the transport cap; the caller
+// then falls back to TCP (draft §5.4.2 item 1).
+func (s *State) blindAdjust() bool {
+	for {
+		cur := s.minQueryLen.Load()
+		next := min(max(cur*2, cur+64), int32(dnscryptcrypto.MaxDNSUDPPacketSize))
+		if next == cur {
+			return false
+		}
+		if s.minQueryLen.CompareAndSwap(cur, next) {
+			s.ewmaQuerySize.Store(math.Float64bits(float64(next)))
+			return true
+		}
+	}
 }
 
 // resolveStamp extracts the server address, provider name, and public key from
@@ -245,9 +300,9 @@ func (c *Client) buildState(
 		clientMagic:   selectedCert.ClientMagic,
 		esVersion:     esVersion,
 		expires:       time.Now().Add(config.DefaultDNSCryptCertificateCacheTTL),
-		minQueryLen:   config.DefaultDNSCryptMinQueryLen,
-		ewmaQuerySize: float64(config.DefaultDNSCryptMinQueryLen),
 	}
+	state.minQueryLen.Store(int32(config.DefaultDNSCryptMinQueryLen))
+	state.ewmaQuerySize.Store(math.Float64bits(float64(config.DefaultDNSCryptMinQueryLen)))
 
 	if cert.classical != nil {
 		state.resolverPK = cert.classical.ResolverPk

@@ -138,6 +138,7 @@ Full implementation with PQC support. Two crypto constructions: XWingPQ (default
 - `state()`: fetches cert via plain DNS TXT, verifies Ed25519 signature, auto-detects PQ certs
 - `prepareQuery()`: tries resumed query → cached X-Wing encapsulation → fresh X-Wing encapsulation
 - UDP→TCP fallback: TC bit, timeouts, padding failures all trigger TCP retry
+- Adaptive sizing (draft §5.4.2): per-response EWMA (decay 2/31) of encrypted wire sizes; TC doubles the padded budget (≤4096) and resets the EWMA; an average below half the budget halves it (floor 512) — mirrors dnscrypt-proxy's `QuestionSizeEstimator`. Estimator state is atomic (lock-free on the response path); the same budget drives the classical UDP padding floor and the PQ resumed floor
 - State caching: `State` with `pqPublicKey`, `pqCertContext`, `pqTicket`, `pqResumeSecret`, `pqTicketExpiry`
 
 ### Wire Formats

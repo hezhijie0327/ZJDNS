@@ -128,7 +128,7 @@ func (c *Client) executeOnce(
 		q.PQCertContext = state.pqCertContext
 	}
 	state.mu.Lock()
-	q.MinQueryLen = state.minQueryLen
+	q.MinQueryLen = int(state.minQueryLen.Load())
 	encrypted, clientNonce, sharedKey, err := prepareQuery(state, q, msg.Data)
 	state.mu.Unlock()
 	if err != nil {
@@ -230,7 +230,9 @@ func (c *Client) executeOnce(
 		ESVersion: state.esVersion,
 	}
 	// Decrypt copies the payload out — the pooled response buffer can be
-	// returned now, regardless of decrypt success (M-3-6).
+	// returned now, regardless of decrypt success (M-3-6).  Capture the wire
+	// size first: the estimator below runs after the buffer is released.
+	respLen := len(respPayload)
 	decrypted, err := resp.Decrypt(respPayload, sharedKey, clientNonce)
 	zpool.ReleaseUDPPayload(respPayload)
 	if err != nil {
@@ -287,19 +289,16 @@ func (c *Client) executeOnce(
 	}
 
 	if response.Truncated {
-		state.mu.Lock()
 		// §5.4.2: escalate by at least 64 bytes on TC.  We double each
 		// round to converge in O(log n) — matching dnscrypt-proxy's
-		// blindAdjust().  The +64 floor is the RFC minimum.
-		next := min(max(state.minQueryLen*2, state.minQueryLen+64), dnscryptcrypto.MaxDNSUDPPacketSize)
-		if next > state.minQueryLen {
-			state.minQueryLen = next
-			log.Debugf("UPSTREAM: DNSCrypt min-query-len escalated to %d after TC", state.minQueryLen)
-			state.mu.Unlock()
+		// blindAdjust().  The +64 floor is the RFC minimum.  The EWMA is
+		// reset to the new budget so a concurrent shrink cannot undo the
+		// escalation (estimator state is atomic — no lock on the read path).
+		if state.blindAdjust() {
+			log.Debugf("UPSTREAM: DNSCrypt min-query-len escalated to %d after TC", state.minQueryLen.Load())
 			pool.DefaultMessage.Put(response)
 			return nil, true, nil // signal retry
 		}
-		state.mu.Unlock()
 		// RFC §5.4.2 MUST: if padding escalation can't resolve
 		// the TC, retry the query over TCP instead.
 		if !useTCP {
@@ -314,6 +313,10 @@ func (c *Client) executeOnce(
 		return nil, false, errors.New("dnscrypt: response still truncated over TCP at max query length")
 	}
 
+	// Feed the observed response size into the estimator: when responses
+	// stay well below the padded query budget, minQueryLen shrinks over
+	// time (draft §5.4.2 — the adjustment algorithm is implementation-defined).
+	state.adjustQuerySize(respLen)
 	return response, false, nil
 }
 

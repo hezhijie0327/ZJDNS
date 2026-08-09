@@ -545,7 +545,7 @@ dig @127.0.0.1 -p 12053 www.baidu.com A +short
 | Server TC truncation | §5.4.6 | built-in | truncate + TC, never silent |
 | TCP 4096 response cap | §5.4.7 | built-in | enforced |
 | Cert TC + classical preserve | §5.5/§11.3 | built-in | PQ omitted → TC=true |
-| EWMA adaptive query sizing | §5.4.2 | 未实现（死代码） | `ewmaQuerySize` 无读取/更新 |
+| EWMA adaptive query sizing | §5.4.2 | built-in | SimpleEWMA(2/31), shrink < ½ budget ≥512, TC doubles + resets |
 | Client TC doubling | §5.4.2 | built-in | O(log n) escalation, ≤4096, 7 次后 TCP |
 | Shared key cache | §8 | built-in | 2048-entry LRU |
 | PQ downgrade protection | §11.9 | `pqdnscrypt: true` | refuses classical fallback |

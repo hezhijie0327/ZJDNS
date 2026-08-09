@@ -1740,7 +1740,7 @@ BinaryStamp = [protocol:1][props:8][addr_len:1][addr:N][hashes...][path...]
 
 ### 客户端优化
 
-- **EWMA 自适应 sizing**: 跟踪响应大小，逐步下调 minQueryLen（对齐 dnscrypt-proxy）
+- **EWMA 自适应 sizing**: 每条响应喂入加密线尺寸（SimpleEWMA decay 2/31，对齐 dnscrypt-proxy estimators.go）；均值 < 预算一半时预算减半（≥512）；TC 翻倍并重置 EWMA，防止收缩撤销升级
 - **TC 翻倍升级**: 收到 TC 时 minQueryLen *= 2（O(log n) 收敛）
 - **临时密钥**: `ephemeral_keys: true` 启用每查询新 X25519 密钥对（前向安全）
 - **PQ 降级保护**: `pqdnscrypt: true` 时拒绝 Classical 回退（§11.9 MUST）
@@ -1756,12 +1756,12 @@ BinaryStamp = [protocol:1][props:8][addr_len:1][addr:N][hashes...][path...]
 - §5.4.6 TC 截断（不静默丢弃）✓
 - §5.4.7 TCP 4096 字节限制 ✓
 - 证书 TC + Classical 保留 ✓
-- EWMA 自适应 sizing ✗（`ewmaQuerySize` 为死代码，未实现；minQueryLen 仅 TC 翻倍升级）
+- EWMA 自适应 sizing ✓（SimpleEWMA decay 2/31；均值 < 预算一半 → 减半 ≥512；TC 翻倍 + EWMA 重置）
 - 临时密钥 ✓
 - PQ 降级保护 ✓
 - §8 共享密钥缓存（2048-entry LRU）✓
 - 弱密钥检查 ✓
-- 18/19 参考实现对齐（EWMA 未实现）
+- 19/19 参考实现对齐
 
 ---
 

@@ -822,83 +822,63 @@ graph TD
 
 ## DNSCrypt 加密流程
 
-### Classical（X25519 + XChaCha20-Poly1305）
+单一流程图覆盖三种会话模式（Classical / PQ 初始 / PQ 恢复），共享填充、加解密与响应路径：
 
 ```mermaid
 graph TD
-    C[Client] --> GENKEY[Generate Ephemeral<br/>X25519 Key Pair<br/>或复用 cached encapsulation]
-    GENKEY --> QUERY[Build Query<br/>ClientMagic 8B<br/>ClientPk 32B<br/>ClientNonce 12B]
-    QUERY --> PAD[ISO/IEC 7816-4 Padding<br/>目标 minQueryLen<br/>初始 512B · TC 翻倍 ≤4096<br/>7 次重试后 TCP 回退]
-    PAD --> ENCRYPT[XChaCha20-Poly1305 Encrypt<br/>Key = SharedKey from X25519<br/>Nonce = ClientNonce + Zeroes 12B]
+    C[Client] --> MODE{会话模式}
+    MODE -->|Classical| GENKEY[Generate Ephemeral<br/>X25519 Key Pair<br/>或复用 cached key pair]
+    MODE -->|PQ 初始| CERT[Fetch PQ Cert<br/>1320B via TXT query<br/>Ed25519 验签]
+    MODE -->|PQ 恢复| RESUME[Build Resumed Query<br/>PQResumeMagic 8B<br/>Ticket + ClientNonce 12B]
+    GENKEY --> CLQUERY[Build Query<br/>ClientMagic 8B<br/>ClientPk 32B<br/>ClientNonce 12B]
+    GENKEY --> CLKEY[SharedKey = X25519<br/>ClientSk x ResolverPk]
+    CERT --> ENCAP[X-Wing Encapsulate<br/>ResolverPk 1216B<br/>→ Ciphertext 1120B<br/>→ SharedSecret 32B]
+    ENCAP --> HKDF[HKDF-SHA256 Derive<br/>cert-context + ciphertext]
+    HKDF --> PQQUERY[Build PQ Query<br/>ClientMagic 8B<br/>Ciphertext 1120B<br/>ClientNonce 12B]
+    CLQUERY --> PAD
+    CLKEY --> PAD
+    RESUME --> PAD
+    PQQUERY --> PAD
+    PAD["ISO/IEC 7816-4 Padding<br/>Classical: 目标 minQueryLen<br/>初始 512 · TC 翻倍 ≤4096<br/>EWMA 收缩 ≥512（均值低于预算一半时减半）<br/>PQ: 初始 ≥64B · 恢复 max(minQueryLen, 256)<br/>7 次重试后 TCP 回退"]
+    PAD --> ENCRYPT[XChaCha20-Poly1305 Encrypt<br/>Nonce = ClientNonce + Zeroes 12B]
     ENCRYPT --> SEND[Send to Resolver]
 
     SEND --> SRECV[Resolver Receives]
     SRECV --> SMAGIC{ClientMagic<br/>Match Cert?}
     SMAGIC -->|No| REJECT[Silent Drop]
-    SMAGIC -->|Yes| SDH[Compute SharedKey<br/>X25519 ClientPk x ResolverSk]
-    SDH --> SCHECK[Cached in<br/>SharedKeyCache?<br/>2048-entry LRU]
-    SCHECK -->|Hit| SUSE[Use Cached Key]
-    SCHECK -->|Miss| SCOMPUTE[Compute + Cache]
-    SUSE --> SDECRYPT[Decrypt + Verify Poly1305]
-    SCOMPUTE --> SDECRYPT
-    SDECRYPT --> SUNPAD[Unpad]
+    SMAGIC -->|Yes| SDECRYPT{查询类型}
+    SDECRYPT -->|Classical| SDH[Compute SharedKey<br/>X25519 ClientPk x ResolverSk<br/>SharedKeyCache 2048 LRU]
+    SDECRYPT -->|PQ 初始| SDECAP[X-Wing Decapsulate<br/>Ciphertext x ResolverSk<br/>→ SharedSecret 32B]
+    SDECRYPT -->|PQ 恢复| SOPEN[Open Ticket<br/>验证 cert-context<br/>Derive SharedKey]
+    SDH --> SUNPAD[Decrypt + Verify<br/>+ Unpad]
+    SDECAP --> SKDF[HKDF-SHA256 Derive<br/>SharedKey]
+    SKDF --> SUNPAD
+    SOPEN --> SUNPAD
     SUNPAD --> SPROCESS[Process DNS Query]
 
     SPROCESS --> SRESP[Build DNS Response]
     SRESP --> SPAD[Deterministic Padding<br/>SHA-256 SharedKey+ClientNonce<br/>Multiple of 64 bytes]
-    SPAD --> SENCRYPT[Encrypt Response<br/>ResolverMagic 8B<br/>Nonce 24B<br/>Poly1305 Tag]
+    SPAD --> SENCRYPT[Encrypt Response<br/>ResolverMagic 8B<br/>Nonce 24B + Poly1305 Tag]
     SENCRYPT --> SBUDGET{UDP Budget?}
-    SBUDGET -->|OK| SSEND[Send to Client]
-    SBUDGET -->|Exceeded| STRUNCATE[Truncate + Set TC]
-
-    classDef client fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef server fill:#d1fae5,stroke:#10b981,color:#064e3b
-    classDef reject fill:#fee2e2,stroke:#ef4444,color:#991b1b
-    class C,GENKEY,QUERY,PAD,ENCRYPT,SEND client
-    class SRECV,SDH,SCHECK,SUSE,SCOMPUTE,SDECRYPT,SUNPAD,SPROCESS,SRESP,SPAD,SENCRYPT,SSEND server
-    class REJECT,STRUNCATE reject
-```
-
-### Post-Quantum（X-Wing KEM）
-
-```mermaid
-graph TD
-    C[Client] --> CERT[Fetch PQ Cert<br/>1320B via TXT query<br/>Ed25519 验签]
-    CERT --> ENCAP[X-Wing Encapsulate<br/>ResolverPk 1216B<br/>→ Ciphertext 1120B<br/>→ SharedSecret 32B]
-    ENCAP --> HKDF[HKDF-SHA256 Derive<br/>SharedKey from SharedSecret<br/>cert-context + ciphertext]
-    HKDF --> QUERY[Build PQ Query<br/>ClientMagic 8B<br/>Ciphertext 1120B<br/>ClientNonce 12B]
-    QUERY --> PAD[ISO/IEC 7816-4 Padding<br/>Target 64B min<br/>Ciphertext provides<br/>anti-amplification]
-    PAD --> ENCRYPT[XChaCha20-Poly1305 Encrypt]
-    ENCRYPT --> SEND[Send to Resolver]
-
-    SEND --> SRECV[Resolver Receives]
-    SRECV --> SMAGIC{ClientMagic<br/>Match PQ Cert?}
-    SMAGIC -->|No| REJECT[Silent Drop]
-    SMAGIC -->|Yes| SDECAP[X-Wing Decapsulate<br/>Ciphertext x ResolverSk<br/>→ SharedSecret 32B]
-    SDECAP --> SHKDF[HKDF-SHA256 Derive<br/>SharedKey]
-    SHKDF --> SDECRYPT[Decrypt + Verify]
-    SDECRYPT --> SPROCESS[Process DNS Query]
-
-    SPROCESS --> TICKET{Include<br/>Resumption Ticket?}
-    TICKET -->|Yes| BUILDCTL[Build Control Block<br/>PQDR Magic 4B + Version 1B<br/>TicketLifetime 4B<br/>TicketLen 2B + Sealed Ticket]
-    BUILDCTL --> CTLBUDGET{UDP Budget OK?}
-    CTLBUDGET -->|Yes| SENDRESP[Send Response with Ticket]
+    SBUDGET -->|OK| TICKET{Include<br/>Resumption Ticket?}
+    SBUDGET -->|响应超预算| STRUNCATE[Truncate + Set TC]
+    TICKET -->|Yes · 仅 PQ| BUILDCTL[Build Control Block<br/>PQDR Magic 4B + Version 1B<br/>TicketLifetime 4B + TicketLen 2B<br/>+ Sealed Ticket]
+    BUILDCTL --> CTLBUDGET{票能装进<br/>预算?}
+    CTLBUDGET -->|Yes| SSEND[Send to Client]
     CTLBUDGET -->|No| WITHHOLD[Withhold Ticket<br/>Send Response 无 TC]
-    TICKET -->|No| SENDRESP
+    TICKET -->|No| SSEND
 
-    SENDRESP --> CLIENT[Client Stores Ticket<br/>for Resumption · 600s 有效]
-    CLIENT --> RESUME[Future Query:<br/>PQResumeMagic 8B<br/>Ticket + ClientNonce<br/>Encrypted Query]
-    RESUME --> RESOLVER[Resolver Opens Ticket<br/>Validates cert-context<br/>Derives SharedKey]
-    RESOLVER --> SPROCESS
+    SSEND --> CLIENT[PQ: Client Stores Ticket<br/>for Resumption · 600s 有效]
+    CLIENT --> RESUME
 
     classDef client fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     classDef server fill:#d1fae5,stroke:#10b981,color:#064e3b
     classDef ticket fill:#f3e8ff,stroke:#a855f7,color:#4c1d95
     classDef reject fill:#fee2e2,stroke:#ef4444,color:#991b1b
-    class C,CERT,ENCAP,HKDF,QUERY,PAD,ENCRYPT,SEND,CLIENT,RESUME client
-    class SRECV,SDECAP,SHKDF,SDECRYPT,SPROCESS,SENDRESP,RESOLVER server
+    class C,MODE,GENKEY,CLQUERY,CLKEY,CERT,ENCAP,HKDF,PQQUERY,RESUME,PAD,ENCRYPT,SEND,CLIENT client
+    class SRECV,SMAGIC,SDECRYPT,SDH,SDECAP,SOPEN,SKDF,SUNPAD,SPROCESS,SRESP,SPAD,SENCRYPT,SBUDGET,SSEND server
     class TICKET,BUILDCTL,CTLBUDGET,WITHHOLD ticket
-    class REJECT reject
+    class REJECT,STRUNCATE reject
 ```
 
 > PQ ClientMagic = SHA-256(pq_public_key) 前 8 字节（首 7 字节全零或等于 PQResumeMagic 时
