@@ -42,8 +42,8 @@ func New(getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Dura
 		tlcpSessions: tlcp.NewLRUSessionCache(config.DefaultTLCPSessionCacheSize),
 		dtlcpSession: dtlcp.NewLRUSessionCache(config.DefaultDTLCPSessionCacheSize),
 		httpClient:   lrumap.New[string, *http.Client](config.DefaultHTTPTLCPClientMax * 2),
-		tlcpPool:     zpool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe),
-		dtlcpPool:    zpool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe),
+		tlcpPool:     zpool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe, config.DefaultMaxPoolTotalConns),
+		dtlcpPool:    zpool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe, config.DefaultMaxPoolTotalConns),
 	}
 	c.httpClient.SetOnEvict(func(_ string, client *http.Client) {
 		client.CloseIdleConnections()

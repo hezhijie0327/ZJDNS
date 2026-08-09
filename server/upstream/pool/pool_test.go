@@ -5,7 +5,7 @@ import (
 )
 
 func TestNewConnPool(t *testing.T) {
-	pool := NewConnPool(10, 16)
+	pool := NewConnPool(10, 16, 0)
 	if pool == nil {
 		t.Fatal("NewConnPool returned nil")
 	}
@@ -13,7 +13,7 @@ func TestNewConnPool(t *testing.T) {
 }
 
 func TestNewQUIC(t *testing.T) {
-	pool := NewQUIC(10)
+	pool := NewQUIC(10, 0)
 	if pool == nil {
 		t.Fatal("NewQUIC returned nil")
 	}
@@ -21,20 +21,20 @@ func TestNewQUIC(t *testing.T) {
 }
 
 func TestConnPool_Shutdown_Double(t *testing.T) {
-	pool := NewConnPool(10, 16)
+	pool := NewConnPool(10, 16, 0)
 	pool.Shutdown()
 	// Second shutdown should be safe
 	pool.Shutdown()
 }
 
 func TestQUIC_Shutdown_Double(t *testing.T) {
-	pool := NewQUIC(10)
+	pool := NewQUIC(10, 0)
 	pool.Shutdown()
 	pool.Shutdown()
 }
 
 func TestConnPool_ZeroConns(t *testing.T) {
-	pool := NewConnPool(0, 16)
+	pool := NewConnPool(0, 16, 0)
 	if pool == nil {
 		t.Fatal("NewConnPool(0) returned nil")
 	}
@@ -42,9 +42,9 @@ func TestConnPool_ZeroConns(t *testing.T) {
 }
 
 func TestQUIC_ZeroConns(t *testing.T) {
-	pool := NewQUIC(0)
+	pool := NewQUIC(0, 0)
 	if pool == nil {
-		t.Fatal("NewQUIC(0) returned nil")
+		t.Fatal("NewQUIC(0, 0) returned nil")
 	}
 	pool.Shutdown()
 }

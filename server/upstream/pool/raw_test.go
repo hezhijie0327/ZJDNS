@@ -170,7 +170,7 @@ func TestRawConn_CtxCancelLeavesConnUsable(t *testing.T) {
 // for repeated acquires and dials at most once.
 func TestRawPool_AcquireReuses(t *testing.T) {
 	_, addr := startFakeRawServer(t, 0)
-	p := NewRawPool(4, 16, rawTestExtractor)
+	p := NewRawPool(4, 16, 0, rawTestExtractor)
 
 	var dials atomic.Int64
 	dialFunc := func(ctx context.Context, a string) (net.Conn, error) {
@@ -202,7 +202,7 @@ func TestRawPool_AcquireReuses(t *testing.T) {
 // (or the peer) is replaced on the next dial rather than handed out.
 func TestRawPool_DeadConnRecycled(t *testing.T) {
 	_, addr := startFakeRawServer(t, 0)
-	p := NewRawPool(4, 16, rawTestExtractor)
+	p := NewRawPool(4, 16, 0, rawTestExtractor)
 
 	var dials atomic.Int64
 	dialFunc := func(ctx context.Context, a string) (net.Conn, error) {

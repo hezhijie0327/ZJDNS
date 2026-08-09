@@ -179,7 +179,9 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, 
 		cancel:         cancel,
 		signingSK:      signingSK,
 		rotateCh:       make(chan struct{}),
-		workerCap:      make(chan struct{}, config.DefaultMaxDNSCryptConcurrent),
+		// Shares DefaultServerGoroutineLimit with the other listeners — the
+		// unified server-side concurrency cap (defaults.go).
+		workerCap:      make(chan struct{}, config.DefaultServerGoroutineLimit),
 		sharedKeyCache: lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize),
 		store:          store,
 	}

@@ -436,7 +436,7 @@ func NewUDPPool(maxConns, maxPipe, maxTotal int, extractKey func(payload []byte)
 		maxPipe = config.DefaultMaxPipe
 	}
 	if maxTotal <= 0 {
-		maxTotal = config.DefaultMaxUDPTotalConns
+		maxTotal = config.DefaultMaxPoolTotalConns
 	}
 	return &UDPPool{
 		conns:      make(map[string][]*UDPConn),

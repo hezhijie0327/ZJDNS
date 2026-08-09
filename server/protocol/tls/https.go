@@ -49,6 +49,9 @@ func (s *Server) startDOHServer(port string) error {
 		tlsConfig.GetConfigForClient = s.getConfigForClient(config.NextProtoDOH)
 
 		httpsListener := eTLS.NewListener(rawListener, tlsConfig)
+		// http.Server spawns its own per-connection goroutines (not through
+		// serverGroup) — cap concurrent connections at the listener instead.
+		httpsListener = zdnsutil.NewLimitListener(httpsListener, config.DefaultServerGoroutineLimit)
 		s.listenerMu.Lock()
 		s.httpsListeners = append(s.httpsListeners, httpsListener)
 		s.listenerMu.Unlock()

@@ -67,6 +67,7 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 		transport := &http.Transport{
 			MaxIdleConns:        config.DefaultMaxIdleConns,
 			MaxIdleConnsPerHost: config.DefaultMaxIdleConnsPerHost,
+			MaxConnsPerHost:     config.DefaultMaxIdleConnsPerHost,
 			IdleConnTimeout:     config.DefaultHTTPIdleConnTimeout,
 			DisableCompression:  true,
 			ForceAttemptHTTP2:   true,

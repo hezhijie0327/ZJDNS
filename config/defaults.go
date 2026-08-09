@@ -179,27 +179,27 @@ const (
 const (
 	DefaultMaxPipe  = 16 // max in-flight queries per TCP/DoT connection
 	DefaultMaxConns = 4  // max connections per upstream
-	// DefaultMaxUDPTotalConns caps the total live pooled UDP sockets across
-	// ALL upstream keys — recursive resolution otherwise opens up to 4 sockets
-	// per distinct authoritative NS address with no global bound (H1).
-	DefaultMaxUDPTotalConns     = 128
-	DefaultMaxConcurrentNS      = 6     // max concurrent NS queries during resolution
-	DefaultMaxProbes            = 16    // max concurrent latency probes
-	DefaultMaxIncomingStreams   = 65535 // QUIC max incoming streams (RFC 9250: one stream per query — 256 exhausted a client's stream quota in seconds, then every query waited on MAX_STREAMS behind quic-go's 25ms ACK delay)
-	DefaultMaxConcurrentStreams = 64    // QUIC concurrent in-flight stream limit
-	// DefaultMaxDNSCryptConcurrent bounds concurrent DNSCrypt handler
-	// goroutines (UDP per-packet, TCP per-connection).  Deliberately NOT the
-	// QUIC stream limit: DNSCrypt is UDP-first and plain-UDP processing has no
-	// concurrency cap — reusing 64 saturated the worker pool under ordinary
-	// load, diverting every further packet into the CPU-heavy saturated
-	// SERVFAIL path (decrypt + encrypt per packet) and amplifying overload
-	// into a CPU storm.  1024 matches DefaultServerGoroutineLimit: far above
-	// realistic concurrency (5900 QPS ≈ 32 in flight) while still bounded
-	// against abuse.
-	DefaultMaxDNSCryptConcurrent   = 1024
-	DefaultCacheRefreshConcurrency = 64 // background cache refresh goroutine cap
+	// DefaultMaxPoolTotalConns caps the total live connections across ALL
+	// upstream keys in one pool instance — recursive resolution otherwise
+	// opens up to 4 sockets per distinct authoritative NS address (UDP) or
+	// forced-TCP upstream (TCP/QUIC) with no global bound (H1).
+	DefaultMaxPoolTotalConns       = 128
+	DefaultMaxConcurrentNS         = 6     // max concurrent NS queries during resolution
+	DefaultMaxProbes               = 16    // max concurrent latency probes
+	DefaultMaxIncomingStreams      = 65535 // QUIC max incoming streams (RFC 9250: one stream per query — 256 exhausted a client's stream quota in seconds, then every query waited on MAX_STREAMS behind quic-go's 25ms ACK delay)
+	DefaultMaxConcurrentStreams    = 64    // QUIC concurrent in-flight stream limit
+	DefaultCacheRefreshConcurrency = 64    // background cache refresh goroutine cap
 
-	DefaultServerGoroutineLimit = 1024
+	// DefaultServerGoroutineLimit is the unified server-side concurrency
+	// cap: the TLS/TLCP serverGroup, the plain-TCP/DoH LimitListener, the
+	// DNSCrypt workerCap, and the QUIC connection semaphore (half of this)
+	// all derive from it.  Far above realistic personal-deployment
+	// concurrency (5900 QPS ≈ 32 in flight) while still bounded against
+	// connection floods.  Deliberately NOT the QUIC stream limit: DNSCrypt
+	// is UDP-first with no per-packet cap elsewhere — a cap in this
+	// hundreds-range absorbs ordinary load without diverting saturated
+	// packets into the CPU-heavy SERVFAIL path.
+	DefaultServerGoroutineLimit = 256
 	DefaultMinConcurrencyLimit  = 8
 
 	DefaultTransportMax          = 64

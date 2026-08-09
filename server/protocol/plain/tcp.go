@@ -30,7 +30,10 @@ func (s *Server) startTCP(g Group, ctx context.Context, handler dns.Handler) err
 		}
 
 		srv := &dns.Server{
-			Listener:    &zdnsutil.TCPKeepAliveListener{Listener: listener},
+			// The accept loop lives inside miekg/dns — cap concurrent
+			// connections at the listener instead (connections queue in the
+			// kernel backlog at the cap).
+			Listener:    zdnsutil.NewLimitListener(&zdnsutil.TCPKeepAliveListener{Listener: listener}, config.DefaultServerGoroutineLimit),
 			Handler:     handler,
 			ReadTimeout: config.DefaultTCPIdleTimeout, // RFC 7766 §6.2.3
 		}

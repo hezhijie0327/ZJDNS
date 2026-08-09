@@ -40,6 +40,7 @@ type RawConn struct {
 	inflight  map[string]*rawPending
 	capacity  chan struct{}
 	inFlight  atomic.Int32
+	lastUsed  atomic.Int64 // log.NowUnix() of the last exchange — LRU eviction key
 	maxPipe   int32
 	closed    atomic.Bool
 	closeOnce sync.Once
@@ -55,6 +56,8 @@ type RawPool struct {
 	dialing    map[string]int
 	maxConns   int
 	maxPipe    int
+	maxTotal   int // global cap on live connections across all keys (0 = unlimited)
+	total      int // live connections currently tracked in conns
 	closed     bool
 	extractKey func(payload []byte) (string, bool)
 }
@@ -72,6 +75,7 @@ func (c *RawConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 	select {
 	case c.capacity <- struct{}{}:
 		c.inFlight.Add(1)
+		c.lastUsed.Store(log.NowUnix())
 		defer func() {
 			c.inFlight.Add(-1)
 			<-c.capacity
@@ -222,20 +226,25 @@ func (c *RawConn) IsDead() bool { return c.closed.Load() }
 // IsFull reports whether the connection has reached its in-flight cap.
 func (c *RawConn) IsFull() bool { return c.inFlight.Load() >= c.maxPipe }
 
-// NewRawPool creates a RawPool.  extractKey derives a response's match key
-// from its raw payload.
-func NewRawPool(maxConns, maxPipe int, extractKey func(payload []byte) (string, bool)) *RawPool {
+// NewRawPool creates a RawPool.  maxTotal caps the live connection count
+// across all keys (0 = unlimited).  extractKey derives a response's match
+// key from its raw payload.
+func NewRawPool(maxConns, maxPipe, maxTotal int, extractKey func(payload []byte) (string, bool)) *RawPool {
 	if maxConns <= 0 {
 		maxConns = config.DefaultMaxConns
 	}
 	if maxPipe <= 0 {
 		maxPipe = config.DefaultMaxPipe
 	}
+	if maxTotal <= 0 {
+		maxTotal = config.DefaultMaxPoolTotalConns
+	}
 	return &RawPool{
 		conns:      make(map[string][]*RawConn),
 		dialing:    make(map[string]int),
 		maxConns:   maxConns,
 		maxPipe:    maxPipe,
+		maxTotal:   maxTotal,
 		extractKey: extractKey,
 	}
 }
@@ -337,10 +346,88 @@ func (p *RawPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc
 	}
 
 	p.conns[key] = append(p.conns[key], c)
-	n := len(p.conns[key])
+	p.total++
+	// Global cap (H1): a flood of distinct upstream keys must not grow the
+	// connection working set without bound.  Evict connections to make room
+	// — dead ones first, then the least-recently-used — and close them after
+	// unlocking (ABBA convention, as in Remove/Shutdown).
+	var evicted []*RawConn
+	for p.total > p.maxTotal {
+		victim, removed := p.evictOne(c)
+		if !removed {
+			break // nothing evictable — the new connection stays
+		}
+		if victim != nil {
+			evicted = append(evicted, victim)
+		}
+	}
+	n := len(p.conns[key]) // captured under the lock — the logs below run unlocked
+	total := p.total
 	p.mu.Unlock()
-	log.Debugf("TCPPOOL: dialed new raw connection to %s (pool=%d/%d)", key, n, p.maxConns)
+	for _, v := range evicted {
+		v.close()
+		log.Debugf("TCPPOOL: evicted raw %s for capacity (total=%d/%d)", v.addr, total, p.maxTotal)
+	}
+	log.Debugf("TCPPOOL: dialed new raw connection to %s (pool=%d/%d, total=%d/%d)", key, n, p.maxConns, total, p.maxTotal)
 	return c, nil
+}
+
+// evictOne removes one connection from the pool to make room for a new dial,
+// preferring (1) dead connections (already closed — nil victim), (2) idle
+// live connections (nothing in flight) oldest first, (3) any live connection
+// oldest first.  Must be called with p.mu held; skip is never evicted.  The
+// live victim is returned WITHOUT closing — the caller closes it outside
+// p.mu (ABBA convention, as in Remove/Shutdown).
+func (p *RawPool) evictOne(skip *RawConn) (victim *RawConn, removed bool) {
+	// (1) Dead connections cost a slot while waiting for lazy pruning —
+	// drop them without closing anything (their readLoop already closed).
+	for key, conns := range p.conns {
+		for i, c := range conns {
+			if !c.IsDead() {
+				continue
+			}
+			p.conns[key] = append(conns[:i], conns[i+1:]...)
+			if len(p.conns[key]) == 0 {
+				delete(p.conns, key)
+			}
+			p.total--
+			return nil, true
+		}
+	}
+	// (2)+(3): least-recently-used live connection.  Prefer idle connections
+	// — an in-flight eviction costs its waiters a failed exchange; an idle
+	// one costs nothing.
+	for preferIdle := true; ; preferIdle = false {
+		var victimKey string
+		var victimIdx int
+		oldest := int64(math.MaxInt64)
+		for key, conns := range p.conns {
+			for i, c := range conns {
+				if c == skip || c.IsDead() {
+					continue
+				}
+				if preferIdle && c.inFlight.Load() > 0 {
+					continue
+				}
+				if last := c.lastUsed.Load(); last < oldest {
+					oldest = last
+					victim, victimKey, victimIdx = c, key, i
+				}
+			}
+		}
+		if victim == nil {
+			if preferIdle {
+				continue // second pass: in-flight connections allowed
+			}
+			return nil, false
+		}
+		p.conns[victimKey] = append(p.conns[victimKey][:victimIdx], p.conns[victimKey][victimIdx+1:]...)
+		if len(p.conns[victimKey]) == 0 {
+			delete(p.conns, victimKey)
+		}
+		p.total--
+		return victim, true
+	}
 }
 
 func newRawConn(addr string, conn net.Conn, maxPipe int, extractKey func(payload []byte) (string, bool)) *RawConn {
@@ -361,6 +448,7 @@ func newRawConn(addr string, conn net.Conn, maxPipe int, extractKey func(payload
 		extractKey:  extractKey,
 		idleTimeout: config.DefaultTCPPoolIdleTimeout,
 	}
+	c.lastUsed.Store(log.NowUnix())
 	go c.readLoop()
 	return c
 }
@@ -376,6 +464,7 @@ func (p *RawPool) replaceDead(key string) *RawConn {
 		if len(p.conns[key]) == 0 {
 			delete(p.conns, key)
 		}
+		p.total--
 		return c
 	}
 	return nil
@@ -393,6 +482,7 @@ func (p *RawPool) Remove(target *RawConn) {
 		if len(p.conns[target.addr]) == 0 {
 			delete(p.conns, target.addr)
 		}
+		p.total--
 		p.mu.Unlock()
 		target.close()
 		return
@@ -409,6 +499,7 @@ func (p *RawPool) Shutdown() {
 		all = append(all, conns...)
 	}
 	p.conns = make(map[string][]*RawConn)
+	p.total = 0
 	p.mu.Unlock()
 
 	for _, c := range all {

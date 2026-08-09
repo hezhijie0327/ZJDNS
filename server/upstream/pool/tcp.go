@@ -39,6 +39,7 @@ type Conn struct {
 	mu        sync.RWMutex
 	inflight  map[uint16]*pending
 	nextID    atomic.Uint32
+	lastUsed  atomic.Int64 // log.NowUnix() of the last query — LRU eviction key
 	capacity  chan struct{}
 	inFlight  atomic.Int32
 	maxPipe   int32
@@ -55,6 +56,8 @@ type ConnPool struct {
 	dialing  map[string]int
 	maxConns int
 	maxPipe  int
+	maxTotal int // global cap on live connections across all keys (0 = unlimited)
+	total    int // live connections currently tracked in conns
 	closed   bool
 }
 
@@ -81,6 +84,7 @@ func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 
 		segmentSize: 0,
 	}
+	c.lastUsed.Store(log.NowUnix())
 	c.nextID.Store(rand.Uint32()) //nolint:gosec // G404: DNS message ID — not cryptographic
 	go c.readLoop()
 	return c
@@ -117,6 +121,7 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (response *dns.Msg, e
 	select {
 	case c.capacity <- struct{}{}:
 		c.inFlight.Add(1)
+		c.lastUsed.Store(log.NowUnix())
 		defer func() {
 			c.inFlight.Add(-1)
 			<-c.capacity
@@ -359,20 +364,25 @@ func (c *Conn) IsDead() bool {
 	return c.closed.Load()
 }
 
-// NewConnPool creates a ConnPool with the specified connection and
-// in-flight limits (RFC 7766 pipelining).
-func NewConnPool(maxConns, maxPipe int) *ConnPool {
+// NewConnPool creates a ConnPool with the specified connection and in-flight
+// limits (RFC 7766 pipelining).  maxTotal caps the live connection count
+// across all keys (0 = unlimited).
+func NewConnPool(maxConns, maxPipe, maxTotal int) *ConnPool {
 	if maxConns <= 0 {
 		maxConns = config.DefaultMaxConns
 	}
 	if maxPipe <= 0 {
 		maxPipe = config.DefaultMaxPipe
 	}
+	if maxTotal <= 0 {
+		maxTotal = config.DefaultMaxPoolTotalConns
+	}
 	return &ConnPool{
 		conns:    make(map[string][]*Conn),
 		dialing:  make(map[string]int),
 		maxConns: maxConns,
 		maxPipe:  maxPipe,
+		maxTotal: maxTotal,
 	}
 }
 
@@ -500,10 +510,89 @@ func (p *ConnPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFun
 	}
 
 	p.conns[key] = append(p.conns[key], c)
-	n := len(p.conns[key])
+	p.total++
+	// Global cap (H1): a flood of distinct upstream keys (recursive TCP
+	// fallbacks, forced-TCP configs) must not grow the connection working
+	// set without bound.  Evict connections to make room — dead ones first,
+	// then the least-recently-used — and close them after unlocking (ABBA
+	// convention, as in Remove/Shutdown).
+	var evicted []*Conn
+	for p.total > p.maxTotal {
+		victim, removed := p.evictOne(c)
+		if !removed {
+			break // nothing evictable — the new connection stays
+		}
+		if victim != nil {
+			evicted = append(evicted, victim)
+		}
+	}
+	n := len(p.conns[key]) // captured under the lock — the logs below run unlocked
+	total := p.total
 	p.mu.Unlock()
-	log.Debugf("TCPPOOL: dialed new connection to %s (pool=%d/%d)", key, n, p.maxConns)
+	for _, v := range evicted {
+		v.close()
+		log.Debugf("TCPPOOL: evicted %s for capacity (total=%d/%d)", v.addr, total, p.maxTotal)
+	}
+	log.Debugf("TCPPOOL: dialed new connection to %s (pool=%d/%d, total=%d/%d)", key, n, p.maxConns, total, p.maxTotal)
 	return c, nil
+}
+
+// evictOne removes one connection from the pool to make room for a new dial,
+// preferring (1) dead connections (already closed — nil victim), (2) idle
+// live connections (nothing in flight) oldest first, (3) any live connection
+// oldest first.  Must be called with p.mu held; skip is never evicted.  The
+// live victim is returned WITHOUT closing — the caller closes it outside
+// p.mu (ABBA convention, as in Remove/Shutdown).
+func (p *ConnPool) evictOne(skip *Conn) (victim *Conn, removed bool) {
+	// (1) Dead connections cost a slot while waiting for lazy pruning —
+	// drop them without closing anything (their readLoop already closed).
+	for key, conns := range p.conns {
+		for i, c := range conns {
+			if !c.IsDead() {
+				continue
+			}
+			p.conns[key] = append(conns[:i], conns[i+1:]...)
+			if len(p.conns[key]) == 0 {
+				delete(p.conns, key)
+			}
+			p.total--
+			return nil, true
+		}
+	}
+	// (2)+(3): least-recently-used live connection.  Prefer idle connections
+	// — an in-flight eviction costs its waiters a failed query; an idle one
+	// costs nothing.
+	for preferIdle := true; ; preferIdle = false {
+		var victimKey string
+		var victimIdx int
+		oldest := int64(math.MaxInt64)
+		for key, conns := range p.conns {
+			for i, c := range conns {
+				if c == skip || c.IsDead() {
+					continue
+				}
+				if preferIdle && c.inFlight.Load() > 0 {
+					continue
+				}
+				if last := c.lastUsed.Load(); last < oldest {
+					oldest = last
+					victim, victimKey, victimIdx = c, key, i
+				}
+			}
+		}
+		if victim == nil {
+			if preferIdle {
+				continue // second pass: in-flight connections allowed
+			}
+			return nil, false
+		}
+		p.conns[victimKey] = append(p.conns[victimKey][:victimIdx], p.conns[victimKey][victimIdx+1:]...)
+		if len(p.conns[victimKey]) == 0 {
+			delete(p.conns, victimKey)
+		}
+		p.total--
+		return victim, true
+	}
 }
 
 // replaceDead removes and returns a dead connection from the pool.
@@ -519,6 +608,7 @@ func (p *ConnPool) replaceDead(key string) *Conn {
 		if len(p.conns[key]) == 0 {
 			delete(p.conns, key)
 		}
+		p.total--
 		return c
 	}
 	return nil
@@ -536,6 +626,7 @@ func (p *ConnPool) Shutdown() {
 		all = append(all, conns...)
 	}
 	p.conns = make(map[string][]*Conn)
+	p.total = 0
 	p.mu.Unlock()
 
 	for _, c := range all {
@@ -555,6 +646,7 @@ func (p *ConnPool) Remove(target *Conn) {
 		if len(p.conns[target.addr]) == 0 {
 			delete(p.conns, target.addr)
 		}
+		p.total--
 		p.mu.Unlock()
 		target.close()
 		return

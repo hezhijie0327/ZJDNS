@@ -117,7 +117,7 @@ func BenchmarkPoolAcquire(b *testing.B) {
 	dialFn := fakeDialer()
 
 	b.Run("Warm", func(b *testing.B) {
-		pool := NewConnPool(4, 16)
+		pool := NewConnPool(4, 16, 0)
 		defer pool.Shutdown()
 
 		// Pre-warm.
@@ -140,7 +140,7 @@ func BenchmarkPoolAcquire(b *testing.B) {
 
 	b.Run("Cold", func(b *testing.B) {
 		for b.Loop() {
-			pool := NewConnPool(4, 16)
+			pool := NewConnPool(4, 16, 0)
 
 			conn, err := pool.Acquire(context.Background(), key, key, dialFn)
 			if err != nil {
@@ -160,7 +160,7 @@ func BenchmarkPoolAcquire(b *testing.B) {
 func BenchmarkPoolExchange(b *testing.B) {
 	const key = "fake"
 
-	pool := NewConnPool(4, 16)
+	pool := NewConnPool(4, 16, 0)
 	defer pool.Shutdown()
 
 	conn, err := pool.Acquire(context.Background(), key, key, fakeDialer())

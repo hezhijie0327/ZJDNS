@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 type QUICConn struct {
 	Conn      *quic.Conn
 	addr      string
+	lastUsed  atomic.Int64 // log.NowUnix() of the last acquire — LRU eviction key
 	closed    atomic.Bool
 	closeOnce sync.Once
 }
@@ -27,6 +29,8 @@ type QUIC struct {
 	conns    map[string][]*QUICConn
 	dialing  map[string]int
 	maxConns int
+	maxTotal int // global cap on live connections across all keys (0 = unlimited)
+	total    int // live connections currently tracked in conns
 	closed   bool
 }
 
@@ -62,15 +66,20 @@ func (p *QUIC) decDialing(key string) {
 	}
 }
 
-// NewQUIC creates a QUIC with the specified maximum connections.
-func NewQUIC(maxConns int) *QUIC {
+// NewQUIC creates a QUIC with the specified maximum connections.  maxTotal
+// caps the live connection count across all keys (0 = unlimited).
+func NewQUIC(maxConns, maxTotal int) *QUIC {
 	if maxConns <= 0 {
 		maxConns = config.DefaultMaxConns
+	}
+	if maxTotal <= 0 {
+		maxTotal = config.DefaultMaxPoolTotalConns
 	}
 	return &QUIC{
 		conns:    make(map[string][]*QUICConn),
 		dialing:  make(map[string]int),
 		maxConns: maxConns,
+		maxTotal: maxTotal,
 	}
 }
 
@@ -101,6 +110,7 @@ func (p *QUIC) Acquire(ctx context.Context, key string, dialFunc func(context.Co
 		// live[0], which would leave connections[1..N] unused.
 		idx := rand.IntN(len(live)) //nolint:gosec // G404: QUIC connection selection — not cryptographic
 		pc := live[idx]
+		pc.lastUsed.Store(log.NowUnix())
 		p.mu.Unlock()
 		return pc, nil
 	}
@@ -116,6 +126,7 @@ func (p *QUIC) Acquire(ctx context.Context, key string, dialFunc func(context.Co
 			return nil, fmt.Errorf("client: dial %s: %w", key, err)
 		}
 		pc := &QUICConn{Conn: conn, addr: key}
+		pc.lastUsed.Store(log.NowUnix())
 		p.mu.Lock()
 		p.decDialing(key)
 		// Pool was shut down while we were dialing — discard the connection.
@@ -130,14 +141,83 @@ func (p *QUIC) Acquire(ctx context.Context, key string, dialFunc func(context.Co
 			return nil, fmt.Errorf("client: pool filled during dial for %s", key)
 		}
 		p.conns[key] = append(p.conns[key], pc)
-		n := len(p.conns[key])
+		p.total++
+		// Global cap (H1): a flood of distinct upstream keys must not grow
+		// the connection working set without bound.  Evict connections to
+		// make room — dead ones first, then the least-recently-used — and
+		// close them after unlocking.
+		var evicted []*QUICConn
+		for p.total > p.maxTotal {
+			victim, removed := p.evictOne(pc)
+			if !removed {
+				break // nothing evictable — the new connection stays
+			}
+			if victim != nil {
+				evicted = append(evicted, victim)
+			}
+		}
+		n := len(p.conns[key]) // captured under the lock — the logs below run unlocked
+		total := p.total
 		p.mu.Unlock()
-		log.Debugf("UPSTREAM: dialed new QUIC connection to %s (pool=%d/%d)", key, n, p.maxConns)
+		for _, v := range evicted {
+			v.close()
+			log.Debugf("UPSTREAM: evicted QUIC %s for capacity (total=%d/%d)", v.addr, total, p.maxTotal)
+		}
+		log.Debugf("UPSTREAM: dialed new QUIC connection to %s (pool=%d/%d, total=%d/%d)", key, n, p.maxConns, total, p.maxTotal)
 		return pc, nil
 	}
 
 	p.mu.Unlock()
 	return nil, fmt.Errorf("client: no available connection to %s", key)
+}
+
+// evictOne removes one connection from the pool to make room for a new dial,
+// preferring (1) dead connections (already closed — nil victim), (2) the
+// least-recently-used live connection.  QUIC multiplexes queries over
+// per-connection streams, so there is no per-conn in-flight signal to prefer
+// idle connections over.  Must be called with p.mu held; skip is never
+// evicted.  The live victim is returned WITHOUT closing — the caller closes
+// it outside p.mu.
+func (p *QUIC) evictOne(skip *QUICConn) (victim *QUICConn, removed bool) {
+	// (1) Dead connections cost a slot while waiting for lazy pruning —
+	// drop them without closing anything (their peer already terminated).
+	for key, conns := range p.conns {
+		for i, c := range conns {
+			if !c.isDead() {
+				continue
+			}
+			p.conns[key] = append(conns[:i], conns[i+1:]...)
+			if len(p.conns[key]) == 0 {
+				delete(p.conns, key)
+			}
+			p.total--
+			return nil, true
+		}
+	}
+	// (2): least-recently-used live connection.
+	var victimKey string
+	var victimIdx int
+	oldest := int64(math.MaxInt64)
+	for key, conns := range p.conns {
+		for i, c := range conns {
+			if c == skip || c.isDead() {
+				continue
+			}
+			if last := c.lastUsed.Load(); last < oldest {
+				oldest = last
+				victim, victimKey, victimIdx = c, key, i
+			}
+		}
+	}
+	if victim == nil {
+		return nil, false
+	}
+	p.conns[victimKey] = append(p.conns[victimKey][:victimIdx], p.conns[victimKey][victimIdx+1:]...)
+	if len(p.conns[victimKey]) == 0 {
+		delete(p.conns, victimKey)
+	}
+	p.total--
+	return victim, true
 }
 
 // WarmUp dials a new QUIC connection and adds it to the pool without returning
@@ -158,6 +238,7 @@ func (p *QUIC) Shutdown() {
 		all = append(all, conns...)
 	}
 	p.conns = make(map[string][]*QUICConn)
+	p.total = 0
 	p.mu.Unlock()
 	for _, pc := range all {
 		pc.close()
@@ -209,14 +290,16 @@ func (p *QUIC) Remove(pc *QUICConn) {
 	conns := p.conns[pc.addr]
 	found := false
 	for i, c := range conns {
-		if c == pc {
-			p.conns[pc.addr] = append(conns[:i], conns[i+1:]...)
-			if len(p.conns[pc.addr]) == 0 {
-				delete(p.conns, pc.addr)
-			}
-			found = true
-			break
+		if c != pc {
+			continue
 		}
+		p.conns[pc.addr] = append(conns[:i], conns[i+1:]...)
+		if len(p.conns[pc.addr]) == 0 {
+			delete(p.conns, pc.addr)
+		}
+		p.total--
+		found = true
+		break
 	}
 	p.mu.Unlock()
 	if found {

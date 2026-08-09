@@ -86,6 +86,7 @@ func New() *Client {
 	dohTransport := &eHTTP.Transport{
 		MaxIdleConns:        config.DefaultMaxIdleConns,
 		MaxIdleConnsPerHost: config.DefaultMaxIdleConnsPerHost,
+		MaxConnsPerHost:     config.DefaultMaxIdleConnsPerHost,
 		IdleConnTimeout:     config.DefaultHTTPIdleConnTimeout,
 		DisableCompression:  true,
 		ForceAttemptHTTP2:   true,
@@ -102,9 +103,9 @@ func New() *Client {
 	sessionCache := eTLS.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize)
 	quicSessionCache := stdtls.NewLRUClientSessionCache(config.DefaultTLSSessionCacheSize)
 	dtlsSessions := lrumap.NewDTLSSessionStore(config.DefaultDTLSSessionCacheSize)
-	tcpPool := pool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe)
-	dotPool := pool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe)
-	quicPool := pool.NewQUIC(config.DefaultMaxConns)
+	tcpPool := pool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe, config.DefaultMaxPoolTotalConns)
+	dotPool := pool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe, config.DefaultMaxPoolTotalConns)
+	quicPool := pool.NewQUIC(config.DefaultMaxConns, config.DefaultMaxPoolTotalConns)
 
 	c := &Client{
 		timeout:      timeout,

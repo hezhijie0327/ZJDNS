@@ -66,8 +66,8 @@ func New(getProxy func(*config.UpstreamServer) *socks5.Dialer) *Client {
 		cache:      lrumap.New[string, *State](config.DefaultTransportMax * 2),
 		getProxy:   getProxy,
 		stateGroup: pending.NewResultGroup[string, *State](),
-		udpPool:    zpool.NewUDPPool(config.DefaultMaxConns, config.DefaultMaxPipe, config.DefaultMaxUDPTotalConns, dnscryptExtractKey),
-		tcpPool:    zpool.NewRawPool(config.DefaultMaxConns, config.DefaultMaxPipe, dnscryptExtractKey),
+		udpPool:    zpool.NewUDPPool(config.DefaultMaxConns, config.DefaultMaxPipe, config.DefaultMaxPoolTotalConns, dnscryptExtractKey),
+		tcpPool:    zpool.NewRawPool(config.DefaultMaxConns, config.DefaultMaxPipe, config.DefaultMaxPoolTotalConns, dnscryptExtractKey),
 	}
 }
 

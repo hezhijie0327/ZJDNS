@@ -70,7 +70,7 @@ func New(
 		doh3Client:       doh3Client,
 		dotPool:          dotPool,
 		quicPool:         quicPool,
-		dtlsPool:         pool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe),
+		dtlsPool:         pool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe, config.DefaultMaxPoolTotalConns),
 		sessionCache:     sessionCache,
 		quicSessionCache: quicSessionCache,
 		dtlsSessions:     dtlsSessions,
