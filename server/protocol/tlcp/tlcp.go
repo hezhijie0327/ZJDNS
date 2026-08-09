@@ -124,6 +124,9 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 		_ = conn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 
 		resp := s.handler.ServeDNS(msg, clientIP, true, config.ProtoTLCP)
+		if resp == msg { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+			resp = nil
+		}
 		if !s.sendDOTResponse(conn, resp, clientIP) {
 			return
 		}

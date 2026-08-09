@@ -100,16 +100,17 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			// Handle stale serving strategies.
 			if m.preferStale && m.closed != nil && !m.closed() {
 				// PreferStale: return stale immediately, refresh in background.
-				if m.tryStartRefresh(qname, qtype, qclass, ecsOpt) {
-					if m.refreshGroup != nil {
-						if !m.refreshGroup.TryGo(func() error {
-							defer zdnsutil.HandlePanic("Cache refresh: stale prefetch")
-							defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
-							_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt) // error logged inside
-							return nil                                            // prevent errgroup context cancellation cascade
-						}) {
-							m.finishRefresh(qname, qtype, qclass, ecsOpt) // slot saturated
-						}
+				// refreshGroup nil (test-only wiring) must skip entirely — the
+				// gate acquired here would never be released (L6, mirroring
+				// the fresh-hit guard above).
+				if m.refreshGroup != nil && m.tryStartRefresh(qname, qtype, qclass, ecsOpt) {
+					if !m.refreshGroup.TryGo(func() error {
+						defer zdnsutil.HandlePanic("Cache refresh: stale prefetch")
+						defer m.finishRefresh(qname, qtype, qclass, ecsOpt)
+						_ = m.refreshCacheEntry(qname, qtype, qclass, ecsOpt) // error logged inside
+						return nil                                            // prevent errgroup context cancellation cascade
+					}) {
+						m.finishRefresh(qname, qtype, qclass, ecsOpt) // slot saturated
 					}
 				}
 				rec := cache.AcquireRequestRecord()

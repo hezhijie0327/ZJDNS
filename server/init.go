@@ -90,8 +90,9 @@ func wireZoneDynamicContent(store cache.Store, rules []config.ZoneRule, resetDNS
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("stats") }, "reset")
 		case dnsutil.Canonical(config.DefaultProjectName + ".latency.clear"):
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("latency") }, "flushed")
-		case dnsutil.Canonical(config.DefaultProjectName + ".delegation.clear"):
-			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("delegation") }, "flushed")
+		// zjdns.delegation.clear was removed: FlushDB has no delegation
+		// branch (the cache store does not own the delegation cache), so the
+		// endpoint always replied a false "flushed" (L2).
 		case dnsutil.Canonical(config.DefaultProjectName + ".querylog.clear"):
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("querylog") }, "flushed")
 		case dnsutil.Canonical(config.DefaultProjectName + ".dnscrypt.clear"):

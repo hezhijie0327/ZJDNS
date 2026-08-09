@@ -721,6 +721,9 @@ func (s *Server) serveDNS(ctx context.Context, rw responseWriter, m *dns.Msg, pr
 
 	clientIP := zdnsutil.ClientIPFromAddr(rw.RemoteAddr())
 	resp := s.handler.ServeDNS(m, clientIP, false, protocol)
+	if resp == m { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+		resp = nil
+	}
 	if resp == nil {
 		return nil
 	}

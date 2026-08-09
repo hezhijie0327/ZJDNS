@@ -344,6 +344,9 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 		// query until the connection closes — the per-connection loop is
 		// not a single-request scope, AUDIT-METHODOLOGY §6.1.1).
 		response := s.handler.ServeDNS(query, clientIP, true, config.ProtoDTLCP)
+		if response == query { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+			response = nil
+		}
 		pool.DefaultMessage.Put(query)
 		if !s.sendDTLCPResponse(conn, response) {
 			return

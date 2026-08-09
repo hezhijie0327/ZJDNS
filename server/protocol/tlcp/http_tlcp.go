@@ -107,6 +107,9 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 	clientIP := net.ParseIP(host)
 
 	resp := s.handler.ServeDNS(msg, clientIP, true, config.ProtoHTTPTLCP)
+	if resp == msg { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+		resp = nil
+	}
 	if resp == nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return

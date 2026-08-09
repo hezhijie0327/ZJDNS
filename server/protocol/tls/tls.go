@@ -174,17 +174,20 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 	workerCap := make(chan struct{}, config.DefaultMaxPipe)
 
 	lengthBuf := make([]byte, zdnsutil.DNSFramePrefixLen)
+	firstRead := true
 	for {
 		if connCtx.Err() != nil {
 			return
 		}
 
 		// The first ReadFull triggers the TLS handshake (lazy handshake in
-		// crypto/tls). Use the HANDSHAKE timeout for that first read — the
-		// 60s idle deadline set here would otherwise override the 10s
-		// pre-handshake deadline above and let a flood of never-handshaking
-		// connections hold errgroup slots six times longer than designed.
-		_ = tlsConn.SetReadDeadline(time.Now().Add(config.DefaultTLSHandshakeTimeout))
+		// crypto/tls). Use the HANDSHAKE timeout for that first read only —
+		// re-arming it every iteration overwrote the 60s idle deadline below
+		// before it ever governed a read, disconnecting clients that poll
+		// every 15-55s six times more often than designed (M5).
+		if firstRead {
+			_ = tlsConn.SetReadDeadline(time.Now().Add(config.DefaultTLSHandshakeTimeout))
+		}
 
 		_, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
@@ -194,6 +197,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			}
 			return
 		}
+		firstRead = false
 
 		// The first read succeeded — the TLS handshake is complete. Switch
 		// to the long idle deadline for the rest of the connection.
@@ -264,6 +268,9 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			}()
 
 			response := s.handler.ServeDNS(query, ip, true, config.ProtoTLS)
+			if response == query { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+				response = nil
+			}
 			if response == nil {
 				return
 			}

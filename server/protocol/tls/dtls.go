@@ -183,6 +183,9 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 		// query until the connection closes — the per-connection loop is
 		// not a single-request scope, AUDIT-METHODOLOGY §6.1.1).
 		response := s.handler.ServeDNS(query, clientIP, true, config.ProtoDTLS)
+		if response == query { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+			response = nil
+		}
 		pool.DefaultMessage.Put(query)
 		if !s.sendDTLSResponse(conn, response) {
 			return

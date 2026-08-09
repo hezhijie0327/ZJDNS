@@ -272,6 +272,9 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	default:
 	}
 	response := s.handler.ServeDNS(req, clientIP, true, config.ProtoQUIC)
+	if response == req { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+		response = nil
+	}
 
 	if err := s.respondQUIC(stream, response); err != nil {
 		log.Debugf("TLS: DoQ response failed: %v", err)

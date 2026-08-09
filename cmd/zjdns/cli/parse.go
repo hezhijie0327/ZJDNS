@@ -26,8 +26,6 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		dnscryptProvider string
 		dnscryptAddr     string
 
-		// SQL
-
 		// DNS stamp
 		runDNSStamp    bool
 		dnsStampDecode bool

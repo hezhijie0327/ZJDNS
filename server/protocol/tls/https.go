@@ -127,6 +127,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		protocol = config.ProtoHTTP3
 	}
 	response := s.handler.ServeDNS(req, clientIP, true, protocol)
+	if response == req { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+		response = nil
+	}
 	if response != nil {
 		defer pool.DefaultMessage.Put(response)
 	}

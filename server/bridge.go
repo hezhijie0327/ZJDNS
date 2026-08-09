@@ -195,6 +195,9 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 				log.Warnf("SERVER: cannot determine client IP from %s", w.RemoteAddr())
 			}
 			response := s.handler.ServeDNS(req, clientIP, false, config.ProtoTCP)
+			if response == req { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+				response = nil
+			}
 			if response != nil {
 				entry.lastAccess.Store(log.NowUnixNano())
 
@@ -256,6 +259,9 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	clientIP := net.ParseIP(dnsutil.RemoteIP(w))
 
 	response := s.handler.ServeDNS(req, clientIP, false, config.ProtoUDP)
+	if response == req { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+		response = nil
+	}
 	if response != nil {
 		// Pre-packed responses (cache hits without EDNS modification) already
 		// carry Data and skip the pack.
