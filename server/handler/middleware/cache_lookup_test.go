@@ -22,8 +22,7 @@ func TestCacheLookup_HitRecordsCachedRcode(t *testing.T) {
 	defer func() { _ = store.Close() }()
 
 	// Store an NXDOMAIN (negative) entry: no answers, rcode=3.
-	store.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false,
-		nil, nil, nil, false, dns.RcodeNameError)
+	store.Set("example.com.", dns.TypeA, dns.ClassINET, nil, nil, nil, nil, false, dns.RcodeNameError)
 
 	// Fresh hit path: CacheLookup.Wrap builds the response from the entry.
 	m := &CacheLookup{store: store}
@@ -68,7 +67,7 @@ func TestCacheLookup_StaleRecordsCachedRcode(t *testing.T) {
 	// entry must be read at least 2 seconds later to be reliably expired —
 	// but still within the serve-stale window (DefaultStaleMaxAge).
 	short := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 1}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.1")}}
-	store.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false,
+	store.Set("example.com.", dns.TypeA, dns.ClassINET, nil,
 		[]dns.RR{short}, nil, nil, false, dns.RcodeNameError)
 	time.Sleep(2500 * time.Millisecond)
 

@@ -176,7 +176,7 @@ func (c *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 			rrKeys = append(rrKeys, k)
 		}
 	}
-	c.cache.Set(zone, dns.TypeDNSKEY, dns.ClassINET, nil, false, rrKeys, nil, nil, true, 0)
+	c.cache.Set(zone, dns.TypeDNSKEY, dns.ClassINET, nil, rrKeys, nil, nil, true, 0)
 }
 
 // ZoneKeys retrieves cached verified DNSKEYs for a zone.
@@ -186,7 +186,7 @@ func (c *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
 	}
 	zone = dnsutil.Canonical(zone)
 
-	cachedEntry, found, expired := c.cache.Get(zone, dns.TypeDNSKEY, dns.ClassINET, nil, false)
+	cachedEntry, found, expired := c.cache.Get(zone, dns.TypeDNSKEY, dns.ClassINET, nil)
 	if !found || cachedEntry == nil || expired {
 		return nil
 	}

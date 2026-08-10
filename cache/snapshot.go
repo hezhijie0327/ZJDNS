@@ -20,12 +20,18 @@ type snapshotItem struct {
 }
 
 // Snapshot entry format: [2B key_len][key][8B ts][4B ttl][1B validated][4B wire_len][wire]
-const snapshotVersion = 1
+//
+// Version 2: buildCacheKey dropped the client-DO segment (keys are
+// (qname, qtype, qclass, ecs) — see buildCacheKey).  Version-1 snapshots
+// carry the old DO-suffixed keys and would load as dead entries (every
+// lookup misses, memory wasted until TTL expiry) — bump so they are
+// rejected cleanly instead (snapfile.Load returns nil → cold start).
+const snapshotVersion = 2
 
 // Snapshot load guards: counts come from the file, so a corrupt or tampered
 // snapshot must not drive an unbounded allocation (M3).
 const (
-	maxSnapshotKeyLen  = 1024 // buildCacheKey output: qname (<=255) + type/class/ECS/prefix/dnssec
+	maxSnapshotKeyLen  = 1024 // buildCacheKey output: qname (<=255) + type/class/ECS/prefix
 	maxSnapshotWireLen = dns.MaxMsgSize
 )
 

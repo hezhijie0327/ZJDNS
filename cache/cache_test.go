@@ -27,9 +27,9 @@ func TestSet_Get_RoundTrip(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, 0)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
 
-	entry, found, expired := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	entry, found, expired := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil)
 	if !found {
 		t.Fatal("Get returned not found after Set")
 	}
@@ -49,7 +49,7 @@ func TestGet_Miss(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	_, found, _ := mc.Get("nonexistent.com.", dns.TypeA, dns.ClassINET, nil, false)
+	_, found, _ := mc.Get("nonexistent.com.", dns.TypeA, dns.ClassINET, nil)
 	if found {
 		t.Error("Get should return not found for missing key")
 	}
@@ -60,9 +60,9 @@ func TestSet_ValidatedFlag(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, true, 0)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, true, 0)
 
-	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil)
 	if !found {
 		t.Fatal("entry not found")
 	}
@@ -80,23 +80,23 @@ func TestSet_Get_ECSScoping(t *testing.T) {
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
 	ecs := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("192.0.2.0").AsSlice()}
 
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs, false, []dns.RR{rr}, nil, nil, false, 0)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs, []dns.RR{rr}, nil, nil, false, 0)
 
 	// Hit with same ECS
-	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs, false)
+	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs)
 	if !found {
 		t.Error("should find entry with matching ECS")
 	}
 
 	// Miss with different ECS
 	ecs2 := &config.ECSOption{Family: 1, SourcePrefix: 16, ScopePrefix: 0, Address: netParseIP("10.0.0.0").AsSlice()}
-	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs2, false)
+	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs2)
 	if found {
 		t.Error("should miss with different ECS")
 	}
 
 	// Miss without ECS
-	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil)
 	if found {
 		t.Error("should miss without ECS when stored with ECS")
 	}
@@ -111,17 +111,17 @@ func TestGet_ECSFallback(t *testing.T) {
 	// Store at /16
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("10.0.0.1")}}
 	ecs16 := &config.ECSOption{Family: 1, SourcePrefix: 16, ScopePrefix: 0, Address: netParseIP("1.2.0.0").AsSlice()}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs16, false, []dns.RR{rr}, nil, nil, false, 0)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs16, []dns.RR{rr}, nil, nil, false, 0)
 
 	// Exact match with /16
-	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs16, false)
+	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs16)
 	if !found {
 		t.Error("should hit with exact /16")
 	}
 
 	// Fallback from /24 to /16 within same range
 	ecs24 := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("1.2.3.0").AsSlice()}
-	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs24, false)
+	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs24)
 	if err := entry.Unpack(); err != nil {
 		t.Fatal(err)
 	}
@@ -136,14 +136,14 @@ func TestGet_ECSFallback(t *testing.T) {
 
 	// Another /24 in same /16 range should also hit
 	ecs24b := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("1.2.255.0").AsSlice()}
-	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs24b, false)
+	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs24b)
 	if !found {
 		t.Error("should fallback from different /24 to same /16")
 	}
 
 	// Completely different /16 should miss
 	ecsOther := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("10.0.0.0").AsSlice()}
-	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecsOther, false)
+	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecsOther)
 	if found {
 		t.Error("should miss with different IP range")
 	}
@@ -156,15 +156,15 @@ func TestGet_ECSFallback_ExactPreferred(t *testing.T) {
 	// Store broad answer at /16
 	rrBroad := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("10.0.0.1")}}
 	ecs16 := &config.ECSOption{Family: 1, SourcePrefix: 16, ScopePrefix: 0, Address: netParseIP("1.2.0.0").AsSlice()}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs16, false, []dns.RR{rrBroad}, nil, nil, false, 0)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs16, []dns.RR{rrBroad}, nil, nil, false, 0)
 
 	// Store specific answer at /24
 	rrSpecific := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("10.0.0.2")}}
 	ecs24 := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("1.2.3.0").AsSlice()}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs24, false, []dns.RR{rrSpecific}, nil, nil, false, 0)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, ecs24, []dns.RR{rrSpecific}, nil, nil, false, 0)
 
 	// Query with /24 should hit exact entry, not the /16 fallback
-	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs24, false)
+	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs24)
 	if err := entry.Unpack(); err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestGet_ECSFallback_ExactPreferred(t *testing.T) {
 
 	// Query with different /24 in same /16 should fallback to /16
 	ecs24b := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netParseIP("1.2.4.0").AsSlice()}
-	entry, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs24b, false)
+	entry, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, ecs24b)
 	if err := entry.Unpack(); err != nil {
 		t.Fatal(err)
 	}
@@ -196,24 +196,24 @@ func TestGet_ECSFallback_IPv6(t *testing.T) {
 	// Store at /48
 	rr := &dns.AAAA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, AAAA: rdata.AAAA{Addr: netParseIP("2001:db8::1")}}
 	ecs48 := &config.ECSOption{Family: 2, SourcePrefix: 48, ScopePrefix: 0, Address: netParseIP("2001:db8:1::").AsSlice()}
-	mc.Set("example.com.", dns.TypeAAAA, dns.ClassINET, ecs48, false, []dns.RR{rr}, nil, nil, false, 0)
+	mc.Set("example.com.", dns.TypeAAAA, dns.ClassINET, ecs48, []dns.RR{rr}, nil, nil, false, 0)
 
 	// Exact match with /48
-	_, found, _ := mc.Get("example.com.", dns.TypeAAAA, dns.ClassINET, ecs48, false)
+	_, found, _ := mc.Get("example.com.", dns.TypeAAAA, dns.ClassINET, ecs48)
 	if !found {
 		t.Error("should hit with exact /48")
 	}
 
 	// Fallback from /56 to /48
 	ecs56 := &config.ECSOption{Family: 2, SourcePrefix: 56, ScopePrefix: 0, Address: netParseIP("2001:db8:1:ff00::").AsSlice()}
-	_, found, _ = mc.Get("example.com.", dns.TypeAAAA, dns.ClassINET, ecs56, false)
+	_, found, _ = mc.Get("example.com.", dns.TypeAAAA, dns.ClassINET, ecs56)
 	if !found {
 		t.Error("should fallback from /56 to /48")
 	}
 
 	// Different /48 range should miss
 	ecsOther := &config.ECSOption{Family: 2, SourcePrefix: 56, ScopePrefix: 0, Address: netParseIP("2001:db8:2::").AsSlice()}
-	_, found, _ = mc.Get("example.com.", dns.TypeAAAA, dns.ClassINET, ecsOther, false)
+	_, found, _ = mc.Get("example.com.", dns.TypeAAAA, dns.ClassINET, ecsOther)
 	if found {
 		t.Error("should miss with different IPv6 range")
 	}
@@ -267,22 +267,26 @@ func TestECSFallbackCandidates(t *testing.T) {
 	}
 }
 
-func TestSet_Get_DNSSECScoping(t *testing.T) {
+// TestSet_Get_DNSSECKeyUnified verifies the cache key does not split on the
+// client's DO bit: outbound queries always carry DO=1, the stored wire always
+// holds the full DNSSEC data, and DO=0 filtering happens at serve time — so a
+// single entry serves both DO variants.
+func TestSet_Get_DNSSECKeyUnified(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
 
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, true, []dns.RR{rr}, nil, nil, false, 0)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
 
-	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, true)
+	_, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil)
 	if !found {
-		t.Error("should find DNSSEC-scoped entry")
+		t.Error("should find entry")
 	}
 
-	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
-	if found {
-		t.Error("should miss non-DNSSEC entry when stored with DNSSEC")
+	_, found, _ = mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil)
+	if !found {
+		t.Error("DO=0 lookup should hit the same entry (key does not split on DO)")
 	}
 }
 
@@ -387,9 +391,9 @@ func TestSet_ZeroTTLFloored(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 0}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, 0)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
 
-	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil)
 	if !found {
 		t.Fatal("entry not found")
 	}
@@ -405,9 +409,9 @@ func TestSet_Get_DNSKEY(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	dnskey := &dns.DNSKEY{Hdr: dns.Header{Name: "com.", Class: dns.ClassINET, TTL: 86400}}
-	mc.Set("com.", dns.TypeDNSKEY, dns.ClassINET, nil, false, []dns.RR{dnskey}, nil, nil, true, 0)
+	mc.Set("com.", dns.TypeDNSKEY, dns.ClassINET, nil, []dns.RR{dnskey}, nil, nil, true, 0)
 
-	entry, found, _ := mc.Get("com.", dns.TypeDNSKEY, dns.ClassINET, nil, false)
+	entry, found, _ := mc.Get("com.", dns.TypeDNSKEY, dns.ClassINET, nil)
 	if !found {
 		t.Fatal("DNSKEY entry not found")
 	}
@@ -421,9 +425,9 @@ func TestSet_Get_NSAddrTXT(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	txt := &dns.TXT{Hdr: dns.Header{Name: ".", Class: dns.ClassINET, TTL: 900}, TXT: rdata.TXT{Txt: []string{"198.41.0.4:53"}}}
-	mc.Set(".", dns.TypeNone, dns.ClassINET, nil, false, []dns.RR{txt}, nil, nil, false, 0)
+	mc.Set(".", dns.TypeNone, dns.ClassINET, nil, []dns.RR{txt}, nil, nil, false, 0)
 
-	entry, found, _ := mc.Get(".", dns.TypeNone, dns.ClassINET, nil, false)
+	entry, found, _ := mc.Get(".", dns.TypeNone, dns.ClassINET, nil)
 	if err := entry.Unpack(); err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +446,7 @@ func TestRecordRequest_Hit(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, 0)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
 
 	// Cache hit via UDP
 	mc.RecordRequest(&RequestRecord{
@@ -468,7 +472,7 @@ func TestRecordRequest_Stale(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, 0)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
 
 	// Stale serve via TCP
 	mc.RecordRequest(&RequestRecord{
@@ -491,7 +495,7 @@ func TestRecordRequest_MultipleResults(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, 0)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
 
 	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
 	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
@@ -535,7 +539,7 @@ func TestUpdateLatency(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("8.8.8.8")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, 0)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
 
 	mc.UpdateLatency("8.8.8.8", 42)
 
@@ -567,10 +571,10 @@ func TestSet_Get_MultipleRecords(t *testing.T) {
 		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.", Serial: 1, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600},
 	}
 
-	mc.Set("multi.example.com.", dns.TypeA, dns.ClassINET, nil, false,
+	mc.Set("multi.example.com.", dns.TypeA, dns.ClassINET, nil,
 		[]dns.RR{a1, a2}, []dns.RR{soa}, nil, true, 0)
 
-	entry, found, _ := mc.Get("multi.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	entry, found, _ := mc.Get("multi.example.com.", dns.TypeA, dns.ClassINET, nil)
 	if err := entry.Unpack(); err != nil {
 		t.Fatal(err)
 	}
@@ -595,9 +599,9 @@ func TestSet_RoundTrip(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "meta.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.1.1.1")}}
-	mc.Set("meta.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, true, 0)
+	mc.Set("meta.example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, true, 0)
 
-	entry, found, _ := mc.Get("meta.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	entry, found, _ := mc.Get("meta.example.com.", dns.TypeA, dns.ClassINET, nil)
 	if !found || entry == nil {
 		t.Fatal("entry not found after Set")
 	}
@@ -684,7 +688,7 @@ func TestStats(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "sum.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("4.5.6.7")}}
-	mc.Set("sum.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, 0)
+	mc.Set("sum.example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
 	mc.RecordRequest(&RequestRecord{Qname: "sum.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
 
 	s := mc.Stats()
@@ -709,11 +713,11 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	a1 := &dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("93.184.216.34")}}
 	a2 := &dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("93.184.216.35")}}
 	aaaa := &dns.AAAA{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, AAAA: rdata.AAAA{Addr: netip.MustParseAddr("2606:2800:220:1:248:1893:25c8:1946")}}
-	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false,
+	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil,
 		[]dns.RR{a1, a2}, nil, []dns.RR{aaaa}, true, 0)
 
 	a3 := &dns.A{Hdr: dns.Header{Name: "github.com.", Class: dns.ClassINET, TTL: 60}, A: rdata.A{Addr: netip.MustParseAddr("140.82.121.3")}}
-	mc.Set("github.com.", dns.TypeA, dns.ClassINET, nil, false,
+	mc.Set("github.com.", dns.TypeA, dns.ClassINET, nil,
 		[]dns.RR{a3}, nil, nil, false, 0)
 
 	soa := &dns.SOA{
@@ -721,10 +725,10 @@ func TestE2E_FullLifecycle(t *testing.T) {
 		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com.", Serial: 2025010101, Refresh: 1800, Retry: 900, Expire: 604800, Minttl: 600},
 	}
 	nsec := &dns.NSEC{Hdr: dns.Header{Name: "alpha.example.com.", Class: dns.ClassINET, TTL: 600}, NSEC: rdata.NSEC{NextDomain: "zulu.example.com."}}
-	mc.Set("beta.example.com.", dns.TypeA, dns.ClassINET, nil, false,
+	mc.Set("beta.example.com.", dns.TypeA, dns.ClassINET, nil,
 		nil, []dns.RR{soa, nsec}, nil, false, 0)
 
-	mc.Set("error.example.com.", dns.TypeA, dns.ClassINET, nil, false,
+	mc.Set("error.example.com.", dns.TypeA, dns.ClassINET, nil,
 		nil, nil, nil, false, 0)
 	mc.RecordRequest(&RequestRecord{
 		Qname: "error.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
@@ -733,11 +737,11 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	})
 
 	txt := &dns.TXT{Hdr: dns.Header{Name: ".", Class: dns.ClassINET, TTL: 3600}, TXT: rdata.TXT{Txt: []string{"198.41.0.4:53"}}}
-	mc.Set(".", dns.TypeNone, dns.ClassINET, nil, false,
+	mc.Set(".", dns.TypeNone, dns.ClassINET, nil,
 		[]dns.RR{txt}, nil, nil, false, 0)
 
 	// ── Phase 2: Get + verify wire-format round-trip ────────────────────────
-	entry, found, expired := mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	entry, found, expired := mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil)
 	if err := entry.Unpack(); err != nil {
 		t.Fatal(err)
 	}
@@ -767,7 +771,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	}
 
 	// ── Phase 3: Negative cache + NXDOMAIN ──────────────────────────────────
-	entry, found, _ = mc.Get("beta.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	entry, found, _ = mc.Get("beta.example.com.", dns.TypeA, dns.ClassINET, nil)
 	if err := entry.Unpack(); err != nil {
 		t.Fatal(err)
 	}
@@ -845,10 +849,10 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	// ── Phase 7: Entry overwrite (INSERT OR REPLACE) ────────────────────────
 	// Re-insert; the wire format should update atomically.
 	aNew := &dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 600}, A: rdata.A{Addr: netip.MustParseAddr("93.184.216.99")}}
-	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false,
+	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil,
 		[]dns.RR{aNew}, nil, nil, false, 0)
 
-	entry, found, _ = mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	entry, found, _ = mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil)
 	if err := entry.Unpack(); err != nil {
 		t.Fatal(err)
 	}
@@ -907,11 +911,11 @@ func TestE2E_LatencyOrdering(t *testing.T) {
 	a1 := &dns.A{Hdr: dns.Header{Name: "real.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("10.0.0.10")}}
 	a2 := &dns.A{Hdr: dns.Header{Name: "real.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("10.0.0.20")}}
 	a3 := &dns.A{Hdr: dns.Header{Name: "real.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("10.0.0.30")}}
-	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false,
+	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil,
 		[]dns.RR{cname, a1, a2, a3}, nil, nil, false, 0)
 
 	// Before latency data: Get() returns original order.
-	entry, found, _ := mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	entry, found, _ := mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil)
 	if err := entry.Unpack(); err != nil {
 		t.Fatal(err)
 	}
@@ -932,11 +936,11 @@ func TestE2E_LatencyOrdering(t *testing.T) {
 	mc.UpdateLatency("10.0.0.30", 5)
 
 	// Re-Set to trigger Set-time latency sort with the new data.
-	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false,
+	mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil,
 		[]dns.RR{cname, a1, a2, a3}, nil, nil, false, 0)
 
 	// After latency data: Get() should return A records sorted fastest-first.
-	entry, found, _ = mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	entry, found, _ = mc.Get("www.example.com.", dns.TypeA, dns.ClassINET, nil)
 	if err := entry.Unpack(); err != nil {
 		t.Fatal(err)
 	}
@@ -984,13 +988,13 @@ func TestE2E_CompressionEfficacy(t *testing.T) {
 				A:   rdata.A{Addr: netip.MustParseAddr(fmt.Sprintf("10.%d.%d.%d", i/256, i%256, j+1))},
 			})
 		}
-		mc.Set(name, dns.TypeA, dns.ClassINET, nil, false, answers, nil, nil, i%2 == 0, 0)
+		mc.Set(name, dns.TypeA, dns.ClassINET, nil, answers, nil, nil, i%2 == 0, 0)
 	}
 
 	// Verify all 50 entries round-trip correctly.
 	for i := range 50 {
 		name := fmt.Sprintf("host-%02d.example.com.", i)
-		entry, found, _ := mc.Get(name, dns.TypeA, dns.ClassINET, nil, false)
+		entry, found, _ := mc.Get(name, dns.TypeA, dns.ClassINET, nil)
 		if err := entry.Unpack(); err != nil {
 			t.Fatal(err)
 		}
@@ -1036,11 +1040,11 @@ func TestSetReplacesExistingKeyWithoutCounterInflation(t *testing.T) {
 
 	a1 := &dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("93.184.216.34")}}
 	for range 3 {
-		mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil, false,
-			[]dns.RR{a1}, nil, nil, true, 0)
+		mc.Set("www.example.com.", dns.TypeA, dns.ClassINET, nil,
+			[]dns.RR{a1}, nil, nil, false, 0)
 	}
-	mc.Set("other.example.com.", dns.TypeA, dns.ClassINET, nil, false,
-		[]dns.RR{a1}, nil, nil, true, 0)
+	mc.Set("other.example.com.", dns.TypeA, dns.ClassINET, nil,
+		[]dns.RR{a1}, nil, nil, false, 0)
 
 	// LRU map keeps exactly the two distinct keys — no counter drift possible.
 	if got := mc.entries.Len(); got != 2 {
@@ -1059,9 +1063,9 @@ func TestSet_Get_NXDOMAINRcode(t *testing.T) {
 		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 900},
 		SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com."},
 	}
-	mc.Set("nonexist.example.com.", dns.TypeA, dns.ClassINET, nil, false, nil, []dns.RR{soa}, nil, false, dns.RcodeNameError)
+	mc.Set("nonexist.example.com.", dns.TypeA, dns.ClassINET, nil, nil, []dns.RR{soa}, nil, false, dns.RcodeNameError)
 
-	entry, found, _ := mc.Get("nonexist.example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	entry, found, _ := mc.Get("nonexist.example.com.", dns.TypeA, dns.ClassINET, nil)
 	if !found {
 		t.Fatal("entry not found")
 	}
@@ -1078,9 +1082,9 @@ func TestSet_Get_NOERRORRcode(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, 0)
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
 
-	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil)
 	if !found {
 		t.Fatal("entry not found")
 	}
@@ -1097,10 +1101,10 @@ func TestGetTypes_AAndAAAA(t *testing.T) {
 
 	a := &dns.A{Hdr: dns.Header{Name: "ns1.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
 	aaaa := &dns.AAAA{Hdr: dns.Header{Name: "ns1.example.com.", Class: dns.ClassINET, TTL: 300}, AAAA: rdata.AAAA{Addr: netParseIP("2001:db8::1")}}
-	mc.Set("ns1.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{a}, nil, nil, false, 0)
-	mc.Set("ns1.example.com.", dns.TypeAAAA, dns.ClassINET, nil, false, []dns.RR{aaaa}, nil, nil, false, 0)
+	mc.Set("ns1.example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{a}, nil, nil, false, 0)
+	mc.Set("ns1.example.com.", dns.TypeAAAA, dns.ClassINET, nil, []dns.RR{aaaa}, nil, nil, false, 0)
 
-	entries, found, expired := mc.GetTypes("ns1.example.com.", dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA}, false)
+	entries, found, expired := mc.GetTypes("ns1.example.com.", dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA})
 	if !found[0] || !found[1] {
 		t.Fatalf("found = %v, want [true true]", found)
 	}
@@ -1128,9 +1132,9 @@ func TestGetTypes_Partial(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	a := &dns.A{Hdr: dns.Header{Name: "ns1.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netParseIP("192.0.2.1")}}
-	mc.Set("ns1.example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{a}, nil, nil, false, 0)
+	mc.Set("ns1.example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{a}, nil, nil, false, 0)
 
-	entries, found, _ := mc.GetTypes("ns1.example.com.", dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA}, false)
+	entries, found, _ := mc.GetTypes("ns1.example.com.", dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA})
 	if !found[0] || found[1] {
 		t.Fatalf("found = %v, want [true false] (AAAA not stored)", found)
 	}
@@ -1143,7 +1147,7 @@ func TestGetTypes_Miss(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	_, found, _ := mc.GetTypes("nonexistent.com.", dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA}, false)
+	_, found, _ := mc.GetTypes("nonexistent.com.", dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA})
 	if found[0] || found[1] {
 		t.Fatalf("found = %v, want [false false]", found)
 	}
@@ -1183,15 +1187,15 @@ func TestPoolReturnsToIdleAfterLoad(t *testing.T) {
 		wg.Go(func() {
 			for j := range 200 {
 				qname := fmt.Sprintf("host%d.example.com.", j%997)
-				s.Get(qname, dns.TypeA, dns.ClassINET, nil, false)
-				s.GetTypes(qname, dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA}, false)
+				s.Get(qname, dns.TypeA, dns.ClassINET, nil)
+				s.GetTypes(qname, dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA})
 				s.LatencyLastProbe("8.8.8.8")
 				s.UpdateLatency("8.8.8.8", 42)
 				rr := &dns.A{
 					Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 60},
 					A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
 				}
-				s.Set(qname, dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, false, 0)
+				s.Set(qname, dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
 				s.RecordRequest(&RequestRecord{
 					Qname: qname, Qtype: dns.TypeA, Qclass: dns.ClassINET,
 					Protocol: "udp", Result: "hit", Rcode: 0,

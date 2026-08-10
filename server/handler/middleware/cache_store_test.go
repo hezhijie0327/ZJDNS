@@ -85,7 +85,7 @@ func TestCacheStore_BogusEDENotCached(t *testing.T) {
 	m := &CacheStore{store: store}
 	m.buildSuccess(qctx)
 
-	if _, found, _ := store.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false); found {
+	if _, found, _ := store.Get("example.com.", dns.TypeA, dns.ClassINET, nil); found {
 		t.Fatal("bogus result must not be cached")
 	}
 }
@@ -112,7 +112,7 @@ func TestCacheStore_RRSIGsMissingCached(t *testing.T) {
 	m := &CacheStore{store: store}
 	m.buildSuccess(qctx)
 
-	entry, found, _ := store.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	entry, found, _ := store.Get("example.com.", dns.TypeA, dns.ClassINET, nil)
 	if !found || entry == nil {
 		t.Fatal("RRSIGs-missing result must stay cacheable")
 	}
@@ -140,7 +140,7 @@ func TestCacheStore_NoEDECached(t *testing.T) {
 	m := &CacheStore{store: store}
 	m.buildSuccess(qctx)
 
-	if _, found, _ := store.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false); !found {
+	if _, found, _ := store.Get("example.com.", dns.TypeA, dns.ClassINET, nil); !found {
 		t.Fatal("clean result must be cached")
 	}
 }
@@ -175,7 +175,7 @@ func TestCacheStore_ValidatedStickyBogusEDE(t *testing.T) {
 	m := &CacheStore{store: store}
 	m.buildSuccess(qctx)
 
-	if _, found, _ := store.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false); !found {
+	if _, found, _ := store.Get("example.com.", dns.TypeA, dns.ClassINET, nil); !found {
 		t.Fatal("validated response must be cached even with stale EDE")
 	}
 }
@@ -204,7 +204,7 @@ func TestCacheStore_UnvalidatedNoEDECached(t *testing.T) {
 	m := &CacheStore{store: store}
 	m.buildSuccess(qctx)
 
-	if _, found, _ := store.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false); !found {
+	if _, found, _ := store.Get("example.com.", dns.TypeA, dns.ClassINET, nil); !found {
 		t.Fatal("unvalidated response without EDE must be cached (insecure/unsigned)")
 	}
 }
@@ -245,7 +245,7 @@ func TestCacheStore_UnvalidatedBogusEDENotCached(t *testing.T) {
 			m := &CacheStore{store: store}
 			m.buildSuccess(qctx)
 
-			if _, found, _ := store.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false); found {
+			if _, found, _ := store.Get("example.com.", dns.TypeA, dns.ClassINET, nil); found {
 				t.Fatalf("unvalidated %s must NOT be cached", c.name)
 			}
 		})

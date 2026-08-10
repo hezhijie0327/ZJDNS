@@ -149,10 +149,11 @@ func scanTTLOffsets(wire []byte, questionEnd int) []uint16 {
 
 // WireHasDNSSEC reports whether a packed DNS message contains DNSSEC record
 // types (RRSIG/NSEC/NSEC3/DNSKEY/DS) in its answer, authority or additional
-// sections.  Used by the Response middleware fast path: a dnssec_ok=0 entry
-// stores whatever the DO=1 upstream returned, and a DO=0 client must not
-// receive those proofs — if the wire carries any, the response takes the
-// unpack+filter path instead of being served directly.
+// sections.  Used by the Response middleware fast path: entries store
+// whatever the DO=1 upstream returned (the key never splits on the client's
+// DO bit), and a DO=0 client must not receive those proofs — if the wire
+// carries any, the response takes the unpack+filter path instead of being
+// served directly.
 func WireHasDNSSEC(wire []byte) bool {
 	// buildEntry only guarantees len >= 3 — a corrupt/truncated wire must
 	// not index out of range (M-low).
@@ -218,8 +219,11 @@ func (s *Cache) EntryCount() int { return s.entries.Len() }
 func (s *Cache) LatencyCount() int { return s.latencies.Len() }
 
 // buildCacheKey is the exact cache key: the composite (qname, qtype, qclass,
-// ecs_addr, ecs_prefix, dnssec_ok) flattened to a string for the LRU map.
-func buildCacheKey(qname string, qtype, qclass uint16, ecsAddr string, ecsPrefix, dnssecInt int) string {
+// ecs_addr, ecs_prefix) flattened to a string for the LRU map.  The key
+// excludes the client's DO bit: outbound queries always carry DO=1
+// (RFC 6840 §5.9) and DO=0 filtering happens at serve time — a DO-split key
+// would store the identical raw wire twice per name.
+func buildCacheKey(qname string, qtype, qclass uint16, ecsAddr string, ecsPrefix int) string {
 	var b strings.Builder
 	b.WriteString(qname)
 	b.WriteByte(0)
@@ -230,17 +234,7 @@ func buildCacheKey(qname string, qtype, qclass uint16, ecsAddr string, ecsPrefix
 	b.WriteString(ecsAddr)
 	b.WriteByte(0)
 	b.WriteString(strconv.Itoa(ecsPrefix))
-	b.WriteByte(0)
-	b.WriteString(strconv.Itoa(dnssecInt))
 	return b.String()
-}
-
-// boolToInt converts a bool to 0/1 for cache-key encoding.
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 // ── Store interface ──────────────────────────────────────────────────────────
@@ -248,16 +242,14 @@ func boolToInt(b bool) int {
 // Get retrieves a cached DNS response by decompressing and unpacking the stored
 // wire format. Returns the entry, whether it was found, and whether it's expired.
 // The caller must pass a canonical qname (dnsutil.Canonical).
-func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool) {
-	dnssecInt := boolToInt(dnssecOK)
-
+func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption) (*Entry, bool, bool) {
 	// ECS fallback candidates from most to least specific — the first hit is
 	// the most specific match (the former SQL picked max(ecs_prefix) over the
 	// 5-candidate lookup).
 	candidates := ecsFallbackCandidates(ecs)
 	defer releaseECSCandidates(candidates)
 	for _, c := range candidates {
-		if ce, ok := s.entries.Get(buildCacheKey(qname, qtype, qclass, c.addr, c.prefix, dnssecInt)); ok {
+		if ce, ok := s.entries.Get(buildCacheKey(qname, qtype, qclass, c.addr, c.prefix)); ok {
 			return s.buildEntry(ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qtype)
 		}
 	}
@@ -268,10 +260,9 @@ func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 // GetTypes retrieves the entries for exactly two qtypes of one qname (NS
 // A/AAAA address lookups).  ECS is not supported — entries are matched on
 // the empty ECS candidate, and the caller must pass a canonical qname.
-func (s *Cache) GetTypes(qname string, qclass uint16, qtypes [2]uint16, dnssecOK bool) (entries [2]*Entry, found, expired [2]bool) {
-	dnssecInt := boolToInt(dnssecOK)
+func (s *Cache) GetTypes(qname string, qclass uint16, qtypes [2]uint16) (entries [2]*Entry, found, expired [2]bool) {
 	for i, qt := range qtypes {
-		if ce, ok := s.entries.Get(buildCacheKey(qname, qt, qclass, "", 0, dnssecInt)); ok {
+		if ce, ok := s.entries.Get(buildCacheKey(qname, qt, qclass, "", 0)); ok {
 			entries[i], found[i], expired[i] = s.buildEntry(ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qt)
 		}
 	}
@@ -468,7 +459,7 @@ func (s *Cache) lookupIPLatencies(ips []string) map[string]int {
 // Set stores a DNS response in the cache.  Wire format is zstd-compressed
 // above the threshold.  Prep work (TTL calculation, wire packing, zstd
 // compression) runs before the synchronous in-memory write.
-func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
+func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 	answer, authority, additional []dns.RR, validated bool, rcode uint16,
 ) int64 {
 	// ── Prep work ────────────────────────────────────────────────────────
@@ -481,7 +472,6 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 
 	ecsAddr, ecsPrefix := ecsParams(ecs)
 	qname = dnsutil.Canonical(qname)
-	dnssecInt := boolToInt(dnssecOK)
 
 	// Strip EDNS OPT pseudo-record from additional before caching
 	// (padding and other EDNS options have no semantic value and waste
@@ -496,11 +486,11 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 	authority = zdnsutil.CloneRRs(authority)
 
 	// NOTE: the stored wire keeps the RAW records (DNSSEC proofs included —
-	// upstream queries always carry DO=1 per RFC 6840 §5.9).  DNSSEC
-	// filtering for dnssec_ok=0 entries happens at SERVE time (WireHasDNSSEC
-	// gate + ProcessRecords in the Response middleware) so the zone-key cache
-	// (CacheZoneKeys, which stores verified DNSKEYs under dnssec_ok=0) keeps
-	// its raw content.
+	// upstream queries always carry DO=1 per RFC 6840 §5.9, and the cache key
+	// never splits on the client's DO bit — see buildCacheKey).  DNSSEC
+	// filtering for DO=0 clients happens at SERVE time (WireHasDNSSEC gate +
+	// ProcessRecords in the Response middleware) so the zone-key cache
+	// (CacheZoneKeys) keeps its raw content.
 
 	// Build a complete DNS response message and pack it so the
 	// cache-hit path can serve the wire directly (skipping Unpack+Pack).
@@ -575,7 +565,7 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, d
 
 	// ── Synchronous memory write ───────────────────────────────────────────
 	// Set is immediately visible to Get — no async layer needed.
-	s.entries.Set(buildCacheKey(qname, qtype, qclass, ecsAddr, ecsPrefix, dnssecInt),
+	s.entries.Set(buildCacheKey(qname, qtype, qclass, ecsAddr, ecsPrefix),
 		&cacheEntry{msgWire: msgWire, ts: now, ttl: entryTTL, validated: validated})
 	return 0
 }

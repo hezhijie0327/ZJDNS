@@ -30,19 +30,19 @@ type RequestRecord struct {
 // StoreReader is the read-only subset of Store.  Consumers that only need
 // cache lookups should depend on this interface rather than the full Store.
 type StoreReader interface {
-	Get(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool) (*Entry, bool, bool)
+	Get(qname string, qtype, qclass uint16, ecs *config.ECSOption) (*Entry, bool, bool)
 	// GetTypes retrieves the entries for exactly two qtypes of one qname in
 	// a single query, in qtypes order.  ECS is not supported (callers never
 	// carry it); entries are matched on the empty ECS candidate.  Returns
 	// parallel slices of entry / found / expired.
-	GetTypes(qname string, qclass uint16, qtypes [2]uint16, dnssecOK bool) (entries [2]*Entry, found, expired [2]bool)
+	GetTypes(qname string, qclass uint16, qtypes [2]uint16) (entries [2]*Entry, found, expired [2]bool)
 	LatencyLastProbe(ip string) (int64, bool)
 }
 
 // StoreWriter is the write subset of Store.  Consumers that only need to
 // populate cache entries or record metrics should depend on this interface.
 type StoreWriter interface {
-	Set(qname string, qtype, qclass uint16, ecs *config.ECSOption, dnssecOK bool,
+	Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 		answer, authority, additional []dns.RR, validated bool, rcode uint16) int64
 	RecordRequest(r *RequestRecord)
 	UpdateLatency(ip string, latencyMS int)

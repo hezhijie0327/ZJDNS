@@ -62,7 +62,7 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			// Skip expired entries: synthesizing from a stale A answer would
 			// serve it with the full stored TTL and no stale-answer EDE
 			// (M-cache).
-			if entry, found, isExpired := m.store.Get(qname, dns.TypeA, qclass, ecsOpt, dnssecOK); found && !isExpired {
+			if entry, found, isExpired := m.store.Get(qname, dns.TypeA, qclass, ecsOpt); found && !isExpired {
 				if entry.Unpack() == nil && len(entry.Answer) > 0 {
 					cache.ReleaseTTLOffsets(entry.TTLOffsets)
 					aqr = &resolver.QueryResult{

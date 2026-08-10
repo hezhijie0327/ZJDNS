@@ -42,9 +42,8 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		qtype := dns.RRToType(qd)
 		qclass := qd.Header().Class
 		ecsOpt := qctx.ECSOpt
-		dnssecOK := qctx.ClientRequestedDNSSEC
 
-		entry, found, isExpired := m.store.Get(qname, qtype, qclass, ecsOpt, dnssecOK)
+		entry, found, isExpired := m.store.Get(qname, qtype, qclass, ecsOpt)
 		if !found {
 			return next.ServeDNS(ctx, qctx)
 		}
@@ -227,7 +226,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(qctx *handler.QueryContext, qname 
 			// the serve-expired window — a fast refresh would otherwise leave
 			// the entry permanently stale (H11).
 			if qr.Cacheable && dnssecCacheable(qr.Validated, qr.DNSSECEDE) {
-				m.store.Set(qname, qtype, qclass, ecsOpt, false, // dnssecOK — refresh does not need DNSSEC
+				m.store.Set(qname, qtype, qclass, ecsOpt,
 					qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
 			}
 			rec := cache.AcquireRequestRecord()
@@ -284,7 +283,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(qctx *handler.QueryContext, qname 
 				select {
 				case <-done:
 					if qr != nil && qr.Err == nil && qr.Cacheable && dnssecCacheable(qr.Validated, qr.DNSSECEDE) {
-						m.store.Set(qname, qtype, qclass, ecsOpt, false, // dnssecOK — background refresh does not need DNSSEC
+						m.store.Set(qname, qtype, qclass, ecsOpt,
 							qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
 					}
 				case <-rc.Done():
@@ -327,7 +326,7 @@ func (m *CacheLookup) refreshCacheEntry(qname string, qtype, qclass uint16, ecsO
 		log.Debugf("CACHE: refresh skipped for %s (type=%d) — bogus validation result", qname, qtype)
 		return nil
 	}
-	m.store.Set(qname, qtype, qclass, ecsOpt, false, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
+	m.store.Set(qname, qtype, qclass, ecsOpt, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
 	log.Debugf("CACHE: refresh updated %s (type=%d, answer=%d)", qname, qtype, len(qr.Answer))
 	return nil
 }

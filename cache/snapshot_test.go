@@ -20,9 +20,9 @@ func TestSnapshotRoundTrip(t *testing.T) {
 
 	c1 := New(0, 0)
 	rr := testARec("192.0.2.1")
-	c1.Set("example.com.", dns.TypeA, dns.ClassINET, nil, false, []dns.RR{rr}, nil, nil, true, 0)
+	c1.Set("example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, true, 0)
 	ecs := &config.ECSOption{Family: 1, SourcePrefix: 24, ScopePrefix: 0, Address: netip.MustParseAddr("192.0.2.0").AsSlice()}
-	c1.Set("ecs.example.com.", dns.TypeA, dns.ClassINET, ecs, false, []dns.RR{rr}, nil, nil, false, 0)
+	c1.Set("ecs.example.com.", dns.TypeA, dns.ClassINET, ecs, []dns.RR{rr}, nil, nil, false, 0)
 	if err := c1.SaveSnapshot(path); err != nil {
 		t.Fatalf("SaveSnapshot: %v", err)
 	}
@@ -32,14 +32,14 @@ func TestSnapshotRoundTrip(t *testing.T) {
 		t.Fatalf("LoadSnapshot: %v", err)
 	}
 
-	entry, found, expired := c2.Get("example.com.", dns.TypeA, dns.ClassINET, nil, false)
+	entry, found, expired := c2.Get("example.com.", dns.TypeA, dns.ClassINET, nil)
 	if !found || expired || entry == nil {
 		t.Fatal("example.com entry not restored")
 	}
 	if !entry.Validated {
 		t.Error("validated flag not restored")
 	}
-	ecsEntry, found, _ := c2.Get("ecs.example.com.", dns.TypeA, dns.ClassINET, ecs, false)
+	ecsEntry, found, _ := c2.Get("ecs.example.com.", dns.TypeA, dns.ClassINET, ecs)
 	if !found || ecsEntry == nil {
 		t.Error("ECS-scoped entry not restored")
 	}

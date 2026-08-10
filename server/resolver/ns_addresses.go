@@ -73,7 +73,7 @@ func cacheRootHint(s cache.Store, name string, addrs []string) {
 		}
 	}
 	for qtype, records := range typeGroups {
-		s.Set(name, qtype, dns.ClassINET, nil, false, records, nil, nil, false, 0)
+		s.Set(name, qtype, dns.ClassINET, nil, records, nil, nil, false, 0)
 	}
 }
 
@@ -235,7 +235,7 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) [
 
 	// One query fetches both the A and AAAA entries (NS address lookups
 	// never carry ECS).
-	entries, found, expired := r.cache.GetTypes(nsName, dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA}, false)
+	entries, found, expired := r.cache.GetTypes(nsName, dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA})
 	// GetTypes hands out pool-owned TTL-offset slices — return them exactly
 	// once on every exit path (M1; the recursive hot path would otherwise
 	// permanently drain the ttloOffsetsPool).

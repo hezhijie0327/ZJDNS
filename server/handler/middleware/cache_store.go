@@ -143,7 +143,7 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 		}
 
 		log.Debugf("CACHE: populating cache for %s", qname)
-		m.store.Set(qname, qtype, qclass, ecsOpt, dnssecOK, qr.Answer, qr.Authority, qr.Additional, validated, qr.Rcode)
+		m.store.Set(qname, qtype, qclass, ecsOpt, qr.Answer, qr.Authority, qr.Additional, validated, qr.Rcode)
 	}
 
 	// Request log.
@@ -191,11 +191,10 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 	qtype := qctx.Qtype
 	qclass := qctx.Req.Question[0].Header().Class
 	ecsOpt := qctx.ECSOpt
-	dnssecOK := qctx.ClientRequestedDNSSEC
 	queryErr := qr.Err
 
 	// Try cache fallback — fresh or stale.
-	if entry, found, isExpired := m.store.Get(qname, qtype, qclass, ecsOpt, dnssecOK); found {
+	if entry, found, isExpired := m.store.Get(qname, qtype, qclass, ecsOpt); found {
 		if !isExpired || entry.CanServeExpired(config.DefaultStaleMaxAge) {
 			log.Debugf("CACHE: serving cached result for %s, ttl_remaining=%d", qname, entry.RemainingTTL())
 			rec := cache.AcquireRequestRecord()
