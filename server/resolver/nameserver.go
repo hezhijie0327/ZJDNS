@@ -109,13 +109,15 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			// some deployments).  Retry once without the option whenever the
 			// query did not succeed (NOERROR or NXDOMAIN); the merge benefit
 			// is lost but resolution must not fail because of it.
-			// Fallback only for genuinely failed queries on a live context:
-			// "operation was canceled" is a normal first-success race and a
-			// 3s timeout exhausts queryCtx — retrying either just blocks
-			// g.Wait for another budget.  Fast failures (REFUSED, socket
-			// closed) leave the ctx alive; those are worth one retry
-			// without the option.
-			if hasMQQUERY(msg.Pseudo) && queryCtx.Err() == nil &&
+			// Fallback for genuinely failed queries: "operation was
+			// canceled" is a normal first-success race (skip — the walk
+			// already has a winner), but timeouts and fast failures
+			// (REFUSED, socket closed) are real — an authority that drops
+			// MQTYPE-Query queries answers the optionless retry.  The retry
+			// uses an independent context so an exhausted queryCtx does not
+			// block it.
+			if hasMQQUERY(msg.Pseudo) &&
+				!errors.Is(result.Error, context.Canceled) &&
 				(result.Error != nil || (result.Response != nil &&
 					result.Response.Rcode != dns.RcodeSuccess && result.Response.Rcode != dns.RcodeNameError)) {
 				if result.Response != nil {
