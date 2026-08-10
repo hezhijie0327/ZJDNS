@@ -55,6 +55,7 @@ func addChaosRecord(cfg *ServerConfig) {
 	for _, name := range []string{
 		DefaultProjectName + ".whoami",
 		DefaultProjectName + ".stats",
+		DefaultProjectName + ".stats.rcode",
 		DefaultProjectName + ".stats.clear",
 		DefaultProjectName + ".cache.clear",
 		DefaultProjectName + ".ptr.clear",
