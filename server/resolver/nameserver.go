@@ -41,7 +41,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		return nil, defense.VerdictClean, errors.New("no nameservers")
 	}
 
-	deadlineCtx, deadlineCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
+	deadlineCtx, deadlineCancel := context.WithTimeout(ctx, config.DefaultRecursiveQueryTimeout)
 	defer deadlineCancel()
 	queryCtx, cancel := context.WithCancel(deadlineCtx)
 	defer cancel()
@@ -109,17 +109,21 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			// some deployments).  Retry once without the option whenever the
 			// query did not succeed (NOERROR or NXDOMAIN); the merge benefit
 			// is lost but resolution must not fail because of it.
-			if hasMQQUERY(msg.Pseudo) &&
+			// Fallback only for genuinely failed queries on a live context:
+			// "operation was canceled" is a normal first-success race and a
+			// 3s timeout exhausts queryCtx — retrying either just blocks
+			// g.Wait for another budget.  Fast failures (REFUSED, socket
+			// closed) leave the ctx alive; those are worth one retry
+			// without the option.
+			if hasMQQUERY(msg.Pseudo) && queryCtx.Err() == nil &&
 				(result.Error != nil || (result.Response != nil &&
 					result.Response.Rcode != dns.RcodeSuccess && result.Response.Rcode != dns.RcodeNameError)) {
 				if result.Response != nil {
 					pool.DefaultMessage.Put(result.Response)
 				}
 				msg.Pseudo = removeMQQUERY(msg.Pseudo)
-				// Independent retry context: queryCtx and the parent deadline
-				// may both be exhausted by the failed first attempt (a 9s
-				// timeout leaves nothing for the retry) — a fresh 5s budget
-				// guarantees the fallback always runs.
+				// Independent retry context: a fresh budget guarantees the
+				// fallback runs even if the first attempt consumed queryCtx.
 				retryCtx, retryCancel := context.WithTimeout(context.Background(), config.DefaultMQTypeResolveTimeout)
 				result = r.resolver.queryClient.ExecuteQuery(retryCtx, msg, server)
 				retryCancel()
@@ -316,7 +320,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 	// delegation order. Latency-probed order is restored on
 	// subsequent queries via the cache.
 
-	resolveCtx, resolveCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
+	resolveCtx, resolveCancel := context.WithTimeout(ctx, config.DefaultRecursiveQueryTimeout)
 	defer resolveCancel()
 
 	g, queryCtx := errgroup.WithContext(resolveCtx)
@@ -324,6 +328,13 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 
 	var allMu sync.Mutex
 	var allAddresses []string
+	// nsNamesDone counts NS names that contributed addresses.  The fan-out
+	// cancels as soon as ≥2 NS names have addresses: the walk only needs
+	// reachable servers, and waiting for every NS name lets the slowest
+	// resolution dictate the latency (a 9s authority timeout stalls the
+	// whole walk).  Cancellation is safe — other goroutines check
+	// queryCtx.Done() and exit early.
+	var nsNamesDone int
 
 	// Accumulate resolved A/AAAA records per NS name so they can be
 	// latency-probed and re-cached asynchronously — matching the glue
@@ -353,7 +364,12 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			if len(cachedAddrs) > 0 {
 				allMu.Lock()
 				allAddresses = append(allAddresses, cachedAddrs...)
+				nsNamesDone++
+				enough := nsNamesDone >= 2
 				allMu.Unlock()
+				if enough {
+					resolveCancel()
+				}
 				return nil
 			}
 
@@ -434,7 +450,12 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 
 			allMu.Lock()
 			allAddresses = append(allAddresses, nsAddrs...)
+			nsNamesDone++
+			enough := nsNamesDone >= 2
 			allMu.Unlock()
+			if enough {
+				resolveCancel()
+			}
 			return nil
 		})
 	}

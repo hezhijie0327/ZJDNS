@@ -75,6 +75,13 @@ const (
 	// (RFC 8767 defines no query timeout).
 	DefaultDNSQueryTimeout = 9 * time.Second
 
+	// DefaultRecursiveQueryTimeout bounds each authority query in the
+	// recursive walk.  Authorities answer in well under a second; 9s (the
+	// forwarding timeout) made a failing authority stall the whole walk —
+	// the fan-out cancels on the first success, but when every NS fails the
+	// walk waited out the full timeout.  3s fails fast and moves on.
+	DefaultRecursiveQueryTimeout = 3 * time.Second
+
 	// DefaultPoisonProbeTimeout bounds the TLD hijack probe query.
 	// The probe detects GFW-injected A/AAAA records at the delegation
 	// level before the authoritative query.  A short timeout avoids
@@ -239,9 +246,12 @@ const (
 	DefaultMQTypeMaxQTx = 4
 
 	// DefaultMQTypeResolveTimeout bounds each QTx resolution during a
-	// server-side MQTYPE merge — a malicious client could otherwise use the
-	// option to amplify the resolver's outbound work (RFC 10029 §4).
-	DefaultMQTypeResolveTimeout = 5 * time.Second
+	// server-side MQTYPE merge, and the walk's MQTYPE-Query fallback retry —
+	// a malicious client could otherwise use the option to amplify the
+	// resolver's outbound work (RFC 10029 §4).  Matches the recursive walk's
+	// authority query budget (DefaultRecursiveQueryTimeout) so the combined
+	// first-attempt + fallback worst case is 6s, not 8s.
+	DefaultMQTypeResolveTimeout = 3 * time.Second
 
 	DefaultQnameMinimiseCount = 10 // RFC 9156 §2.3: max QNAME minimisation iterations
 	DefaultMinimiseOneLabel   = 4  // RFC 9156 §2.3: labels added one-at-a-time before proportional division

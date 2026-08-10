@@ -9,6 +9,7 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
 	"zjdns/internal/pending"
@@ -323,16 +324,31 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		// explicitly query the current (parent) zone's nameservers for
 		// its DNSKEY RRset before we can cryptographically verify the
 		// child's DS RRSIGs.
-		r.updateDNSSECChain(ctx, response, currentDomain, bestMatch, nameservers, chain)
-
+		//
 		// Save parent zone before updating — glue name validation uses
 		// the parent zone (the zone that published the delegation),
 		// not the delegated-to zone.
 		parentDomain := currentDomain
 		currentDomain = bestMatch
 
-		// Resolve NS addresses for the next delegation level.
-		nsResult := r.resolveNextNameservers(ctx, bestNSRecords, response, qname, parentDomain, depth, forceTCP)
+		// DNSSEC chain update and the next-level NS address resolution
+		// are independent queries against the same (parent) servers —
+		// run them concurrently instead of serially (DNSKEY fetch and
+		// NS-name resolution each do their own walk).
+		var nsResult resolvedNSAddrs
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer zdnsutil.HandlePanic("DNSSEC chain update")
+			defer wg.Done()
+			r.updateDNSSECChain(ctx, response, parentDomain, bestMatch, nameservers, chain)
+		}()
+		go func() {
+			defer zdnsutil.HandlePanic("Resolve NS addresses")
+			defer wg.Done()
+			nsResult = r.resolveNextNameservers(ctx, bestNSRecords, response, qname, parentDomain, depth, forceTCP)
+		}()
+		wg.Wait()
 
 		if len(nsResult.addrs) > 0 {
 			log.Debugf("RECURSION: zone=%s, %d NS names -> %d addresses (source=%s): %v",
