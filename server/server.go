@@ -207,11 +207,9 @@ func SetRootFilesDir(dir string) {
 }
 
 // isRecursiveMode reports whether any upstream server uses the built-in
-// recursive resolver, or whether no servers are configured (pure recursive mode).
+// recursive resolver.  Recursion is explicit-only: an empty upstream list
+// does not imply recursion (queries then resolve to SERVFAIL).
 func isRecursiveMode(cfg *config.ServerConfig) bool {
-	if len(cfg.Upstream) == 0 {
-		return true
-	}
 	for i := range cfg.Upstream {
 		if cfg.Upstream[i].IsRecursive() {
 			return true
@@ -523,7 +521,9 @@ func (s *Server) displayInfo() {
 	up := s.handler.UpstreamServers()
 
 	if len(up) == 0 {
-		log.Infof("RECURSION: Recursive mode")
+		// Recursion is explicit-only — an empty upstream list resolves to
+		// SERVFAIL, not implicit recursion.
+		log.Warnf("SERVER: no upstream servers configured")
 		return
 	}
 

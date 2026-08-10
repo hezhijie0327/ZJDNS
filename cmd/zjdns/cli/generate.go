@@ -24,7 +24,17 @@ func generateExampleConfig() (string, error) {
 	cfg.Server.Pprof = config.DefaultPprofPort
 	cfg.Server.LogLevel = log.DefaultLevel
 
+	// The example advertises every protocol — the default config no longer
+	// pre-sets secure ports (explicit-only), so set them all here.
+	cfg.Server.Protocol.TLS = config.DefaultTLSPort
+	cfg.Server.Protocol.QUIC = config.DefaultQUICPort
+	cfg.Server.Protocol.HTTPS = config.HTTPSEndpoint{Port: config.DefaultHTTPSPort, Endpoint: config.DefaultQueryPath}
+	cfg.Server.Protocol.HTTP3 = config.HTTPSEndpoint{Port: config.DefaultHTTP3Port, Endpoint: config.DefaultQueryPath}
+	cfg.Server.Protocol.DTLS = config.DefaultDTLSPort
 	cfg.Server.Protocol.DNSCrypt = config.DefaultDNSCryptPort
+	cfg.Server.Protocol.TLCP = config.DefaultTLCPPort
+	cfg.Server.Protocol.HTTPTLCP = config.HTTPSEndpoint{Port: config.DefaultHTTPTLCPPort, Endpoint: config.DefaultQueryPath}
+	cfg.Server.Protocol.DTLCP = config.DefaultDTLCPPort
 
 	cfg.Server.Certificate.Domain = "dns.example.com"
 	cfg.Server.Certificate.TLS = config.TLSCertificate{
@@ -56,6 +66,8 @@ func generateExampleConfig() (string, error) {
 			StateFile: "./zjdns.delegation",
 		},
 	}
+	cfg.Server.Features.DDR = config.DDRSettings{IPv4: "127.0.0.1", IPv6: "::1"}
+	cfg.Server.Features.DNSSECEnforce = true
 	cfg.Server.Features.ECS = config.ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.LatencyProbe = []config.LatencyProbeStep{
 		{Protocol: config.ProtoPing, Timeout: int(config.DefaultLatencyProbeTimeout.Milliseconds())},

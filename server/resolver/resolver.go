@@ -253,19 +253,12 @@ func (r *Resolver) UpstreamServers() []*config.UpstreamServer {
 	return r.upstream.list()
 }
 
-// Query resolves a DNS question by querying upstream servers, or falling back to
-// built-in recursive resolution if no upstream servers are configured.
+// Query resolves a DNS question by querying upstream servers.  Recursive
+// resolution is never implicit: it only runs when a `protocol: recursive`
+// upstream is explicitly configured — an empty upstream list resolves to
+// "no upstream servers" (SERVFAIL), not built-in recursion.
 func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOption) *QueryResult {
 	servers := r.upstream.list()
-
-	// No servers configured — use built-in recursive resolver.
-	if len(servers) == 0 {
-		resolveCtx, cancel := context.WithTimeout(ctx, config.DefaultRecursiveResolveTimeout)
-		defer cancel()
-		qr := r.cname.resolve(resolveCtx, question, ecs)
-		return &qr
-	}
-
 	qr := r.queryUpstream(ctx, question, ecs, servers)
 	return &qr
 }

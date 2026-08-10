@@ -67,20 +67,11 @@ func NewDefaultServerConfig() *ServerConfig {
 
 	cfg.Server.Protocol.UDP = DefaultUDPPort
 	cfg.Server.Protocol.TCP = DefaultTCPPort
-	cfg.Server.Protocol.TLS = DefaultTLSPort
-	cfg.Server.Protocol.QUIC = DefaultQUICPort
-	cfg.Server.Protocol.HTTPS = HTTPSEndpoint{Port: DefaultHTTPSPort, Endpoint: DefaultQueryPath}
-	cfg.Server.Protocol.HTTP3 = HTTPSEndpoint{Port: DefaultHTTP3Port, Endpoint: DefaultQueryPath}
-	cfg.Server.Protocol.DTLS = DefaultDTLSPort
-	cfg.Server.Protocol.DNSCrypt = DefaultDNSCryptPort
-	cfg.Server.Protocol.TLCP = DefaultTLCPPort
-	cfg.Server.Protocol.HTTPTLCP = HTTPSEndpoint{Port: DefaultHTTPTLCPPort, Endpoint: DefaultQueryPath}
-	cfg.Server.Protocol.DTLCP = DefaultDTLCPPort
 
-	cfg.Server.Certificate.Domain = "dns.example.com"
-	cfg.Server.Features.DDR = DDRSettings{IPv4: "127.0.0.1", IPv6: "::1"}
 	cfg.Server.Features.ECS = ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.DNSSECEnforce = true
+
+	cfg.Upstream = []UpstreamServer{{Protocol: ProtoRecursive}}
 
 	return cfg
 }

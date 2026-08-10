@@ -22,7 +22,7 @@
 # 构建
 go build -o zjdns ./cmd/zjdns
 
-# 纯递归模式
+# 默认配置 = 递归解析器（UDP/TCP 监听）
 ./zjdns
 
 # 指定配置文件

@@ -126,3 +126,18 @@ func TestFindChainStep_WrongType(t *testing.T) {
 		t.Fatalf("AAAA records must not count for an A query: next=%v hasTarget=%t", next, hasTarget)
 	}
 }
+
+// TestQuery_EmptyUpstream_NoImplicitRecursion verifies the deterministic
+// routing rule: recursive resolution is explicit-only (protocol: recursive
+// upstream).  An empty upstream list resolves to "no upstream servers"
+// (SERVFAIL at the middleware layer), never implicit recursion.
+func TestQuery_EmptyUpstream_NoImplicitRecursion(t *testing.T) {
+	r := &Resolver{upstream: &upstreamSet{}}
+	qr := r.Query(t.Context(), Question{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil)
+	if qr == nil || qr.Err == nil {
+		t.Fatalf("empty upstream must error, got %+v", qr)
+	}
+	if !strings.Contains(qr.Err.Error(), "no upstream servers") {
+		t.Errorf("error = %v, want 'no upstream servers'", qr.Err)
+	}
+}

@@ -279,7 +279,9 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 ### Query Routing (`server/resolver`)
 - Upstream servers queried concurrently via `errgroup`; first NOERROR wins
 - NXDOMAIN stored as secondary fallback within each query group
-- No servers configured → built-in recursive (root→TLD→authoritative)
+- Recursion is explicit-only: `protocol: "recursive"` in upstream — an empty
+  upstream list resolves to SERVFAIL ("no upstream servers"), never implicit
+  recursion
 - CNAME chain exceeded → return partial chain + warn (no SERVFAIL); FORMERR from auth → EDNS-free retry (RFC 6891 §6.2.2)
 
 ### Recursive Resolution
