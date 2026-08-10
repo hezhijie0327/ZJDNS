@@ -34,16 +34,6 @@ FROM scratch
 
 COPY --from=rebase_zjdns / /
 
-# madvdontneed=1: MADV_DONTNEED instead of MADV_FREE, so GC-released pages are
-# returned to the OS immediately and RSS tracks the live heap instead of
-# lingering at the burst peak. Silent — no log output.
-# gctrace/scavtrace are intentionally NOT enabled by default: they emit one
-# line per GC cycle to stderr and flood container logs under load. Add them to
-# GODEBUG temporarily (e.g. "madvdontneed=1,gctrace=1,scavtrace=1") for a
-# debugging session, then remove.
-ENV \
-    GODEBUG="madvdontneed=1"
-
 EXPOSE 53/tcp 53/udp 443/tcp 443/udp 853/tcp 853/udp 8443/tcp 8443/udp 8853/udp 9853/tcp 9853/udp 9443/tcp 6060/tcp
 
 ENTRYPOINT ["/zjdns"]

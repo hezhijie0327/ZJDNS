@@ -8,8 +8,8 @@ require (
 	github.com/cloudflare/circl v1.6.6-0.20260806151822-33d33c75d9a0
 	github.com/emmansun/gmsm v0.44.1
 	github.com/klauspost/compress v1.19.3-0.20260807134503-07f8bcdd5278
-	github.com/pion/dtls/v3 v3.1.3-0.20260808225941-de94497853a1
-	github.com/quic-go/quic-go v0.61.1-0.20260803043222-2cfe6ee0b5ac
+	github.com/pion/dtls/v3 v3.1.3-0.20260809113520-d26388d44aee
+	github.com/quic-go/quic-go v0.61.1-0.20260810070610-c03564aff5aa
 	gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f
 	gitlab.com/go-extension/tls v0.0.0-20260715144009-d75c84d8b9d2
 	golang.org/x/crypto v0.54.0
