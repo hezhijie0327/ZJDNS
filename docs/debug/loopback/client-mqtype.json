@@ -1,0 +1,9 @@
+{
+  "server": {
+    "log_level": "debug",
+    "protocol": { "udp": "10453", "tcp": "10453" }
+  },
+  "upstream": [
+    { "address": "127.0.0.1:10533", "protocol": "udp", "mqtype": [1, 28] }
+  ]
+}

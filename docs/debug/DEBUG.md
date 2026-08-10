@@ -10,6 +10,7 @@ docs/debug/
 ├── loopback/               # ZJDNS ↔ ZJDNS protocol loopback tests
 │   ├── server.json         # server: all protocols + self-signed TLS + DNSCrypt + TLCP/DTLCP
 │   ├── server-dnssec.json  # server: dnssec_enforce=true, recursive mode
+│   ├── recursive-mqtype.json          # server: recursive mode + mqtype [1,28] (RFC 10029 merge)
 │   ├── client-udp.json     # client: UDP → server
 │   ├── client-tcp.json     # client: TCP → server
 │   ├── client-tls.json     # client: TLS → server
@@ -20,6 +21,7 @@ docs/debug/
 │   ├── client-tlcp.json    # client: TLCP → server
 │   ├── client-http-tlcp.json           # client: HTTP over TLCP → server
 │   ├── client-dtlcp.json   # client: DTLCP → server
+│   ├── client-mqtype.json  # client: UDP + mqtype [1,28] → server (RFC 10029 bundle)
 │   ├── client-dnscrypt.json            # client: DNSCrypt (PQ preferred) → server
 │   ├── client-dnscrypt-classic.json    # client: DNSCrypt (classical only) → server
 │   ├── client-dnscrypt-ephemeral.json  # client: DNSCrypt + ephemeral_keys + PQ → server
@@ -128,6 +130,8 @@ sleep 3
 
 All forwarding clients accept queries on both **UDP and TCP** (same port).
 The "Protocol" column is the upstream forwarding protocol.
+`recursive-mqtype.json` is a standalone recursive instance (not a forwarding
+client) — point `client-mqtype.json` at it via `sed 's/10533/13733/'`.
 
 | Client Config | Client Port | Upstream | Server Port |
 | `client-udp.json` | 10553 | UDP | 10533 |
@@ -140,10 +144,12 @@ The "Protocol" column is the upstream forwarding protocol.
 | `client-tlcp.json` | 14553 | TLCP | 10850 |
 | `client-http-tlcp.json` | 13553 | TLCP DoH | 10440 |
 | `client-dtlcp.json` | 14653 | DTLCP | 8542 |
+| `client-mqtype.json` | 10453 | UDP + mqtype [1,28] | 10533 |
 | `client-dnscrypt.json` | 12444 | DNSCrypt (PQ) | 12443 |
 | `client-dnscrypt-classic.json` | 12445 | DNSCrypt (classical) | 12443 |
 | `client-dnscrypt-ephemeral.json` | 12446 | DNSCrypt + ephemeral_keys + PQ | 12443 |
 | `client-dnscrypt-ephemeral-classical.json` | 22544 | DNSCrypt + ephemeral_keys (classical only) | 12443 |
+| `recursive-mqtype.json` | 13733 | recursive + mqtype [1,28] | — (self) |
 
 > [!NOTE]
 > Forwarding client configs set `tcp` to the same port as `udp`. Without it,
@@ -168,6 +174,54 @@ dig @127.0.0.1 -p 10753 www.baidu.com A +short          # UDP (default)
 dig @127.0.0.1 -p 10753 www.baidu.com A +short +tcp     # TCP
 pkill -f "client-tls"
 ```
+
+### MQTYPE Tests (RFC 10029)
+
+ZJDNS ↔ ZJDNS 的 MQTYPE 两条路径：forward + recursive（均本地合并）。
+
+**场景 A — forward 本地合并（client-mqtype → server）**：
+
+server 是 forward 模式（到 223.5.5.5）。client 配置 `mqtype: [1, 28]`，
+A 查询自动附加 MQQUERY{AAAA} 转发给 server；server 收到客户端 MQQUERY 后
+**本地合并**（forward 模式也走 middleware/mqtype.go，逐 QTx 经自己的上游独立解析）。
+真上游不支持 MQTYPE → QTx 走独立普通查询 → 合并成功 → MQTYPE-Response 回显 →
+client warm + 剥离（客户端只见 A），AAAA 二次查询命中缓存。
+
+```bash
+/tmp/zjdns -config docs/debug/loopback/client-mqtype.json &
+sleep 2
+dig +tcp @127.0.0.1 -p 10453 www.cloudflare.com A +short   # 正常 A 回答
+dig +tcp @127.0.0.1 -p 10453 www.cloudflare.com AAAA +short  # 独立解析
+pkill -f "client-mqtype"
+```
+
+**场景 B — recursive 本地合并（client-mqtype → recursive-mqtype）**：
+
+recursive-mqtype 是 recursive 模式，收到客户端 MQQUERY 后在本地合并
+（middleware/mqtype.go：逐 QTx 解析 + 合并 + MQTYPE-Response 回显）。
+client 收到合并响应 → warm cache + 剥离捆绑类型 → 客户端只见主类型。
+
+```bash
+/tmp/zjdns -config docs/debug/loopback/recursive-mqtype.json &
+sleep 2
+# client → recursive-mqtype（10453 → 13733）
+sed 's/10533/13733/' docs/debug/loopback/client-mqtype.json > /tmp/client-mqtype-rec.json
+/tmp/zjdns -config /tmp/client-mqtype-rec.json &
+sleep 2
+dig +tcp @127.0.0.1 -p 10453 www.cloudflare.com A +short     # 只见 A（AAAA 已剥离）
+dig +tcp @127.0.0.1 -p 10453 www.cloudflare.com AAAA +short  # warm cache 命中（0ms）
+pkill -f "client-mqtype"; pkill -f "recursive-mqtype"
+```
+
+**直连合并验证**（dig 带 MQQUERY，option 20 数据 = uint16 列表，AAAA=28 → `001c`）：
+
+```bash
+dig +tcp +ednsopt=20:001c @127.0.0.1 -p 13733 www.cloudflare.com A +short
+# → A + AAAA 合并返回；FORMERR 校验：+ednsopt=20:001c001c（重复）→ FORMERR
+```
+
+> client-mqtype.json 端口 10453；recursive-mqtype.json 端口 13733
+> （server.json 的 10533 与 server-dnssec.json 的 12733 均不冲突）。
 
 ### Connection Pool Tests (连接复用验证)
 

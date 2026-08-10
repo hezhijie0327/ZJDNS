@@ -32,29 +32,6 @@ type Handler struct {
 	CookieGenerator  *CookieGenerator
 }
 
-// RFC 6975 algorithm lists advertised on upstream queries.  Static slices —
-// the validator's algorithm support is fixed at build time.
-var (
-	// dauAlgorithms: DNSSEC signing algorithms the resolver can validate
-	// (RSASHA256=8, RSASHA512=10, ECDSAP256SHA256=13, ECDSAP384SHA384=14,
-	// ED25519=15).  RFC 6975 §4: only algorithms the validator can actually
-	// verify may be advertised — ED448 (16) is deliberately absent, the
-	// verifier has no ED448 support.
-	dauAlgorithms = []uint8{8, 10, 13, 14, 15}
-	// dhuAlgorithms: DS digest types the resolver can validate (SHA-1=1,
-	// SHA-256=2, SHA-384=4).
-	dhuAlgorithms = []uint8{1, 2, 4}
-	// n3uAlgorithms: NSEC3 hash algorithms understood (SHA-1=1 — the only
-	// one defined by RFC 5155).
-	n3uAlgorithms = []uint8{1}
-	// staticDAU, staticDHU, staticN3U are pre-built RFC 6975 algorithm-
-	// signalling options shared across all outgoing queries to avoid
-	// per-request allocations — the algorithm lists are fixed at build time.
-	staticDAU = &dns.DAU{AlgCode: dauAlgorithms}
-	staticDHU = &dns.DHU{AlgCode: dhuAlgorithms}
-	staticN3U = &dns.N3U{AlgCode: n3uAlgorithms}
-)
-
 // NewHandler creates a Handler with the given default ECS configuration.
 func NewHandler(defaultECS config.ECSConfig) (*Handler, error) {
 	cg, err := NewCookieGenerator()
@@ -132,10 +109,6 @@ func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnectio
 		// signal) instead of NXDOMAIN — smaller responses, no zone
 		// enumeration.  §5.1 restoration is handled by the resolver.
 		msg.CompactAnswers = true
-		// RFC 6975: signal which DNSSEC algorithms, DS digests and NSEC3
-		// hashes this resolver understands — authorities can skip
-		// signatures we cannot validate.
-		msg.Pseudo = append(msg.Pseudo, staticDAU, staticDHU, staticN3U)
 	}
 
 	if ecs != nil {

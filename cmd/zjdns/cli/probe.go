@@ -54,8 +54,10 @@ func runProbe(probeType, addr string) error {
 		return probeConnReuse(addr)
 	case "idle-timeout":
 		return probeIdleTimeout(addr)
+	case "mqtype":
+		return probeMQType(addr)
 	default:
-		return fmt.Errorf("unknown probe type %q (supported: pipeline, conn-reuse, idle-timeout)", probeType)
+		return fmt.Errorf("unknown probe type %q (supported: pipeline, conn-reuse, idle-timeout, mqtype)", probeType)
 	}
 }
 
@@ -297,6 +299,75 @@ func probeConnReuse(addr string) error {
 
 	fmt.Println()
 	fmt.Println("✅ Server supports RFC 1035 connection reuse")
+	return nil
+}
+
+// probeMQType tests whether the server supports RFC 10029 MQTYPE: a query
+// carrying an MQTYPE-Query EDNS option (asking to merge AAAA and HTTPS into
+// an A query) must come back with an MQTYPE-Response option — even with an
+// empty list, §3.4's support signal.  The option's String() in this fork
+// drops the first type on multi-type lists, so the types are formatted
+// manually.
+func probeMQType(addr string) error {
+	conn, err := dialProbeTarget(addr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }() // _ = error: best-effort cleanup close
+
+	_ = conn.SetDeadline(time.Now().Add(probeDefaultReadTimeout)) // _ = error: deadline advisory
+	q := newQuery("www.cloudflare.com.", 0)
+	q.UDPSize = 1232
+	q.Security = true // DO bit (fork v2 API — options live in Pseudo)
+	q.Pseudo = append(q.Pseudo, &dns.MQQUERY{Types: []uint16{dns.TypeAAAA, dns.TypeHTTPS}})
+	if err := writeDNSMsg(conn, q); err != nil {
+		return fmt.Errorf("write query: %w", err)
+	}
+
+	fmt.Printf("Probing %s for RFC 10029 MQTYPE support...\n\n", addr)
+	fmt.Println("  → sent query: www.cloudflare.com A + MQTYPE-Query{AAAA HTTPS}")
+
+	resp, err := readDNSMsg(conn)
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+
+	var mqr *dns.MQRESPONSE
+	seen := 0
+	invalid := false
+	for _, rr := range resp.Pseudo {
+		switch opt := rr.(type) {
+		case *dns.MQRESPONSE:
+			seen++
+			if seen > 1 {
+				invalid = true // more than one MQTYPE-Response (RFC 10029 §3.5)
+			}
+			mqr = opt
+		case *dns.MQQUERY:
+			invalid = true // MQTYPE-Query in a response (RFC 10029 §3.5)
+		}
+	}
+	if invalid {
+		fmt.Printf("  ← response: rcode=%s, MQTYPE options malformed\n\n", dns.RcodeToString[resp.Rcode])
+		fmt.Println("⚠️  Server returns a malformed MQTYPE response — partial/buggy implementation")
+		return nil
+	}
+	if mqr == nil {
+		fmt.Printf("  ← response: rcode=%s, no MQTYPE-Response\n\n", dns.RcodeToString[resp.Rcode])
+		fmt.Println("⚠️  Server does not support RFC 10029 MQTYPE (no MQTYPE-Response in reply)")
+		return nil
+	}
+	if len(mqr.Types) == 0 {
+		fmt.Printf("  ← response: rcode=%s, MQTYPE-Response: [empty]\n\n", dns.RcodeToString[resp.Rcode])
+		fmt.Println("✅ Server supports RFC 10029 MQTYPE (merged nothing)")
+		return nil
+	}
+	merged := make([]string, 0, len(mqr.Types))
+	for _, t := range mqr.Types {
+		merged = append(merged, dns.TypeToString[t])
+	}
+	fmt.Printf("  ← response: rcode=%s, MQTYPE-Response: %s\n\n", dns.RcodeToString[resp.Rcode], strings.Join(merged, " "))
+	fmt.Printf("✅ Server supports RFC 10029 MQTYPE (merged: %s)\n", strings.Join(merged, " "))
 	return nil
 }
 

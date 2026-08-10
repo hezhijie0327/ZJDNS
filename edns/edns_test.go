@@ -64,8 +64,11 @@ func TestBuildCookieResponse(t *testing.T) {
 	}
 }
 
-// TestApplyToMessage_RequestFlags verifies RFC 9824 CO bit and RFC 6975
-// algorithm options on upstream (request) messages.
+// TestApplyToMessage_RequestFlags verifies the RFC 9824 CO bit on upstream
+// (request) messages.  RFC 6975 algorithm advertisements are deliberately
+// not sent: they are pure optimisation hints, and some authorities (e.g.
+// Tencent NS) drop queries carrying them together with unknown EDNS options
+// such as MQTYPE-Query.
 func TestApplyToMessage_RequestFlags(t *testing.T) {
 	h, err := NewHandler(config.ECSConfig{})
 	if err != nil {
@@ -77,28 +80,11 @@ func TestApplyToMessage_RequestFlags(t *testing.T) {
 	if !msg.CompactAnswers {
 		t.Error("request must set the CO (Compact Answers OK) bit (RFC 9824)")
 	}
-	var dau, dhu, n3u bool
 	for _, o := range msg.Pseudo {
-		switch opt := o.(type) {
-		case *dns.DAU:
-			dau = true
-			if len(opt.AlgCode) == 0 {
-				t.Error("DAU must list algorithms")
-			}
-		case *dns.DHU:
-			dhu = true
-			if len(opt.AlgCode) == 0 {
-				t.Error("DHU must list digests")
-			}
-		case *dns.N3U:
-			n3u = true
-			if len(opt.AlgCode) == 0 {
-				t.Error("N3U must list hashes")
-			}
+		switch o.(type) {
+		case *dns.DAU, *dns.DHU, *dns.N3U:
+			t.Error("RFC 6975 advertisements must not be sent")
 		}
-	}
-	if !dau || !dhu || !n3u {
-		t.Errorf("request missing RFC 6975 options: dau=%t dhu=%t n3u=%t", dau, dhu, n3u)
 	}
 }
 

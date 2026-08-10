@@ -44,6 +44,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		probePipeline  bool
 		probeConnReuse bool
 		probeIdleTO    bool
+		probeMQType    bool
 	)
 
 	fs := flag.NewFlagSet(osArgs[0], flag.ContinueOnError)
@@ -68,6 +69,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	fs.BoolVar(&probePipeline, "pipeline", false, "Test RFC 7766 query pipelining (with --probe)")
 	fs.BoolVar(&probeConnReuse, "conn-reuse", false, "Test RFC 1035 connection reuse (with --probe)")
 	fs.BoolVar(&probeIdleTO, "idle-timeout", false, "Measure server idle timeout (with --probe)")
+	fs.BoolVar(&probeMQType, "mqtype", false, "Test RFC 10029 MQTYPE support (with --probe)")
 
 	// DNS stamp encode
 	fs.StringVar(&stampProto, "proto", "", "Stamp protocol: plain, dnscrypt, doh, dot, doq, odoh-target, dnscrypt-relay, odoh-relay")
@@ -92,6 +94,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		fmt.Fprintf(os.Stderr, "  %s --probe --pipeline    tcp://host:port  # Test RFC 7766 query pipelining\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --probe --conn-reuse  tcp://host:port  # Test RFC 1035 connection reuse\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --probe --idle-timeout tcp://host:port  # Measure server idle timeout\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s --probe --mqtype      tcp://host:port  # Test RFC 10029 MQTYPE support\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "\n")
 	}
 
@@ -124,21 +127,21 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		return "", true, 1
 	}
 	probeModes := 0
-	for _, on := range []bool{probePipeline, probeConnReuse, probeIdleTO} {
+	for _, on := range []bool{probePipeline, probeConnReuse, probeIdleTO, probeMQType} {
 		if on {
 			probeModes++
 		}
 	}
 	if probeModes > 1 {
-		fmt.Fprintln(os.Stderr, "error: --pipeline, --conn-reuse and --idle-timeout are mutually exclusive")
+		fmt.Fprintln(os.Stderr, "error: --pipeline, --conn-reuse, --idle-timeout and --mqtype are mutually exclusive")
 		return "", true, 1
 	}
 	if probeModes > 0 && !runProbeFlag {
-		fmt.Fprintln(os.Stderr, "error: --pipeline, --conn-reuse and --idle-timeout require --probe")
+		fmt.Fprintln(os.Stderr, "error: --pipeline, --conn-reuse, --idle-timeout and --mqtype require --probe")
 		return "", true, 1
 	}
 	if runProbeFlag && probeModes == 0 {
-		fmt.Fprintln(os.Stderr, "error: --probe requires one of --pipeline, --conn-reuse or --idle-timeout")
+		fmt.Fprintln(os.Stderr, "error: --probe requires one of --pipeline, --conn-reuse, --idle-timeout or --mqtype")
 		return "", true, 1
 	}
 	// --dnsstamp sub-modes: --decode and --encode are mutually exclusive —
@@ -190,7 +193,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	if runProbeFlag {
 		args := fs.Args()
 		if len(args) < 1 {
-			fmt.Fprintf(os.Stderr, "Usage: %s --probe --pipeline|--conn-reuse|--idle-timeout <tcp://host:port|tls://host:port>\n", fs.Name())
+			fmt.Fprintf(os.Stderr, "Usage: %s --probe --pipeline|--conn-reuse|--idle-timeout|--mqtype <tcp://host:port|tls://host:port>\n", fs.Name())
 			return "", true, 1
 		}
 		var probeType string
@@ -201,8 +204,10 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 			probeType = "conn-reuse"
 		case probeIdleTO:
 			probeType = "idle-timeout"
+		case probeMQType:
+			probeType = "mqtype"
 		default:
-			fmt.Fprintf(os.Stderr, "Usage: %s --probe --pipeline|--conn-reuse|--idle-timeout <tcp://host:port|tls://host:port>\n", fs.Name())
+			fmt.Fprintf(os.Stderr, "Usage: %s --probe --pipeline|--conn-reuse|--idle-timeout|--mqtype <tcp://host:port|tls://host:port>\n", fs.Name())
 			return "", true, 1
 		}
 		if err := runProbe(probeType, args[0]); err != nil {

@@ -221,7 +221,7 @@ zjdns/
 ├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, ...
 └── server/
     ├── handler/        ← query pipeline adapter + QueryContext
-    │   └── middleware/ ← 9 composable middleware + AssembleChain
+    │   └── middleware/ ← 10 composable middleware + AssembleChain
     ├── defense/        ← DNS anti-pollution (Detector, hopguard/poisonguard/spoofguard/splitguard)
     ├── protocol/       ← {plain,tls,tlcp,dnscrypt} server listeners
     ├── upstream/       ← {plain,tls,tlcp,dnscrypt} outbound client + pool + SOCKS5
@@ -258,17 +258,23 @@ Execution order (outermost → innermost):
 
 1. `ResponseMiddleware` — EDNS / Cookie / EDE finalisation
 2. `EDNSMiddleware` — ECS parsing, DNS Cookie validation (RFC 7873/9018)
-3. `CacheStoreMiddleware` — cache write, request logging, latency probe
-4. `ValidationMiddleware` — domain / label / NXNAME-AXFR-IXFR rejection (RFC 9824 §3.5)
-5. `ZoneMiddleware` — zone rule evaluation, synthetic response (runs before Any so rules win)
-6. `AnyMiddleware` — RFC 8482 minimal ANY response (HINFO "RFC8482")
-7. `CacheLookupMiddleware` — fresh→serve, stale→serve+refresh, miss→delegate
-8. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147)
-9. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive with singleflight dedup
+3. `MQTYPE` — RFC 10029 multi-QTYPE merge (recursive mode) + FORMERR (§3.3); forwarding mode also merges locally
+4. `CacheStoreMiddleware` — cache write, request logging, latency probe
+5. `ValidationMiddleware` — domain / label / NXNAME-AXFR-IXFR rejection (RFC 9824 §3.5)
+6. `ZoneMiddleware` — zone rule evaluation, synthetic response (runs before Any so rules win)
+7. `AnyMiddleware` — RFC 8482 minimal ANY response (HINFO "RFC8482")
+8. `CacheLookupMiddleware` — fresh→serve, stale→serve+refresh, miss→delegate
+9. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147)
+10. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive with singleflight dedup
 
 All layers share a mutable `QueryContext`. Any layer may short-circuit by setting `qctx.Res`.
 
-> **Note:** Names like `ResponseMiddleware`, `CacheStoreMiddleware`, etc. are descriptive labels for the pipeline. The actual Go types are simply `Response`, `CacheStore`, `Validation`, `Zone`, `Any`, `EDNS`, `CacheLookup`, `DNS64`, and `Resolution`.
+> **Note:** Names like `ResponseMiddleware`, `CacheStoreMiddleware`, etc. are descriptive labels for the pipeline. The actual Go types are simply `Response`, `CacheStore`, `MQTYPE`, `Validation`, `Zone`, `Any`, `EDNS`, `CacheLookup`, `DNS64`, and `Resolution`.
+
+### RFC 10029 MQTYPE (`upstream[*].mqtype`, numeric QTYPE list)
+- Client: outbound queries attach `MQQUERY{config − primary}`; merged records (with RRSIGs) warm the cache; bundled types stripped from the client response; unsupported authority → §3.5 fallback standalone queries (existing concurrent walks)
+- Server: `middleware/mqtype.go` merges per §3.4 (RCODE/AA/AD match, RR dedup, size budget that never self-triggers TC, empty-list support signal); 8 FORMERR cases §3.3
+- Never: zonecut DS+NS (RFC A.3 failure), NS-walk serialization
 
 ### Query Routing (`server/resolver`)
 - Upstream servers queried concurrently via `errgroup`; first NOERROR wins
@@ -296,7 +302,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | Type | Package | Notes |
 |------|---------|-------|
 | `ServerConfig` | `config` | Top-level config; owns `ECSConfig`, `ProtocolSettings`, `CertificateSettings` |
-| `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `SkipCache`, `Match`, `Proxy`, defense flags |
+| `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `SkipCache`, `Match`, `Proxy`, defense flags, `MQType` (RFC 10029 bundle list) |
 | `ProtocolSettings` | `config` | Per-protocol port/endpoint: `UDP`, `TCP`, `TLS`, `QUIC`, `HTTPS`, `HTTP3`, `TLCP`, `DTLS`, `DTLCP`, `DNSCrypt` |
 | `Store` | `cache` | Interface: Get/Set/RecordRequest/FlushDB/Stats/Close |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL |
@@ -323,7 +329,7 @@ All logs use `zjdns/internal/log` (package-level `Default` logger). Default leve
 
 **Component filtering:** `log_level` supports `"level:comp1,comp2"` syntax (e.g. `"debug:UPSTREAM,RECURSION"`).
 
-**canonical prefixes:** `TLS`, `CACHE`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `PLAIN`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PANIC`, `DNSCRYPT`, `TLCP`, `RULESET`, `DNS64`, `RESPONSE`, `ANY`, `IPDETECT`, `UDPPOOL`, `DOH`, `RESOLVER` (27 total).
+**canonical prefixes:** `TLS`, `CACHE`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `PLAIN`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PANIC`, `DNSCRYPT`, `TLCP`, `RULESET`, `DNS64`, `RESPONSE`, `ANY`, `IPDETECT`, `UDPPOOL`, `DOH`, `RESOLVER`, `MQTYPE` (28 total).
 
 Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECURITY:`. `DOT:`/`DOQ:`/`DOH:`/`DTLS:` → `TLS:`. `DTLCP:` → `TLCP:`. `UDP:`/`TCP:` → `PLAIN:`. Hot-path logs are `Debug` only.
 

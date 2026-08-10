@@ -810,13 +810,17 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ---
 
-## RFC 6975 — Algorithm Understanding in DNSSEC  `[RFC 6975: Proposed Standard]`  ✅
+## RFC 6975 — Algorithm Understanding in DNSSEC  `[RFC 6975: Proposed Standard]`  ⚠️
 
 **EDNS0 选项 DAU（5）/DHU（6）/N3U（7）：解析器向权威宣告支持的签名/摘要/NSEC3 哈希算法。**
 
 ### 我们的实现
 
-- ✓ 上游查询携带 DAU={8,10,13,14,15}（ED448 刻意排除——验证器无 ED448 支持）、DHU={1,2,4}、N3U={1}（`edns/edns.go:ApplyToMessage`，仅请求方向）
+- ⚠️ **不再向上游广告 DAU/DHU/N3U**（`edns/edns.go`）：广告是纯优化提示（权威可忽略，合法），
+  且实测发现部分权威（如腾讯 qq.com/tencent-cloud.net NS）会**静默丢弃**同时携带未知 EDNS
+  选项（如 MQTYPE-Query）与 RFC 6975 选项的查询——为兼容这类实现，出站查询不再携带。
+  ZJDNS 支持 DAU 列表 {8,10,13,14,15}（ED448 刻意排除）内的全部算法，权威按默认算法
+  签名即可验证，无功能损失
 
 ---
 
@@ -1626,18 +1630,25 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 ---
 
-## RFC 10029 — Multiple QTYPEs in a Single DNS Query (MQTYPE-Query/Response)  `[RFC 10029: Proposed Standard]`  ⚪
+## RFC 10029 — Multiple QTYPEs in a Single DNS Query (MQTYPE-Query/Response)  `[RFC 10029: Proposed Standard]`  ✅
 
 **EDNS0 选项 MQTYPE-Query（20）/MQTYPE-Response（21）：客户端在查询中附加 QTYPE 列表，服务端把多类型响应合并进单个回复。**
 
-### 我们的决定
+### 配置
 
-⚠️ **不实现。** 经过完整实现后又全部移除，原因：
+`upstream[*].mqtype`：数字 QTYPE 列表（如 `[1, 28]` = A + AAAA），forward 与 `protocol: recursive` 均适用。加载期校验：已注册 data type、非元类型（RFC 6895 §3.1）、去重、≤4（§4 QTx cap）。空 = 关闭。
 
-- **服务端合并无实际收益**: ZJDNS 的客户端不发 MQTYPE-Query；即使支持，合并逻辑增加的复杂度（缓存穿透、RCODE/flags 一致性、预算管理、RR 去重）远超省下的 RTT
-- **转发透传多余**: 客户端不发 MQTYPE-Query 时透传零作用；更糟的是 MQTYPE 中间件本身已能做合并（转发模式跳过逻辑反而绕过了自身能力）
-- **递归→权威无收益**: 权威多数不实现 MQTYPE；DS+NS 合并被 referral Authority section 里已有的 NS 记录覆盖，MQTYPE-Query(TypeNS) 纯属冗余
-- **ZJDNS↔ZJDNS 场景不需要**: 两个实例间不需要 MQTYPE 来减少 RTT——缓存预热已有同等效果
+### 我们的实现
+
+- **客户端（出站）**：查询 qtype Q 时附加 `MQQUERY{配置 − Q}`（零分配，栈数组）。响应按 §3.5 验证（重复 MQRESPONSE / QTx 重复主类型 → 无效；MQQUERY 出现在响应 → 视为不支持）；完成的 QTx 记录（含 RRSIG）warm cache（正记录按 owner==qname 提取，负记录带 SOA 证明），并从客户端响应中**剥离**（客户端只问了主类型）；权威不支持 → fallback 独立查询（§3.5 义务，现有并发 walk 天然满足）
+- **服务端（合并）**：`middleware/mqtype.go` —— §3.3 八条 FORMERR（opcode/QDCOUNT=0/主类型非 data/空列表/元类型/重复/重复主类型/入站 MQRESPONSE）；§3.4 合并（RCODE/AA/AD 与主响应一致才并入、RR 去重、预算 ≤ client UDP size 且**合并本身不触发 TC**、完整 QTx 必入列表、空列表也必返以宣告支持）；每个 QTx 解析带 5s 超时（§4 DoS 防护）
+- **本地合并（所有模式）**：客户端 MQQUERY 由 ZJDNS 本地合并（forward 也如此——ZJDNS 是完整解析器，QTx 走自己的上游解析），不透传；链上任一节点不支持 MQTYPE 也不影响响应支持性
+
+### 明确不做
+
+- **zonecut DS+NS 合并**：RFC Appendix A.3 记录的正是此场景失败（父侧 NS AA=0 vs DS AA=1，标志不匹配 → 排除）
+- **NS walk 串行化短路**：A/AAAA 已并发（1 RTT 最优），捆绑仅作 warm cache 收益
+- **跨 zone 组合**（DS+DNSKEY 等）：§3.4 标志匹配机制天然排除，白费字节
 
 ---
 

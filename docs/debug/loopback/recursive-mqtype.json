@@ -1,0 +1,8 @@
+{
+  "server": {
+    "log_level": "debug",
+    "protocol": { "udp": "13733", "tcp": "13733" },
+    "features": { "cache": {} }
+  },
+  "upstream": [{ "protocol": "recursive", "mqtype": [1, 28] }]
+}

@@ -239,6 +239,9 @@ func (r *Resolver) ConfigureServers(servers []config.UpstreamServer) {
 			r.recursive.splitguard = r.recursive.splitguard || s.Splitguard
 			r.recursive.poisonguard = r.recursive.poisonguard || s.Poisonguard
 			r.recursive.hopguard = r.recursive.hopguard || s.HopGuard
+			// RFC 10029: the recursive walk bundles the configured types via
+			// MQTYPE-Query when querying authorities.
+			r.recursive.mqtype = append(r.recursive.mqtype, s.MQType...)
 		}
 		active = append(active, s)
 	}

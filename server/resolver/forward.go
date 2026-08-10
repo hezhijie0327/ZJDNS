@@ -108,6 +108,10 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 					server.Protocol != config.ProtoDNSCrypt &&
 					server.Protocol != config.ProtoDNSCryptTCP
 				msg := r.buildMsg(question, ecs, true, isSecure)
+				// RFC 10029: attach the configured list minus the primary
+				// QTYPE.  Client MQTYPE-Query options are never forwarded —
+				// the server-side MQTYPE middleware merges locally.
+				attachMQType(msg, server.MQType, question.Qtype)
 				queryResult := r.queryClient.ExecuteQuery(groupCtx, msg, server)
 				pool.DefaultMessage.Put(msg)
 
@@ -262,6 +266,12 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 
 	upstreamEDE := captureUpstreamEDE(lastEDE, queryResult.Response, server.Address)
 
+	// RFC 10029: the configured mqtype list warms the cache with the
+	// upstream's merged records and strips them from the client-facing
+	// response.  Client-sent MQTYPE-Query options never reach here — the
+	// server-side MQTYPE middleware merges locally.
+	mqr, mqInvalid := parseMQResponse(queryResult.Response)
+
 	switch rcode {
 	case dns.RcodeSuccess:
 		if len(server.Match) > 0 {
@@ -286,6 +296,14 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 		if dnssec.HasCompactNXNAME(queryResult.Response) {
 			log.Debugf("UPSTREAM: compact NODATA with NXNAME signal for %s via %s — restoring NXDOMAIN", question.Name, server.Address)
 			rcode = dns.RcodeNameError
+		}
+
+		// RFC 10029: warm the merged types and strip them from the answer —
+		// the strip uses the completed list, never server.MQType, which
+		// would remove the primary records.
+		if len(server.MQType) > 0 && mqr != nil && !mqInvalid && r.cache != nil && !server.SkipCache {
+			r.warmFromMQResponse(queryResult.Response, question.Name, question.Qclass, mqr, ecsResponse, queryResult.Validated)
+			queryResult.Response.Answer = stripMQBundled(queryResult.Response.Answer, question.Name, mqr.Types)
 		}
 
 		select {

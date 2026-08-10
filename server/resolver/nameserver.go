@@ -57,6 +57,8 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 	baseMsg := r.resolver.buildMsg(question, ecs, false, false)
 	baseMsg.UDPSize = pool.RecursiveUDPBufferSize
+	// RFC 10029: bundle the configured types (minus the primary QTYPE).
+	attachMQType(baseMsg, r.mqtype, question.Qtype)
 	for _, ns := range nameservers {
 		nsAddr := ns
 		protocol := config.ProtoUDP
@@ -100,6 +102,28 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			// duplicated the timer and context per NS (a dominant allocation
 			// under full guards, where every recursion level fans out here).
 			result := r.resolver.queryClient.ExecuteQuery(queryCtx, msg, server)
+			// RFC 10029 fallback: a query carrying MQTYPE-Query can be
+			// dropped (timeout), interfered with, refused, or answered with
+			// any failure rcode by authorities that do not implement the
+			// option (observed: Tencent NS refusing MQTYPE-Query queries in
+			// some deployments).  Retry once without the option whenever the
+			// query did not succeed (NOERROR or NXDOMAIN); the merge benefit
+			// is lost but resolution must not fail because of it.
+			if hasMQQUERY(msg.Pseudo) &&
+				(result.Error != nil || (result.Response != nil &&
+					result.Response.Rcode != dns.RcodeSuccess && result.Response.Rcode != dns.RcodeNameError)) {
+				if result.Response != nil {
+					pool.DefaultMessage.Put(result.Response)
+				}
+				msg.Pseudo = removeMQQUERY(msg.Pseudo)
+				// Independent retry context: queryCtx and the parent deadline
+				// may both be exhausted by the failed first attempt (a 9s
+				// timeout leaves nothing for the retry) — a fresh 5s budget
+				// guarantees the fallback always runs.
+				retryCtx, retryCancel := context.WithTimeout(context.Background(), config.DefaultMQTypeResolveTimeout)
+				result = r.resolver.queryClient.ExecuteQuery(retryCtx, msg, server)
+				retryCancel()
+			}
 			if result.Error == nil && result.Response != nil {
 				// RFC 5452 §9.3: reject responses that do not echo the query's
 				// question — a replayed signed response for a different name
@@ -333,10 +357,11 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 				return nil
 			}
 
-			// Cache miss: resolve A and AAAA concurrently.  The A walk
-			// bundles AAAA via RFC 10029 (one authority query instead of
-			// two walks); when the authority merges AAAA into the A
-			// response, the AAAA walk short-circuits.
+			// Cache miss: resolve A and AAAA concurrently (1 RTT — no
+			// serialization).  With mqtype configured the A walk bundles
+			// AAAA via RFC 10029; a supporting authority merges AAAA into
+			// the A response, the warm cache (resolve()) lets the AAAA
+			// walk's cache-first lookup short-circuit.
 			var nsAddrs []string
 			var ansARecords []dns.RR
 			var ansAAAARecords []dns.RR

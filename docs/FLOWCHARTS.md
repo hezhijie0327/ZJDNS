@@ -9,6 +9,7 @@
 - [服务生命周期](#服务生命周期)
 - [快照持久化](#快照持久化)
 - [中间件管道](#中间件管道)
+- [MQTYPE (RFC 10029)](#mqtype-rfc-10029)
 - [缓存查询流程](#缓存查询流程)
 - [递归解析流程](#递归解析流程)
 - [DNSSEC 验证链](#dnssec-验证链)
@@ -33,7 +34,7 @@
 graph LR
     C[Clients] --> L
     subgraph ZJDNS
-        L[Listeners<br/>UDP · TCP · DoT · DoH · DoH3<br/>DoQ · DTLS · TLCP · DTLCP<br/>DNSCrypt] --> MW[Middleware Chain<br/>Response · EDNS · CacheStore<br/>Validation · Zone · Any<br/>CacheLookup · DNS64<br/>Resolution]
+        L[Listeners<br/>UDP · TCP · DoT · DoH · DoH3<br/>DoQ · DTLS · TLCP · DTLCP<br/>DNSCrypt] --> MW[Middleware Chain<br/>Response · EDNS · MQTYPE · CacheStore<br/>Validation · Zone · Any<br/>CacheLookup · DNS64<br/>Resolution]
         MW --> RES[Resolver<br/>Forwarding · Recursive<br/>QNAME Minimisation · DNSSEC<br/>Delegation Cache]
         RES --> UP[Upstream Pool<br/>TCP Pipeline · QUIC Pool<br/>SOCKS5 Proxy]
     end
@@ -55,7 +56,7 @@ graph TD
     START[New Server] --> LOADCONF[Load Config<br/>+ Validate]
     LOADCONF --> INIT[In-memory Init<br/>cache.New → load cache snapshot<br/>→ load latency snapshot<br/>→ zone.New → EDNS<br/>→ Zone/Ruleset → QueryClient<br/>→ Resolver → load delegation snapshot]
     INIT --> WARM[warmUpConnections]
-    WARM --> INITMW[Assemble Middleware Chain<br/>9 Layers<br/>Zone/DNS64 条件挂载]
+    WARM --> INITMW[Assemble Middleware Chain<br/>10 Layers<br/>Zone/DNS64 条件挂载]
     INITMW --> STARTPROTO[Start Protocol Listeners<br/>UDP TCP DoT DoH DoH3<br/>DoQ DTLS TLCP DTLCP<br/>DNSCrypt + pprof]
     STARTPROTO --> BG[Start Background Tasks<br/>Cookie Rotate · ECS Refresh<br/>Prefetch Cleanup · TCP WriteMu Sweep<br/>UDP Pool Reap · Snapshot Maintenance<br/>Signal Handling]
     BG --> RUNNING[Running<br/>accept queries]
@@ -106,7 +107,8 @@ graph TD
 graph LR
     Q[Query] --> R[Response<br/>EDNS · Cookie · EDE<br/>Pre-packed fast path]
     R --> E[EDNS<br/>Full unpack · ECS<br/>Cookie · Padding]
-    E --> CS[CacheStore<br/>Write · Request Log]
+    E --> MQ[MQTYPE<br/>RFC 10029 合并 · FORMERR<br/>所有模式]
+    MQ --> CS[CacheStore<br/>Write · Request Log]
     CS --> V[Validation<br/>Domain · Label · Type<br/>Opcode · QCLASS · NXNAME/XFR]
     V --> Z[Zone<br/>Rules · Wildcard<br/>Bypass · Loopback Gate]
     Z --> A[Any<br/>RFC 8482 HINFO]
@@ -115,12 +117,56 @@ graph LR
     D64 --> RE[Resolution<br/>Upstream · Recursive<br/>Singleflight]
     classDef mw fill:#fef3c7,stroke:#f59e0b,color:#78350f
     class Q mw
-    class R,E,CS,V,Z,A,CL,D64,RE mw
+    class R,E,MQ,CS,V,Z,A,CL,D64,RE mw
 ```
 
-> 执行顺序（外层→内层）：`Response → EDNS → CacheStore → Validation → Zone → Any →
+> 执行顺序（外层→内层）：`Response → EDNS → MQTYPE → CacheStore → Validation → Zone → Any →
 > CacheLookup → DNS64 → Resolution`（`middleware/chain.go`）。`Zone` 仅当配置了 zone 规则、
-> `DNS64` 仅当配置了 DNS64 时挂载。
+> `DNS64` 仅当配置了 DNS64 时挂载。`MQTYPE` 位于 CacheStore 外侧（post 阶段在 CacheStore
+> 构建主响应之后合并）、EDNS 内侧（pre 阶段可见已解析的 Pseudo 选项）。
+
+### MQTYPE (RFC 10029)
+
+**出站（ZJDNS 作为 MQTYPE 客户端）**：
+
+```mermaid
+graph TD
+    A1["查询 QTYPE=Q<br/>上游配置 mqtype=[T1 T2]"] --> A2{附加 MQQUERY<br/>配置 − Q 非空?}
+    A2 -->|否| A3[普通查询]
+    A2 -->|是| A4[附加 MQQUERY Tx]
+    A4 --> A5{响应含 MQRESPONSE?}
+    A5 -->|否| A6[权威不支持<br/>fallback 独立查询 §3.5]
+    A5 -->|是| A7{§3.5 验证<br/>重复/主类型重复?}
+    A7 -->|无效| A8[忽略捆绑数据]
+    A7 -->|有效| A9[warm cache<br/>Tx 记录 + RRSIG]
+    A9 --> A10[从客户端响应剥离 Tx<br/>只留主类型回答]
+    classDef cl fill:#d1fae5,stroke:#10b981,color:#064e3b
+    class A1,A2,A3,A4,A5,A6,A7,A8,A9,A10 cl
+```
+
+**入站（ZJDNS 作为 MQTYPE 服务端）**：
+
+```mermaid
+graph TD
+    S1[客户端查询带 MQQUERY] --> S2{§3.3 八条校验}
+    S2 -->|不合法| S3[FORMERR]
+    S2 -->|合法| S4[主响应先行<br/>RCODE/AA/AD 定调]
+    S4 --> S5{主响应 TC?}
+    S5 -->|是| S6[不处理 QTx<br/>返回空 MQTYPE-Response]
+    S5 -->|否| S7[逐 QTx 解析<br/>单 flight · 5s 超时]
+    S7 --> S8{RCODE/标志与主响应一致?}
+    S8 -->|否| S9[排除该 QTx<br/>不入合并与列表]
+    S8 -->|是| S10{尺寸预算足够?}
+    S10 -->|否| S11[排除 QTx<br/>合并不触发 TC]
+    S10 -->|是| S12[合并 + 去重<br/>入 MQTYPE-Response 列表]
+    S12 --> S13[返回合并响应<br/>空列表也必返]
+    classDef sv fill:#fef3c7,stroke:#f59e0b,color:#78350f
+    class S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,S11,S12,S13 sv
+```
+
+> 配置：`upstream[*].mqtype`（数字 QTYPE 列表，如 `[1, 28]`；加载期校验：data type、
+> 非元类型、去重、≤4 个 §4 QTx cap）。forward 与 `protocol: recursive` 均适用。
+> 不实现：zonecut DS+NS 合并（RFC A.3 记录的失败场景）、NS walk 串行化短路。
 
 ### 缓存命中直发（pre-packed）
 

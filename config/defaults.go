@@ -232,6 +232,17 @@ const (
 	DefaultMaxCNAMEChain     = 16
 	DefaultMaxRecursionDepth = 16
 
+	// DefaultMQTypeMaxQTx is the RFC 10029 §4 QTx cap: the maximum number of
+	// additional RR types a server will process per MQTYPE-Query.  Public DNS
+	// expects 4; the operator-configured upstream mqtype list is itself
+	// bounded by this value.
+	DefaultMQTypeMaxQTx = 4
+
+	// DefaultMQTypeResolveTimeout bounds each QTx resolution during a
+	// server-side MQTYPE merge — a malicious client could otherwise use the
+	// option to amplify the resolver's outbound work (RFC 10029 §4).
+	DefaultMQTypeResolveTimeout = 5 * time.Second
+
 	DefaultQnameMinimiseCount = 10 // RFC 9156 §2.3: max QNAME minimisation iterations
 	DefaultMinimiseOneLabel   = 4  // RFC 9156 §2.3: labels added one-at-a-time before proportional division
 

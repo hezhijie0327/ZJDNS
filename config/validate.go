@@ -13,9 +13,20 @@ import (
 
 	zdnsutil "zjdns/internal/dnsutil"
 
+	"codeberg.org/miekg/dns"
 	"gitee.com/Trisia/gotlcp/tlcp"
 	eTLS "gitlab.com/go-extension/tls"
 )
+
+// MQTypeMetaTypes are the RRTYPEs that must not appear in an MQTYPE-Query
+// list or as its primary question: RFC 6895 §3.1 Meta-TYPEs and QTYPEs.
+// Shared by config validation and the server-side MQTYPE middleware.
+var MQTypeMetaTypes = map[uint16]struct{}{
+	dns.TypeANY: {}, dns.TypeAXFR: {}, dns.TypeIXFR: {},
+	dns.TypeMAILA: {}, dns.TypeMAILB: {},
+	dns.TypeOPT: {}, dns.TypeTSIG: {}, dns.TypeTKEY: {},
+	dns.TypeNXNAME: {}, dns.TypeReserved: {},
+}
 
 // validatePort checks that a port string is a valid numeric port in [1, 65535].
 func validatePort(field, value string) error {
@@ -233,6 +244,36 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 				return fmt.Errorf("upstream server %d: match tag '%s' not found", i, cleanTag)
 			}
 		}
+
+		if err := validateMQType(server); err != nil {
+			return fmt.Errorf("upstream server %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// validateMQType validates an upstream's RFC 10029 MQTYPE-Query list: every
+// value must be a registered data RRTYPE (RFC 6895 §3.1), unique, and within
+// the RFC 10029 §4 QTx cap.
+func validateMQType(server *UpstreamServer) error {
+	if len(server.MQType) == 0 {
+		return nil
+	}
+	if len(server.MQType) > DefaultMQTypeMaxQTx {
+		return fmt.Errorf("mqtype: at most %d types allowed (RFC 10029 §4), got %d", DefaultMQTypeMaxQTx, len(server.MQType))
+	}
+	seen := make(map[uint16]struct{}, len(server.MQType))
+	for _, qt := range server.MQType {
+		if dns.TypeToString[qt] == "" {
+			return fmt.Errorf("mqtype: unknown QTYPE %d", qt)
+		}
+		if _, meta := MQTypeMetaTypes[qt]; meta {
+			return fmt.Errorf("mqtype: QTYPE %d (%s) is a Meta/QTYPE and must not appear in the list (RFC 6895 §3.1)", qt, dns.TypeToString[qt])
+		}
+		if _, dup := seen[qt]; dup {
+			return fmt.Errorf("mqtype: duplicate QTYPE %d", qt)
+		}
+		seen[qt] = struct{}{}
 	}
 	return nil
 }

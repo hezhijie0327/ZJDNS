@@ -38,6 +38,7 @@ type Recursive struct {
 	splitguard  bool                                  // from protocol=recursive upstream
 	poisonguard bool                                  // from protocol=recursive upstream
 	hopguard    bool                                  // from protocol=recursive upstream
+	mqtype      []uint16                              // RFC 10029 MQTYPE-Query types (from protocol=recursive upstream)
 
 	// rootCache memoizes getRootServers' result: the root set changes at
 	// most monthly, but the uncached path issues 13 names × 2 types = 26
@@ -232,6 +233,16 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		// Cryptographic DNSSEC validation at this delegation level
 		cryptoValidated := r.isValidWithDNSSEC(response, currentDomain, chain)
 		ecsResponse := r.resolver.edns.ParseFromDNS(response)
+
+		// RFC 10029: warm the merged types and strip them from the
+		// client-facing answer — the strip uses the completed list, never
+		// r.mqtype, which would remove the primary records.
+		if len(r.mqtype) > 0 {
+			if mqr, invalid := parseMQResponse(response); mqr != nil && !invalid {
+				r.resolver.warmFromMQResponse(response, queryQuestion.Name, queryQuestion.Qclass, mqr, ecsResponse, cryptoValidated)
+				response.Answer = stripMQBundled(response.Answer, queryQuestion.Name, mqr.Types)
+			}
+		}
 
 		validated := cryptoValidated
 

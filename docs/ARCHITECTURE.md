@@ -21,7 +21,7 @@ on restart).
 
 | Data | Structure | Lifetime |
 |------|-----------|----------|
-| DNS cache entries | `lrumap.Map[string, *cacheEntry]` — key = (qname, qtype, qclass, ecs, dnssec) flattened, value = pre-packed wire (format 0x02) + ts/ttl | LRU-bounded, TTL-expired lazily on read; `state_file` empty (default) = no persistence, restart starts cold |
+| DNS cache entries | `lrumap.Map[string, *cacheEntry]` — key = (qname, qtype, qclass, ecs) flattened, value = pre-packed wire (format 0x02) + ts/ttl. The key never splits on the client's DO bit — outbound queries always carry DO=1 (RFC 6840 §5.9) and DO=0 filtering happens at serve time | LRU-bounded, TTL-expired lazily on read; `state_file` empty (default) = no persistence, restart starts cold |
 | Query stats + per-RCODE journal | `statsjournal` (atomic counters + `topk.Map`) | Resets on restart |
 | Zone rules | `zoneTable` atomic.Pointer snapshot (exact/wildcard maps, compressed RR blobs) | Rebuilt from config at startup |
 | Ruleset rules | `ruleTable` atomic.Pointer snapshot (IP trie + domain suffix map) | Rebuilt from config at startup |
@@ -41,8 +41,10 @@ so cache hits serve the exact rcode.
   patches the message ID/RD bits and bridge.go writes it without any
   Unpack/Pack round-trip (~14.4ns at the middleware layer, 0 allocs). TTL
   deduction happens in-place via the offset table; DNSSEC filtering for
-  DO=0 clients uses a wire scan (WireHasDNSSEC). Entries below the
-  compression threshold are stored uncompressed (no decompress either).
+  DO=0 clients uses a wire scan (WireHasDNSSEC) — entries store whatever the
+  DO=1 upstream returned, so one entry serves both DO variants. Entries
+  below the compression threshold are stored uncompressed (no decompress
+  either).
 - **RecordRequest**: All results → in-memory atomic counters (`cache/statsjournal.go`); non-hit events also enter a per-RCODE top-N domain journal (`topk.Map`, bounded). No SQL, no disk — pure memory, reset on restart.
 - **Stats aggregation**: `Stats()` reads the in-memory snapshot — O(1) counters + per-RCODE top-N sort. Output keeps the previous TXT layout plus `top-rcode<N>` lines.
 - **Pruning**: `PruneQueryJournal` is a no-op — the journal is bounded in memory, nothing to prune.
@@ -261,16 +263,27 @@ Reuses SM2 certificate pair from TLCP. Wire format = DTLS (RFC 8094): 2-byte big
 
 ## EDNS Extensions & RFC Support
 
-The middleware chain (see CLAUDE.md for the full 9-layer pipeline) hosts the
+The middleware chain (see CLAUDE.md for the full 10-layer pipeline) hosts the
 recent RFC features:
 
+- **RFC 10029 MQTYPE**: per-upstream `mqtype` config (numeric QTYPE list).
+  Client side: outbound queries attach MQQUERY{config − primary}; merged
+  records warm the cache and are stripped from the client-facing answer;
+  unsupported authorities fall back to standalone queries (§3.5).
+  Server side: `middleware/mqtype.go` (between EDNS and CacheStore) merges
+  per §3.4 — RCODE/AA/AD must match the primary, RRs deduplicated, size
+  budget never self-triggers TC, empty-list MQTYPE-Response still returned
+  as the support signal; §3.3's eight FORMERR conditions enforced.  The
+  merge is local in every mode (forwarding included) — the option is never
+  passed through, so the response supports MQTYPE regardless of upstream
+  support.
 - **RFC 9824 Compact Denial**: upstream queries set the CO bit
   (`edns/edns.go`); `dnssec.HasCompactNXNAME` detects the NXNAME(128) signal
   and the resolver restores NXDOMAIN (§5.1) — recursive path only after the
   NSEC proof validates. NXNAME queries are REFUSED at Validation.
 - **RFC 8482 minimal ANY**: `middleware/any.go` (inside Zone) answers
   QTYPE=ANY with `HINFO "RFC8482"`.
-- **RFC 6975**: upstream requests advertise DAU/DHU/N3U algorithm lists.
+- **RFC 6975**: DAU/DHU/N3U algorithm lists are deliberately NOT advertised — pure optimisation hints that some authorities (e.g. Tencent NS) drop queries over when combined with unknown options such as MQTYPE-Query.
 - **RFC 9715**: UDP responses capped at 1400 bytes; oversized wires are
   truncated in place by `truncateWire` (server/bridge.go) — TC=1, no
   Unpack/Pack round-trip.

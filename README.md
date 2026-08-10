@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-4.0.8-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-4.1.1-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -56,6 +56,7 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 - **并发去重**：singleflight 合并同 key 并发 miss
 - **紧凑否认**：[RFC 9824](docs/rfc/rfc9824.txt) —— 上游查询设置 CO 位，NXNAME 信号自动恢复 NXDOMAIN 语义
 - **分片避免**：[RFC 9715](docs/rfc/rfc9715.txt) —— UDP 响应 1400 字节上限，超限 TC + TCP 重试
+- **多类型捆绑（MQTYPE）**：[RFC 10029](docs/rfc/rfc10029.txt) —— `upstream[*].mqtype` 可配数字 QTYPE 列表（如 `[1, 28]`）；出站查询附加 MQQUERY 捆绑解析，合并记录 warm 缓存（含 DNSSEC 签名）并从客户端响应剥离；服务端支持客户端 MQQUERY 合并（§3.3 八条 FORMERR 校验、§3.4 合并预算与标志匹配）；权威不支持时自动回退独立查询
 
 ### 全协议支持
 | 协议 | 端口 | 传输 | RFC |
@@ -71,7 +72,7 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 | DTLCP | 9853 | UDP + SM2/SM3/SM4 | GM/T 0128-2023 |
 
 ### 安全
-- **DNSSEC**：完整密码学信任链（DNSKEY→DS→RRSIG），NSEC/NSEC3 否定回答（[RFC 5155](docs/rfc/rfc5155.txt)），REVOKE 位检查（[RFC 5011](docs/rfc/rfc5011.txt)），算法协商 DAU/DHU/N3U（[RFC 6975](docs/rfc/rfc6975.txt)）
+- **DNSSEC**：完整密码学信任链（DNSKEY→DS→RRSIG），NSEC/NSEC3 否定回答（[RFC 5155](docs/rfc/rfc5155.txt)），REVOKE 位检查（[RFC 5011](docs/rfc/rfc5011.txt)）
 - **DNS 防污染**：hopguard（IP TTL 指纹）、spoofguard（UDP 多读）、poisonguard（越权检测）、splitguard（TCP 分段）
 - **DNS Cookie**：SipHash-2-4（[RFC 9018](docs/rfc/rfc9018.txt)），密钥 24h 轮换，保留历史密钥兼容慢客户端
 - **EDNS Padding**：[RFC 8467](docs/rfc/rfc8467.txt)，请求 128/响应 468 块大小，随机填充
@@ -136,6 +137,7 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 | `spoofguard` | bool | UDP 多读防欺骗 |
 | `splitguard` | bool | TCP 分段防 RST |
 | `hopguard` | bool | IP TTL 指纹防欺骗 |
+| `mqtype` | []uint16 | [RFC 10029](docs/rfc/rfc10029.txt) 捆绑 QTYPE 列表（数字，如 `[1, 28]` = A + AAAA）——查询时附加 MQQUERY 捆绑解析，合并记录 warm 缓存并从客户端响应剥离；空 = 关闭 |
 
 ### 防污染配置示例
 

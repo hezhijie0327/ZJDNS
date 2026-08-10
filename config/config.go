@@ -155,6 +155,11 @@ type UpstreamServer struct {
 	Spoofguard     bool     `json:"spoofguard,omitzero"`
 	Splitguard     bool     `json:"splitguard,omitzero"`
 	HopGuard       bool     `json:"hopguard,omitzero"`
+	// MQType lists the QTYPE values (numeric, e.g. [1, 28] for A and AAAA)
+	// to bundle into queries via the RFC 10029 MQTYPE-Query EDNS option — an
+	// A (1) query also asks for AAAA (28).  The primary QTYPE is excluded
+	// automatically; empty (default) disables the option.
+	MQType []uint16 `json:"mqtype,omitzero"`
 }
 
 // ZoneRule defines a DNS zone rule for constructing synthetic responses.
