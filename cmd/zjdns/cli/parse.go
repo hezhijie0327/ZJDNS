@@ -94,7 +94,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		fmt.Fprintf(os.Stderr, "  %s --probe --pipeline    tcp://host:port  # Test RFC 7766 query pipelining\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --probe --conn-reuse  tcp://host:port  # Test RFC 1035 connection reuse\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "  %s --probe --idle-timeout tcp://host:port  # Measure server idle timeout\n", fs.Name())
-		fmt.Fprintf(os.Stderr, "  %s --probe --mqtype      tcp://host:port  # Test RFC 10029 MQTYPE support\n", fs.Name())
+		fmt.Fprintf(os.Stderr, "  %s --probe --mqtype      tcp://host:port  # Test RFC 10029 MQTYPE support (udp:// works too)\n", fs.Name())
 		fmt.Fprintf(os.Stderr, "\n")
 	}
 
@@ -193,7 +193,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 	if runProbeFlag {
 		args := fs.Args()
 		if len(args) < 1 {
-			fmt.Fprintf(os.Stderr, "Usage: %s --probe --pipeline|--conn-reuse|--idle-timeout|--mqtype <tcp://host:port|tls://host:port>\n", fs.Name())
+			fmt.Fprintf(os.Stderr, "Usage: %s --probe --pipeline|--conn-reuse|--idle-timeout|--mqtype <tcp://host:port|tls://host:port|udp://host:port>\n", fs.Name())
 			return "", true, 1
 		}
 		var probeType string
@@ -207,7 +207,7 @@ func ParseFlags(osArgs []string, versionStr string) (configFile string, exitAfte
 		case probeMQType:
 			probeType = "mqtype"
 		default:
-			fmt.Fprintf(os.Stderr, "Usage: %s --probe --pipeline|--conn-reuse|--idle-timeout|--mqtype <tcp://host:port|tls://host:port>\n", fs.Name())
+			fmt.Fprintf(os.Stderr, "Usage: %s --probe --pipeline|--conn-reuse|--idle-timeout|--mqtype <tcp://host:port|tls://host:port|udp://host:port>\n", fs.Name())
 			return "", true, 1
 		}
 		if err := runProbe(probeType, args[0]); err != nil {

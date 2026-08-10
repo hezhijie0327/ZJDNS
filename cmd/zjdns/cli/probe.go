@@ -61,12 +61,14 @@ func runProbe(probeType, addr string) error {
 	}
 }
 
-// dialProbeTarget parses a [tcp|tls]://host:port address and returns
-// a connected net.Conn.  Default ports are 53 for TCP, 853 for TLS.
+// dialProbeTarget parses a [tcp|tls|udp]://host:port address and returns a
+// connected net.Conn.  Default ports are 53 for TCP/UDP, 853 for TLS.
+// UDP targets are datagram-based: writeDNSMsg/readDNSMsg skip the 2-byte
+// TCP length prefix for them.
 func dialProbeTarget(addr string) (net.Conn, error) {
 	protocol, host, ok := strings.Cut(addr, "://")
 	if !ok || protocol == "" || host == "" {
-		return nil, fmt.Errorf("invalid address %q (expected tcp://host:port or tls://host:port)", addr)
+		return nil, fmt.Errorf("invalid address %q (expected tcp://host:port, tls://host:port or udp://host:port)", addr)
 	}
 
 	tryAddPort := func(h string, defaultPort int) string {
@@ -82,6 +84,11 @@ func dialProbeTarget(addr string) (net.Conn, error) {
 		host = tryAddPort(host, defaultProbePort)
 		d := net.Dialer{Timeout: probeDialTimeout}
 		return d.Dial("tcp", host)
+
+	case "udp":
+		host = tryAddPort(host, defaultProbePort)
+		d := net.Dialer{Timeout: probeDialTimeout}
+		return d.Dial("udp", host)
 
 	case "tls":
 		host = tryAddPort(host, defaultProbeTLSPort)
@@ -114,17 +121,23 @@ func dialProbeTarget(addr string) (net.Conn, error) {
 		return tlsConn, nil
 
 	default:
-		return nil, fmt.Errorf("unsupported protocol %q (supported: tcp, tls)", protocol)
+		return nil, fmt.Errorf("unsupported protocol %q (supported: tcp, tls, udp)", protocol)
 	}
 }
 
-// writeDNSMsg packs a DNS message and writes it to conn with a 2-byte
-// TCP length prefix.
+// writeDNSMsg packs a DNS message and writes it to conn with a 2-byte TCP
+// length prefix (stream transports only — UDP datagrams carry the bare wire).
 func writeDNSMsg(conn net.Conn, msg *dns.Msg) error {
 	if err := msg.Pack(); err != nil {
 		return fmt.Errorf("pack: %w", err)
 	}
 	data := msg.Data
+	if _, ok := conn.(*net.UDPConn); ok {
+		if _, err := conn.Write(data); err != nil {
+			return fmt.Errorf("write: %w", err)
+		}
+		return nil
+	}
 	var prefix [2]byte
 	binary.BigEndian.PutUint16(prefix[:], uint16(len(data))) //nolint:gosec // G115: DNS data length fits in uint16
 	if _, err := conn.Write(append(prefix[:], data...)); err != nil {
@@ -133,20 +146,33 @@ func writeDNSMsg(conn net.Conn, msg *dns.Msg) error {
 	return nil
 }
 
-// readDNSMsg reads a DNS message with a 2-byte TCP length prefix from conn,
-// unpacks it, and returns the result.
+// readDNSMsg reads a DNS message from conn — with a 2-byte TCP length prefix
+// on stream transports, as a bare datagram on UDP — unpacks it, and returns
+// the result.
 func readDNSMsg(conn net.Conn) (*dns.Msg, error) {
-	var prefix [2]byte
-	if _, err := io.ReadFull(conn, prefix[:]); err != nil {
-		return nil, fmt.Errorf("read prefix: %w", err)
-	}
-	length := binary.BigEndian.Uint16(prefix[:])
-	if length == 0 || length > dns.MaxMsgSize {
-		return nil, fmt.Errorf("invalid message length: %d", length)
-	}
-	buf := make([]byte, length)
-	if _, err := io.ReadFull(conn, buf); err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
+	var buf []byte
+	if _, ok := conn.(*net.UDPConn); ok {
+		// One Read = one datagram; UDP responses are bounded by the
+		// advertised EDNS size (1232), but read conservatively larger.
+		buf = make([]byte, dns.MaxMsgSize)
+		n, err := conn.Read(buf)
+		if err != nil {
+			return nil, fmt.Errorf("read datagram: %w", err)
+		}
+		buf = buf[:n]
+	} else {
+		var prefix [2]byte
+		if _, err := io.ReadFull(conn, prefix[:]); err != nil {
+			return nil, fmt.Errorf("read prefix: %w", err)
+		}
+		length := binary.BigEndian.Uint16(prefix[:])
+		if length == 0 || length > dns.MaxMsgSize {
+			return nil, fmt.Errorf("invalid message length: %d", length)
+		}
+		buf = make([]byte, length)
+		if _, err := io.ReadFull(conn, buf); err != nil {
+			return nil, fmt.Errorf("read body: %w", err)
+		}
 	}
 	msg := &dns.Msg{}
 	msg.Data = buf
@@ -354,7 +380,26 @@ func probeMQType(addr string) error {
 	}
 	if mqr == nil {
 		fmt.Printf("  ← response: rcode=%s, no MQTYPE-Response\n\n", dns.RcodeToString[resp.Rcode])
-		fmt.Println("⚠️  Server does not support RFC 10029 MQTYPE (no MQTYPE-Response in reply)")
+
+		// FORMERR discrimination: a server with the MQTYPE middleware
+		// rejects a malformed MQTYPE-Query per §3.3 — an OK response means
+		// there is no middleware at all.  A forwarding ZJDNS passes the
+		// valid option through to the upstream, which typically does not
+		// merge — the server supports MQTYPE but the merge is the
+		// upstream's job.
+		_ = conn.SetDeadline(time.Now().Add(probeDefaultReadTimeout)) // _ = error: deadline advisory
+		q2 := newQuery("www.cloudflare.com.", 1)
+		q2.UDPSize = 1232
+		q2.Security = true
+		// Duplicate QTx values — RFC 10029 §3.3 mandates FORMERR.
+		q2.Pseudo = append(q2.Pseudo, &dns.MQQUERY{Types: []uint16{dns.TypeAAAA, dns.TypeAAAA}})
+		if err := writeDNSMsg(conn, q2); err == nil {
+			if resp2, err := readDNSMsg(conn); err == nil && resp2.Rcode == dns.RcodeFormatError {
+				fmt.Println("⚠️  Server supports RFC 10029 MQTYPE but did not merge — the option is forwarded upstream, which does not support MQTYPE")
+				return nil
+			}
+		}
+		fmt.Println("⚠️  Server does not support RFC 10029 MQTYPE (no MQTYPE-Response, no §3.3 FORMERR on a malformed option)")
 		return nil
 	}
 	if len(mqr.Types) == 0 {
