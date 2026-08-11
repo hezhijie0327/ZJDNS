@@ -824,7 +824,7 @@ graph LR
 graph LR
     Q[Query] --> PROXY{Proxy?}
     PROXY -->|No| POOL[Pooled Direct<br/>key=addr]
-    PROXY -->|Yes| POOLP[Pooled Proxied<br/>key=addr&#124;proxy]
+    PROXY -->|Yes| POOLP["Pooled Proxied<br/>key=addr|proxy"]
     POOLP -->|TCP family| TCPR[Relay TCP<br/>Socks Handshake<br/>一次/连接]
     POOLP -->|UDP family| UDPR[UDP ASSOCIATE<br/>relay 绑定<br/>一次/socket]
     POOL --> UP[Upstream]
