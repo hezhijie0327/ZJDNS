@@ -713,7 +713,9 @@ graph TD
     PROBE --> STEPS[按配置顺序执行探测步骤<br/>首个成功即返回<br/>elapsed from start]
     STEPS --> ICMP[ICMP Ping<br/>privileged raw socket]
     STEPS --> TCP[TCP Connect<br/>configurable port]
-    STEPS --> UDP[UDP Send + Read<br/>DNS probe query]
+    STEPS --> UDP[UDP Send + Read<br/>single-byte datagram]
+    STEPS --> DNS[DNS Query<br/>UDP:53 · ID match]
+    STEPS --> DNSTCP[DNS Query<br/>TCP:53 · length-prefixed]
     STEPS --> HTTP[HTTP HEAD<br/>port 80]
     STEPS --> HTTPS[HTTPS HEAD<br/>port 443 · TLS]
     STEPS --> HTTP3[HTTP3 HEAD<br/>port 443 · QUIC]
@@ -721,6 +723,8 @@ graph TD
     ICMP --> SUCC{任一成功?}
     TCP --> SUCC
     UDP --> SUCC
+    DNS --> SUCC
+    DNSTCP --> SUCC
     HTTP --> SUCC
     HTTPS --> SUCC
     HTTP3 --> SUCC
@@ -737,12 +741,17 @@ graph TD
     classDef out fill:#e2e8f0,stroke:#64748b,color:#1e293b
     class QUERY start
     class EXTRACT,BATCH,PROBE,STEPS,SUCC,LAT,MAX,STORE,SORT proc
-    class ICMP,TCP,UDP,HTTP,HTTPS,HTTP3 proto
+    class ICMP,TCP,UDP,DNS,DNSTCP,HTTP,HTTPS,HTTP3 proto
     class RETURN out
 ```
 
 > 聚合语义：按配置顺序执行各探测步骤，**首个成功步骤的累计耗时**即该 IP 的延迟
 > （不是各步骤最小值）。缓存命中时 `sortAnswerByLatency` 按延迟升序重排 A/AAAA。
+>
+> **NS/Root 探测**（`ProbeNSAddrs`）：固定两步 `dns:53 → dns-tcp:53`，不读配置。
+> 发送真实 DNS 查询（root A），任意响应（NOERROR/NXDOMAIN/REFUSED/SERVFAIL）即成功，
+> 按 RFC 5452 §4.2 校验 QR 位与消息 ID。**无 ping 步骤**——链式首胜下多数公共 NS
+> 的 ICMP 响应会短路真实 DNS 测量。
 
 ## 连接池与协议协商
 

@@ -12,7 +12,10 @@ import (
 	"sync"
 	"time"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -64,7 +67,7 @@ func measureIPLatency(ctx context.Context, ip net.IP, steps []config.LatencyProb
 
 func probeAddress(ctx context.Context, ip net.IP, step config.LatencyProbeStep, httpPool *httpClientPool) error {
 	switch step.Protocol {
-	case config.ProtoPing, config.ProtoICMP:
+	case config.ProtoPing:
 		return probeICMP(ctx, ip)
 	case config.ProtoTCP:
 		port := step.Port
@@ -78,6 +81,12 @@ func probeAddress(ctx context.Context, ip net.IP, step config.LatencyProbeStep, 
 			port = config.DefaultProbePortDNS
 		}
 		return probeUDP(ctx, ip, port)
+	case config.ProtoDNS, config.ProtoDNSTCP:
+		port := step.Port
+		if port <= 0 {
+			port = config.DefaultProbePortDNS
+		}
+		return probeDNSQuery(ctx, ip, port, step.Protocol == config.ProtoDNSTCP)
 	case config.ProtoHTTP:
 		port := step.Port
 		if port <= 0 {
@@ -137,6 +146,76 @@ func probeUDP(ctx context.Context, ip net.IP, port int) error {
 	buffer := make([]byte, probeUDPReadBufSize)
 	_, err = conn.Read(buffer)
 	return err
+}
+
+// probeDNSQuery sends a real DNS query for the root zone over UDP or TCP
+// (RFC 1035 §4.2.1/§4.2.2) and returns once a response (QR=1) with a matching
+// message ID arrives (RFC 5452 §4.2). Any DNS response — NOERROR, NXDOMAIN,
+// REFUSED, SERVFAIL — proves the target answers DNS; only a timeout, a
+// transport error, or an unpackable/mismatched datagram fails the probe.
+func probeDNSQuery(ctx context.Context, ip net.IP, port int, tcp bool) error {
+	query := new(dns.Msg)
+	dnsutil.SetQuestion(query, ".", dns.TypeA) // assigns a random message ID
+	if err := query.Pack(); err != nil {
+		return err
+	}
+
+	network := "udp"
+	if tcp {
+		network = "tcp"
+	}
+	addr := net.JoinHostPort(ip.String(), strconv.Itoa(port))
+	dialer := net.Dialer{}
+	conn, err := dialer.DialContext(ctx, network, addr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }() // _ = error: best-effort cleanup close
+
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline) // _ = error: deadline advisory, benign on closed conn
+	}
+
+	if tcp {
+		// RFC 1035 §4.2.2 framing (2-byte length prefix) handled by dnsutil.
+		if err := zdnsutil.WriteTCPMsg(conn, query); err != nil {
+			return err
+		}
+		resp, err := zdnsutil.ReadTCPMsg(conn)
+		if err != nil {
+			return err
+		}
+		if !resp.Response || resp.ID != query.ID {
+			return fmt.Errorf("DNS response mismatch: QR=%t ID=%d, want QR=true ID=%d", resp.Response, resp.ID, query.ID)
+		}
+		return nil
+	}
+
+	if _, err := conn.Write(query.Data); err != nil {
+		return err
+	}
+	buffer := make([]byte, probeUDPReadBufSize)
+	for {
+		// Check context cancellation on each iteration.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		n, err := conn.Read(buffer)
+		if err != nil {
+			return err
+		}
+		resp := new(dns.Msg)
+		resp.Data = buffer[:n]
+		if err := resp.Unpack(); err != nil {
+			continue // garbage datagram — keep reading
+		}
+		if !resp.Response || resp.ID != query.ID {
+			continue // not a response to our query (QR=0 or ID mismatch) — keep reading
+		}
+		return nil
+	}
 }
 
 func probeICMP(ctx context.Context, ip net.IP) error {

@@ -278,12 +278,15 @@ func ProbeNSAddrs(ctx context.Context, cache CacheSetter, addrs []string) {
 }
 
 // defaultNSProbeSteps returns the default probe steps for NS/Root latency
-// probing (ping → UDP:53 → TCP:53).
+// probing (DNS-over-UDP:53 → DNS-over-TCP:53).
+//
+// No ping step: the chain stops at the first success, and most public
+// authoritative NS servers answer ICMP — a ping hit would always short-circuit
+// the DNS measurement, which is exactly the latency the resolver experiences.
 func defaultNSProbeSteps() []config.LatencyProbeStep {
 	return []config.LatencyProbeStep{
-		{Protocol: config.ProtoPing, Timeout: nsProbeTimeoutMS},
-		{Protocol: config.ProtoUDP, Port: config.DefaultProbePortDNS, Timeout: nsProbeTimeoutMS},
-		{Protocol: config.ProtoTCP, Port: config.DefaultProbePortDNS, Timeout: nsProbeTimeoutMS},
+		{Protocol: config.ProtoDNS, Port: config.DefaultProbePortDNS, Timeout: nsProbeTimeoutMS},
+		{Protocol: config.ProtoDNSTCP, Port: config.DefaultProbePortDNS, Timeout: nsProbeTimeoutMS},
 	}
 }
 

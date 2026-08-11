@@ -327,11 +327,13 @@ const (
 	DNSSECStatusBogus    = "bogus"
 
 	ProtoPing = "ping"
-	ProtoICMP = "icmp"
 	ProtoHTTP = "http"
 
 	ProtoUDP = "udp"
 	ProtoTCP = "tcp"
+
+	ProtoDNS    = "dns"
+	ProtoDNSTCP = "dns-tcp"
 
 	ProtoRecursive = "recursive" // built-in recursive resolver
 

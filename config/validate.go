@@ -450,7 +450,7 @@ func validateLatencyProbeStep(index int, step *LatencyProbeStep) error {
 		return fmt.Errorf("latency_probe step %d: protocol cannot be empty", index)
 	}
 	switch protocol {
-	case ProtoPing, ProtoICMP:
+	case ProtoPing:
 	case ProtoTCP:
 		normalizeLatencyProbePort(&step.Port, DefaultProbePortHTTP)
 		return validateProbePort(index, ProtoTCP, step.Port)

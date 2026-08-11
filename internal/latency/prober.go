@@ -36,7 +36,7 @@ func New(steps []config.LatencyProbeStep, bgCtx context.Context) *Prober {
 		bgCtx = context.Background()
 	}
 	p := &Prober{
-		steps:    normalizeSteps(steps),
+		steps:    steps,
 		sem:      make(chan struct{}, config.DefaultMaxProbes),
 		httpPool: newHTTPClientPool(),
 		ctx:      bgCtx,
@@ -180,28 +180,4 @@ sendJobs:
 	}
 
 	return sorted, latencyMS
-}
-
-// normalizeSteps pre-processes probe steps to avoid repeated string operations
-// on the hot path.
-func normalizeSteps(steps []config.LatencyProbeStep) []config.LatencyProbeStep {
-	if len(steps) == 0 {
-		return nil
-	}
-	normalized := make([]config.LatencyProbeStep, len(steps))
-	for i, s := range steps {
-		s.Protocol = normalizeProbeProtocol(s.Protocol)
-		normalized[i] = s
-	}
-	return normalized
-}
-
-// normalizeProbeProtocol canonicalizes protocol names (e.g. "ICMP" → "ping").
-func normalizeProbeProtocol(p string) string {
-	switch p {
-	case "icmp", "ICMP":
-		return "ping"
-	default:
-		return p
-	}
 }

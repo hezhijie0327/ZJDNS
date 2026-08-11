@@ -81,23 +81,6 @@ func TestProbeIPsLatency_LoopbackPrivate(t *testing.T) {
 	// Since all are unprobeable, order should be unchanged.
 }
 
-func TestNormalizeProbeProtocol(t *testing.T) {
-	tests := []struct{ in, want string }{
-		{"ping", "ping"},
-		{"icmp", "ping"},
-		{"ICMP", "ping"},
-		{"tcp", "tcp"},
-		{"udp", "udp"},
-		{"http", "http"},
-	}
-	for _, tt := range tests {
-		got := normalizeProbeProtocol(tt.in)
-		if got != tt.want {
-			t.Errorf("normalizeProbeProtocol(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
-
 func TestProbeIPsLatency_ConcurrentCalls(t *testing.T) {
 	// Regression: concurrent ProbeIPsLatency calls (one per probe key) on a
 	// shared Prober used to panic with "WaitGroup is reused before previous
