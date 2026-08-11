@@ -52,10 +52,11 @@ func LoadConfig(configFile string) (*ServerConfig, error) {
 
 	addChaosRecord(cfg)
 
-	log.Debugf("CONFIG: upstream=%d recursive=%t dnssec_enforce=%t cache_entries=%d log_level=%s",
+	log.Debugf("CONFIG: upstream=%d recursive=%t dnssec_enforce=%t cache_entries_mem=%d cache_entries_disk=%d log_level=%s",
 		len(cfg.Upstream), len(cfg.Upstream) == 0,
 		cfg.Server.Features.DNSSECEnforce,
-		cfg.Server.Features.Cache.Entries.Limit, cfg.Server.LogLevel)
+		cfg.Server.Features.Cache.Entries.Limit.Mem,
+		cfg.Server.Features.Cache.Entries.Limit.Disk, cfg.Server.LogLevel)
 	log.Infof("CONFIG: Configuration loaded successfully")
 	return cfg, nil
 }

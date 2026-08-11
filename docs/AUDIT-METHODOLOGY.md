@@ -50,7 +50,7 @@
 ```
 Phase 1: 包级审计（7 agent 并行）
 ├── Foundation audit: internal/* 基础包
-├── Domain audit:     config / cache / edns / zone / ruleset / internal/snapfile
+├── Domain audit:     config / cache / edns / zone / ruleset / internal/spillfile
 ├── Protocol audit:   server/protocol/{plain,tls,tlcp,dnscrypt}
 ├── Upstream audit:   server/upstream/*
 ├── Resolver audit:   server/resolver/*
@@ -277,7 +277,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 | **并发安全** | 临界区过窄或缺失（锁-drop 窗口、无锁写入） | 锁保护区域明确注释；`go test -race` 作为 CI 必需项 |
 | **防御算法** | 状态机缺少逃逸路径、过度拒绝合法响应 | 每个防御模块必须有 fuzz 测试和边界条件用例 |
 | **死代码/冗余** | 重构后遗留（中间件、迁移、未用字段） | `staticcheck -checks U1000` 集成 CI |
-| **快照持久化** | `snapfile.Save` 与并发写入竞态（保存期间条目被淘汰/修改）、保存失败静默忽略（`_ = Save(...)`）、`Load` 中 readEntry 出错中止后部分加载、保存路径持有锁导致阻塞 | 保存前取一致性快照（拷贝/序列化到缓冲）再写盘；Save 错误必须记日志（周期保存可降级为 warn）；Load 返回 err 时上层必须处理而非静默继续；temp+rename 原子替换（`internal/snapfile` 已实现） |
+| **spill 持久化** | `spillfile` 追加写失败静默忽略（evict 回调 `_ = Put(...)`）、索引与文件失步（Compact 期间并发 Put）、启动扫描损坏文件导致索引错位、内存索引无限增长 | Put/Compact 错误必须记日志（可降级为 warn）；Compact 全程持锁、完成后重建索引；启动扫描必须校验记录边界并截断尾部残片（`internal/spillfile` 已实现）；索引大小与 `limit.disk` 挂钩 |
 | **跨协议一致性** | 同类型 bug 在不同协议处理器中重复出现（DTLS/DTLCP 固定缓冲区） | 修复一个协议 bug 后，全局搜索相同模式到所有协议处理器 |
 | **Pool buffer 生命周期** | `response.Data` 指向已归还的 pool buffer（use-after-free） | `pool.Put` 前必须 `response.Data = nil`，参考 `tcp.go` 的 `resp.Data = nil` 模式 |
 | **TODO 管理** | TODO 注释累积但不实现，变成虚假安全感 | 每个 TODO 要么实现、要么改为 NOTE 并说明原因、要么删除 |
@@ -331,7 +331,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 2. **锁内不要做 IO**：在锁外关闭旧连接，在锁内操作数据结构
 3. **切片共享底层数组**：从 atomic pointer 获取的切片在修改前必须复制
 4. **多读循环必须检查 ctx.Done()**：每个 poll 迭代都应可取消
-5. **快照保存必须 temp+rename 原子替换**：`snapfile.Save` 先写 `.tmp` 再 `os.Rename`，崩溃不会破坏上一份快照；保存错误不能静默丢弃（周期保存至少 warn），加载错误不能静默降级（要区分"文件不存在"冷启动与"文件损坏"两类情况）
+5. **spill 压实必须 temp+rename 原子替换**：`spillfile.Compact` 先写 `.tmp` 再 `os.Rename`，崩溃不会破坏上一份 spill 文件；追加写错误不能静默丢弃（至少 warn）；启动打开损坏文件时错误必须区分"文件不存在"冷启动与"文件损坏"（后者禁用磁盘层而非覆盖）
 6. **每查询一条日志原则**：hot-path（每次查询都经过的路径）只用 Debug；Info 仅用于状态变更（启动/关闭/重载）；Warn 用于可恢复异常且应带采样或限流；Error 仅用于不可恢复
 7. **日志必须含定位信息**：错误/Warn 日志至少包含 qname/qtype/server/error 中与上下文相关的字段；不要打印"query failed"而没说哪个查询
 8. **禁止 info/warn 在热路径**：`log.Infof` / `log.Warnf` 不得出现在每次查询都会执行的代码路径中（如 ServeDNS、middleware Wrap、upstream Exchange）。每查询超过一条 info/warn 即为刷屏
@@ -415,7 +415,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 ```
 docs/audit/<YYYY-MM>-<主题>/
 ├── 01-foundation.md     ← internal/* 包审计
-├── 02-domain.md         ← config / cache / edns / zone / ruleset / snapfile
+├── 02-domain.md         ← config / cache / edns / zone / ruleset / spillfile
 ├── 03-protocol.md       ← server/protocol/*
 ├── 04-upstream.md       ← server/upstream/*
 ├── 05-resolver.md       ← server/resolver/*

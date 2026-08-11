@@ -12,11 +12,7 @@
 param(
     [Parameter(Mandatory)]
     [ValidateSet("patch", "minor", "major")]
-    [string]$Bump,
-
-    [Parameter(Mandatory)]
-    [string]$Slug,
-
+    [string]$Bump
 )
 
 $ErrorActionPreference = "Stop"

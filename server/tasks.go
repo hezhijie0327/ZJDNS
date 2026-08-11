@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/signal"
+	"sort"
 	"syscall"
 	"time"
 	"zjdns/cache"
@@ -12,6 +13,8 @@ import (
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/spillfile"
+	"zjdns/internal/ttl"
 )
 
 // startBackgroundTasks launches all background goroutines owned by the server.
@@ -25,10 +28,11 @@ func (s *Server) startBackgroundTasks() {
 	s.setupSignalHandling()
 }
 
-// startStateMaintenance periodically persists all three state stores
-// (cache/latency/delegation) and physically removes expired entries, when
-// any state file is configured.  Shutdown snapshots are taken separately in
-// shutdownServer.
+// startStateMaintenance periodically compacts the spill stores (dropping
+// expired and over-cap records) and physically removes expired latency and
+// delegation entries, when any state file is configured.  Spill records are
+// written continuously on eviction, so no periodic save is needed — only
+// compaction and expiry cleanup.
 func (s *Server) startStateMaintenance() {
 	feats := s.config.Server.Features
 	cachePath, latencyPath, delegationPath := feats.CacheStateFile(), feats.LatencyStateFile(), feats.DelegationStateFile()
@@ -45,27 +49,64 @@ func (s *Server) startStateMaintenance() {
 	}
 
 	s.runBackgroundTicker("state maintenance", config.DefaultCacheSnapshotInterval, func() {
-		if cachePath != "" {
-			if err := cc.SaveSnapshot(cachePath); err != nil {
-				log.Warnf("CACHE: periodic snapshot failed: %v", err)
-			}
+		// Entries spill: rewrite when expired records dominate or the disk
+		// cap is exceeded (dropping the oldest beyond cap).
+		if spill := cc.SpillStore(); spill != nil {
+			compactSpill(spill, cc.SpillCap())
 		}
 		if latencyPath != "" {
-			if err := cc.SaveLatencySnapshot(latencyPath); err != nil {
-				log.Warnf("CACHE: periodic latency snapshot failed: %v", err)
-			}
 			// Physical expiry cleanup — gated on the latency state file (M7):
 			// the cache-file branch is not the right owner, and a
 			// latency-only deployment must still reap dead entries.
 			cc.CleanupLatency()
+			if spill := cc.LatencySpillStore(); spill != nil {
+				compactSpill(spill, cc.LatencySpillCap())
+			}
 		}
 		if delegationPath != "" {
-			if err := s.dnsResolver.SaveDelegationSnapshot(delegationPath); err != nil {
-				log.Warnf("RESOLVER: periodic delegation snapshot failed: %v", err)
-			}
 			s.dnsResolver.CleanupDelegations()
+			s.dnsResolver.CompactDelegationSpill()
 		}
 	})
+}
+
+// compactSpill rewrites a spill store keeping only fresh records, newest
+// first within the disk cap (cap <= 0 = unbounded).  Runs when expired
+// records dominate the index (> 50%) or the index exceeds the cap.
+func compactSpill(spill *spillfile.Store, diskCap int) {
+	entries := spill.Entries()
+	if len(entries) == 0 {
+		return
+	}
+	expired := 0
+	for _, e := range entries {
+		if !ttl.CanServeExpired(e.Ts, e.Ttl, config.DefaultStaleMaxAge) {
+			expired++
+		}
+	}
+	if expired*2 <= len(entries) && (diskCap <= 0 || len(entries) <= diskCap) {
+		return // nothing worth rewriting
+	}
+
+	// Newest-first traversal — the disk cap keeps the newest fresh records.
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Ts > entries[j].Ts })
+	keepSize := len(entries)
+	if diskCap > 0 {
+		keepSize = min(diskCap, keepSize)
+	}
+	keep := make(map[string]bool, keepSize)
+	for _, e := range entries {
+		if !ttl.CanServeExpired(e.Ts, e.Ttl, config.DefaultStaleMaxAge) { // past window — drop
+			continue
+		}
+		if diskCap > 0 && len(keep) >= diskCap {
+			break
+		}
+		keep[e.Key] = true
+	}
+	if err := spill.Compact(func(key string, _ int64, _ int) bool { return keep[key] }); err != nil {
+		log.Warnf("CACHE: spill compact failed: %v", err)
+	}
 }
 
 // runBackgroundTicker runs fn on each tick of a time.Ticker with the given
@@ -336,9 +377,10 @@ func (s *Server) shutdownServer() {
 	}
 
 	if cacheStore := s.handler.CacheStore(); cacheStore != nil {
-		// Persist all state stores before closing.  Bounded by
-		// DefaultShutdownTimeout: a stalled disk must not hang shutdown
-		// forever (L3).
+		// Push the in-memory tiers to their spill stores before closing
+		// (entries + latency; the delegation spill flushes in the resolver's
+		// own shutdown hook).  Bounded by DefaultShutdownTimeout: a stalled
+		// disk must not hang shutdown forever (L3).
 		saveDone := make(chan struct{})
 		go func() {
 			defer zdnsutil.HandlePanic("Shutdown state save")
@@ -347,27 +389,13 @@ func (s *Server) shutdownServer() {
 			if !ok {
 				return
 			}
-			feats := s.config.Server.Features
-			if path := feats.CacheStateFile(); path != "" {
-				if err := cc.SaveSnapshot(path); err != nil {
-					log.Warnf("CACHE: snapshot save failed: %v", err)
-				}
-			}
-			if path := feats.LatencyStateFile(); path != "" {
-				if err := cc.SaveLatencySnapshot(path); err != nil {
-					log.Warnf("CACHE: latency snapshot save failed: %v", err)
-				}
-			}
-			if path := feats.DelegationStateFile(); path != "" {
-				if err := s.dnsResolver.SaveDelegationSnapshot(path); err != nil {
-					log.Warnf("RESOLVER: delegation snapshot save failed: %v", err)
-				}
-			}
+			cc.Flush()
+			s.dnsResolver.FlushDelegationSpill()
 		}()
 		select {
 		case <-saveDone:
 		case <-time.After(config.DefaultShutdownTimeout):
-			log.Warnf("SERVER: state snapshot save timed out — exiting without final snapshot")
+			log.Warnf("SERVER: state flush timed out — exiting without final spill flush")
 		}
 		zdnsutil.CloseWithLog(cacheStore, "Cache store", "SERVER")
 	}

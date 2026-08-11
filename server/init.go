@@ -39,7 +39,9 @@ func initResolver(
 		BuildMsg:             buildMsg,
 		Cache:                cacheStore,
 		DNSSECEnforce:        cfg.Server.Features.DNSSECEnforce,
-		DelegationMaxEntries: cfg.Server.Features.Cache.Delegation.Limit,
+		DelegationMaxEntries: cfg.Server.Features.Cache.Delegation.Limit.Mem,
+		DelegationSpillPath:  cfg.Server.Features.DelegationStateFile(),
+		DelegationSpillLimit: cfg.Server.Features.Cache.Delegation.Limit.Disk,
 		Ctx:                  backgroundCtx,
 	})
 	if err != nil {

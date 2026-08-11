@@ -7,7 +7,7 @@
 
 - [整体架构](#整体架构)
 - [服务生命周期](#服务生命周期)
-- [快照持久化](#快照持久化)
+- [缓存持久化](#缓存持久化)
 - [中间件管道](#中间件管道)
 - [MQTYPE (RFC 10029)](#mqtype-rfc-10029)
 - [缓存查询流程](#缓存查询流程)
@@ -54,15 +54,15 @@ graph LR
 ```mermaid
 graph TD
     START[New Server] --> LOADCONF[Load Config<br/>+ Validate]
-    LOADCONF --> INIT[In-memory Init<br/>cache.New → load cache snapshot<br/>→ load latency snapshot<br/>→ zone.New → EDNS<br/>→ Zone/Ruleset → QueryClient<br/>→ Resolver → load delegation snapshot]
+    LOADCONF --> INIT[In-memory Init<br/>cache.New → open spill + warm top limit.mem<br/>→ zone.New → EDNS<br/>→ Zone/Ruleset → QueryClient<br/>→ Resolver → open delegation spill]
     INIT --> WARM[warmUpConnections]
     WARM --> INITMW[Assemble Middleware Chain<br/>10 Layers<br/>Zone/DNS64 条件挂载]
     INITMW --> STARTPROTO[Start Protocol Listeners<br/>UDP TCP DoT DoH DoH3<br/>DoQ DTLS TLCP DTLCP<br/>DNSCrypt + pprof]
-    STARTPROTO --> BG[Start Background Tasks<br/>Cookie Rotate · ECS Refresh<br/>Prefetch Cleanup · TCP WriteMu Sweep<br/>UDP Pool Reap · Snapshot Maintenance<br/>Signal Handling]
+    STARTPROTO --> BG[Start Background Tasks<br/>Cookie Rotate · ECS Refresh<br/>Prefetch Cleanup · TCP WriteMu Sweep<br/>UDP Pool Reap · Spill Compact<br/>Signal Handling]
     BG --> RUNNING[Running<br/>accept queries]
     RUNNING --> SIG{Signal?}
     SIG -->|SIGINT/SIGTERM| SHUTDOWN[Mark Closed<br/>Cancel Context<br/>Stop Protocol Listeners + pprof]
-    SHUTDOWN --> WAITBG[Wait Background Groups<br/>Save snapshots: cache · latency · delegation]
+    SHUTDOWN --> WAITBG[Wait Background Groups<br/>Flush memory tiers to spill]
     WAITBG --> EXIT[Exit]
     classDef start fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     classDef proc fill:#fef3c7,stroke:#f59e0b,color:#78350f
@@ -76,28 +76,34 @@ graph TD
 
 > 后台任务共 7 项（`server/tasks.go`）：Cookie 密钥轮换（24h）、ECS 公网 IP 刷新（15min）、
 > prefetch 节流清理、TCP writeMu 分片注册表 sweep（5min）、UDP 连接池死连接回收、
-> 快照周期保存（5min）、信号处理。统计**不是**后台任务——同步内存计数（见「同步统计记录」）。
+> spill 压实（5min）、信号处理。统计**不是**后台任务——同步内存计数（见「同步统计记录」）。
 
-## 快照持久化
+## 缓存持久化
 
-三个 store（cache / latency / delegation）在配置 `state_file` 时持久化；默认路径为空 =
-不持久化（重启冷启动）。DNSCrypt 证书状态独立持久化（`dnscryptstate`）。
+三个 store（cache / latency / delegation）在配置 `state_file` 时启用磁盘
+第二层（`internal/spillfile` append-log）：内存淘汰的未过期条目落盘，内存
+miss 时读盘提升，关机时内存全量 flush，5 分钟周期压实（丢弃过期与超
+`limit.disk` 的条目，temp+rename 原子重写）。启动时最热的 `limit.mem`
+条载入内存，其余留盘。默认路径为空 = 不持久化（重启冷启动）。DNSCrypt
+证书状态独立持久化（`dnscryptstate`）。
 
 ```mermaid
 graph TD
     STARTUP[启动] --> GATE{任一 state_file 配置?}
-    GATE -->|是| LOAD[启动加载<br/>cache + latency + delegation]
-    GATE -->|否| COLD[冷启动<br/>无周期保存任务]
-    RUNNING[Running] --> TICKER{5min 周期}
-    TICKER -->|fire| SAVE[锁内收集快照<br/>锁外序列化 + temp+rename 原子写]
-    SAVE --> RUNNING
-    SHUTDOWN[关闭] --> SAVEF[再保存一次]
-    SAVEF --> DONE
+    GATE -->|是| LOAD[spill store 打开 + 扫描索引<br/>top limit.mem 载入内存<br/>其余留盘]
+    GATE -->|否| COLD[冷启动<br/>单层内存]
+    RUNNING[Running] --> EVICT[内存 LRU 淘汰]
+    EVICT -->|未过期| SPILL[追加到 spill log]
+    RUNNING --> MISS[内存 miss]
+    MISS -->|spill 命中| PROMOTE[读盘 + 提升到内存]
+    RUNNING --> TICKER{5min 周期}
+    TICKER -->|过期>50% 或超 limit.disk| COMPACT[temp+rename 压实]
+    SHUTDOWN[关闭] --> FLUSH[内存全量 flush 到 spill]
     classDef start fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     classDef proc fill:#fef3c7,stroke:#f59e0b,color:#78350f
     classDef ok fill:#d1fae5,stroke:#10b981,color:#064e3b
     class STARTUP,RUNNING,SHUTDOWN start
-    class LOAD,COLD,SAVE,SAVEF proc
+    class LOAD,COLD,SPILL,PROMOTE,COMPACT,FLUSH proc
     class DONE ok
 ```
 

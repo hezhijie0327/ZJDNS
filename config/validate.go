@@ -301,14 +301,17 @@ func validateDDR(cfg *ServerConfig) error {
 func validateCache(cfg *ServerConfig) error {
 	for _, store := range []struct {
 		name  string
-		limit int
+		limit LimitSettings
 	}{
 		{"entries", cfg.Server.Features.Cache.Entries.Limit},
 		{"latency", cfg.Server.Features.Cache.Latency.Limit},
 		{"delegation", cfg.Server.Features.Cache.Delegation.Limit},
 	} {
-		if store.limit < 0 {
-			return fmt.Errorf("server.features.cache.%s.limit must be zero or positive", store.name)
+		if store.limit.Mem < 0 {
+			return fmt.Errorf("server.features.cache.%s.limit.mem must be zero or positive", store.name)
+		}
+		if store.limit.Disk < 0 {
+			return fmt.Errorf("server.features.cache.%s.limit.disk must be zero or positive", store.name)
 		}
 	}
 	return nil

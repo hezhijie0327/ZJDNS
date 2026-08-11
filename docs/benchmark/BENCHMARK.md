@@ -42,7 +42,7 @@ Minimal config for pure zone-lookup QPS:
   "server": {
     "log_level": "error",
     "protocol": { "udp": "10533" },
-    "features": { "cache": { "entries": { "limit": 100 } } }
+    "features": { "cache": { "entries": { "limit": { "mem": 100 } } } }
   },
   "zone": [
     { "name": "www.baidu.com",

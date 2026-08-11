@@ -277,7 +277,7 @@ bash docs/debug/pprof-dual.sh tls quic  # 指定协议
 ```
 
 脚本自动：生成双端配置（server/client 各注入独立 pprof 端口，server 附带
-快照持久化）→ 启动 server → 逐协议 dig 冒烟 + benchclient 压测 → 双端
+spill 持久化）→ 启动 server → 逐协议 dig 冒烟 + benchclient 压测 → 双端
 pprof 采样 → 停止并输出汇总（panic / falling back / 池 dialed 计数）。
 产物存 `/tmp/zjdns-pprof/`（g-\<proto\>.prof = client goroutine、
 h-\<proto\>.prof = client heap、hs-\<proto\>.prof = server heap、各端日志）。
@@ -328,7 +328,7 @@ go tool pprof -top /tmp/g.prof
 |------|------|------|
 | 2026-08 | 递归模式 UDP 池按权威 NS 地址无界建键、死连接钉住（H1） | `ReapDead` 周期回收 + 空键删除（pool/udp.go） |
 | 2026-08 | 代理 DoQ/DoH3 泄漏 SOCKS5 relay：2 fd + 1 goroutine/连接（H3） | quic.Conn Context.Done 钩子关闭 pconn（tls/quic.go） |
-| 2026-08 | 快照保存持 LRU 锁跨磁盘写，周期保存停顿全部缓存（H5） | 锁内收集、锁外序列化（cache/snapshot.go） |
+| 2026-08 | 快照保存持 LRU 锁跨磁盘写，周期保存停顿全部缓存（H5） | 锁内收集、锁外序列化；后由 spillfile 追加写取代（淘汰时落盘，无周期全量保存） |
 
 ### RFC Feature Tests
 
@@ -854,7 +854,7 @@ ls -la /tmp/zjdns-persist/zjdns.dnscrypt
 
 ## Query Stats & Debug
 
-查询统计（`query_stats`）和查询日志（`query_log`）是纯内存实现（`cache/statsjournal.go`）：原子计数器 + 每种 RCODE 的 top-N 域名 journal，重启后归零。整个服务器无 SQLite——缓存/延迟/委派（lrumap）、规则（快照）全部内存化，唯一的持久化是 DNSCrypt 状态文件（`zjdns.dnscrypt`）。
+查询统计（`query_stats`）和查询日志（`query_log`）是纯内存实现（`cache/statsjournal.go`）：原子计数器 + 每种 RCODE 的 top-N 域名 journal，重启后归零。整个服务器无 SQLite——缓存/延迟/委派（lrumap）、规则（快照）全部内存化，持久化有两类：spill 第二层（配置 `features.cache.*.state_file` 后启用，`internal/spillfile` append-log：淘汰落盘、miss 提升、关机 flush、周期压实）和 DNSCrypt 状态文件（`zjdns.dnscrypt`）。
 
 ```bash
 # 实时统计（聚合计数）
@@ -874,7 +874,7 @@ dig @127.0.0.1 -p 15353 zjdns.stats.clear CH TXT +short
 dig @127.0.0.1 -p 15353 zjdns.querylog.clear CH TXT +short
 ```
 
-整个服务器**无数据库、无 SQL 工具**——所有数据在内存（`lrumap` 缓存/延迟/委派 + `statsjournal` 统计 + 快照规则）。日常排查全部通过 `zjdns.stats` 完成。
+整个服务器**无数据库、无 SQL 工具**——热数据在内存（`lrumap` 缓存/延迟/委派 + `statsjournal` 统计 + 快照规则），配置 `state_file` 时缓存/延迟/委派各有一个磁盘 spill 第二层（`internal/spillfile`）。日常排查全部通过 `zjdns.stats` 完成。
 
 ### 排查 SERVFAIL 域名
 

@@ -278,9 +278,10 @@ func TestAncestorZonesMaxLimit(t *testing.T) {
 	}
 }
 
-// TestDelegationSnapshotRoundTrip verifies the delegation cache persists
-// through the snapshot file, including NS names, addresses and DS records.
-func TestDelegationSnapshotRoundTrip(t *testing.T) {
+// TestDelegationSpillRoundTrip verifies the delegation cache persists
+// through the spill file — including NS names, addresses and DS records —
+// and is restored with the freshest entries on reopen.
+func TestDelegationSpillRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "delegation.snap")
 
 	r1 := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](100)}
@@ -292,14 +293,11 @@ func TestDelegationSnapshotRoundTrip(t *testing.T) {
 	}
 	chain := &dnssecChain{childDS: dsRecords}
 	r1.storeDelegation("baidu.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
-	if err := r1.SaveDelegationSnapshot(path); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
+	r1.loadDelegationSpill(path, 0, 100) // enables the spill tier
+	r1.flushDelegationSpill()            // memory → spill
 
 	r2 := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](100)}
-	if err := r2.LoadDelegationSnapshot(path); err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	r2.loadDelegationSpill(path, 0, 100)
 	rec, ok := r2.lookupDelegation("www.baidu.com.", dns.TypeA)
 	if !ok {
 		t.Fatal("delegation not restored")
@@ -312,6 +310,41 @@ func TestDelegationSnapshotRoundTrip(t *testing.T) {
 	}
 	if len(rec.ds) != 1 || rec.ds[0].KeyTag != 11111 {
 		t.Errorf("ds = %v, want keytag 11111", rec.ds)
+	}
+}
+
+// TestDelegationSpillEvictPromote verifies an evicted delegation is served
+// from the spill tier and promoted back into memory.
+func TestDelegationSpillEvictPromote(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "delegation.snap")
+	r := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](2)}
+	r.loadDelegationSpill(path, 0, 2)
+	if r.spill == nil {
+		t.Fatal("spill tier not enabled")
+	}
+
+	nsRecords := []*dns.NS{
+		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: "ns1.baidu.com."}},
+	}
+	chain := &dnssecChain{}
+	r.storeDelegation("baidu.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
+	r.storeDelegation("qq.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
+	r.storeDelegation("taobao.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0) // evicts baidu.com → spill
+
+	if got := r.spill.EntryCount(); got != 1 {
+		t.Fatalf("spill EntryCount = %d, want 1", got)
+	}
+	rec, ok := r.lookupDelegation("www.baidu.com.", dns.TypeA)
+	if !ok {
+		t.Fatal("evicted delegation not served from spill")
+	}
+	if len(rec.nsNames) != 1 || rec.nsNames[0] != "ns1.baidu.com." {
+		t.Errorf("nsNames = %v, want [ns1.baidu.com.]", rec.nsNames)
+	}
+	// baidu.com promoted back; the cap-2 map still holds two entries (one of
+	// the other two spilled in turn).
+	if r.delegations.Len() != 2 {
+		t.Fatalf("delegations after promote = %d, want 2", r.delegations.Len())
 	}
 }
 

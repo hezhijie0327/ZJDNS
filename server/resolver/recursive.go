@@ -14,6 +14,7 @@ import (
 	"zjdns/internal/lrumap"
 	"zjdns/internal/pending"
 	"zjdns/internal/pool"
+	"zjdns/internal/spillfile"
 	"zjdns/server/defense"
 	"zjdns/server/resolver/dnssec"
 
@@ -35,11 +36,18 @@ type Recursive struct {
 	cache       cache.Store
 	ctx         context.Context                       // lifecycle context for background probes
 	delegations *lrumap.Map[string, *delegationEntry] // zone-cut delegation cache (zone → NS names + DS)
-	spoofguard  bool                                  // from protocol=recursive upstream
-	splitguard  bool                                  // from protocol=recursive upstream
-	poisonguard bool                                  // from protocol=recursive upstream
-	hopguard    bool                                  // from protocol=recursive upstream
-	mqtype      []uint16                              // RFC 10029 MQTYPE-Query types (from protocol=recursive upstream)
+
+	// spill is the delegation disk tier: evicted-but-fresh delegations land
+	// here and are promoted back on a lookup miss.  nil when no state_file
+	// is configured.
+	spill    *spillfile.Store
+	spillCap int // spill record cap (≤0 = unbounded)
+
+	spoofguard  bool     // from protocol=recursive upstream
+	splitguard  bool     // from protocol=recursive upstream
+	poisonguard bool     // from protocol=recursive upstream
+	hopguard    bool     // from protocol=recursive upstream
+	mqtype      []uint16 // RFC 10029 MQTYPE-Query types (from protocol=recursive upstream)
 
 	// rootCache memoizes getRootServers' result: the root set changes at
 	// most monthly, but the uncached path issues 13 names × 2 types = 26

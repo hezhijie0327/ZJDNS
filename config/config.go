@@ -128,13 +128,22 @@ type CacheSettings struct {
 	Delegation CacheStoreSettings `json:"delegation,omitzero"`
 }
 
-// CacheStoreSettings bounds and persists one cache-store: limit (<= 0
-// applies the config default) and state_file (empty = not persisted).
-// PreferStale is entries-only — it is ignored by latency/delegation.
+// CacheStoreSettings bounds and persists one cache-store: a two-tier limit
+// (in-memory + disk spill) and state_file (empty = not persisted, no spill
+// tier).  PreferStale is entries-only — it is ignored by latency/delegation.
 type CacheStoreSettings struct {
-	Limit       int    `json:"limit,omitzero"`
-	PreferStale bool   `json:"prefer_stale,omitzero"`
-	StateFile   string `json:"state_file,omitzero"`
+	Limit       LimitSettings `json:"limit,omitzero"`
+	PreferStale bool          `json:"prefer_stale,omitzero"`
+	StateFile   string        `json:"state_file,omitzero"`
+}
+
+// LimitSettings defines the two-tier capacity in entries.  Mem bounds the
+// in-memory LRU (<= 0 applies the store default); Disk bounds the spill
+// file records (<= 0 = unbounded).  The disk tier is only active when
+// StateFile is non-empty.
+type LimitSettings struct {
+	Mem  int `json:"mem,omitzero"`
+	Disk int `json:"disk,omitzero"`
 }
 
 // UpstreamServer defines a single upstream DNS server with address, protocol,

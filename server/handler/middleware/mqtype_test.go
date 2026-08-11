@@ -46,7 +46,7 @@ func (f *fakeMQResolver) UpstreamServers() []*config.UpstreamServer {
 
 func mqTestStore(t *testing.T) cache.Store {
 	t.Helper()
-	return cache.New(0, 0)
+	return cache.New(config.LimitSettings{}, config.LimitSettings{}, "", "")
 }
 
 func mqQuery(t *testing.T, types ...uint16) *dns.Msg {

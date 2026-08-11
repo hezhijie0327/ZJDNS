@@ -52,9 +52,9 @@ work = sys.argv[1]
 srv = json.load(open('docs/debug/loopback/server.json'))
 srv['server']['pprof'] = '16060'
 srv['server'].setdefault('features', {})['cache'] = {
-    'entries':   {'limit': 2000, 'state_file': f'{work}/cache.snap'},
-    'latency':   {'limit': 1000, 'state_file': f'{work}/lat.snap'},
-    'delegation': {'limit': 1000, 'state_file': f'{work}/deleg.snap'},
+    'entries':   {'limit': {'mem': 2000, 'disk': 20000}, 'state_file': f'{work}/cache.snap'},
+    'latency':   {'limit': {'mem': 1000, 'disk': 5000}, 'state_file': f'{work}/lat.snap'},
+    'delegation': {'limit': {'mem': 1000, 'disk': 20000}, 'state_file': f'{work}/deleg.snap'},
 }
 json.dump(srv, open(f'{work}/server.json', 'w'), indent=1)
 pprof = {'udp':17061,'tcp':17062,'tls':17063,'https':17064,'http3':17065,

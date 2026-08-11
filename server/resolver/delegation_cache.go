@@ -170,6 +170,10 @@ func (r *Recursive) storeDelegation(zone, parent string, nsRecords []*dns.NS, ad
 // ancestor of (or equal to) qname.  Parent-side qtypes (DS, NSEC, NSEC3) skip
 // a delegation whose zone matches the qname exactly, because the parent — not
 // the child — is authoritative for those records (RFC 4035 §1).
+//
+// A memory miss falls back to the delegation spill tier, promoting the hit
+// back into memory (which may itself evict the LRU tail — that delegation
+// spills to disk in turn).
 func (r *Recursive) lookupDelegation(qname string, qtype uint16) (*delegationEntry, bool) {
 	zones := ancestorZones(qname)
 	if len(zones) == 0 {
@@ -189,6 +193,11 @@ func (r *Recursive) lookupDelegation(qname string, qtype uint16) (*delegationEnt
 	for _, z := range zones {
 		if e, ok := r.delegations.Get(z); ok && e.fresh() {
 			return e, true
+		}
+		if r.spill != nil {
+			if e, ok := r.getDelegationFromSpill(z); ok && e.fresh() {
+				return e, true
+			}
 		}
 	}
 	return nil, false

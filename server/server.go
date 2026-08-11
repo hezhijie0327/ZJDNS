@@ -89,21 +89,12 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		tcpSem:          make(chan struct{}, config.DefaultServerGoroutineLimit),
 	}
 
-	cacheStore := cache.New(cfg.Server.Features.Cache.Entries.Limit, cfg.Server.Features.Cache.Latency.Limit)
-	if path := cfg.Server.Features.CacheStateFile(); path != "" {
-		if err := cacheStore.LoadSnapshot(path); err != nil {
-			log.Warnf("CACHE: snapshot load failed (starting cold): %v", err)
-		} else {
-			log.Infof("CACHE: restored %d entries from snapshot", cacheStore.EntryCount())
-		}
-	}
-	if path := cfg.Server.Features.LatencyStateFile(); path != "" {
-		if err := cacheStore.LoadLatencySnapshot(path); err != nil {
-			log.Warnf("CACHE: latency snapshot load failed (starting cold): %v", err)
-		} else {
-			log.Infof("CACHE: restored %d latency entries from snapshot", cacheStore.LatencyCount())
-		}
-	}
+	// Two-tier cache: the spill files ARE the persistence — opened (and
+	// warmed with the hottest entries) inside New, no separate snapshot load.
+	cacheStore := cache.New(
+		cfg.Server.Features.Cache.Entries.Limit, cfg.Server.Features.Cache.Latency.Limit,
+		cfg.Server.Features.CacheStateFile(), cfg.Server.Features.LatencyStateFile(),
+	)
 	zoneEvaluator := zone.New()
 
 	ednsH, err := s.initEDNS(cfg)
@@ -126,16 +117,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("resolver init: %w", err)
 	}
 	s.dnsResolver = dnsResolver
-
-	// Restore the delegation cache from its snapshot — the periodic and
-	// shutdown saves already run (M4; previously write-only).
-	if path := cfg.Server.Features.DelegationStateFile(); path != "" {
-		if err := dnsResolver.LoadDelegationSnapshot(path); err != nil {
-			log.Warnf("RESOLVER: delegation snapshot load failed (starting cold): %v", err)
-		} else {
-			log.Infof("RESOLVER: restored %d delegations from snapshot", dnsResolver.DelegationCount())
-		}
-	}
 
 	s.warmUpConnections(cfg, queryClient)
 

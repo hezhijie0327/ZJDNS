@@ -4,24 +4,29 @@ Detailed technical reference for ZJDNS. For working guidelines, see [CLAUDE.md](
 
 ## Storage
 
-ZJDNS is fully in-memory — there is no database.  The cache, stats, zone
-rules, ruleset, latency and delegation data all live in memory (lrumap for
-LRU maps for cache/latency/delegations, atomic.Pointer snapshots for
-zone/ruleset rules, atomic counters for stats).  Persistence is opt-in via
-`state_file`: cache, latency and delegation stores each persist when their
-`state_file` is configured (5-minute periodic save + save on shutdown,
-`internal/snapfile` temp+rename atomic writes).  The DNSCrypt state file
+ZJDNS is in-memory with an optional disk spill tier — there is no database.
+The cache, stats, zone rules, ruleset, latency and delegation data live in
+memory (lrumap for LRU maps for cache/latency/delegations, atomic.Pointer
+snapshots for zone/ruleset rules, atomic counters for stats).  The disk
+tier is opt-in via `state_file`: when set, each store (cache entries,
+latency, delegation) gets a second-tier **spill store** (`internal/spillfile`
+— an append-only log of evicted-but-fresh records with an in-memory index).
+Evictions land on disk, memory misses promote disk records back, shutdown
+flushes the in-memory tiers, and a 5-min ticker compacts the file (dropping
+expired and over-cap records, temp+rename atomic rewrite).  The disk cap is
+`limit.disk` (in entries; ≤0 = unbounded); `limit.mem` bounds the hot tier
+(≤0 applies the store default).  On startup the hottest `limit.mem` records
+are loaded into memory, the rest stay on disk.  The DNSCrypt state file
 (`dnscryptstate`) is a separate ~300-byte blob holding the provider identity
-+ cert windows so restarts resume the same certificates. Like the other
-stores, all `state_file` keys are empty by default — persistence disabled,
-no file created, cold start per restart.  Stats are never persisted (reset
-on restart).
++ cert windows so restarts resume the same certificates.  All `state_file`
+keys are empty by default — persistence disabled, no file created, cold
+start per restart.  Stats are never persisted (reset on restart).
 
 ### In-memory data
 
 | Data | Structure | Lifetime |
 |------|-----------|----------|
-| DNS cache entries | `lrumap.Map[string, *cacheEntry]` — key = (qname, qtype, qclass, ecs) flattened, value = pre-packed wire (format 0x02) + ts/ttl. The key never splits on the client's DO bit — outbound queries always carry DO=1 (RFC 6840 §5.9) and DO=0 filtering happens at serve time | LRU-bounded, TTL-expired lazily on read; `state_file` empty (default) = no persistence, restart starts cold |
+| DNS cache entries | `lrumap.Map[string, *cacheEntry]` — key = (qname, qtype, qclass, ecs) flattened, value = pre-packed wire (format 0x02) + ts/ttl. The key never splits on the client's DO bit — outbound queries always carry DO=1 (RFC 6840 §5.9) and DO=0 filtering happens at serve time | LRU-bounded (limit.mem), TTL-expired lazily on read; spill tier when `state_file` set (evict → disk, miss → promote, shutdown flush) |
 | Query stats + per-RCODE journal | `statsjournal` (atomic counters + `topk.Map`) | Resets on restart |
 | Zone rules | `zoneTable` atomic.Pointer snapshot (exact/wildcard maps, compressed RR blobs) | Rebuilt from config at startup |
 | Ruleset rules | `ruleTable` atomic.Pointer snapshot (IP trie + domain suffix map) | Rebuilt from config at startup |
@@ -48,7 +53,7 @@ so cache hits serve the exact rcode.
 - **RecordRequest**: All results → in-memory atomic counters (`cache/statsjournal.go`); non-hit events also enter a per-RCODE top-N domain journal (`topk.Map`, bounded). No SQL, no disk — pure memory, reset on restart.
 - **Stats aggregation**: `Stats()` reads the in-memory snapshot — O(1) counters + per-RCODE top-N sort. Output keeps the previous TXT layout plus `top-rcode<N>` lines.
 - **Pruning**: `PruneQueryJournal` is a no-op — the journal is bounded in memory, nothing to prune.
-- **Eviction**: Pure LRU — on `Set()` when count > maxEntries the least-recently-used entry is evicted (`lrumap`). Latency and delegation entries expire lazily on read (past the stale window / TTL); periodic cleanup runs only when their `state_file` is configured (5-min state-maintenance ticker).
+- **Eviction**: Pure LRU — on `Set()` when count > maxEntries the least-recently-used entry is evicted (`lrumap`). With a spill tier the evicted entry (still fresh) is appended to the spill log; a memory miss reads the record back and promotes it. Latency and delegation entries expire lazily on read (past the stale window / TTL); periodic cleanup and spill compaction run only when their `state_file` is configured (5-min state-maintenance ticker).
 - **NS latency cache**: NS/Root addresses as TypeA/TypeAAAA entries. Latency probed via `ProbeNSAddrs`, reordered by `sortAnswerByLatency` at `Get()` time.
 - **Delegation cache**: Zone-cut delegations (zone to NS names + verified DS) in memory (LRU-bounded, lazy TTL expiry + periodic cleanup). Populated at every delegation crossing during recursive walks; only secure (verified DS) or insecure (authenticated no-DS) delegations are stored. On subsequent queries, a suffix-walk from the deepest ancestor finds the first fresh delegation and starts the walk from that zone instead of the root, skipping already-walked delegation levels. DNSKEYs are fetched fresh by `ensureZoneDNSKEYs` (verified against the cached DS); NS addresses are resolved from the existing TypeA/TypeAAAA cache with the stored address snapshot as a fallback.
 - **IP latency**: Per-IP keyed, in memory (LRU-bounded `lrumap.Map[string, latEntry]`). Background probes write latency + probe time; cache hits read it to reorder A/AAAA answers fastest-first. All domains sharing a CDN IP reuse the same entry. Entries expire lazily past the stale window.

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 	"zjdns/cache"
+	"zjdns/config"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
 
@@ -15,7 +16,7 @@ import (
 
 func testStore(t *testing.T) cache.Store {
 	t.Helper()
-	return cache.New(0, 0)
+	return cache.New(config.LimitSettings{}, config.LimitSettings{}, "", "")
 }
 
 func testQuery(t *testing.T) *dns.Msg {

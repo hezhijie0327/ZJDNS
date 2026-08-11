@@ -32,9 +32,17 @@ const (
 // =============================================================================
 
 const (
-	DefaultMaxCacheEntries      = 10000
-	DefaultMaxLatencyEntries    = 5000  // per-IP latency table bound
-	DefaultMaxDelegationEntries = 10000 // zone-cut delegation cache bound
+	// Defaults tuned for small-memory devices (64–128 MB): the hot tier
+	// stays under ~3 MB and the spill index (≈100 B per disk record) under
+	// ~4 MB at full caps.
+	DefaultMaxCacheEntries      = 2000
+	DefaultMaxLatencyEntries    = 1000 // per-IP latency table bound
+	DefaultMaxDelegationEntries = 2000 // zone-cut delegation cache bound
+
+	// Spill tier defaults (second-tier disk caps, in entries).
+	DefaultSpillCacheEntries      = 20000
+	DefaultSpillLatencyEntries    = 5000
+	DefaultSpillDelegationEntries = 20000
 
 	DefaultTTL         = 10
 	DefaultStaleTTL    = 30

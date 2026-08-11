@@ -113,6 +113,11 @@ type Config struct {
 	// DelegationMaxEntries bounds the in-memory zone-cut delegation cache
 	// (<= 0 applies the config default).
 	DelegationMaxEntries int
+	// DelegationSpillPath enables the delegation disk spill tier ("" =
+	// single-tier).  DelegationSpillLimit bounds the spill records (<= 0 =
+	// unbounded).
+	DelegationSpillPath  string
+	DelegationSpillLimit int
 	Ctx                  context.Context // lifecycle context propagated to Recursive for probes
 }
 
@@ -193,28 +198,30 @@ func New(cfg *Config) (*Resolver, error) {
 		delegations: lrumap.New[string, *delegationEntry](delegationMax),
 		ctx:         cfg.Ctx,
 	}
+	r.recursive.loadDelegationSpill(cfg.DelegationSpillPath, cfg.DelegationSpillLimit, delegationMax)
 	r.cname = &CNAME{resolver: r}
 	r.validator = &Validator{Crypto: cfg.Crypto, Poisonguard: cfg.PoisonDetector}
 	return r, nil
 }
 
-// LoadDelegationSnapshot restores the zone-cut delegation cache from a
-// snapshot file (persistence bridge for the server lifecycle).
-func (r *Resolver) LoadDelegationSnapshot(path string) error {
-	return r.recursive.LoadDelegationSnapshot(path)
-}
-
 // DelegationCount returns the number of cached zone-cut delegations.
 func (r *Resolver) DelegationCount() int { return r.recursive.delegations.Len() }
-
-// SaveDelegationSnapshot persists the zone-cut delegation cache.
-func (r *Resolver) SaveDelegationSnapshot(path string) error {
-	return r.recursive.SaveDelegationSnapshot(path)
-}
 
 // CleanupDelegations physically removes expired delegation entries.
 func (r *Resolver) CleanupDelegations() {
 	r.recursive.CleanupDelegations()
+}
+
+// FlushDelegationSpill pushes the in-memory delegation cache to the spill
+// store (shutdown hook).
+func (r *Resolver) FlushDelegationSpill() {
+	r.recursive.flushDelegationSpill()
+}
+
+// CompactDelegationSpill rewrites the delegation spill store when expired
+// records dominate or the disk cap is exceeded.
+func (r *Resolver) CompactDelegationSpill() {
+	r.recursive.compactDelegationSpill()
 }
 
 // ConfigureServers initializes the upstream server list.

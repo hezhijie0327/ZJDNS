@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"testing"
 	"zjdns/cache"
+	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/rdata"
@@ -158,7 +159,7 @@ func TestStripMQBundled(t *testing.T) {
 
 // TestWarmFromMQResponse_Positive caches the merged records (with RRSIGs).
 func TestWarmFromMQResponse_Positive(t *testing.T) {
-	r := &Resolver{cache: cache.New(0, 0)}
+	r := &Resolver{cache: cache.New(config.LimitSettings{}, config.LimitSettings{}, "", "")}
 	sig := &dns.RRSIG{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, RRSIG: rdata.RRSIG{TypeCovered: dns.TypeAAAA}}
 	resp := mqTestMsg()
 	resp.Answer = append(resp.Answer, mqA("192.0.2.1"), mqAAAA("2001:db8::1"), sig)
@@ -178,7 +179,7 @@ func TestWarmFromMQResponse_Positive(t *testing.T) {
 
 // TestWarmFromMQResponse_Negative caches NODATA with the denial proofs.
 func TestWarmFromMQResponse_Negative(t *testing.T) {
-	r := &Resolver{cache: cache.New(0, 0)}
+	r := &Resolver{cache: cache.New(config.LimitSettings{}, config.LimitSettings{}, "", "")}
 	resp := mqTestMsg()
 	resp.Authoritative = true
 	resp.Ns = append(resp.Ns, &dns.SOA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}})
@@ -199,7 +200,7 @@ func TestWarmFromMQResponse_Negative(t *testing.T) {
 // TestWarmFromMQResponse_Referral warms nothing — a referral carries NS in
 // authority, no SOA, no records.
 func TestWarmFromMQResponse_Referral(t *testing.T) {
-	r := &Resolver{cache: cache.New(0, 0)}
+	r := &Resolver{cache: cache.New(config.LimitSettings{}, config.LimitSettings{}, "", "")}
 	resp := mqTestMsg()
 	resp.Ns = append(resp.Ns, &dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, NS: rdata.NS{Ns: "ns1.example.com."}})
 	mqr := &dns.MQRESPONSE{Types: []uint16{dns.TypeAAAA}}
@@ -211,7 +212,7 @@ func TestWarmFromMQResponse_Referral(t *testing.T) {
 
 // TestWarmFromMQResponse_Truncated warms nothing.
 func TestWarmFromMQResponse_Truncated(t *testing.T) {
-	r := &Resolver{cache: cache.New(0, 0)}
+	r := &Resolver{cache: cache.New(config.LimitSettings{}, config.LimitSettings{}, "", "")}
 	resp := mqTestMsg()
 	resp.Truncated = true
 	resp.Answer = append(resp.Answer, mqAAAA("2001:db8::1"))

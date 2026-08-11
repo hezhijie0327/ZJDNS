@@ -16,8 +16,14 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 )
 
+// newTestCache returns a single-tier cache with default capacities (no
+// spill files).
+func newTestCache() *Cache {
+	return New(config.LimitSettings{}, config.LimitSettings{}, "", "")
+}
+
 func testStore() *Cache {
-	return New(0, 0)
+	return newTestCache()
 }
 
 // ── Get / Set ─────────────────────────────────────────────────────────────────
@@ -765,7 +771,7 @@ func TestStats(t *testing.T) {
 // ── E2E: full lifecycle with disk-backed DB and real DNS records ─────────────
 
 func TestE2E_FullLifecycle(t *testing.T) {
-	mc := New(0, 0)
+	mc := newTestCache()
 	defer func() { _ = mc.Close() }()
 
 	// ── Phase 1: Insert varied DNS records ──────────────────────────────────
@@ -1034,7 +1040,7 @@ func TestE2E_LatencyOrdering(t *testing.T) {
 // ── E2E: Compression efficacy ────────────────────────────────────────────────
 
 func TestE2E_CompressionEfficacy(t *testing.T) {
-	mc := New(0, 0)
+	mc := newTestCache()
 	defer func() { _ = mc.Close() }()
 
 	// Insert 50 realistic A-record responses (different domain names, multiple IPs).
@@ -1094,7 +1100,7 @@ func netParseIP(s string) netip.Addr {
 // entry counter — otherwise the counter drifts above the real row count and
 // evictIfNeeded deletes valid entries prematurely.
 func TestSetReplacesExistingKeyWithoutCounterInflation(t *testing.T) {
-	mc := New(0, 0)
+	mc := newTestCache()
 	defer func() { _ = mc.Close() }()
 
 	a1 := &dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("93.184.216.34")}}
@@ -1239,7 +1245,7 @@ func TestPruneQueryJournal(t *testing.T) {
 // resolver exercises (cache Get/GetTypes/LatencyLastProbe + Set + stats
 // RecordRequest + UpdateLatency) under concurrency.
 func TestPoolReturnsToIdleAfterLoad(t *testing.T) {
-	s := New(0, 0)
+	s := newTestCache()
 
 	var wg sync.WaitGroup
 	for range 32 {

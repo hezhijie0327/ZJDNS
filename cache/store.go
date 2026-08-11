@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"net"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
 	"zjdns/internal/pool"
+	"zjdns/internal/spillfile"
 	"zjdns/internal/ttl"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -20,13 +22,19 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
-// Cache is an in-memory DNS response cache backed by an LRU map.  It
-// implements the Store interface.  The name is historical — there is no
-// SQLite involvement.
+// Cache is an in-memory DNS response cache backed by an LRU map, with an
+// optional disk spill tier.  It implements the Store interface.  The name
+// is historical — there is no SQLite involvement.
 type Cache struct {
 	entries    *lrumap.Map[string, *cacheEntry] // cache key → entry
 	maxEntries int
 	statsMgr   *Manager // in-memory query stats + per-RCODE top-N journal
+
+	// spill is the second-tier disk store: evicted-but-fresh entries land
+	// here and are promoted back on a memory miss.  nil when no state_file
+	// is configured (single-tier mode).
+	spill    *spillfile.Store
+	spillCap int // spill file record cap (≤0 = unbounded)
 
 	// hasLatencyData gates sortAnswerByLatency: when false (no latency data has
 	// ever been written), the per-hit latency lookup is skipped entirely.
@@ -38,6 +46,10 @@ type Cache struct {
 	// cleaned by CleanupLatency.
 	latencies  *lrumap.Map[string, latEntry]
 	latencyMax int
+
+	// spillLat is the latency-table spill tier (same role as spill).
+	spillLat    *spillfile.Store
+	spillLatCap int
 }
 
 // cacheEntry is one cached DNS response.  msgWire is the pre-packed response
@@ -186,31 +198,120 @@ func WireHasDNSSEC(wire []byte) bool {
 	return false
 }
 
-// New creates an in-memory cache with the given entry and latency capacities
-// (<= 0 applies the config defaults).
-func New(maxEntries, latencyMax int) *Cache {
+// New creates a two-tier cache with the given entry and latency capacities
+// (<= 0 applies the config defaults).  A non-empty spill path enables the
+// disk tier for that store: the spill file is opened and its hottest
+// entries (by store timestamp) are loaded into memory, up to the mem cap;
+// the rest stay on disk and are promoted back on a memory miss.
+func New(entriesLimit, latencyLimit config.LimitSettings, spillPath, latencySpillPath string) *Cache {
+	maxEntries := entriesLimit.Mem
 	if maxEntries <= 0 {
 		maxEntries = config.DefaultMaxCacheEntries
 	}
+	latencyMax := latencyLimit.Mem
 	if latencyMax <= 0 {
 		latencyMax = config.DefaultMaxLatencyEntries
 	}
-	return &Cache{
+	c := &Cache{
 		entries:    lrumap.New[string, *cacheEntry](maxEntries),
 		maxEntries: maxEntries,
 		statsMgr:   newStatsJournal(0),
 		latencies:  lrumap.New[string, latEntry](latencyMax),
 		latencyMax: latencyMax,
 	}
+	c.loadSpill(spillPath, entriesLimit.Disk, maxEntries)
+	c.loadLatencySpill(latencySpillPath, latencyLimit.Disk, latencyMax)
+	return c
 }
 
-// Close is a no-op — the cache is pure memory, nothing to release.
+// loadSpill opens the entries spill store and warms memory with its hottest
+// entries.  On failure (foreign/corrupt file) the disk tier is disabled —
+// the cache still works, just single-tier.
+func (s *Cache) loadSpill(path string, diskCap, maxEntries int) {
+	if path == "" {
+		return
+	}
+	spill, err := spillfile.Open(path)
+	if err != nil {
+		log.Warnf("CACHE: spill store open failed (disk tier disabled): %v", err)
+		return
+	}
+	s.spill = spill
+	s.spillCap = diskCap
+
+	entries := spill.Entries()
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Ts < entries[j].Ts })
+	n := 0
+	for _, e := range entries {
+		if n >= maxEntries {
+			break
+		}
+		if !ttl.CanServeExpired(e.Ts, e.Ttl, config.DefaultStaleMaxAge) {
+			spill.Delete(e.Key) // past the stale window — dead weight
+			continue
+		}
+		ts, entryTTL, validated, wire, ok := spill.Get(e.Key)
+		if !ok {
+			continue
+		}
+		// Coldest first so the hottest entry ends up at the LRU front.
+		s.entries.Set(e.Key, &cacheEntry{msgWire: wire, ts: ts, ttl: entryTTL, validated: validated})
+		n++
+	}
+	// Spill-on-evict registered AFTER the warm-up load — load-time capacity
+	// evictions must not re-spill the very entries just read back.
+	s.entries.SetOnEvict(func(key string, ce *cacheEntry) {
+		if ce.ts > 0 && ttl.CanServeExpired(ce.ts, ce.ttl, config.DefaultStaleMaxAge) {
+			_ = s.spill.Put(key, ce.ts, ce.ttl, ce.validated, ce.msgWire)
+		}
+	})
+	log.Infof("CACHE: spill store ready: %d records on disk, %d loaded to memory", spill.EntryCount(), n)
+}
+
+// Close flushes and closes the spill stores (the in-memory LRUs need no
+// cleanup).
 func (s *Cache) Close() error {
-	return nil
+	var err error
+	if s.spill != nil {
+		if e := s.spill.Close(); e != nil && err == nil {
+			err = e
+		}
+	}
+	if s.spillLat != nil {
+		if e := s.spillLat.Close(); e != nil && err == nil {
+			err = e
+		}
+	}
+	return err
 }
 
-// Flush is a no-op — Set() writes synchronously, nothing is buffered.
-func (s *Cache) Flush() {}
+// Flush pushes every in-memory entry to its spill store (skipping records
+// already on disk unchanged) and fsyncs — called at shutdown so a restart
+// warms from disk.  No-op without a disk tier.
+func (s *Cache) Flush() {
+	if s.spill != nil {
+		s.entries.Range(func(key string, ce *cacheEntry) bool {
+			if ce.ts > 0 && ttl.CanServeExpired(ce.ts, ce.ttl, config.DefaultStaleMaxAge) && !s.spill.Indexed(key, ce.ts) {
+				_ = s.spill.Put(key, ce.ts, ce.ttl, ce.validated, ce.msgWire)
+			}
+			return true
+		})
+	}
+	if s.spillLat != nil {
+		s.latencies.Range(func(key string, e latEntry) bool {
+			if e.lastProbe > 0 && !s.spillLat.Indexed(key, e.lastProbe) {
+				_ = s.spillLat.Put(key, e.lastProbe, 0, false, marshalLatency(e))
+			}
+			return true
+		})
+	}
+	if s.spill != nil {
+		_ = s.spill.Flush()
+	}
+	if s.spillLat != nil {
+		_ = s.spillLat.Flush()
+	}
+}
 
 // EntryCount returns the number of cached entries.
 func (s *Cache) EntryCount() int { return s.entries.Len() }
@@ -242,6 +343,10 @@ func buildCacheKey(qname string, qtype, qclass uint16, ecsAddr string, ecsPrefix
 // Get retrieves a cached DNS response by decompressing and unpacking the stored
 // wire format. Returns the entry, whether it was found, and whether it's expired.
 // The caller must pass a canonical qname (dnsutil.Canonical).
+//
+// On a memory miss the disk spill tier is consulted; a fresh spill hit is
+// promoted back into memory (which may itself evict the LRU tail — that
+// entry spills to disk in turn).
 func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption) (*Entry, bool, bool) {
 	// ECS fallback candidates from most to least specific — the first hit is
 	// the most specific match (the former SQL picked max(ecs_prefix) over the
@@ -249,12 +354,35 @@ func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption) (
 	candidates := ecsFallbackCandidates(ecs)
 	defer releaseECSCandidates(candidates)
 	for _, c := range candidates {
-		if ce, ok := s.entries.Get(buildCacheKey(qname, qtype, qclass, c.addr, c.prefix)); ok {
+		key := buildCacheKey(qname, qtype, qclass, c.addr, c.prefix)
+		if ce, ok := s.entries.Get(key); ok {
 			return s.buildEntry(ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qtype)
+		}
+		if s.spill != nil {
+			if entry, found := s.getFromSpill(key); found {
+				return s.buildEntry(entry.ts, entry.ttl, entry.validated, entry.msgWire, qname, qtype)
+			}
 		}
 	}
 	log.Debugf("CACHE: miss for %s (type=%d)", qname, qtype)
 	return nil, false, false
+}
+
+// getFromSpill reads a spill record by key and promotes it to memory.  An
+// expired record is dropped from the index (the file record lingers until
+// compaction).  Returns (entry, false) on miss or expiry.
+func (s *Cache) getFromSpill(key string) (*cacheEntry, bool) {
+	ts, entryTTL, validated, wire, ok := s.spill.Get(key)
+	if !ok {
+		return nil, false
+	}
+	if !ttl.CanServeExpired(ts, entryTTL, config.DefaultStaleMaxAge) {
+		s.spill.Delete(key)
+		return nil, false
+	}
+	ce := &cacheEntry{msgWire: wire, ts: ts, ttl: entryTTL, validated: validated}
+	s.entries.Set(key, ce)
+	return ce, true
 }
 
 // GetTypes retrieves the entries for exactly two qtypes of one qname (NS
@@ -262,12 +390,33 @@ func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption) (
 // the empty ECS candidate, and the caller must pass a canonical qname.
 func (s *Cache) GetTypes(qname string, qclass uint16, qtypes [2]uint16) (entries [2]*Entry, found, expired [2]bool) {
 	for i, qt := range qtypes {
-		if ce, ok := s.entries.Get(buildCacheKey(qname, qt, qclass, "", 0)); ok {
+		key := buildCacheKey(qname, qt, qclass, "", 0)
+		if ce, ok := s.entries.Get(key); ok {
 			entries[i], found[i], expired[i] = s.buildEntry(ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qt)
+			continue
+		}
+		if s.spill != nil {
+			if ce, ok := s.getFromSpill(key); ok {
+				entries[i], found[i], expired[i] = s.buildEntry(ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qt)
+			}
 		}
 	}
 	return entries, found, expired
 }
+
+// SpillStore returns the entries spill store (nil in single-tier mode) —
+// used by the server's state maintenance for compaction.
+func (s *Cache) SpillStore() *spillfile.Store { return s.spill }
+
+// SpillCap returns the entries spill record cap (≤0 = unbounded).
+func (s *Cache) SpillCap() int { return s.spillCap }
+
+// LatencySpillStore returns the latency spill store (nil in single-tier
+// mode).
+func (s *Cache) LatencySpillStore() *spillfile.Store { return s.spillLat }
+
+// LatencySpillCap returns the latency spill record cap (≤0 = unbounded).
+func (s *Cache) LatencySpillCap() int { return s.spillLatCap }
 
 // buildEntry parses a stored BLOB (pre-packed) into an Entry, applying
 // latency sorting.  Returns (entry, found, expired); found=false on corrupt

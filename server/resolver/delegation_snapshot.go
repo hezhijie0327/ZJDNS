@@ -2,172 +2,267 @@ package resolver
 
 import (
 	"encoding/binary"
-	"fmt"
-	"io"
+	"sort"
 	"zjdns/internal/log"
-	"zjdns/internal/snapfile"
+	"zjdns/internal/spillfile"
+	"zjdns/internal/ttl"
 )
 
-// Delegation snapshot entry format:
+// Delegation spill record wire layout:
 // [2B zone_len][zone][2B parent_len][parent][8B ts][4B ttl]
 // [4B ns_count][ns names...][4B addr_count][addrs...][4B ds_len][ds_wire]
-const delegationSnapshotVersion = 1
-
-// Load guards for the delegation snapshot — counts come from the file, so a
-// corrupt or tampered snapshot must not drive an unbounded allocation (M3).
 const (
-	maxSnapshotNames  = 64        // NS/address count per zone
-	maxSnapshotKeyLen = 1024      // zone/parent/NS name length
-	maxSnapshotDSLen  = 64 * 1024 // packed DS wire
+	maxSpillNames   = 64        // NS/address count per zone
+	maxSpillNameLen = 1024      // zone/parent/NS name length
+	maxSpillDSLen   = 64 * 1024 // packed DS wire
 )
 
-// SaveDelegationSnapshot writes the zone-cut delegation cache to path
-// atomically.  Entries are collected under the LRU lock and serialized
-// outside it (H5) — delegation entries are immutable once stored.
-func (r *Recursive) SaveDelegationSnapshot(path string) error {
-	items := make(map[string]*delegationEntry, r.delegations.Len())
-	r.delegations.Range(func(zone string, e *delegationEntry) bool {
-		items[zone] = e
-		return true
-	})
-	return snapfile.Save(path, delegationSnapshotVersion, func(w io.Writer) error {
-		var lenBuf [2]byte
-		var tsBuf [8]byte
-		var numBuf [4]byte
-		writeStr := func(s string) error {
-			binary.BigEndian.PutUint16(lenBuf[:], uint16(len(s))) //nolint:gosec // G115: DNS names are bounded
-			if _, err := w.Write(lenBuf[:]); err != nil {
-				return err
-			}
-			_, err := io.WriteString(w, s)
-			return err
+// packDelegationEntry serialises a delegationEntry into a spill record wire.
+func packDelegationEntry(e *delegationEntry) []byte {
+	out := make([]byte, 0, 128)
+	var lenBuf [2]byte
+	var numBuf [4]byte
+	var tsBuf [8]byte
+	writeStr := func(s string) {
+		binary.BigEndian.PutUint16(lenBuf[:], uint16(len(s))) //nolint:gosec // G115: DNS names are bounded
+		out = append(out, lenBuf[:]...)
+		out = append(out, s...)
+	}
+	writeStrs := func(ss []string) {
+		binary.BigEndian.PutUint32(numBuf[:], uint32(len(ss))) //nolint:gosec // G115: bounded by NS/addr counts
+		out = append(out, numBuf[:]...)
+		for _, s := range ss {
+			writeStr(s)
 		}
-		writeStrings := func(ss []string) error {
-			binary.BigEndian.PutUint32(numBuf[:], uint32(len(ss))) //nolint:gosec // G115: bounded by NS/addr counts
-			if _, err := w.Write(numBuf[:]); err != nil {
-				return err
-			}
-			for _, s := range ss {
-				if err := writeStr(s); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
+	}
 
-		for zone, e := range items {
-			if err := writeStr(zone); err != nil {
-				return err
-			}
-			if err := writeStr(e.parent); err != nil {
-				return err
-			}
-			binary.BigEndian.PutUint64(tsBuf[:], uint64(e.ts)) //nolint:gosec // G115: unix seconds fit uint64
-			if _, err := w.Write(tsBuf[:]); err != nil {
-				return err
-			}
-			binary.BigEndian.PutUint32(numBuf[:], uint32(e.ttl)) //nolint:gosec // G115: TTL bounded by config cap
-			if _, err := w.Write(numBuf[:]); err != nil {
-				return err
-			}
-			if err := writeStrings(e.nsNames); err != nil {
-				return err
-			}
-			if err := writeStrings(e.addrs); err != nil {
-				return err
-			}
-			dsWire := packDS(e.ds)
-			binary.BigEndian.PutUint32(numBuf[:], uint32(len(dsWire))) //nolint:gosec // G115: DS wire bounded
-			if _, err := w.Write(numBuf[:]); err != nil {
-				return err
-			}
-			if _, err := w.Write(dsWire); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	writeStr(e.zone)
+	writeStr(e.parent)
+	binary.BigEndian.PutUint64(tsBuf[:], uint64(e.ts)) //nolint:gosec // G115: unix seconds fit uint64
+	out = append(out, tsBuf[:]...)
+	binary.BigEndian.PutUint32(numBuf[:], uint32(e.ttl)) //nolint:gosec // G115: TTL bounded by config cap
+	out = append(out, numBuf[:]...)
+	writeStrs(e.nsNames)
+	writeStrs(e.addrs)
+	dsWire := packDS(e.ds)
+	binary.BigEndian.PutUint32(numBuf[:], uint32(len(dsWire))) //nolint:gosec // G115: DS wire bounded
+	out = append(out, numBuf[:]...)
+	out = append(out, dsWire...)
+	return out
 }
 
-// LoadDelegationSnapshot loads the delegation cache from a snapshot file.
-func (r *Recursive) LoadDelegationSnapshot(path string) error {
-	return snapfile.Load(path, delegationSnapshotVersion, func(rd io.Reader) error {
-		var lenBuf [2]byte
-		readStr := func() (string, error) {
-			if _, err := io.ReadFull(rd, lenBuf[:]); err != nil {
-				return "", err
-			}
-			n := int(binary.BigEndian.Uint16(lenBuf[:]))
-			if n > maxSnapshotKeyLen {
-				return "", fmt.Errorf("delegation snapshot: corrupt name length %d", n)
-			}
-			buf := make([]byte, n)
-			if _, err := io.ReadFull(rd, buf); err != nil {
-				return "", err
-			}
-			return string(buf), nil
+// unpackDelegationEntry parses a delegationEntry from a spill record wire.
+// ok is false for corrupt or foreign-length wires (treated as a miss).
+func unpackDelegationEntry(wire []byte) (*delegationEntry, bool) {
+	e := &delegationEntry{}
+	r := wire
+	take := func(n int) ([]byte, bool) {
+		if len(r) < n {
+			return nil, false
 		}
-		readStrings := func() ([]string, error) {
-			var numBuf [4]byte
-			if _, err := io.ReadFull(rd, numBuf[:]); err != nil {
-				return nil, err
-			}
-			n := int(binary.BigEndian.Uint32(numBuf[:]))
-			if n > maxSnapshotNames {
-				return nil, fmt.Errorf("delegation snapshot: corrupt string count %d", n)
-			}
-			out := make([]string, 0, n)
-			for range n {
-				s, err := readStr()
-				if err != nil {
-					return nil, err
-				}
-				out = append(out, s)
-			}
-			return out, nil
+		out := r[:n]
+		r = r[n:]
+		return out, true
+	}
+	readStr := func() (string, bool) {
+		lb, ok := take(2)
+		if !ok {
+			return "", false
 		}
+		n := int(binary.BigEndian.Uint16(lb))
+		if n > maxSpillNameLen {
+			return "", false
+		}
+		b, ok := take(n)
+		if !ok {
+			return "", false
+		}
+		return string(b), true
+	}
+	readStrs := func() ([]string, bool) {
+		nb, ok := take(4)
+		if !ok {
+			return nil, false
+		}
+		n := int(binary.BigEndian.Uint32(nb))
+		if n > maxSpillNames {
+			return nil, false
+		}
+		out := make([]string, 0, n)
+		for range n {
+			s, ok := readStr()
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	}
 
-		zone, err := readStr()
-		if err != nil {
-			return err
-		}
-		parent, err := readStr()
-		if err != nil {
-			return err
-		}
-		var entryBuf [12]byte // ts(8) + ttl(4)
-		if _, err := io.ReadFull(rd, entryBuf[:]); err != nil {
-			return err
-		}
-		ts := int64(binary.BigEndian.Uint64(entryBuf[0:8])) //nolint:gosec // G115: snapshot ts is a unix second
-		ttl := int(binary.BigEndian.Uint32(entryBuf[8:12]))
-		nsNames, err := readStrings()
-		if err != nil {
-			return err
-		}
-		addrs, err := readStrings()
-		if err != nil {
-			return err
-		}
-		var numBuf [4]byte
-		if _, err := io.ReadFull(rd, numBuf[:]); err != nil {
-			return err
-		}
-		dsLen := int(binary.BigEndian.Uint32(numBuf[:]))
-		if dsLen > maxSnapshotDSLen {
-			return fmt.Errorf("delegation snapshot: corrupt DS length %d", dsLen)
-		}
-		dsWire := make([]byte, dsLen)
-		if _, err := io.ReadFull(rd, dsWire); err != nil {
-			return err
-		}
+	var ok bool
+	if e.zone, ok = readStr(); !ok {
+		return nil, false
+	}
+	if e.parent, ok = readStr(); !ok {
+		return nil, false
+	}
+	tsb, ok := take(8)
+	if !ok {
+		return nil, false
+	}
+	e.ts = int64(binary.BigEndian.Uint64(tsb)) //nolint:gosec // G115: unix seconds fit int64
+	ttlb, ok := take(4)
+	if !ok {
+		return nil, false
+	}
+	e.ttl = int(binary.BigEndian.Uint32(ttlb))
+	if e.nsNames, ok = readStrs(); !ok {
+		return nil, false
+	}
+	if e.addrs, ok = readStrs(); !ok {
+		return nil, false
+	}
+	dslb, ok := take(4)
+	if !ok {
+		return nil, false
+	}
+	dsLen := int(binary.BigEndian.Uint32(dslb))
+	if dsLen > maxSpillDSLen {
+		return nil, false
+	}
+	dsWire, ok := take(dsLen)
+	if !ok {
+		return nil, false
+	}
+	e.ds = unpackDS(dsWire)
+	return e, true
+}
 
-		r.delegations.Set(zone, &delegationEntry{
-			zone: zone, parent: parent, nsNames: nsNames, addrs: addrs,
-			ds: unpackDS(dsWire), ts: ts, ttl: ttl,
-		})
-		return nil
+// loadDelegationSpill opens the delegation spill store and warms memory with
+// its freshest entries (spill ts == store time — freshness is TTL-based).
+// On failure (foreign/corrupt file) the disk tier is disabled.
+func (r *Recursive) loadDelegationSpill(path string, diskCap, delegationMax int) {
+	if path == "" {
+		return
+	}
+	spill, err := spillfile.Open(path)
+	if err != nil {
+		log.Warnf("RESOLVER: delegation spill store open failed (disk tier disabled): %v", err)
+		return
+	}
+	r.spill = spill
+	r.spillCap = diskCap
+
+	entries := spill.Entries()
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Ts < entries[j].Ts })
+	n := 0
+	for _, e := range entries {
+		if n >= delegationMax {
+			break
+		}
+		if ttl.IsExpired(e.Ts, e.Ttl) {
+			spill.Delete(e.Key)
+			continue
+		}
+		_, _, _, wire, ok := spill.Get(e.Key)
+		if !ok {
+			continue
+		}
+		de, ok := unpackDelegationEntry(wire)
+		if !ok {
+			spill.Delete(e.Key)
+			continue
+		}
+		// Coldest first so the freshest entry ends up at the LRU front.
+		r.delegations.Set(e.Key, de)
+		n++
+	}
+	// Spill-on-evict registered AFTER the warm-up load.
+	r.delegations.SetOnEvict(func(zone string, de *delegationEntry) {
+		if de.ts > 0 && !ttl.IsExpired(de.ts, de.ttl) {
+			_ = r.spill.Put(zone, de.ts, de.ttl, false, packDelegationEntry(de))
+		}
 	})
+	log.Infof("RESOLVER: delegation spill store ready: %d records on disk, %d loaded to memory", spill.EntryCount(), n)
+}
+
+// getDelegationFromSpill reads a delegation record by zone and promotes it
+// to memory.  An expired record is dropped from the index.
+func (r *Recursive) getDelegationFromSpill(zone string) (*delegationEntry, bool) {
+	ts, entryTTL, _, wire, ok := r.spill.Get(zone)
+	if !ok {
+		return nil, false
+	}
+	if ttl.IsExpired(ts, entryTTL) {
+		r.spill.Delete(zone)
+		return nil, false
+	}
+	de, ok := unpackDelegationEntry(wire)
+	if !ok {
+		r.spill.Delete(zone)
+		return nil, false
+	}
+	r.delegations.Set(zone, de)
+	return de, true
+}
+
+// flushDelegationSpill pushes the in-memory delegation cache to the spill
+// store (shutdown hook).
+func (r *Recursive) flushDelegationSpill() {
+	if r.spill == nil {
+		return
+	}
+	r.delegations.Range(func(zone string, de *delegationEntry) bool {
+		if de.ts > 0 && !ttl.IsExpired(de.ts, de.ttl) && !r.spill.Indexed(zone, de.ts) {
+			_ = r.spill.Put(zone, de.ts, de.ttl, false, packDelegationEntry(de))
+		}
+		return true
+	})
+	_ = r.spill.Flush()
+}
+
+// compactDelegationSpill rewrites the delegation spill store keeping only
+// fresh records, newest first within the disk cap (cap <= 0 = unbounded).
+// Runs when expired records dominate the index (> 50%) or the index exceeds
+// the cap.
+func (r *Recursive) compactDelegationSpill() {
+	spill := r.spill
+	if spill == nil {
+		return
+	}
+	entries := spill.Entries()
+	if len(entries) == 0 {
+		return
+	}
+	now := log.NowUnix()
+	expired := 0
+	for _, e := range entries {
+		if e.Ts+int64(e.Ttl) <= now {
+			expired++
+		}
+	}
+	if expired*2 <= len(entries) && (r.spillCap <= 0 || len(entries) <= r.spillCap) {
+		return // nothing worth rewriting
+	}
+
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Ts > entries[j].Ts })
+	keepSize := len(entries)
+	if r.spillCap > 0 {
+		keepSize = min(r.spillCap, keepSize)
+	}
+	keep := make(map[string]bool, keepSize)
+	for _, e := range entries {
+		if e.Ts+int64(e.Ttl) <= now { // expired — drop
+			continue
+		}
+		if r.spillCap > 0 && len(keep) >= r.spillCap {
+			break
+		}
+		keep[e.Key] = true
+	}
+	if err := spill.Compact(func(key string, _ int64, _ int) bool { return keep[key] }); err != nil {
+		log.Warnf("RESOLVER: delegation spill compact failed: %v", err)
+	}
 }
 
 // CleanupDelegations physically removes expired entries — the lazy read-time

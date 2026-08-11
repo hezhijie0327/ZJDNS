@@ -87,7 +87,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## Version Bumping
 
-Use `sh scripts/bump-version.sh <patch|minor|major> <slug>`.
+Use `sh scripts/bump-version.sh <patch|minor|major>`.
 
 | Component | Semantics |
 |-----------|-----------|

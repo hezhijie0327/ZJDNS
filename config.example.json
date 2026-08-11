@@ -51,16 +51,16 @@
       },
       "cache": {
         "entries": {
-          "limit": 10000,
+          "limit": { "mem": 2000, "disk": 20000 },
           "prefer_stale": true,
           "state_file": "./zjdns.cache"
         },
         "latency": {
-          "limit": 5000,
+          "limit": { "mem": 1000, "disk": 5000 },
           "state_file": "./zjdns.latency"
         },
         "delegation": {
-          "limit": 10000,
+          "limit": { "mem": 2000, "disk": 20000 },
           "state_file": "./zjdns.delegation"
         }
       },

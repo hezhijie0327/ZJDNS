@@ -54,13 +54,23 @@ func (s *Cache) FlushDB(target string) (int64, error) {
 			s.statsMgr.ResetJournal()
 		}
 	case "cache":
-		s.entries.Clear()
+		s.entries.Clear() // evict callbacks re-spill — wipe the spill file after
+		if s.spill != nil {
+			if err := s.spill.Clear(); err != nil {
+				log.Warnf("CACHE: spill clear failed: %v", err)
+			}
+		}
 	case "latency":
 		// Clear in place (lrumap is internally locked) — replacing the map
 		// pointer unsynchronized would race the cache-hit hot path and the
 		// latency-probe goroutines (H4).
 		s.latencies.Clear()
 		s.hasLatencyData.Store(false)
+		if s.spillLat != nil {
+			if err := s.spillLat.Clear(); err != nil {
+				log.Warnf("CACHE: latency spill clear failed: %v", err)
+			}
+		}
 	case "delegation", "zone":
 		// Not owned by the cache store — no-op (kept for interface parity).
 	default:
@@ -276,8 +286,14 @@ func (s *Cache) UpdateLatency(ip string, latencyMS int) {
 // LatencyLastProbe returns the last probe time for an IP. Returns (0, false)
 // if the IP has never been probed or its entry is older than the stale
 // window (lazy expiry — the former eviction-time DELETE FROM ip_latency).
+// A memory miss is retried against the latency spill tier (promoting on hit).
 func (s *Cache) LatencyLastProbe(ip string) (int64, bool) {
 	e, ok := s.latencies.Get(ip)
+	if !ok && s.spillLat != nil {
+		if lat, spillOK := s.getLatencyFromSpill(ip); spillOK {
+			e, ok = lat, true
+		}
+	}
 	if !ok {
 		return 0, false
 	}

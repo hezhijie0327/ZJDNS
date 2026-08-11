@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 	"zjdns/cache"
+	"zjdns/config"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
@@ -506,7 +507,7 @@ func TestIsResponseValid_NXDOMAIN(t *testing.T) {
 // ── Full chain: DS → DNSKEY → answer ────────────────────────────────────────
 
 func testCache() cache.Store {
-	return cache.New(0, 0)
+	return cache.New(config.LimitSettings{}, config.LimitSettings{}, "", "")
 }
 
 func TestFullDNSSECChain(t *testing.T) {

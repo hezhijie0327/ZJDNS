@@ -53,16 +53,25 @@ func generateExampleConfig() (string, error) {
 	cfg.Server.Features.KTLS = &config.KTLSSettings{KernelTX: true}
 	cfg.Server.Features.Cache = config.CacheSettings{
 		Entries: config.CacheStoreSettings{
-			Limit:       config.DefaultMaxCacheEntries,
+			Limit: config.LimitSettings{
+				Mem:  config.DefaultMaxCacheEntries,
+				Disk: config.DefaultSpillCacheEntries,
+			},
 			PreferStale: true,
 			StateFile:   "./zjdns.cache",
 		},
 		Latency: config.CacheStoreSettings{
-			Limit:     config.DefaultMaxLatencyEntries,
+			Limit: config.LimitSettings{
+				Mem:  config.DefaultMaxLatencyEntries,
+				Disk: config.DefaultSpillLatencyEntries,
+			},
 			StateFile: "./zjdns.latency",
 		},
 		Delegation: config.CacheStoreSettings{
-			Limit:     config.DefaultMaxDelegationEntries,
+			Limit: config.LimitSettings{
+				Mem:  config.DefaultMaxDelegationEntries,
+				Disk: config.DefaultSpillDelegationEntries,
+			},
 			StateFile: "./zjdns.delegation",
 		},
 	}
