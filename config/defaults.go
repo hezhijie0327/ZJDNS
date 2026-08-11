@@ -306,11 +306,12 @@ const (
 	// passive eavesdropping but not active MITM (RFC 8310 §5).
 	PrivacyProfileOpportunistic = "opportunistic"
 
-	DefaultLatencyProbeTimeout     = 100 * time.Millisecond
-	DefaultNSProbeTimeout          = 5 * time.Second // timeout for NS/root latency probing
-	DefaultLatencyProbeMinInterval = 60              // min interval between probes for the same IP (seconds)
-	DefaultRootCacheTTL            = 3600            // root server cache entry TTL (seconds)
-	DefaultDelegationLookupZones   = 16              // max ancestor zones per delegation lookup
+	DefaultLatencyProbeTimeout      = 100 * time.Millisecond
+	DefaultNSProbeTimeout           = 5 * time.Second // timeout for NS/root latency probing
+	DefaultLatencyProbeMinInterval  = 60              // min interval between probes for the same IP (seconds)
+	DefaultLatencyProbeSmoothFactor = 2               // EWMA smoothing factor: srtt = ((N-1)·srtt + rtt) / N (N=2 → α=1/2)
+	DefaultRootCacheTTL             = 3600            // root server cache entry TTL (seconds)
+	DefaultDelegationLookupZones    = 16              // max ancestor zones per delegation lookup
 
 	DefaultProbePortDNS   = 53
 	DefaultProbePortHTTP  = 80

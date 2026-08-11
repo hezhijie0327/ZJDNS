@@ -5,6 +5,7 @@ import (
 	"net"
 	"slices"
 	"strings"
+	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/topk"
 )
@@ -250,8 +251,9 @@ func formatStatsLine(metrics ...statsMetric) string {
 
 // UpdateLatency stores a latency measurement keyed by IP only. All domains
 // sharing the same IP reuse the same entry — latency is measured once, not
-// once per domain.  In-memory only (no SQL, no disk); the entry is lazily
-// expired on read past DefaultStaleMaxAge.
+// once per domain.  New measurements are smoothed via integer EWMA
+// (srtt = (srtt + rtt) / N) to suppress single-sample jitter; the first
+// probe for an IP or an expired entry is stored directly.
 func (s *Cache) UpdateLatency(ip string, latencyMS int) {
 	s.hasLatencyData.Store(true)
 	if latencyMS < 0 {
@@ -260,7 +262,15 @@ func (s *Cache) UpdateLatency(ip string, latencyMS int) {
 	if net.ParseIP(ip) == nil {
 		return
 	}
-	s.latencies.Set(ip, latEntry{latency: latencyMS, lastProbe: log.NowUnix()})
+
+	now := log.NowUnix()
+	if old, ok := s.latencies.Get(ip); ok && old.lastProbe > 0 && old.lastProbe >= now-defaultStaleMaxAge {
+		// Unbiased integer EWMA: srtt = ((N-1)·srtt + rtt) / N.  The naive
+		// (srtt + rtt) / N form converges to rtt/(N-1) for N > 2 — a
+		// systematic underestimate — so N must weight the previous value.
+		latencyMS = ((config.DefaultLatencyProbeSmoothFactor-1)*old.latency + latencyMS) / config.DefaultLatencyProbeSmoothFactor
+	}
+	s.latencies.Set(ip, latEntry{latency: latencyMS, lastProbe: now})
 }
 
 // LatencyLastProbe returns the last probe time for an IP. Returns (0, false)

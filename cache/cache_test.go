@@ -558,6 +558,65 @@ func TestUpdateLatency(t *testing.T) {
 	}
 }
 
+// ── UpdateLatency SRTT (EWMA smoothing) ─────────────────────────────────
+
+func TestUpdateLatency_SRTT_FirstProbe(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	// First probe: stored directly (no prior entry).
+	mc.UpdateLatency("8.8.8.8", 42)
+	e, ok := mc.latencies.Get("8.8.8.8")
+	if !ok || e.latency != 42 {
+		t.Fatalf("first probe latency = %d, want 42", e.latency)
+	}
+}
+
+func TestUpdateLatency_SRTT_Converges(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	// First probe: 100ms.
+	mc.UpdateLatency("1.2.3.4", 100)
+	e, _ := mc.latencies.Get("1.2.3.4")
+	if e.latency != 100 {
+		t.Fatalf("first probe = %d, want 100", e.latency)
+	}
+
+	// Second probe: 20ms. SRTT = (100 + 20) / 2 = 60.
+	mc.UpdateLatency("1.2.3.4", 20)
+	e, _ = mc.latencies.Get("1.2.3.4")
+	if e.latency != 60 {
+		t.Fatalf("second probe = %d, want 60", e.latency)
+	}
+
+	// Third probe: 20ms again. SRTT = (60 + 20) / 2 = 40.
+	mc.UpdateLatency("1.2.3.4", 20)
+	e, _ = mc.latencies.Get("1.2.3.4")
+	if e.latency != 40 {
+		t.Fatalf("third probe = %d, want 40", e.latency)
+	}
+}
+
+func TestUpdateLatency_SRTT_ExpiredEntry(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	// Write an entry with a stale timestamp (3 days ago).
+	mc.latencies.Set("1.2.3.4", latEntry{latency: 100, lastProbe: log.NowUnix() - int64(config.DefaultStaleMaxAge) - 1})
+	mc.hasLatencyData.Store(true)
+
+	// Probe: expired entry → treated as first probe, stored directly.
+	mc.UpdateLatency("1.2.3.4", 30)
+	e, ok := mc.latencies.Get("1.2.3.4")
+	if !ok {
+		t.Fatal("entry should exist after UpdateLatency")
+	}
+	if e.latency != 30 {
+		t.Fatalf("expired entry probe = %d, want 30 (treated as first probe)", e.latency)
+	}
+}
+
 // ── Wire format multi-record round-trip ──────────────────────────────────────
 
 func TestSet_Get_MultipleRecords(t *testing.T) {

@@ -714,25 +714,27 @@ graph TD
     STEPS --> ICMP[ICMP Ping<br/>privileged raw socket]
     STEPS --> TCP[TCP Connect<br/>configurable port]
     STEPS --> UDP[UDP Send + Read<br/>single-byte datagram]
-    STEPS --> DNS[DNS Query<br/>UDP:53 · ID match]
-    STEPS --> DNSTCP[DNS Query<br/>TCP:53 · length-prefixed]
     STEPS --> HTTP[HTTP HEAD<br/>port 80]
     STEPS --> HTTPS[HTTPS HEAD<br/>port 443 · TLS]
     STEPS --> HTTP3[HTTP3 HEAD<br/>port 443 · QUIC]
+    STEPS --> DNS[DNS Query<br/>UDP:53 · ID match]
+    STEPS --> DNSTCP[DNS Query<br/>TCP:53 · length-prefixed]
 
     ICMP --> SUCC{任一成功?}
     TCP --> SUCC
     UDP --> SUCC
-    DNS --> SUCC
-    DNSTCP --> SUCC
     HTTP --> SUCC
     HTTPS --> SUCC
     HTTP3 --> SUCC
+    DNS --> SUCC
+    DNSTCP --> SUCC
     SUCC -->|是| LAT[取首个成功步骤耗时]
     SUCC -->|否| MAX[MaxInt64<br/>视为不可达]
-    LAT --> STORE[Store latency map<br/>Per-IP, shared across domains]
+    LAT --> SMOOTH[EWMA 平滑<br/>无偏整数 EWMA · α=1/2<br/>首次探测直接存储]
+    SMOOTH --> STORE[Store latency map<br/>Per-IP, shared across domains]
     MAX --> STORE
     STORE --> SORT
+    SMOOTH -.->|下一轮探测<br/>≥60s 后（min interval）| PROBE
 
     SORT --> RETURN[Return Sorted Answer<br/>Fastest IP First]
     classDef start fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
@@ -740,7 +742,7 @@ graph TD
     classDef proto fill:#d1fae5,stroke:#10b981,color:#064e3b
     classDef out fill:#e2e8f0,stroke:#64748b,color:#1e293b
     class QUERY start
-    class EXTRACT,BATCH,PROBE,STEPS,SUCC,LAT,MAX,STORE,SORT proc
+    class EXTRACT,BATCH,PROBE,STEPS,SUCC,LAT,MAX,SMOOTH,STORE,SORT proc
     class ICMP,TCP,UDP,DNS,DNSTCP,HTTP,HTTPS,HTTP3 proto
     class RETURN out
 ```
@@ -752,6 +754,11 @@ graph TD
 > 发送真实 DNS 查询（root A），任意响应（NOERROR/NXDOMAIN/REFUSED/SERVFAIL）即成功，
 > 按 RFC 5452 §4.2 校验 QR 位与消息 ID。**无 ping 步骤**——链式首胜下多数公共 NS
 > 的 ICMP 响应会短路真实 DNS 测量。
+>
+> **SRTT 平滑**（`UpdateLatency`）：写入前用无偏整数 EWMA 合并历史值
+> `srtt = ((N-1)·srtt + rtt) / N`，`DefaultLatencyProbeSmoothFactor = 2`（α=1/2）——
+> 抗单点抖动，链式首胜的瞬时 RTT 不再直接污染排序。首次探测 / 过期条目（3 天）直接
+> 存储；探测失败不写，保留旧平滑值。
 
 ## 连接池与协议协商
 
