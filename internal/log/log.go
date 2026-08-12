@@ -210,16 +210,21 @@ func (m *Logger) Log(lvl Level, format string, args ...any) {
 	// The rendered-message check below still applies for dynamic prefixes
 	// passed as arguments (e.g. "%s: ..."), which would otherwise bypass
 	// the filter.
+	//
+	// The filter only gates Info/Debug traffic — Error and Warn always pass
+	// through, so a filtered component cannot swallow operational failures
+	// (a config-load error under "info:CACHE" would otherwise exit the
+	// process with no visible message).
 	m.mu.RLock()
 	filter := m.componentFilter
 	m.mu.RUnlock()
-	if filter != nil {
+	if filter != nil && lvl >= Info {
 		if prefix := extractPrefix(format); prefix != "" && !filter[prefix] {
 			return
 		}
 	}
 	message := sanitizeLogMessage(fmt.Sprintf(format, args...))
-	if filter != nil {
+	if filter != nil && lvl >= Info {
 		if prefix := extractPrefix(message); prefix != "" && !filter[prefix] {
 			return
 		}

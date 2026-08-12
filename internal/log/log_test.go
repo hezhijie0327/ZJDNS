@@ -242,6 +242,33 @@ func TestLog_ComponentFilter(t *testing.T) {
 	}
 }
 
+func TestLog_ComponentFilterDoesNotHideErrors(t *testing.T) {
+	var buf bytes.Buffer
+	m := NewLogger()
+	m.writer = &buf
+	m.SetLevel(Debug)
+	m.SetComponentFilter([]string{"RESULT"})
+
+	// Error/Warn must pass the filter — a filtered config error would
+	// otherwise exit the process with no visible message.
+	m.Error("CONFIG: Config load failed: bad port")
+	if !strings.Contains(buf.String(), "Config load failed") {
+		t.Error("Error message should bypass component filter")
+	}
+
+	buf.Reset()
+	m.Warn("CACHE: spill compact failed")
+	if !strings.Contains(buf.String(), "spill compact failed") {
+		t.Error("Warn message should bypass component filter")
+	}
+
+	buf.Reset()
+	m.Info("CONFIG: loaded")
+	if buf.Len() > 0 {
+		t.Error("Info message should still be filtered")
+	}
+}
+
 func TestNewLogger(t *testing.T) {
 	m := NewLogger()
 	if m == nil {
