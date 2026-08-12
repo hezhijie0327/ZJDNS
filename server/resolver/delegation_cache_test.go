@@ -294,10 +294,12 @@ func TestDelegationSpillRoundTrip(t *testing.T) {
 	chain := &dnssecChain{childDS: dsRecords}
 	r1.storeDelegation("baidu.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
 	r1.loadDelegationSpill(path, 0, 100) // enables the spill tier
-	r1.flushDelegationSpill()            // memory → spill
+	t.Cleanup(func() { _ = r1.spill.Close() })
+	r1.flushDelegationSpill() // memory → spill
 
 	r2 := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](100)}
 	r2.loadDelegationSpill(path, 0, 100)
+	t.Cleanup(func() { _ = r2.spill.Close() })
 	rec, ok := r2.lookupDelegation("www.baidu.com.", dns.TypeA)
 	if !ok {
 		t.Fatal("delegation not restored")
@@ -319,6 +321,7 @@ func TestDelegationSpillEvictPromote(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "delegation.snap")
 	r := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](2)}
 	r.loadDelegationSpill(path, 0, 2)
+	t.Cleanup(func() { _ = r.spill.Close() })
 	if r.spill == nil {
 		t.Fatal("spill tier not enabled")
 	}

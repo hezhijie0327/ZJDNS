@@ -197,8 +197,12 @@ const (
 	// DefaultMaxPoolTotalConns caps the total live connections across ALL
 	// upstream keys in one pool instance — recursive resolution otherwise
 	// opens up to 4 sockets per distinct authoritative NS address (UDP) or
-	// forced-TCP upstream (TCP/QUIC) with no global bound (H1).
-	DefaultMaxPoolTotalConns       = 128
+	// forced-TCP upstream (TCP/QUIC) with no global bound (H1).  Sized for
+	// a personal deployment (a handful of forwarding upstreams at 4 conns
+	// each, or a recursive walk's root+TLD+auth working set) while bounding
+	// pool memory: 9 pool instances × 32 = 288 sockets max, each UDP socket
+	// pinning a 16 KB read buffer and each QUIC connection hundreds of KB.
+	DefaultMaxPoolTotalConns       = 32
 	DefaultMaxConcurrentNS         = 6     // max concurrent NS queries during resolution
 	DefaultMaxProbes               = 16    // max concurrent latency probes
 	DefaultMaxIncomingStreams      = 65535 // QUIC max incoming streams (RFC 9250: one stream per query — 256 exhausted a client's stream quota in seconds, then every query waited on MAX_STREAMS behind quic-go's 25ms ACK delay)

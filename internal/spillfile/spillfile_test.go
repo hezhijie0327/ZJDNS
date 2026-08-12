@@ -371,6 +371,267 @@ func TestOpenMissingCreates(t *testing.T) {
 	}
 }
 
+func TestMergeAndSortedLookup(t *testing.T) {
+	// 300 records span 3 blocks (128 + 128 + 44).  After a merge every key
+	// lives in the sorted region and must be found via the sparse index.
+	path := tmpPath(t)
+	st, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	for i := range 300 {
+		key := fmt.Sprintf("key-%03d.example.", i)
+		if err := st.Put(key, int64(1000+i), 300, i%2 == 0, []byte(key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Compact(func(string, int64, int) bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.EntryCount(); got != 300 {
+		t.Fatalf("EntryCount after merge = %d, want 300", got)
+	}
+	for i := range 300 {
+		key := fmt.Sprintf("key-%03d.example.", i)
+		ts, ttl, validated, wire, ok := st.Get(key)
+		if !ok || ts != int64(1000+i) || ttl != 300 || validated != (i%2 == 0) || string(wire) != key {
+			t.Fatalf("key %q wrong after merge: ok=%t ts=%d ttl=%d validated=%t wire=%q", key, ok, ts, ttl, validated, wire)
+		}
+	}
+	if _, _, _, _, ok := st.Get("missing.example."); ok {
+		t.Fatal("missing key returned ok")
+	}
+	// Reopen — the merged file must be self-consistent.
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st2.Close() }()
+	if got := st2.EntryCount(); got != 300 {
+		t.Fatalf("EntryCount after reopen = %d, want 300", got)
+	}
+	for i := 297; i < 300; i++ {
+		key := fmt.Sprintf("key-%03d.example.", i)
+		if _, _, _, wire, ok := st2.Get(key); !ok || string(wire) != key {
+			t.Fatalf("key %q lost after reopen: ok=%t", key, ok)
+		}
+	}
+}
+
+func TestTailSupersedesSorted(t *testing.T) {
+	path := tmpPath(t)
+	st, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	if err := st.Put("a.example.", 100, 10, false, []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Compact(func(string, int64, int) bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh Put lands in the tail region and must supersede the sorted
+	// record — without a merge in between.
+	if err := st.Put("a.example.", 200, 20, true, []byte("v2")); err != nil {
+		t.Fatal(err)
+	}
+	ts, ttl, validated, wire, ok := st.Get("a.example.")
+	if !ok || ts != 200 || ttl != 20 || !validated || string(wire) != "v2" {
+		t.Fatalf("tail did not supersede sorted: ok=%t ts=%d ttl=%d validated=%t wire=%q", ok, ts, ttl, validated, wire)
+	}
+	// After the next merge only the newest record survives.
+	if err := st.Compact(func(string, int64, int) bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.EntryCount(); got != 1 {
+		t.Fatalf("EntryCount after second merge = %d, want 1", got)
+	}
+	if _, _, _, wire, ok := st.Get("a.example."); !ok || string(wire) != "v2" {
+		t.Fatalf("merged record wrong: ok=%t wire=%q", ok, wire)
+	}
+}
+
+func TestDeleteTombstone(t *testing.T) {
+	path := tmpPath(t)
+	st, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	if err := st.Put("keep.example.", 100, 10, false, []byte("k")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Put("drop.example.", 100, 10, false, []byte("d")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Compact(func(string, int64, int) bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	// Delete a sorted-region key — the tombstone must hide it without a merge.
+	st.Delete("drop.example.")
+	if _, _, _, _, ok := st.Get("drop.example."); ok {
+		t.Fatal("deleted key served")
+	}
+	if _, _, _, _, ok := st.Get("keep.example."); !ok {
+		t.Fatal("kept key lost")
+	}
+	if got := st.EntryCount(); got != 1 {
+		t.Fatalf("EntryCount with tombstone = %d, want 1", got)
+	}
+	// The merge physically drops the tombstoned record.
+	if err := st.Compact(func(string, int64, int) bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.EntryCount(); got != 1 {
+		t.Fatalf("EntryCount after merge = %d, want 1", got)
+	}
+	if _, _, _, _, ok := st.Get("drop.example."); ok {
+		t.Fatal("deleted key resurrected by merge")
+	}
+}
+
+func TestMergeDedupNewestTs(t *testing.T) {
+	path := tmpPath(t)
+	st, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	if err := st.Put("dup.example.", 100, 10, false, []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Put("dup.example.", 200, 20, true, []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Compact(func(string, int64, int) bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	ts, ttl, validated, wire, ok := st.Get("dup.example.")
+	if !ok || ts != 200 || ttl != 20 || !validated || string(wire) != "new" {
+		t.Fatalf("dedup picked wrong record: ok=%t ts=%d ttl=%d validated=%t wire=%q", ok, ts, ttl, validated, wire)
+	}
+	if got := st.EntryCount(); got != 1 {
+		t.Fatalf("EntryCount = %d, want 1", got)
+	}
+}
+
+func TestIndexedAcrossRegions(t *testing.T) {
+	path := tmpPath(t)
+	st, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	if err := st.Put("sorted.example.", 100, 10, false, []byte("s")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Compact(func(string, int64, int) bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Put("tail.example.", 200, 20, false, []byte("t")); err != nil {
+		t.Fatal(err)
+	}
+	// "sorted.example." lives in the sorted region, "tail.example." in the
+	// tail map — Indexed must resolve both, plus ts mismatches.
+	if !st.Indexed("sorted.example.", 100) {
+		t.Fatal("sorted key not indexed")
+	}
+	if st.Indexed("sorted.example.", 101) {
+		t.Fatal("wrong ts indexed")
+	}
+	if !st.Indexed("tail.example.", 200) {
+		t.Fatal("tail key not indexed")
+	}
+	if st.Indexed("missing.example.", 100) {
+		t.Fatal("missing key indexed")
+	}
+}
+
+func TestBlockBoundaries(t *testing.T) {
+	// 129 records = one full block of 128 + a partial block of 1.  Keys on
+	// both sides of the boundary must be findable.
+	path := tmpPath(t)
+	st, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	for i := range 129 {
+		key := fmt.Sprintf("b%03d.example.", i)
+		if err := st.Put(key, int64(i), 10, false, []byte(key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Compact(func(string, int64, int) bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"b000.example.", "b127.example.", "b128.example.", "b126.example."} {
+		if _, _, _, _, ok := st.Get(k); !ok {
+			t.Fatalf("boundary key %q not found", k)
+		}
+	}
+	if _, _, _, _, ok := st.Get("c000.example."); ok {
+		t.Fatal("missing key found")
+	}
+}
+
+func TestCorruptTailAfterMerge(t *testing.T) {
+	// The sorted region must survive a corrupt tail: Open cuts the file back
+	// to the last complete record without touching the sorted blocks.
+	path := tmpPath(t)
+	st, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 10 {
+		key := fmt.Sprintf("k%d.example.", i)
+		if err := st.Put(key, int64(1000+i), 300, false, []byte(key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Compact(func(string, int64, int) bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0) //nolint:gosec // G304: test temp file
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte{0x00, 0x03, 'x', 'y'}); err != nil { // key_len + half a key
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st2.Close() }()
+	if got := st2.EntryCount(); got != 10 {
+		t.Fatalf("EntryCount = %d, want 10 (sorted region intact)", got)
+	}
+	if _, _, _, _, ok := st2.Get("k5.example."); !ok {
+		t.Fatal("sorted key lost")
+	}
+	// Appends must continue after the truncation point.
+	if err := st2.Put("new.example.", 500, 30, true, []byte("n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, wire, ok := st2.Get("new.example."); !ok || string(wire) != "n" {
+		t.Fatal("append after truncation failed")
+	}
+}
+
 func BenchmarkPut(b *testing.B) {
 	st, err := Create(filepath.Join(b.TempDir(), "bench.bin"))
 	if err != nil {
@@ -382,6 +643,33 @@ func BenchmarkPut(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		if err := st.Put("example.com.\x001\x001\x00\x0016", int64(i), 300, true, wire); err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkGetSorted(b *testing.B) {
+	// Get through the sparse-index path: 1000 records merged into sorted
+	// blocks, lookup by binary search + block parse (tail map miss).
+	st, err := Create(filepath.Join(b.TempDir(), "bench.bin"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	wire := bytes.Repeat([]byte{0xAA}, 400)
+	for i := range 1000 {
+		key := fmt.Sprintf("key-%04d.example.", i)
+		if err := st.Put(key, int64(i), 300, true, wire); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := st.Compact(func(string, int64, int) bool { return true }); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; b.Loop(); i++ {
+		key := fmt.Sprintf("key-%04d.example.", i%1000)
+		if _, _, _, _, ok := st.Get(key); !ok {
+			b.Fatal("miss")
 		}
 	}
 }

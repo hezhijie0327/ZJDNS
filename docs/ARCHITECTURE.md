@@ -73,7 +73,7 @@ All outbound protocols multiplex over pooled connections
 | `QUIC` | QUIC connections | none (streams multiplex internally) | DoQ |
 
 **Unified bounds** (per pool instance):
-- per-key `maxConns=4`, per-conn `maxPipe=16`, **global `maxTotal=128`**
+- per-key `maxConns=4`, per-conn `maxPipe=16`, **global `maxTotal=32`**
   (`DefaultMaxPoolTotalConns`)
 - Global-cap enforcement: `dialAndAdd` evicts via `evictOne` — dead conns
   first, then idle-LRU, then any-LRU (`lastUsed` timestamp, zero-alloc
