@@ -80,16 +80,18 @@ type UDPPool struct {
 }
 
 // Tiered payload-buffer pools for the pooled-UDP read loop: the per-response
-// make([]byte, n) allocation on the hot path (every plain-UDP and DNSCrypt
-// response) is replaced with a size-classed pool (M-3-6).
+// make([]byte, n) allocation on the hot path (every plain-UDP, DNSCrypt and
+// raw-framed response) is replaced with a size-classed pool (M-3-6).
 const (
-	packetBufSmall  = 512  // typical A/AAAA responses
-	packetBufMedium = 1500 // Ethernet MTU
+	packetBufSmall  = 512   // typical A/AAAA responses
+	packetBufMedium = 1500  // Ethernet MTU
+	packetBufLarge  = 16384 // DNSSEC responses and DNSCrypt frames — matches the read buffer
 )
 
 var (
 	packetBufSmallPool  = sync.Pool{New: func() any { b := make([]byte, packetBufSmall); return &b }}
 	packetBufMediumPool = sync.Pool{New: func() any { b := make([]byte, packetBufMedium); return &b }}
+	packetBufLargePool  = sync.Pool{New: func() any { b := make([]byte, packetBufLarge); return &b }}
 )
 
 // acquirePacketBuf returns a payload buffer of at least n bytes and the
@@ -103,6 +105,9 @@ func acquirePacketBuf(n int) (packet []byte, release func()) {
 	case n <= packetBufMedium:
 		bp := packetBufMediumPool.Get().(*[]byte)
 		return (*bp)[:n], func() { clear(*bp); packetBufMediumPool.Put(bp) }
+	case n <= packetBufLarge:
+		bp := packetBufLargePool.Get().(*[]byte)
+		return (*bp)[:n], func() { clear(*bp); packetBufLargePool.Put(bp) }
 	default:
 		b := make([]byte, n)
 		return b, func() {}
@@ -128,6 +133,11 @@ func releasePacketBuf(packet []byte) {
 		*bp = (*bp)[:packetBufMedium]
 		clear(*bp)
 		packetBufMediumPool.Put(bp)
+	case packetBufLarge:
+		bp := &packet
+		*bp = (*bp)[:packetBufLarge]
+		clear(*bp)
+		packetBufLargePool.Put(bp)
 	}
 }
 
@@ -316,7 +326,7 @@ func (c *UDPConn) readLoop() {
 	// retried over TCP.  The previous 64KB (max UDP payload) cost 4x the
 	// memory per connection, and with recursive resolution holding one
 	// connection per authoritative server, the working set scaled badly.
-	buf := make([]byte, 16384) // one allocation per conn
+	buf := make([]byte, packetBufLarge) // one allocation per conn
 
 	for {
 		_ = c.conn.SetReadDeadline(time.Now().Add(c.idleTimeout))

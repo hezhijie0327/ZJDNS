@@ -32,6 +32,9 @@ COPY --from=build_zjdns /zjdns/zjdns /zjdns
 
 FROM scratch
 
+ENV \
+    GODEBUG="madvdontneed=1"
+
 COPY --from=rebase_zjdns / /
 
 EXPOSE 53/tcp 53/udp 443/tcp 443/udp 853/tcp 853/udp 8443/tcp 8443/udp 8853/udp 9853/tcp 9853/udp 9443/tcp 6060/tcp

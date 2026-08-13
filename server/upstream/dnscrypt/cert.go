@@ -124,6 +124,9 @@ func (c *Client) fetchCertTCP(ctx context.Context, addr string, query []byte, se
 			respPayload, err := rc.Exchange(ctx, query, string(query[:2]))
 			if err == nil {
 				resp, unpackErr := unpackCertResponse(respPayload)
+				// Return the tiered-pool payload buffer (M-3-6) — Unpack copied
+				// the records out and cleared the alias.
+				zpool.ReleaseUDPPayload(respPayload)
 				if unpackErr == nil {
 					return resp, nil
 				}
@@ -146,6 +149,9 @@ func unpackCertResponse(payload []byte) (*dns.Msg, error) {
 	if err := resp.Unpack(); err != nil {
 		return nil, fmt.Errorf("unpack: %w", err)
 	}
+	// The records were copied out by the copy-based Unpack — drop the alias so
+	// the caller can release the pooled payload buffer safely.
+	resp.Data = nil
 	return resp, nil
 }
 

@@ -7,13 +7,13 @@ require (
 	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033
 	github.com/cloudflare/circl v1.6.6-0.20260806151822-33d33c75d9a0
 	github.com/emmansun/gmsm v0.44.1
-	github.com/klauspost/compress v1.19.3-0.20260807134503-07f8bcdd5278
-	github.com/pion/dtls/v3 v3.1.3-0.20260809113520-d26388d44aee
-	github.com/quic-go/quic-go v0.61.1-0.20260810070610-c03564aff5aa
+	github.com/klauspost/compress v1.19.3-0.20260811110452-dd6de45e8beb
+	github.com/pion/dtls/v3 v3.1.3-0.20260813160346-026b6152bce7
+	github.com/quic-go/quic-go v0.61.1-0.20260813134850-9bdf5153b936
 	gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f
 	gitlab.com/go-extension/tls v0.0.0-20260715144009-d75c84d8b9d2
-	golang.org/x/crypto v0.54.0
-	golang.org/x/net v0.57.0
+	golang.org/x/crypto v0.55.0
+	golang.org/x/net v0.58.0
 	golang.org/x/sync v0.22.0
 )
 
@@ -35,5 +35,5 @@ require (
 	gitlab.com/go-extension/utils v0.0.0-20251006173700-b62b19cda891 // indirect
 	go.uber.org/mock v0.6.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 )

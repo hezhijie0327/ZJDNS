@@ -108,10 +108,14 @@ func (c *RawConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 		c.mu.Lock()
 		delete(c.inflight, matchKey)
 		c.mu.Unlock()
-		// Drain an orphaned response that arrived after ctx cancellation.  A
-		// nil value marks connection close — nothing to release.
+		// Drain an orphaned response that arrived after ctx cancellation and
+		// return the tiered-pool payload buffer.  A nil value marks connection
+		// close — nothing to release (same discipline as the UDP pool).
 		select {
-		case <-resultCh:
+		case resp := <-resultCh:
+			if resp != nil {
+				ReleaseUDPPayload(resp)
+			}
 		default:
 		}
 	}()
@@ -175,13 +179,18 @@ func (c *RawConn) readLoop() {
 		if msgLen == 0 {
 			return
 		}
-		body := make([]byte, msgLen)
+		// Frame payload from the tiered packet pool — the waiter owns the
+		// slice and releases it by capacity class once unpacked/decrypted
+		// (same discipline as the UDP pool).
+		body, release := acquirePacketBuf(int(msgLen)) //nolint:gosec // G115: msgLen is uint16, fits int
 		if _, err := io.ReadFull(c.conn, body); err != nil {
+			release()
 			return
 		}
 
 		key, ok := c.extractKey(body)
 		if !ok {
+			release()
 			continue // not a response for any of our exchanges — drop
 		}
 		// Lookup AND delivery under RLock: close() closes resultChs under the
@@ -191,13 +200,14 @@ func (c *RawConn) readLoop() {
 		p, ok := c.inflight[key]
 		if !ok {
 			c.mu.RUnlock()
+			release()
 			continue // response for an exchange we no longer track — drop
 		}
 		select {
 		case p.resultCh <- body:
 		default:
 			// Waiter already gave up (ctx cancelled) — drop.
-			_ = body
+			release()
 		}
 		c.mu.RUnlock()
 	}
