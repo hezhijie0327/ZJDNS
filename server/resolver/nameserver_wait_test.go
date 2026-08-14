@@ -210,6 +210,63 @@ func scriptItoa(i int) string {
 	return string(b)
 }
 
+// ── probeTLDForPoison: concurrent fan-out verdicts ───────────────────────────
+
+// TestProbeTLDForPoison_AnyPoisonedWins verifies the concurrent probe
+// semantics: any peer's A/AAAA answer forces TCP, and a slow peer must not
+// stall the verdict beyond the probe timeout.
+func TestProbeTLDForPoison_AnyPoisonedWins(t *testing.T) {
+	qname := "www.example.com."
+	client := &fakeNSClient{handlers: map[string]nsScriptHandler{
+		"10.0.0.1:53": func(ctx context.Context, msg *dns.Msg) *upstream.Result {
+			return nsReply(msg, dns.RcodeSuccess) // clean — no answer records
+		},
+		"10.0.0.2:53": func(ctx context.Context, msg *dns.Msg) *upstream.Result {
+			resp := dnsutil.SetReply(new(dns.Msg), msg)
+			resp.Answer = append(resp.Answer, aRec(qname, "93.46.8.89")) // GFW blackhole injection
+			return &upstream.Result{Response: resp}
+		},
+		"10.0.0.3:53": nsReplyAfter(5*time.Second, dns.RcodeSuccess), // slow peer — bounded by probe timeout
+	}}
+	r := newTestRecursiveNS(client)
+	r.poisonguard = true
+	r.resolver.validator = &Validator{Poisonguard: defense.Detector{}}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	start := time.Now()
+	poisoned := r.probeTLDForPoison(ctx, []string{"10.0.0.1:53", "10.0.0.2:53", "10.0.0.3:53"}, qname)
+	if !poisoned {
+		t.Fatal("probe must detect the injected A record from the poisoned peer")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("probe took %v, want < 2s (bounded by DefaultPoisonProbeTimeout)", elapsed)
+	}
+}
+
+// TestProbeTLDForPoison_AllClean verifies the negative case: no A/AAAA from
+// any peer means no injection.
+func TestProbeTLDForPoison_AllClean(t *testing.T) {
+	qname := "www.example.com."
+	client := &fakeNSClient{handlers: map[string]nsScriptHandler{
+		"10.0.0.1:53": func(ctx context.Context, msg *dns.Msg) *upstream.Result {
+			return nsReply(msg, dns.RcodeSuccess)
+		},
+		"10.0.0.2:53": func(ctx context.Context, msg *dns.Msg) *upstream.Result {
+			return nsReply(msg, dns.RcodeSuccess)
+		},
+	}}
+	r := newTestRecursiveNS(client)
+	r.poisonguard = true
+	r.resolver.validator = &Validator{Poisonguard: defense.Detector{}}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	if r.probeTLDForPoison(ctx, []string{"10.0.0.1:53", "10.0.0.2:53"}, qname) {
+		t.Fatal("clean probes must not force TCP")
+	}
+}
+
 // TestQueryNameservers_StragglerCanceled verifies that returning early (win or
 // deferral expiry) cancels the batch so slow stragglers abort instead of
 // pinning their pooled messages.

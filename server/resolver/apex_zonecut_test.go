@@ -349,6 +349,7 @@ func TestAdvanceApexZoneCut(t *testing.T) {
 	}))
 
 	rr := newTestRecursive()
+	rr.resolver.DNSSECEnforce = true // raced-DS verification is enforcement-path behavior (no-DS short-circuit applies when off)
 	setTestBuildMsg(rr)
 	chain := &dnssecChain{zoneDNSKEYs: []*dns.DNSKEY{parentKey}}
 

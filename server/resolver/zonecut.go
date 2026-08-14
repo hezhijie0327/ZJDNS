@@ -156,6 +156,12 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 		return false, errors.New("could not determine child zone name from RRSIG signer")
 	}
 
+	if len(chain.childDS) == 0 && len(chain.zoneDNSKEYs) == 0 {
+		// Unsigned delegation: no DS at the cut means no verifiable keys —
+		// a DNSKEY fetch can only return empty.  (Signed zones keep the
+		// fetch; a signer-mismatch RRSIG can only come from a signed zone.)
+		return false, errors.New("unsigned delegation — no DNSKEYs to verify zone cut")
+	}
 	if len(chain.zoneDNSKEYs) == 0 {
 		r.ensureZoneDNSKEYs(ctx, nameservers, currentDomain, chain)
 	}

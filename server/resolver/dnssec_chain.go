@@ -180,6 +180,19 @@ func (r *Recursive) updateDNSSECChain(ctx context.Context, response *dns.Msg, cu
 		// §5.2). Unverifiable delegations are treated as bogus, never as
 		// insecure. When the parent has no verifiable DNSKEYs (a genuinely
 		// unsigned parent), the delegation is insecure.
+		if !r.resolver.DNSSECEnforce {
+			// Enforcement off: the no-DS denial only gates bogus
+			// classification, which enforcement never reaches — a missing
+			// DS means insecure outright.  Skipping the DS + DNSKEY
+			// verification saves 1-2 RTT per unsigned delegation level
+			// (most CN domains — qq.com, baidu.com, tencent-cloud.net —
+			// are unsigned).  Signed domains (DS present) keep the full
+			// chain build above.
+			chain.childDS = nil
+			chain.dsPresentButUnverified = false
+			log.Debugf("SECURITY: no DS for %s — insecure delegation (no-DS verification skipped, enforce off)", childZone)
+			break
+		}
 		noDS, dsRaced := r.verifyNoDSInParent(ctx, nameservers, childZone, currentDomain, chain)
 		switch {
 		case noDS:
@@ -467,6 +480,15 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 	// If we already have verified DNSKEYs for this zone, verify directly
 	if len(chain.zoneDNSKEYs) > 0 {
 		return r.validateOrRetry(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain, chain.zoneDNSKEYs)
+	}
+
+	if len(chain.childDS) == 0 {
+		// Unsigned delegation (no DS at the cut): the zone has no verifiable
+		// keys, so a DNSKEY fetch can only return empty — skip it (previously
+		// paid one query per unsigned answer level).  The result is the same:
+		// unvalidated, and (matching the caller) no EDE for clean
+		// insecure delegations.
+		return false
 	}
 
 	// Delegate to ensureZoneDNSKEYs — it fetches, verifies (DS / root

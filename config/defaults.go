@@ -92,9 +92,17 @@ const (
 
 	// DefaultPoisonProbeTimeout bounds the TLD hijack probe query.
 	// The probe detects GFW-injected A/AAAA records at the delegation
-	// level before the authoritative query.  A short timeout avoids
-	// blocking the resolution pipeline when a TLD server is unresponsive.
-	DefaultPoisonProbeTimeout = 2 * time.Second
+	// level before the authoritative query.  A bare UDP probe either
+	// answers in a few hundred ms or is dropped — 1s bounds the stall
+	// while the concurrent fan-out (DefaultPoisonProbeServers) covers
+	// single-server drops.
+	DefaultPoisonProbeTimeout = 1 * time.Second
+
+	// DefaultPoisonProbeServers is how many TLD servers the hijack probe
+	// queries concurrently.  A single rate-limited or packet-lossy server
+	// previously stretched the probe to its full timeout even when peers
+	// answered instantly.
+	DefaultPoisonProbeServers = 3
 
 	// DefaultNXDOMAINDeferralWindow bounds how long an all-NXDOMAIN level
 	// waits for a real NOERROR to race a (possibly injected) NXDOMAIN after
@@ -230,7 +238,6 @@ const (
 	// hundreds-range absorbs ordinary load without diverting saturated
 	// packets into the CPU-heavy SERVFAIL path.
 	DefaultServerGoroutineLimit = 256
-	DefaultMinConcurrencyLimit  = 8
 
 	DefaultTransportMax          = 64
 	DefaultQUICConfigCacheSize   = 128 // max cached QUIC configs (LRU)

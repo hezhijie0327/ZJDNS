@@ -381,38 +381,62 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 	}
 }
 
-// probeTLDForPoison sends a single UDP probe to a TLD server for the full
-// QNAME and delegates the verdict to security.Detector.IsPoisonedByTLD.
+// probeTLDForPoison probes the first few TLD servers concurrently for the
+// full QNAME and delegates the verdict to security.Detector.IsPoisonedByTLD.
+// Any peer's A/AAAA answer is injection evidence (a TLD server never
+// legitimately answers a subdomain), so any poisoned verdict forces TCP; the
+// concurrent fan-out covers single-server drops that previously stretched the
+// probe to its full timeout.
 func (r *Recursive) probeTLDForPoison(ctx context.Context, tldServers []string, qname string) bool {
 	if !r.poisonguard || len(tldServers) == 0 {
 		return false
 	}
 
-	msg := pool.DefaultMessage.Get()
-	defer pool.DefaultMessage.Put(msg)
-	dnsutil.SetQuestion(msg, dnsutil.Fqdn(qname), dns.TypeA)
-	msg.RecursionDesired = false
-	msg.UDPSize = pool.RecursiveUDPBufferSize
-
-	server := &config.UpstreamServer{
-		Address:  tldServers[0],
-		Protocol: config.ProtoUDP,
-		Proxy:    r.resolver.recursiveProxyURL,
-	}
-
 	probeCtx, probeCancel := context.WithTimeout(ctx, config.DefaultPoisonProbeTimeout)
 	defer probeCancel()
 
-	result := r.resolver.queryClient.ExecuteQuery(probeCtx, msg, server)
-	if result.Error != nil || result.Response == nil {
-		return false
-	}
-	defer pool.DefaultMessage.Put(result.Response)
+	// The walk's address list is unfiltered (it also seeds tldServers for
+	// later levels) — skip the unreachable family here too.
+	tldServers = filterFamilyUnreachable(tldServers)
+	n := min(len(tldServers), config.DefaultPoisonProbeServers)
+	verdicts := make(chan bool, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		server := &config.UpstreamServer{
+			Address:  tldServers[i],
+			Protocol: config.ProtoUDP,
+			Proxy:    r.resolver.recursiveProxyURL,
+		}
+		wg.Add(1)
+		go func() {
+			defer zdnsutil.HandlePanic("TLD poison probe")
+			defer wg.Done()
+			msg := pool.DefaultMessage.Get()
+			defer pool.DefaultMessage.Put(msg)
+			dnsutil.SetQuestion(msg, dnsutil.Fqdn(qname), dns.TypeA)
+			msg.RecursionDesired = false
+			msg.UDPSize = pool.RecursiveUDPBufferSize
 
-	if r.resolver.validator.Poisonguard.IsPoisonedByTLD(result.Response, qname) {
-		log.Debugf("RECURSION: poison probe detected A/AAAA for %s from TLD server %s, forcing TCP",
-			qname, tldServers[0])
-		return true
+			result := r.resolver.queryClient.ExecuteQuery(probeCtx, msg, server)
+			if result.Error != nil || result.Response == nil {
+				verdicts <- false
+				return
+			}
+			defer pool.DefaultMessage.Put(result.Response)
+			if r.resolver.validator.Poisonguard.IsPoisonedByTLD(result.Response, qname) {
+				log.Debugf("RECURSION: poison probe detected A/AAAA for %s from TLD server %s, forcing TCP",
+					qname, tldServers[i])
+				verdicts <- true
+				return
+			}
+			verdicts <- false
+		}()
+	}
+	wg.Wait()
+	for range n {
+		if <-verdicts {
+			return true
+		}
 	}
 	return false
 }
