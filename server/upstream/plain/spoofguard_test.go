@@ -3,6 +3,7 @@ package plain
 import (
 	"net/netip"
 	"testing"
+	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -174,6 +175,54 @@ func TestSpoofguard_EDNSFastAccept_TTLConfident(t *testing.T) {
 	s := &spoofguardState{}
 	if resp := s.processPacket(raw, len(raw), 4096, "1.2.3.4:53", true, 64, true); resp == nil {
 		t.Fatal("TTL-confident EDNS response must fast-accept")
+	}
+}
+
+// TestSpoofguard_IdenticalRepeat_ConfirmsImmediately verifies the
+// identical-repeat fast path: two identical EDNS candidates confirm the
+// server's answer and return immediately, instead of waiting out the collect
+// window (GFW fakes vary per packet; the real answer is deterministic).
+func TestSpoofguard_IdenticalRepeat_ConfirmsImmediately(t *testing.T) {
+	raw := spoofguardResponse(t, []dns.RR{aRR("142.250.80.4")}, nil, []dns.RR{optRR()}, dns.RcodeSuccess)
+	s := &spoofguardState{}
+	if resp := s.processPacket(raw, len(raw), 4096, "1.2.3.4:53", false, 64, true); resp != nil {
+		t.Fatalf("first EDNS candidate must collect (nil), got a response")
+	}
+	if resp := s.processPacket(raw, len(raw), 4096, "1.2.3.4:53", false, 64, true); resp == nil {
+		t.Fatal("identical repeat must confirm and return immediately")
+	}
+}
+
+// TestSpoofguard_MismatchedRepeat_KeepsCollecting verifies the fast path does
+// not fire on divergent candidates — a fake varies per packet, so a differing
+// repeat must keep collecting until the window expires.
+func TestSpoofguard_MismatchedRepeat_KeepsCollecting(t *testing.T) {
+	raw1 := spoofguardResponse(t, []dns.RR{aRR("142.250.80.4")}, nil, []dns.RR{optRR()}, dns.RcodeSuccess)
+	raw2 := spoofguardResponse(t, []dns.RR{aRR("93.46.8.89")}, nil, []dns.RR{optRR()}, dns.RcodeSuccess)
+	s := &spoofguardState{}
+	if resp := s.processPacket(raw1, len(raw1), 4096, "1.2.3.4:53", false, 64, true); resp != nil {
+		t.Fatalf("first candidate must collect (nil), got a response")
+	}
+	if resp := s.processPacket(raw2, len(raw2), 4096, "1.2.3.4:53", false, 64, true); resp != nil {
+		t.Fatalf("mismatched repeat must keep collecting (nil), got a response")
+	}
+	if s.last == nil || s.prev == nil {
+		t.Fatal("both divergent candidates must be retained for pickBest")
+	}
+}
+
+// TestSpoofguard_CollectWindow_Adaptive verifies the window adapts to the
+// packet count: a single datagram (nothing to compare) waits only the short
+// window; a second datagram (possible injected peer) keeps the full collect
+// window for comparison.
+func TestSpoofguard_CollectWindow_Adaptive(t *testing.T) {
+	s := &spoofguardState{}
+	if w := s.collectWindow(); w != config.DefaultSpoofguardSingleWindow {
+		t.Errorf("single-packet window = %v, want %v", w, config.DefaultSpoofguardSingleWindow)
+	}
+	s.packets = 2
+	if w := s.collectWindow(); w != config.DefaultSpoofguardCollectWindow {
+		t.Errorf("multi-packet window = %v, want %v", w, config.DefaultSpoofguardCollectWindow)
 	}
 }
 

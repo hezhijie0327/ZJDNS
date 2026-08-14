@@ -89,7 +89,7 @@ func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 	// validation context (M3).
 	hasSig := false
 	for _, rr := range response.Answer {
-		if sig, ok := rr.(*dns.RRSIG); ok && dnsutil.Canonical(sig.Hdr.Name) == n {
+		if sig, ok := rr.(*dns.RRSIG); ok && strings.EqualFold(sig.Hdr.Name, n) {
 			hasSig = true
 			break
 		}
@@ -99,7 +99,10 @@ func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 		if rr == nil {
 			continue // defensive: malformed responses must not panic the validator (R2)
 		}
-		if dnsutil.Canonical(rr.Header().Name) != n {
+		// EqualFold (case-insensitive, zero-alloc) instead of Canonical —
+		// owner names and the already-canonical query name are both FQDNs,
+		// so the comparison is exact without a strings.Map per RR.
+		if !strings.EqualFold(rr.Header().Name, n) {
 			continue
 		}
 		rrtype := dns.RRToType(rr)
@@ -147,7 +150,7 @@ func (d *Detector) IsPoisonedByTLD(response *dns.Msg, queryName string) bool {
 		if rr == nil {
 			continue
 		}
-		if dnsutil.Canonical(rr.Header().Name) != n {
+		if !strings.EqualFold(rr.Header().Name, n) {
 			continue
 		}
 		switch dns.RRToType(rr) {

@@ -182,7 +182,13 @@ const (
 
 const (
 	DefaultSpoofguardCollectWindow = 500 * time.Millisecond // silence window before returning best EDNS candidate
-	DefaultSpoofguardPollInterval  = 100 * time.Millisecond // per-read poll interval
+	// DefaultSpoofguardSingleWindow is the silence window when only one
+	// datagram arrived — nothing to compare, so the full window would be
+	// pure wait (authorities answer once).  Multi-packet scenarios keep
+	// the full window for comparison; injected domains are gated upstream
+	// by the TLD poison probe + poisonguard verdict.
+	DefaultSpoofguardSingleWindow = 150 * time.Millisecond
+	DefaultSpoofguardPollInterval = 100 * time.Millisecond // per-read poll interval
 	// DefaultSpoofguardConfirmRounds bounds the pure-UDP re-query
 	// confirmation for an ambiguous single-answer non-EDNS response: a
 	// matching repeat (same answer records) confirms it as the real server's

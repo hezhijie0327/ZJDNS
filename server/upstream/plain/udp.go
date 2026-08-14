@@ -27,6 +27,7 @@ type spoofguardState struct {
 	prev, last           *dns.Msg
 	prevAns, lastAns     int
 	rejected, candidates int
+	packets              int // datagrams received this query (window adaptation)
 	lastRecv             time.Time
 
 	// nonEDNS holds a non-EDNS fallback candidate.  It is only populated
@@ -342,7 +343,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 			case <-pollTimer.C:
 				pollTimer.Reset(config.DefaultSpoofguardPollInterval)
 				now := time.Now()
-				if sg.last != nil && now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
+				if sg.last != nil && now.Sub(sg.lastRecv) > sg.collectWindow() {
 					// EDNS candidate — safe, return directly.
 					resp := sg.pickBest()
 					if hg != nil {
@@ -355,7 +356,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					uc.ReleaseCollect(matchKey)
 					return resp, nil
 				}
-				if sg.last == nil && sg.nonEDNS != nil && now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
+				if sg.last == nil && sg.nonEDNS != nil && now.Sub(sg.lastRecv) > sg.collectWindow() {
 					resp := sg.pickBest()
 					uc.ReleaseCollect(matchKey)
 					if sg.nonEDNSSafe || sg.rejected <= 1 {
@@ -590,11 +591,11 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 					// even if ambiguous — single-answer EDNS responses are common
 					// for uncensored domains. The window already waited for a second
 					// candidate (potential GFW fake) to compare against.
-					if sg.last != nil && now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
+					if sg.last != nil && now.Sub(sg.lastRecv) > sg.collectWindow() {
 						return sg.pickBest(), nil
 					}
 					// For non-EDNS-only fallback, use the same window.
-					if sg.last == nil && sg.nonEDNS != nil && now.Sub(sg.lastRecv) > config.DefaultSpoofguardCollectWindow {
+					if sg.last == nil && sg.nonEDNS != nil && now.Sub(sg.lastRecv) > sg.collectWindow() {
 						return sg.pickBest(), nil
 					}
 					if now.After(maxDeadline) {
@@ -719,6 +720,19 @@ func dialProxyUDP(ctx context.Context, proxyDialer *socks5.Dialer, addr string, 
 	return pconn, nil
 }
 
+// collectWindow returns the silence window before returning the best
+// candidate: the full window when a second packet could still arrive for
+// comparison, the short single-candidate window when only one datagram was
+// received (nothing to compare — authorities answer a query once).  Injected
+// domains are gated upstream by the TLD poison probe and the poisonguard
+// verdict, so the short single-candidate wait keeps that defense intact.
+func (s *spoofguardState) collectWindow() time.Duration {
+	if s.packets < 2 {
+		return config.DefaultSpoofguardSingleWindow
+	}
+	return config.DefaultSpoofguardCollectWindow
+}
+
 // copyData returns a byte slice of length n holding a copy of raw[:n],
 // reusing s.copyBuf to avoid per-candidate heap allocations in the
 // multi-read loop.
@@ -740,6 +754,7 @@ func (s *spoofguardState) copyData(raw []byte, n int) []byte {
 // processPacket applies EDNS-gate and fast-return checks to a single raw packet.
 // Returns a response to return immediately, or nil to continue the loop.
 func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, addr string, ttlConfident bool, ttl uint8, spoofguardEnabled bool) *dns.Msg {
+	s.packets++
 	s.lastRecv = time.Now()
 
 	// Fast signals from raw header — check first, before EDNS gate.
@@ -913,6 +928,23 @@ func (s *spoofguardState) collectEDNSCandidate(resp *dns.Msg, ttlConfident bool,
 	}
 
 	s.candidates++
+	// A repeated identical answer confirms the server's response — GFW
+	// fakes vary per packet while the real answer is deterministic (the
+	// same principle as the non-EDNS re-query confirm).  Return
+	// immediately instead of waiting out the collect window; a mismatched
+	// repeat keeps collecting (the candidate may still be a fake).
+	if s.last != nil && sameUDPAnswer(s.last, resp) {
+		log.Debugf("UPSTREAM: UDP spoofguard confirmed by identical repeat from %s (answer=%d)", addr, len(resp.Answer))
+		pool.DefaultMessage.Put(s.last)
+		if s.prev != nil {
+			pool.DefaultMessage.Put(s.prev)
+			s.prev = nil
+		}
+		s.last = resp
+		s.lastTTL = ttl
+		s.lastAns = len(resp.Answer)
+		return resp
+	}
 	if s.prev != nil {
 		pool.DefaultMessage.Put(s.prev)
 	}
