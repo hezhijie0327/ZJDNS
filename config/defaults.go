@@ -104,16 +104,18 @@ const (
 	// answered instantly.
 	DefaultPoisonProbeServers = 3
 
-	// DefaultNXDOMAINDeferralWindow bounds how long an all-NXDOMAIN level
+	// DefaultNXDOMAINDeferralWindow bounds how long an all-NXDOMAIN fan-out
 	// waits for a real NOERROR to race a (possibly injected) NXDOMAIN after
 	// the first NXDOMAIN arrives.  0 serves the first NXDOMAIN immediately:
-	// the fan-out queries every NS concurrently, so the fastest server's
+	// the fan-out queries every server concurrently, so the fastest server's
 	// answer is accepted without waiting for the slowest (a rate-limited or
-	// packet-lossy server previously stretched every all-NXDOMAIN level to
-	// its full tail — measured 41ms→382ms on a 15-server batch).  The
-	// poisonguard verdict + TCP fallback still gate poisoned responses.
-	// Raise to ~150ms to restore the NOERROR race at the cost of that fixed
-	// delay on censored domains.
+	// packet-lossy server previously stretched every all-NXDOMAIN fan-out to
+	// its full tail — measured 41ms→382ms on a 15-server recursive batch;
+	// one hung forwarding upstream previously delayed NXDOMAIN answers by
+	// its whole 9s timeout).  The recursive walk's poisonguard verdict +
+	// TCP fallback still gate poisoned responses; forwarding spoofguard
+	// covers the A/AAAA injection case.  Raise to ~150ms to restore the
+	// NOERROR race at the cost of that fixed delay on censored domains.
 	DefaultNXDOMAINDeferralWindow = 0 * time.Second
 
 	DefaultRecursiveResolveTimeout = 30 * time.Second // full recursive resolution

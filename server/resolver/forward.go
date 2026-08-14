@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"sync/atomic"
+	"time"
 	"zjdns/config"
 	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
@@ -69,6 +70,9 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 
 	resultChan := make(chan QueryResult, 1)
 	var nxdomainResult atomic.Pointer[QueryResult]
+	// nxdomainCh wakes the wait loop on the first collected NXDOMAIN so the
+	// deferral window starts from the earliest possible instant.
+	nxdomainCh := make(chan struct{}, 1)
 	queryCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(errors.New("query completed"))
 
@@ -120,7 +124,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 				pool.DefaultMessage.Put(msg)
 
 				if queryResult.Error == nil && queryResult.Response != nil {
-					if handled := r.processUpstreamResponse(queryResult, server, question, resultChan, &nxdomainResult, &activeConnections, cancel, groupCtx, &cidrFilterRefused, &lastUpstreamEDE); handled {
+					if handled := r.processUpstreamResponse(queryResult, server, question, resultChan, &nxdomainResult, nxdomainCh, &activeConnections, cancel, groupCtx, &cidrFilterRefused, &lastUpstreamEDE); handled {
 						return nil
 					}
 				}
@@ -142,31 +146,21 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	}()
 
 	// First-wins: wait for the first successful result from any upstream.
-	select {
-	case res, ok := <-resultChan:
-		if ok {
-			if errors.Is(res.Err, ErrCIDRFilterRefused) {
-				return QueryResult{Err: ErrCIDRFilterRefused}
-			}
-			if res.Server != "" {
-				return res
-			}
+	// The first collected NXDOMAIN arms a bounded deferral window
+	// (DefaultNXDOMAINDeferralWindow, 0 = serve immediately — GFW pollution
+	// toward trusted forwarding resolvers is A/AAAA injection, not NXDOMAIN;
+	// spoofguard covers the injection case).  Without the early return, an
+	// all-NXDOMAIN fan-out waited for EVERY upstream — one hung resolver
+	// (9s timeout) delayed a 10ms NXDOMAIN to its full tail.
+	var deferralTimer *time.Timer
+	var deferralCh <-chan time.Time
+	defer func() {
+		if deferralTimer != nil {
+			deferralTimer.Stop()
 		}
-		if nxRes := nxdomainResult.Load(); nxRes != nil && nxRes.Server != "" {
-			return *nxRes
-		}
-		// Propagate any EDE code captured from upstream SERVFAIL.
-		if opt := lastUpstreamEDE.Load(); opt != nil {
-			log.Debugf("UPSTREAM: all %d servers failed for %s, propagating EDE %d", len(servers), question.Name, opt.InfoCode)
-			return QueryResult{Err: dnssecEDEError(uint64(opt.InfoCode)), UpstreamEDE: opt}
-		}
-		log.Debugf("UPSTREAM: all %d servers failed for %s", len(servers), question.Name)
-		return QueryResult{Err: errors.New("all upstream queries failed")}
-	case <-queryCtx.Done():
-		// When processUpstreamResponse cancels queryCtx after sending
-		// a result to resultChan, the select can pick either branch.
-		// Drain any pending result from the buffered channel before
-		// falling back to the timeout/error path.
+	}()
+waitLoop:
+	for {
 		select {
 		case res, ok := <-resultChan:
 			if ok {
@@ -176,16 +170,72 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 				if res.Server != "" {
 					return res
 				}
+				continue
 			}
-		default:
+			break waitLoop
+		case <-nxdomainCh:
+			if deferralTimer == nil {
+				deferralTimer = time.NewTimer(config.DefaultNXDOMAINDeferralWindow)
+				deferralCh = deferralTimer.C
+			}
+		case <-deferralCh:
+			// A NOERROR winner may have landed concurrently with the
+			// deferral firing — serve it first (mirrors the recursive
+			// walk's winner drain).
+			select {
+			case res, ok := <-resultChan:
+				if ok {
+					if errors.Is(res.Err, ErrCIDRFilterRefused) {
+						return QueryResult{Err: ErrCIDRFilterRefused}
+					}
+					if res.Server != "" {
+						return res
+					}
+				}
+			default:
+			}
+			if nx := nxdomainResult.Load(); nx != nil && nx.Server != "" {
+				return *nx
+			}
+			continue
+		case <-queryCtx.Done():
+			// When processUpstreamResponse cancels queryCtx after sending
+			// a result to resultChan, the select can pick either branch.
+			// Drain any pending result from the buffered channel before
+			// falling back to the timeout/error path.
+			select {
+			case res, ok := <-resultChan:
+				if ok {
+					if errors.Is(res.Err, ErrCIDRFilterRefused) {
+						return QueryResult{Err: ErrCIDRFilterRefused}
+					}
+					if res.Server != "" {
+						return res
+					}
+				}
+			default:
+			}
+			// Check for captured EDE codes here too so they are
+			// not lost to a "context canceled" error.
+			if opt := lastUpstreamEDE.Load(); opt != nil {
+				return QueryResult{Err: dnssecEDEError(uint64(opt.InfoCode)), UpstreamEDE: opt}
+			}
+			return QueryResult{Err: queryCtx.Err()}
 		}
-		// Check for captured EDE codes here too so they are
-		// not lost to a "context canceled" error.
-		if opt := lastUpstreamEDE.Load(); opt != nil {
-			return QueryResult{Err: dnssecEDEError(uint64(opt.InfoCode)), UpstreamEDE: opt}
-		}
-		return QueryResult{Err: queryCtx.Err()}
 	}
+
+	// All upstreams finished without a first-win: NXDOMAIN fallback (the
+	// deferral may have been bypassed), then EDE, then failure.
+	if nxRes := nxdomainResult.Load(); nxRes != nil && nxRes.Server != "" {
+		return *nxRes
+	}
+	// Propagate any EDE code captured from upstream SERVFAIL.
+	if opt := lastUpstreamEDE.Load(); opt != nil {
+		log.Debugf("UPSTREAM: all %d servers failed for %s, propagating EDE %d", len(servers), question.Name, opt.InfoCode)
+		return QueryResult{Err: dnssecEDEError(uint64(opt.InfoCode)), UpstreamEDE: opt}
+	}
+	log.Debugf("UPSTREAM: all %d servers failed for %s", len(servers), question.Name)
+	return QueryResult{Err: errors.New("all upstream queries failed")}
 }
 
 func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]dns.RR, bool) {
@@ -253,7 +303,7 @@ func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]
 // answers. ZJDNS in forwarding mode queries recursive resolvers (always AA=0), so the
 // check is intentionally skipped — it would incorrectly reject all recursive responses.
 // Returns true if the goroutine should return (result sent or handled).
-func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server *config.UpstreamServer, question Question, resultChan chan<- QueryResult, nxdomainResult *atomic.Pointer[QueryResult], activeConnections *atomic.Int32, cancel context.CancelCauseFunc, groupCtx context.Context, cidrFilterRefused *atomic.Bool, lastEDE *atomic.Pointer[dns.EDE]) bool {
+func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server *config.UpstreamServer, question Question, resultChan chan<- QueryResult, nxdomainResult *atomic.Pointer[QueryResult], nxdomainCh chan<- struct{}, activeConnections *atomic.Int32, cancel context.CancelCauseFunc, groupCtx context.Context, cidrFilterRefused *atomic.Bool, lastEDE *atomic.Pointer[dns.EDE]) bool {
 	// RFC 5452 §9.3: reject responses that do not echo the query's question.
 	// The forwarding path already checks the response ID (spoofguard); the
 	// question echo closes the cross-name replay variant (R3-H1).
@@ -324,7 +374,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 			return true
 		}
 	case dns.RcodeNameError:
-		nxdomainResult.CompareAndSwap(nil, &QueryResult{
+		if nxdomainResult.CompareAndSwap(nil, &QueryResult{
 			Answer:        queryResult.Response.Answer,
 			Authority:     queryResult.Response.Ns,
 			Additional:    queryResult.Response.Extra,
@@ -335,7 +385,14 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 			ECS:           r.edns.ParseFromDNS(queryResult.Response),
 			Server:        serverDesc,
 			UpstreamEDE:   upstreamEDE,
-		})
+		}) {
+			// First NXDOMAIN collected — arm the deferral window in the
+			// wait loop (first-wins; same principle as the recursive walk).
+			select {
+			case nxdomainCh <- struct{}{}:
+			default:
+			}
+		}
 		pool.DefaultMessage.Put(queryResult.Response)
 	default:
 		pool.DefaultMessage.Put(queryResult.Response)
@@ -357,9 +414,10 @@ func (r *Resolver) handleRecursiveQuery(groupCtx context.Context, server *config
 	// Empty response (no Answer AND no Authority): nothing to forward as a
 	// first-win — the query is dropped here.  Note this only matches fully
 	// empty responses: real denials carry the SOA/NSEC/NSEC3 proof in
-	// Authority, so they ARE forwarded as first-wins (forwarding fan-out
-	// has no NXDOMAIN-deferral — intentional divergence from the recursive
-	// walk).
+	// Authority, so they ARE forwarded as first-wins — consistent with the
+	// forwarding fan-out, where a collected NXDOMAIN is served after the
+	// (default zero) deferral window without waiting for the slowest
+	// upstream.
 	if len(qr.Answer) == 0 && len(qr.Authority) == 0 {
 		return false
 	}
