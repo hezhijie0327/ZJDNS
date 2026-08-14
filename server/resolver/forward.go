@@ -48,6 +48,15 @@ func captureUpstreamEDE(lastEDE *atomic.Pointer[dns.EDE], resp *dns.Msg, serverA
 	return nil
 }
 
+// isSecureUpstream reports whether an upstream uses an encrypted transport
+// where hijacking is impossible and first-wins needs no defense gating.
+// DNSCrypt carries its own crypto on the DNS layer — not a TLS transport.
+func isSecureUpstream(server *config.UpstreamServer) bool {
+	return zdnsutil.IsSecureProtocol(server.Protocol) &&
+		server.Protocol != config.ProtoDNSCrypt &&
+		server.Protocol != config.ProtoDNSCryptTCP
+}
+
 func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *edns.ECSOption, servers []*config.UpstreamServer) QueryResult {
 	if len(servers) == 0 {
 		return QueryResult{Err: errors.New("no upstream servers")}
@@ -86,6 +95,31 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	var activeConnections atomic.Int32
 	var cidrFilterRefused atomic.Bool
 
+	// One base query per connection class (plain vs secure), built once
+	// before the fan-out: the EDNS options (ECS, padding) are identical for
+	// every upstream of a class — per-server variation is only the RFC 10029
+	// MQTYPE list, appended to each copy.  Sharing avoids N-1 wasted
+	// ApplyToMessage + padding passes under a multi-upstream fan-out
+	// (mirrors the recursive walk's baseMsg pattern).
+	var needPlain, needSecure bool
+	for _, s := range servers {
+		if s.IsRecursive() {
+			continue
+		}
+		if isSecureUpstream(s) {
+			needSecure = true
+		} else {
+			needPlain = true
+		}
+	}
+	var basePlain, baseSecure *dns.Msg
+	if needPlain {
+		basePlain = r.buildMsg(question, ecs, true, false)
+	}
+	if needSecure {
+		baseSecure = r.buildMsg(question, ecs, true, true)
+	}
+
 	//nolint:gosec // non-crypto random for server load balancing
 	startIdx := rand.IntN(len(servers))
 	for i := range servers {
@@ -112,10 +146,23 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 			default:
 				// TCP/TLS/other: encrypted or single-response —
 				// no hijacking possible, first-wins is fine.
-				isSecure := zdnsutil.IsSecureProtocol(server.Protocol) &&
-					server.Protocol != config.ProtoDNSCrypt &&
-					server.Protocol != config.ProtoDNSCryptTCP
-				msg := r.buildMsg(question, ecs, true, isSecure)
+				base := basePlain
+				if isSecureUpstream(server) {
+					base = baseSecure
+				}
+				msg := pool.DefaultMessage.Get()
+				// Copy the shared base (the pooled msg starts nil, so each
+				// copy owns its Question/Pseudo backing arrays — no shared
+				// array between workers).
+				if len(base.Question) > 0 {
+					msg.Question = append(msg.Question, base.Question[0])
+				}
+				msg.RecursionDesired = base.RecursionDesired
+				msg.CheckingDisabled = base.CheckingDisabled
+				msg.Security = base.Security
+				msg.CompactAnswers = base.CompactAnswers
+				msg.UDPSize = base.UDPSize
+				msg.Pseudo = append(msg.Pseudo, base.Pseudo...)
 				// RFC 10029: attach the configured list minus the primary
 				// QTYPE.  Client MQTYPE-Query options are never forwarded —
 				// the server-side MQTYPE middleware merges locally.
@@ -136,6 +183,16 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	go func() {
 		defer zdnsutil.HandlePanic("UPSTREAM errgroup wait")
 		_ = g.Wait() // _ = error: upstream fan-out errors surface per-query via resultChan; group errors are best-effort
+		// basePlain/baseSecure are read by every worker (including stragglers
+		// still winding down) — return them here, after g.Wait, so no worker
+		// reads a pooled message that was already zeroed or reused (mirrors
+		// the recursive walk's baseMsg lifecycle).
+		if basePlain != nil {
+			pool.DefaultMessage.Put(basePlain)
+		}
+		if baseSecure != nil {
+			pool.DefaultMessage.Put(baseSecure)
+		}
 		if cidrFilterRefused.Load() {
 			select {
 			case resultChan <- QueryResult{Err: ErrCIDRFilterRefused}:

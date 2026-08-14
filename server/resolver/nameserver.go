@@ -168,6 +168,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			msg.RecursionDesired = baseMsg.RecursionDesired
 			msg.CheckingDisabled = baseMsg.CheckingDisabled
 			msg.Security = baseMsg.Security
+			msg.CompactAnswers = baseMsg.CompactAnswers
 			msg.UDPSize = baseMsg.UDPSize
 			// EDNS(0) options (ECS SUBNET, cookie, padding) live in Pseudo in
 			// this fork — without this copy the caller's explicit ECS never
