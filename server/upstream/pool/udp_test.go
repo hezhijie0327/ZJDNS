@@ -477,3 +477,42 @@ func TestPacketBufTiers(t *testing.T) {
 		release2()
 	}
 }
+
+func TestDrainCollectChClosedChannelReturns(t *testing.T) {
+	// Regression: drainCollectCh on a CLOSED channel used to spin forever —
+	// a non-blocking receive on a closed channel is always ready, so the
+	// default branch never fired (observed as one 100% core per dead conn,
+	// hit via ExchangeCollect's write-error path and ReleaseCollect).
+	ch := make(chan collectPacket, 4)
+	released := 0
+	for range 3 {
+		ch <- collectPacket{Release: func() { released++ }}
+	}
+	close(ch)
+
+	done := make(chan struct{})
+	go func() {
+		drainCollectCh(ch)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("drainCollectCh did not return on a closed channel")
+	}
+	if released != 3 {
+		t.Errorf("released = %d, want 3 (buffered packets must still be released)", released)
+	}
+}
+
+func TestDrainCollectChOpenChannelDrains(t *testing.T) {
+	ch := make(chan collectPacket, 4)
+	released := 0
+	for range 3 {
+		ch <- collectPacket{Release: func() { released++ }}
+	}
+	drainCollectCh(ch)
+	if released != 3 {
+		t.Errorf("released = %d, want 3", released)
+	}
+}

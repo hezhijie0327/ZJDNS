@@ -304,7 +304,14 @@ func (c *UDPConn) ReleaseCollect(matchKey string) {
 func drainCollectCh(ch <-chan collectPacket) {
 	for {
 		select {
-		case pkt := <-ch:
+		case pkt, ok := <-ch:
+			if !ok {
+				// Closed (the conn died): a non-blocking receive on a closed
+				// channel is always ready, so without this check the loop
+				// spun forever on zero-value packets — one 100% core per
+				// dead connection.
+				return
+			}
 			if pkt.Release != nil {
 				pkt.Release()
 			}
