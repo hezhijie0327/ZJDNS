@@ -22,37 +22,29 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// ── Address-family reachability ──────────────────────────────────────────────
-// Fan-out batches (root/NS addresses) are filtered by the host's usable
-// address families, probed once at startup.  A plain UDP dial does no
-// handshake — it only verifies a route exists — so it fails instantly with
-// "network unreachable" on hosts without the family.  Without the filter, a
-// 26-address root batch carries 13 IPv6 addresses that fail instantly per
-// query (dial + TCP fallback attempt + UDP-pool socket churn, evicting one
-// pooled socket per address).
+// ── Address-family filtering (operator-configured) ───────────────────────────
+// Fan-out batches (root/NS addresses) are restricted to the configured
+// address family.  The family is an explicit operator choice
+// (server.features.address_family) — no runtime probing: the operator knows
+// the network, and a 26-address root batch carrying 13 addresses of an
+// unwanted family would churn the UDP pool (dial + evict per address) and
+// double the per-query error log noise.
 
-var (
-	// ipv4Reachable/ipv6Reachable memoize the family check (sync.OnceValue —
-	// dialed once on first use, never re-probed).
-	ipv4Reachable = sync.OnceValue(func() bool { return dialFamilyReachable("udp4", "8.8.8.8:53") })
-	ipv6Reachable = sync.OnceValue(func() bool { return dialFamilyReachable("udp6", "[2001:500:2::c]:53") })
-)
-
-func dialFamilyReachable(network, addr string) bool {
-	conn, err := net.DialTimeout(network, addr, 500*time.Millisecond)
-	if err != nil {
-		return false
+// filterByFamily keeps only addresses of the configured family: "dual" (or
+// any unknown value) keeps everything, "ipv4" drops IPv6 addresses, "ipv6"
+// drops IPv4 addresses.  The caller's backing array is never mutated (callers
+// reuse address lists across walk iterations).  Hostnames and non-ip:port
+// entries are always kept.  Forwarding upstreams (also explicitly configured)
+// are NOT filtered.
+func filterByFamily(addrs []string, family string) []string {
+	keepV4, keepV6 := true, true
+	switch family {
+	case "ipv4":
+		keepV6 = false
+	case "ipv6":
+		keepV4 = false
 	}
-	_ = conn.Close()
-	return true
-}
-
-// filterFamilyUnreachable drops addresses whose family has no route on this
-// host.  Returns the input unchanged when both families are reachable; the
-// caller's backing array is never mutated (the caller reuses the address list
-// across walk iterations).  Non-IP addresses are kept defensively.
-func filterFamilyUnreachable(addrs []string) []string {
-	if ipv4Reachable() && ipv6Reachable() {
+	if keepV4 && keepV6 {
 		return addrs
 	}
 	out := make([]string, 0, len(addrs))
@@ -62,19 +54,26 @@ func filterFamilyUnreachable(addrs []string) []string {
 			out = append(out, a) // not an ip:port — keep
 			continue
 		}
-		ip := net.ParseIP(strings.Trim(host, "[]"))
-		switch {
-		case ip == nil:
-			out = append(out, a) // hostname — keep
-		case ip.To4() != nil && !ipv4Reachable():
+		if familyFiltered(host, keepV4, keepV6) {
 			continue
-		case ip.To4() == nil && !ipv6Reachable():
-			continue
-		default:
-			out = append(out, a)
 		}
+		out = append(out, a)
 	}
 	return out
+}
+
+// familyFiltered reports whether an ip:port host's address family should be
+// dropped.  Hostnames are never filtered.
+func familyFiltered(host string, keepV4, keepV6 bool) bool {
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	switch {
+	case ip == nil:
+		return false // hostname — keep
+	case ip.To4() != nil:
+		return !keepV4
+	default:
+		return !keepV6
+	}
 }
 
 // responseEchoesQuestion verifies that a response echoes the query's question
@@ -101,7 +100,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	// startup): a 26-address root batch carrying 13 instant-failing IPv6
 	// addresses churned the UDP pool (dial + evict per address) and doubled
 	// the per-query error log noise.  Ordering (latency-sorted) is kept.
-	nameservers = filterFamilyUnreachable(nameservers)
+	nameservers = filterByFamily(nameservers, r.addressFamily)
 	if len(nameservers) == 0 {
 		return nil, defense.VerdictClean, errors.New("no nameservers")
 	}

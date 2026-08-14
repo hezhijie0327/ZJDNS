@@ -39,6 +39,7 @@ func initResolver(
 		BuildMsg:             buildMsg,
 		Cache:                cacheStore,
 		DNSSECEnforce:        cfg.Server.Features.DNSSECEnforce,
+		AddressFamily:        cfg.Server.Features.AddressFamily,
 		DelegationMaxEntries: cfg.Server.Features.Cache.Delegation.Limit.Mem,
 		DelegationSpillPath:  cfg.Server.Features.DelegationStateFile(),
 		DelegationSpillLimit: cfg.Server.Features.Cache.Delegation.Limit.Disk,

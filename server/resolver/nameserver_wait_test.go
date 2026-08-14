@@ -303,3 +303,54 @@ func TestQueryNameservers_StragglerCanceled(t *testing.T) {
 		t.Fatal("straggler was not canceled after the early NXDOMAIN return")
 	}
 }
+
+// ── Address-family filtering (operator-configured) ───────────────────────────
+
+func TestFamilyFiltered(t *testing.T) {
+	cases := []struct {
+		host   string
+		keepV4 bool
+		keepV6 bool
+		want   bool
+		desc   string
+	}{
+		{"1.2.3.4", true, true, false, "v4 kept in dual mode"},
+		{"1.2.3.4", true, false, false, "v4 kept in v4 mode"},
+		{"1.2.3.4", false, true, true, "v4 filtered in v6 mode"},
+		{"[2001:db8::1]", true, true, false, "v6 kept in dual mode"},
+		{"[2001:db8::1]", false, true, false, "v6 kept in v6 mode"},
+		{"[2001:db8::1]", true, false, true, "v6 filtered in v4 mode"},
+		{"[::ffff:1.2.3.4]", false, true, true, "v4-mapped v6 filtered in v6 mode (v4 semantics)"},
+		{"dns.example.com", false, false, false, "hostname never filtered"},
+		{"", false, false, false, "empty host kept defensively"},
+	}
+	for _, c := range cases {
+		if got := familyFiltered(c.host, c.keepV4, c.keepV6); got != c.want {
+			t.Errorf("%s (%s, keepV4=%v, keepV6=%v): got %v, want %v", c.desc, c.host, c.keepV4, c.keepV6, got, c.want)
+		}
+	}
+}
+
+// TestFilterByFamily_Policies verifies the operator-configured family
+// policies: "dual" keeps everything, "ipv4" drops IPv6, "ipv6" drops IPv4,
+// unknown values behave as dual (defensive).
+func TestFilterByFamily_Policies(t *testing.T) {
+	addrs := []string{"1.2.3.4:53", "[2001:db8::1]:53", "ns.example.com:53"}
+
+	got := filterByFamily(addrs, "dual")
+	if len(got) != 3 {
+		t.Fatalf("dual: got %d addresses, want all 3", len(got))
+	}
+	got = filterByFamily(addrs, "ipv4")
+	if len(got) != 2 || got[0] != "1.2.3.4:53" || got[1] != "ns.example.com:53" {
+		t.Fatalf("ipv4: got %v, want [1.2.3.4:53 ns.example.com:53]", got)
+	}
+	got = filterByFamily(addrs, "ipv6")
+	if len(got) != 2 || got[0] != "[2001:db8::1]:53" || got[1] != "ns.example.com:53" {
+		t.Fatalf("ipv6: got %v, want [[2001:db8::1]:53 ns.example.com:53]", got)
+	}
+	got = filterByFamily(addrs, "bogus")
+	if len(got) != 3 {
+		t.Fatalf("unknown value: got %d addresses, want all 3 (defensive dual)", len(got))
+	}
+}

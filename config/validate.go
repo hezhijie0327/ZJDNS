@@ -54,6 +54,12 @@ func validateConfig(cfg *ServerConfig) error {
 		}
 	}
 
+	switch cfg.Server.Features.AddressFamily {
+	case "", "dual", "ipv4", "ipv6":
+	default:
+		return fmt.Errorf("features.address_family must be one of \"dual\", \"ipv4\", \"ipv6\", got %q", cfg.Server.Features.AddressFamily)
+	}
+
 	rulesetTags, err := validateRuleSets(cfg)
 	if err != nil {
 		return err

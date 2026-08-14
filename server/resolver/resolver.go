@@ -110,6 +110,9 @@ type Config struct {
 	BuildMsg       BuildQueryFunc
 	Cache          cache.Store
 	DNSSECEnforce  bool
+	// AddressFamily restricts recursive fan-out to one address family
+	// ("dual" | "ipv4" | "ipv6" — from server.features.address_family).
+	AddressFamily string
 	// DelegationMaxEntries bounds the in-memory zone-cut delegation cache
 	// (<= 0 applies the config default).
 	DelegationMaxEntries int
@@ -178,10 +181,11 @@ func New(cfg *Config) (*Resolver, error) {
 		delegationMax = config.DefaultMaxDelegationEntries
 	}
 	r.recursive = &Recursive{
-		resolver:    r,
-		cache:       cfg.Cache,
-		delegations: lrumap.New[string, *delegationEntry](delegationMax),
-		ctx:         cfg.Ctx,
+		resolver:      r,
+		cache:         cfg.Cache,
+		delegations:   lrumap.New[string, *delegationEntry](delegationMax),
+		ctx:           cfg.Ctx,
+		addressFamily: cfg.AddressFamily,
 	}
 	r.recursive.loadDelegationSpill(cfg.DelegationSpillPath, cfg.DelegationSpillLimit, delegationMax)
 	r.cname = &CNAME{resolver: r}

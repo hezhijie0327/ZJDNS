@@ -88,8 +88,13 @@ type DNSCryptCertificate struct {
 // FeatureFlags enables optional features: KTLS, DDR, ECS,
 // cache, latency probes, and stats.
 type FeatureFlags struct {
-	KTLS          *KTLSSettings      `json:"ktls,omitzero"`
-	DNSSECEnforce bool               `json:"dnssec_enforce,omitzero"`
+	KTLS          *KTLSSettings `json:"ktls,omitzero"`
+	DNSSECEnforce bool          `json:"dnssec_enforce,omitzero"`
+	// AddressFamily restricts recursive fan-out to one address family:
+	// "dual" (default, empty) keeps both, "ipv4" drops IPv6 addresses,
+	// "ipv6" drops IPv4 addresses.  Explicit operator choice — no runtime
+	// reachability probing.
+	AddressFamily string             `json:"address_family,omitzero"`
 	DDR           DDRSettings        `json:"ddr,omitzero"`
 	ECS           ECSConfig          `json:"ecs_subnet,omitzero"`
 	Cache         CacheSettings      `json:"cache,omitzero"`

@@ -48,6 +48,9 @@ type Recursive struct {
 	poisonguard bool     // from protocol=recursive upstream
 	hopguard    bool     // from protocol=recursive upstream
 	mqtype      []uint16 // RFC 10029 MQTYPE-Query types (from protocol=recursive upstream)
+	// addressFamily restricts fan-out to one family ("dual"|"ipv4"|"ipv6",
+	// from server.features.address_family — explicit operator choice).
+	addressFamily string
 
 	// rootCache memoizes getRootServers' result: the root set changes at
 	// most monthly, but the uncached path issues 13 names × 2 types = 26
@@ -397,7 +400,7 @@ func (r *Recursive) probeTLDForPoison(ctx context.Context, tldServers []string, 
 
 	// The walk's address list is unfiltered (it also seeds tldServers for
 	// later levels) — skip the unreachable family here too.
-	tldServers = filterFamilyUnreachable(tldServers)
+	tldServers = filterByFamily(tldServers, r.addressFamily)
 	n := min(len(tldServers), config.DefaultPoisonProbeServers)
 	verdicts := make(chan bool, n)
 	var wg sync.WaitGroup
