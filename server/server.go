@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"errors"
+	_ "expvar" // /debug/vars: runtime MemStats for RSS diagnosis (served only when pprof is enabled)
 	"fmt"
 	"net"
 	"net/http"
