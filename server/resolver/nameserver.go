@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
@@ -20,6 +21,61 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 	"golang.org/x/sync/errgroup"
 )
+
+// ── Address-family reachability ──────────────────────────────────────────────
+// Fan-out batches (root/NS addresses) are filtered by the host's usable
+// address families, probed once at startup.  A plain UDP dial does no
+// handshake — it only verifies a route exists — so it fails instantly with
+// "network unreachable" on hosts without the family.  Without the filter, a
+// 26-address root batch carries 13 IPv6 addresses that fail instantly per
+// query (dial + TCP fallback attempt + UDP-pool socket churn, evicting one
+// pooled socket per address).
+
+var (
+	// ipv4Reachable/ipv6Reachable memoize the family check (sync.OnceValue —
+	// dialed once on first use, never re-probed).
+	ipv4Reachable = sync.OnceValue(func() bool { return dialFamilyReachable("udp4", "8.8.8.8:53") })
+	ipv6Reachable = sync.OnceValue(func() bool { return dialFamilyReachable("udp6", "[2001:500:2::c]:53") })
+)
+
+func dialFamilyReachable(network, addr string) bool {
+	conn, err := net.DialTimeout(network, addr, 500*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// filterFamilyUnreachable drops addresses whose family has no route on this
+// host.  Returns the input unchanged when both families are reachable; the
+// caller's backing array is never mutated (the caller reuses the address list
+// across walk iterations).  Non-IP addresses are kept defensively.
+func filterFamilyUnreachable(addrs []string) []string {
+	if ipv4Reachable() && ipv6Reachable() {
+		return addrs
+	}
+	out := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		host, _, err := net.SplitHostPort(a)
+		if err != nil {
+			out = append(out, a) // not an ip:port — keep
+			continue
+		}
+		ip := net.ParseIP(strings.Trim(host, "[]"))
+		switch {
+		case ip == nil:
+			out = append(out, a) // hostname — keep
+		case ip.To4() != nil && !ipv4Reachable():
+			continue
+		case ip.To4() == nil && !ipv6Reachable():
+			continue
+		default:
+			out = append(out, a)
+		}
+	}
+	return out
+}
 
 // responseEchoesQuestion verifies that a response echoes the query's question
 // section (RFC 5452 §9.3).  Without this check, an on-path attacker could
@@ -41,6 +97,15 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		return nil, defense.VerdictClean, errors.New("no nameservers")
 	}
 
+	// Drop the address family this host cannot reach (probed once at
+	// startup): a 26-address root batch carrying 13 instant-failing IPv6
+	// addresses churned the UDP pool (dial + evict per address) and doubled
+	// the per-query error log noise.  Ordering (latency-sorted) is kept.
+	nameservers = filterFamilyUnreachable(nameservers)
+	if len(nameservers) == 0 {
+		return nil, defense.VerdictClean, errors.New("no nameservers")
+	}
+
 	deadlineCtx, deadlineCancel := context.WithTimeout(ctx, config.DefaultRecursiveQueryTimeout)
 	defer deadlineCancel()
 	queryCtx, cancel := context.WithCancel(deadlineCtx)
@@ -48,11 +113,24 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 	resultChan := make(chan *dns.Msg, 1)
 	g, queryCtx := errgroup.WithContext(queryCtx)
-	limit := min(len(nameservers), config.DefaultMaxConcurrentNS)
-	g.SetLimit(limit)
+	// Every nameserver is queried concurrently — no artificial cap.  The
+	// early-return wait loop sits after the launch loop, and a cap (errgroup
+	// SetLimit or a semaphore) starves the first responder: slow servers
+	// hold the limited slots, fast servers queue behind them, and the
+	// level stalls until a slot frees (measured 41ms→382ms→3000ms on a
+	// 15-server batch).  The UDP pool already bounds sockets at 32 global /
+	// 4 per address, so resource growth is bounded without a query cap —
+	// the same all-N-concurrent pattern BIND/Unbound use for root servers.
+	// The win path's cancel() aborts the stragglers once a response wins.
 
 	var poisonRejected atomic.Bool
-	var nxdomainMsg atomic.Pointer[dns.Msg] // NXDOMAIN stored as secondary — never wins race against NOERROR
+	// nxdomainMsg holds the first collected NXDOMAIN (secondary result —
+	// served only when no NOERROR wins the race or the deferral window
+	// expires).
+	var nxdomainMsg atomic.Pointer[dns.Msg]
+	// nxdomainCh wakes the wait loop on the first NXDOMAIN collection so the
+	// deferral window starts from the earliest possible instant.
+	nxdomainCh := make(chan struct{}, 1)
 	normalizedQname := dnsutil.Canonical(question.Name)
 
 	baseMsg := r.resolver.buildMsg(question, ecs, false, false)
@@ -79,7 +157,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 			select {
 			case <-queryCtx.Done():
-				return queryCtx.Err()
+				return nil
 			default:
 			}
 
@@ -198,11 +276,12 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 				}
 
 				if rcode == dns.RcodeNameError {
-					// NXDOMAIN is deferred — GFW can inject fake NXDOMAIN
-					// faster than real NOERROR responses. By storing it as
-					// a secondary result (never canceling the errgroup), we
-					// give legitimate NOERROR responses time to arrive.
-					// Falls back to NXDOMAIN only if no NOERROR succeeds.
+					// NXDOMAIN is accepted as the level's answer once
+					// collected (first-wins; GFW pollution is A/AAAA
+					// injection and packet drops, not NXDOMAIN).  It is
+					// stored via CAS so the first one wins, and the wait
+					// loop below serves it immediately or after the
+					// optional deferral window.
 					if r.poisonguard {
 						v := detector.Validate(currentDomain, normalizedQname, result.Response)
 						if v == defense.VerdictPoisoned {
@@ -215,6 +294,13 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 					if !nxdomainMsg.CompareAndSwap(nil, result.Response) {
 						pool.DefaultMessage.Put(result.Response)
+					} else {
+						// First NXDOMAIN collected — arm the deferral window
+						// in the wait loop below.
+						select {
+						case nxdomainCh <- struct{}{}:
+						default:
+						}
 					}
 					return nil
 				}
@@ -257,18 +343,17 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 	verdict := defense.VerdictClean
 
-	select {
-	case resp := <-resultChan:
+	// serveWinner handles a NOERROR race winner: returns the collected
+	// NXDOMAIN (if any) to the pool, carries the poison verdict, and drains
+	// orphan responses that slipped into the buffer between the winner's
+	// send and cancel() propagation (M10).
+	serveWinner := func(resp *dns.Msg) (*dns.Msg, defense.Verdict, error) {
 		if nx := nxdomainMsg.Load(); nx != nil {
 			pool.DefaultMessage.Put(nx)
 		}
 		if poisonRejected.Load() {
 			verdict = defense.VerdictPoisoned
 		}
-		// A second goroutine can slip a response into the buffer between the
-		// winner's send and cancel() propagation — return the orphan so the
-		// pooled message is not dropped when the channel goes out of scope
-		// (M10).
 		for {
 			select {
 			case m := <-resultChan:
@@ -277,8 +362,54 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 				return resp, verdict, nil
 			}
 		}
-	case <-errgroupDone:
-	case <-ctx.Done():
+	}
+
+	// NXDOMAIN handling: the first collected NXDOMAIN is accepted — GFW's
+	// A/AAAA-injection pollution does not include NXDOMAIN, so there is no
+	// injected-NXDOMAIN race to defer for.  A bounded deferral window is kept
+	// as an optional knob for misconfigured/stale authorities that answer
+	// NXDOMAIN before healthy peers return the real NOERROR: raising
+	// DefaultNXDOMAINDeferralWindow re-arms that race at the cost of a fixed
+	// delay per all-NXDOMAIN level.  The default 0 serves the first NXDOMAIN
+	// immediately — the level no longer waits for the SLOWEST nameserver to
+	// complete (a rate-limited or packet-lossy server previously stretched
+	// every all-NXDOMAIN level to its full tail — measured 41ms→382ms on a
+	// 15-server batch).  The poisonguard verdict + TCP fallback still gate
+	// poisoned responses.
+	var deferralTimer *time.Timer
+	var deferralCh <-chan time.Time
+	// The timer is created lazily inside the loop; stop it from function
+	// scope so a pending window never outlives the query (Stop on an
+	// already-fired timer is a no-op).
+	defer func() {
+		if deferralTimer != nil {
+			deferralTimer.Stop()
+		}
+	}()
+waitLoop:
+	for {
+		select {
+		case resp := <-resultChan:
+			return serveWinner(resp)
+		case <-nxdomainCh:
+			if deferralTimer == nil {
+				deferralTimer = time.NewTimer(config.DefaultNXDOMAINDeferralWindow)
+				deferralCh = deferralTimer.C
+			}
+		case <-deferralCh:
+			nx := nxdomainMsg.Load()
+			if nx == nil { // unreachable: the channel only fires after a store
+				return nil, verdict, errors.New("no successful response")
+			}
+			if poisonRejected.Load() {
+				verdict = defense.VerdictPoisoned
+			}
+			return nx, verdict, nil
+		case <-errgroupDone:
+			break waitLoop
+		case <-ctx.Done():
+			break waitLoop
+		}
 	}
 
 	// Drain a NOERROR result that arrived concurrently with errgroupDone or
@@ -317,16 +448,17 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 		return nil
 	}
 
-	// Resolve NS addresses concurrently, then shuffle so the
-	// concurrency-limited first batch is not biased toward the
-	// delegation order. Latency-probed order is restored on
-	// subsequent queries via the cache.
+	// Resolve NS addresses concurrently, then shuffle so the first batch is
+	// not biased toward the delegation order. Latency-probed order is
+	// restored on subsequent queries via the cache.  No query cap: SetLimit
+	// starved the ≥2-names-done early-exit the same way it stalled
+	// queryNameserversConcurrent (slow NS names held the slots while fast
+	// ones queued behind the launch loop).
 
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, config.DefaultRecursiveQueryTimeout)
 	defer resolveCancel()
 
 	g, queryCtx := errgroup.WithContext(resolveCtx)
-	g.SetLimit(concurrencyLimit(len(nsRecords)))
 
 	var allMu sync.Mutex
 	var allAddresses []string

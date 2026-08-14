@@ -121,21 +121,6 @@ type Config struct {
 	Ctx                  context.Context // lifecycle context propagated to Recursive for probes
 }
 
-// concurrencyTier1/2/3 define server-count thresholds for adaptive concurrency
-// limits. concurrencyDiv2/3 are divisor constants used in the tier formulas:
-//
-//	Tier 1 (≤4 servers): serverCount
-//	Tier 2 (5–12 servers): (2×serverCount + 2) / 3
-//	Tier 3 (13–20 servers): (serverCount + 1) / 2
-//	Tier 4 (>20 servers): serverCount / 3
-const (
-	concurrencyTier1 = 4
-	concurrencyTier2 = 12
-	concurrencyTier3 = 20
-	concurrencyDiv2  = 2
-	concurrencyDiv3  = 3
-)
-
 // ErrCIDRFilterRefused is returned when all A/AAAA records are filtered by
 // CIDR rules.
 var ErrCIDRFilterRefused = errors.New("cidr_filter_refused")
@@ -280,29 +265,5 @@ func ShuffleSlice[T any](slice []T) {
 	for i := len(slice) - 1; i > 0; i-- {
 		j := rand.IntN(i + 1) //nolint:gosec // G404: Fisher-Yates shuffle — not cryptographic
 		slice[i], slice[j] = slice[j], slice[i]
-	}
-}
-
-// concurrencyLimit returns an adaptive concurrency limit based on the number of
-// servers to query simultaneously. The limit is monotonic: each tier formula
-// is floored at the previous tier's value, so adding a server never reduces
-// the fan-out (e.g. 12 and 13 servers both yield 8; 20 and 21 both yield 10).
-func concurrencyLimit(serverCount int) int {
-	if serverCount <= 0 {
-		return 1
-	}
-	switch {
-	case serverCount <= concurrencyTier1:
-		return serverCount
-	case serverCount <= concurrencyTier2:
-		return max((serverCount*concurrencyDiv2+concurrencyDiv2)/concurrencyDiv3, concurrencyTier1)
-	case serverCount <= concurrencyTier3:
-		return max((serverCount+1)/concurrencyDiv2, (concurrencyTier2*concurrencyDiv2+concurrencyDiv2)/concurrencyDiv3)
-	default:
-		limit := serverCount / concurrencyDiv3
-		if limit < config.DefaultMinConcurrencyLimit {
-			return max(config.DefaultMinConcurrencyLimit, (concurrencyTier3+1)/concurrencyDiv2)
-		}
-		return limit
 	}
 }

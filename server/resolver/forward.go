@@ -73,7 +73,11 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	defer cancel(errors.New("query completed"))
 
 	g, groupCtx := errgroup.WithContext(queryCtx)
-	g.SetLimit(concurrencyLimit(len(servers)))
+	// No query cap: SetLimit made the launch loop block once the limit was
+	// reached, delaying first-wins until a queued slot freed (a rate-limited
+	// upstream — common for public resolvers under burst — held its slot for
+	// the full query timeout while healthy peers queued).  First-wins is
+	// served the instant any upstream answers; cancel() aborts the rest.
 
 	var activeConnections atomic.Int32
 	var cidrFilterRefused atomic.Bool

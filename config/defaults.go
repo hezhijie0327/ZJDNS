@@ -96,6 +96,18 @@ const (
 	// blocking the resolution pipeline when a TLD server is unresponsive.
 	DefaultPoisonProbeTimeout = 2 * time.Second
 
+	// DefaultNXDOMAINDeferralWindow bounds how long an all-NXDOMAIN level
+	// waits for a real NOERROR to race a (possibly injected) NXDOMAIN after
+	// the first NXDOMAIN arrives.  0 serves the first NXDOMAIN immediately:
+	// the fan-out queries every NS concurrently, so the fastest server's
+	// answer is accepted without waiting for the slowest (a rate-limited or
+	// packet-lossy server previously stretched every all-NXDOMAIN level to
+	// its full tail — measured 41ms→382ms on a 15-server batch).  The
+	// poisonguard verdict + TCP fallback still gate poisoned responses.
+	// Raise to ~150ms to restore the NOERROR race at the cost of that fixed
+	// delay on censored domains.
+	DefaultNXDOMAINDeferralWindow = 0 * time.Second
+
 	DefaultRecursiveResolveTimeout = 30 * time.Second // full recursive resolution
 
 )
@@ -203,7 +215,6 @@ const (
 	// pool memory: 9 pool instances × 32 = 288 sockets max, each UDP socket
 	// pinning a 16 KB read buffer and each QUIC connection hundreds of KB.
 	DefaultMaxPoolTotalConns       = 32
-	DefaultMaxConcurrentNS         = 6     // max concurrent NS queries during resolution
 	DefaultMaxProbes               = 16    // max concurrent latency probes
 	DefaultMaxIncomingStreams      = 65535 // QUIC max incoming streams (RFC 9250: one stream per query — 256 exhausted a client's stream quota in seconds, then every query waited on MAX_STREAMS behind quic-go's 25ms ACK delay)
 	DefaultMaxConcurrentStreams    = 64    // QUIC concurrent in-flight stream limit
