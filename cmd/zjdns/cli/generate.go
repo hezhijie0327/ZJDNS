@@ -76,6 +76,7 @@ func generateExampleConfig() (string, error) {
 		},
 	}
 	cfg.Server.Features.DDR = config.DDRSettings{IPv4: "127.0.0.1", IPv6: "::1"}
+	cfg.Server.Features.AddressFamily = "dual"
 	cfg.Server.Features.DNSSECEnforce = true
 	cfg.Server.Features.ECS = config.ECSConfig{IPv4: "auto", IPv6: "auto", PreferIPv4: true}
 	cfg.Server.Features.LatencyProbe = []config.LatencyProbeStep{

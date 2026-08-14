@@ -427,7 +427,7 @@ graph TD
 | 层 | 机制 | 适用模式 | 作用层 | 检测原理 |
 |---|------|----------|--------|----------|
 | 1 | **HopGuard** | 转发+递归 | IP 层 | UDP 上游 TTL 指纹学习，32 样本武装，拒绝偏离 ±2 的响应 |
-| 2 | **SpoofGuard** | 转发+递归 | DNS 报文层 | UDP 多读循环（≤500ms），fast signal 即收、EDNS 候选决胜、裸单答案重查确认 |
+| 2 | **SpoofGuard** | 转发+递归 | DNS 报文层 | UDP 多读循环（自适应窗口：单包 150ms / 多包 500ms，同内容重复即确认），fast signal 即收、EDNS 候选决胜、裸单答案重查确认 |
 | 3 | **SplitGuard** | 转发+递归 | TCP 流层 | TCP 分段发送（随机 [1,4] 字节），破坏 DPI 首包特征识别 |
 | 4 | **Poisonguard** | 递归专属 | DNS 内容层 | 每跳 zone-authority 交叉验证，检测越权 A/AAAA 注入 |
 

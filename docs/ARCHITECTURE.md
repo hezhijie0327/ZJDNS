@@ -56,6 +56,8 @@ so cache hits serve the exact rcode.
 - **Eviction**: Pure LRU — on `Set()` when count > maxEntries the least-recently-used entry is evicted (`lrumap`). With a spill tier the evicted entry (still fresh) is appended to the spill log; a memory miss reads the record back and promotes it. Latency and delegation entries expire lazily on read (past the stale window / TTL); periodic cleanup and spill compaction run only when their `state_file` is configured (5-min state-maintenance ticker).
 - **NS latency cache**: NS/Root addresses as TypeA/TypeAAAA entries. Latency probed via `ProbeNSAddrs`, reordered by `sortAnswerByLatency` at `Get()` time.
 - **Delegation cache**: Zone-cut delegations (zone to NS names + verified DS) in memory (LRU-bounded, lazy TTL expiry + periodic cleanup). Populated at every delegation crossing during recursive walks; only secure (verified DS) or insecure (authenticated no-DS) delegations are stored. On subsequent queries, a suffix-walk from the deepest ancestor finds the first fresh delegation and starts the walk from that zone instead of the root, skipping already-walked delegation levels. DNSKEYs are fetched fresh by `ensureZoneDNSKEYs` (verified against the cached DS); NS addresses are resolved from the existing TypeA/TypeAAAA cache with the stored address snapshot as a fallback.
+- **Fan-out address family**: `server.features.address_family` (`"dual"` default / `"ipv4"` / `"ipv6"`) restricts the recursive fan-out batches (root hints, NS resolutions, TLD probe) to the configured family — explicit operator choice, no runtime reachability probing.  Dynamically discovered addresses only; explicitly configured forwarding upstreams are untouched.
+- **On-demand DNSSEC chain**: the chain build (parent DNSKEY fetch + DS/no-DS verification) runs only from the DS signal — a delegation WITH DS (a signed zone) builds the full chain as before; without DS the delegation is marked insecure outright when `dnssec_enforce` is off, skipping the DS + DNSKEY queries per unsigned level (most CN domains are unsigned).  Enforcement keeps the full no-DS verification for bogus classification.
 - **IP latency**: Per-IP keyed, in memory (LRU-bounded `lrumap.Map[string, latEntry]`). Background probes write latency + probe time; cache hits read it to reorder A/AAAA answers fastest-first. All domains sharing a CDN IP reuse the same entry. Entries expire lazily past the stale window.
 - **Dynamic queries**: `Store.Stats()` returns TXT records (overview, hits, errors, rcodes, poisoned, plain, encrypted, DNSCrypt, TLCP, DNSSEC). Write: `zjdns.cache.clear` / `zjdns.stats.clear` / `zjdns.latency.clear` / `zjdns.querylog.clear` / `zjdns.dnscrypt.clear` (loopback-only).
 
@@ -115,7 +117,7 @@ DNS pollution attacks. Each is enabled via `UpstreamServer` flags.
 | Mechanism | Layer | Algorithm |
 |-----------|-------|-----------|
 | **Hopguard** | UDP upstream | IP TTL fingerprint: auto-learn baseline, reject responses with TTL outside ±2 range |
-| **Spoofguard** | UDP upstream | Multi-read loop (≤500ms): fast-accept `AN>=2`/`NS>0`/`AD=1`; EDNS responses are candidates (richness tie-break); bare single-answer A/AAAA → collect, re-query-confirm (≤3 rounds) |
+| **Spoofguard** | UDP upstream | Multi-read loop (adaptive window: 150ms single packet, 500ms multi-packet; identical repeats confirm immediately): fast-accept `AN>=2`/`NS>0`/`AD=1`; EDNS responses are candidates (richness tie-break); bare single-answer A/AAAA → collect, re-query-confirm (≤3 rounds) |
 | **Poisonguard** | Recursive | Zone-authority cross-validation on resolved answers |
 | **Splitguard** | TCP upstream | Random [1,4]-byte payload segmentation (no time jitter) |
 
@@ -152,16 +154,28 @@ the authoritative query after a cache hit) still passes through
 `queryNameserversConcurrent` with the full Poisonguard detector. The TLD
 poison probe (`probeTLDForPoison`) is skipped when the cached zone is
 not a TLD (no `tldServers` to probe), but spoofguard + poisonguard +
-hopguard still protect the authoritative query.
+hopguard still protect the authoritative query.  The probe queries the
+first `DefaultPoisonProbeServers` (3) TLD servers concurrently within a 1s
+budget — any peer's A/AAAA answer is injection evidence and forces TCP;
+the fan-out covers single-server drops that previously stretched the probe
+to its full timeout.
 
 ### Spoofguard
 
 Implements a multi-read UDP loop. After sending a query, it reads responses
-within a 500ms collect window (100ms poll). Candidates are classified:
+within an adaptive collect window (100ms poll): a single datagram (nothing
+to compare — authorities answer a query once) waits the short
+`DefaultSpoofguardSingleWindow` (150ms); a second datagram (a possible
+injected peer) keeps the full `DefaultSpoofguardCollectWindow` (500ms) for
+comparison.  Injected domains are gated upstream by the TLD poison probe
+and the poisonguard verdict, so the short single-candidate wait keeps that
+defense intact.  Candidates are classified:
 - Fast-accept (checked on the bare header, before the EDNS gate): `AN≥2` or
   `NS>0` or `AD=1`
 - EDNS response: a legitimate candidate (never rejected) — fast-accepted
-  when HopGuard is TTL-confident, otherwise collected
+  when HopGuard is TTL-confident, otherwise collected; two identical
+  candidates confirm the deterministic real answer immediately (GFW fakes
+  vary per packet) instead of waiting out the window
 - Non-EDNS bare single-answer A/AAAA: ambiguous — a lone response is served
   directly; ≥2 responses (injection signal) trigger a re-query confirmation
   (`DefaultSpoofguardConfirmRounds = 3`), a matching repeat confirms the

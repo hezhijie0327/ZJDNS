@@ -70,11 +70,17 @@ single-answer A/AAAA records without EDNS arrive ~6-8ms after the query; the rea
 response arrives 65-180ms later, multi-answer (AN≥2) for major sites.
 
 ### How It Works
-1. **Multi-read loop:** After sending a UDP query, keep reading datagrams for a
-   500ms window. Both GFW fakes and the real response arrive.
+1. **Multi-read loop:** After sending a UDP query, keep reading datagrams in an
+   **adaptive collect window** — 150ms after a single datagram (nothing to
+   compare; authorities answer a query once), the full 500ms once a second
+   datagram arrives (a possible injected peer). Injected domains are gated
+   upstream by the TLD poison probe and the poisonguard verdict, so the short
+   single-candidate wait keeps that defense intact.
 2. **Detection rules (in priority order):**
    - **AN≥2, NS>0, AD=1** → immediate fast-return (authoritative signal)
-   - **EDNS-bearing NOERROR** → collect as candidate (always preferred)
+   - **EDNS-bearing NOERROR** → collect as candidate (always preferred);
+     two **identical** EDNS answers confirm the deterministic real response
+     immediately (GFW fakes vary per packet) — no window wait
    - **Non-EDNS + CNAME** → safe fallback (GFW does not inject CNAME chains)
    - **Non-EDNS + bare single-answer A/AAAA** → AMBIGUOUS:
      - only **one** response received → serve directly (no injection signal —
@@ -87,7 +93,7 @@ response arrives 65-180ms later, multi-answer (AN≥2) for major sites.
    preferred; the richer answer wins; random tie-break prevents deterministic
    tail-win exploitation.
 
-### Demo Output (scenarios 1–5)
+### Demo Output (scenarios 1–6)
 ```
 Scenario 1: www.google.com — fakes + real EDNS → real EDNS wins (CLEAN)
 Scenario 3: www.google.com — no-EDNS real + fake → re-query →
@@ -96,6 +102,8 @@ Scenario 4: www.google.com — lone injection (2 fakes/round) →
   No matching confirmation across 3 rounds → query fails, nothing served
 Scenario 5: github.com — clean single-answer no-EDNS →
   Served directly (1 response, no injection signal)
+Scenario 6: www.example.com — server retransmit, two identical EDNS answers →
+  Confirmed at +90ms (identical repeat), window skipped
 ```
 
 ### Key Insight

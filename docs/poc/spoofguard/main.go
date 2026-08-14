@@ -79,6 +79,15 @@ func (s *sgState) processPacket(r *simResp) (result *simResp, verdict string) { 
 		return nil, yellow + "COLLECT" + reset + " (non-NOERROR — real server signal, collected)"
 	}
 	if r.hasEDNS {
+		// Identical-repeat confirm (mirrors collectEDNSCandidate): two
+		// identical EDNS answers confirm the deterministic real response —
+		// GFW fakes vary per packet.  Return immediately instead of
+		// waiting out the collect window.
+		if s.last != nil && sameAnswers(s.last.answers, r.answers) {
+			s.last = r
+			s.candidates++
+			return r, green + "CONFIRMED" + reset + " (identical repeat — real server, no window wait)"
+		}
 		s.prev = s.last
 		s.last = r
 		s.candidates++
@@ -211,7 +220,8 @@ func main() {
 	fmt.Println()
 	fmt.Println("  GFW signature: bare A/AAAA, no EDNS, no CNAME \u2192 low-priority fallback")
 	fmt.Println("  Real signal:   EDNS-bearing \u2192 collect as candidate")
-	fmt.Println("  After 500ms:   compare candidates, pick richest")
+	fmt.Println("  Window:        adaptive \u2014 150ms single datagram / 500ms once a")
+	fmt.Println("                 second datagram arrives (injection signal)")
 	fmt.Println()
 	fmt.Println("  " + bold + "Impact of the 2026-08 change on www.google.com:" + reset)
 	fmt.Println("    BEFORE: fakes #1/#2 \u2192 REJECTED; the REAL EDNS response was ALSO")
@@ -419,6 +429,36 @@ func main() {
 		fmt.Printf("  %sNo response.%s\n", red, reset)
 	}
 
+	// ── Scenario 6: server retransmit — identical EDNS repeat ──
+
+	fmt.Println()
+	fmt.Println()
+	fmt.Printf("  %sScenario 6:%s server retransmit — two identical EDNS responses\n", bold, reset)
+	fmt.Printf("  Query: %sA www.example.com%s → EDNS-capable authority\n\n", bold, reset)
+
+	printHR()
+	fmt.Println("  " + bold + "Identical-Repeat Confirm (no window wait)" + reset)
+	fmt.Println()
+	fmt.Println("  The authority retransmits its (deterministic) EDNS answer: the second")
+	fmt.Println("  identical candidate confirms the first and is served immediately —")
+	fmt.Println("  no 500ms window wait. GFW fakes vary per packet, so an identical")
+	fmt.Println("  repeat can only be the real server (same principle as the non-EDNS")
+	fmt.Println("  re-query confirm in Scenario 3).")
+	fmt.Println()
+	printHR()
+
+	scenario6 := []simResp{
+		{delay: 40 * time.Millisecond, hasEDNS: true, answers: []string{"A 192.0.2.9"}, label: "Real #1 — EDNS + A record"},
+		{delay: 90 * time.Millisecond, hasEDNS: true, answers: []string{"A 192.0.2.9"}, label: "Real #2 — retransmit, identical answer"},
+	}
+	best6 := runConfirmRound(scenario6, time.Now())
+	fmt.Println()
+	if best6 != nil {
+		fmt.Printf("  %sServed at +90ms:%s %s (confirmed by identical repeat, window skipped)\n", green, reset, best6.label)
+	} else {
+		fmt.Printf("  %sNo response.%s\n", red, reset)
+	}
+
 	// ── Comparison Table ──
 
 	fmt.Println()
@@ -452,11 +492,15 @@ func main() {
 	fmt.Println()
 	fmt.Println(bold + "  How it works:" + reset)
 	fmt.Println("  GFW injects bare A/AAAA records without EDNS — the signature")
-	fmt.Println("  of DNS injection. Spoofguard reads all UDP datagrams in a")
-	fmt.Println("  500ms window, prefers EDNS-bearing candidates, and picks the")
-	fmt.Println("  richest response. Non-EDNS responses are kept as a low-priority")
-	fmt.Println("  candidate; a bare single-answer A/AAAA is ambiguous and is served")
-	fmt.Println("  only after a matching re-query confirms it (pure UDP — GFW fakes")
-	fmt.Println("  vary per packet, the real answer is deterministic).")
+	fmt.Println("  of DNS injection. Spoofguard reads all UDP datagrams in an")
+	fmt.Println("  adaptive collect window — 150ms after a single datagram (nothing")
+	fmt.Println("  to compare; authorities answer once), the full 500ms once a")
+	fmt.Println("  second datagram arrives (a possible injected peer). EDNS-bearing")
+	fmt.Println("  candidates are preferred; two identical EDNS answers confirm")
+	fmt.Println("  the deterministic real response immediately. The richest response")
+	fmt.Println("  wins the window comparison. Non-EDNS responses are kept as a")
+	fmt.Println("  low-priority candidate; a bare single-answer A/AAAA is ambiguous")
+	fmt.Println("  and is served only after a matching re-query confirms it (pure")
+	fmt.Println("  UDP — GFW fakes vary per packet, the real answer is deterministic).")
 	fmt.Println()
 }
