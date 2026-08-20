@@ -199,7 +199,7 @@ func ElapsedMS(startNs int64) int64 {
 func BuildQueryMsg(ednsH *edns.Handler, question Question, ecs *edns.ECSOption, recursionDesired, isSecureConnection bool) *dns.Msg {
 	msg := pool.DefaultMessage.Get()
 
-	dnsutil.SetQuestion(msg, dnsutil.Fqdn(question.Name), question.Qtype)
+	dnsutil.SetQuestion(msg, dnsutil.Fqdn(question.Name), question.Qtype, question.Qclass)
 	msg.RecursionDesired = recursionDesired
 	// RFC 6840 §5.9: a validating resolver SHOULD set CD on every
 	// upstream query so the upstream returns DNSSEC proofs even for

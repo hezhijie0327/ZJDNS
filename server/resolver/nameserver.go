@@ -651,7 +651,7 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 
 	bareMsg := pool.DefaultMessage.Get()
 	defer pool.DefaultMessage.Put(bareMsg)
-	dnsutil.SetQuestion(bareMsg, dnsutil.Fqdn(question.Name), question.Qtype)
+	dnsutil.SetQuestion(bareMsg, dnsutil.Fqdn(question.Name), question.Qtype, question.Qclass)
 	bareMsg.RecursionDesired = false
 
 	retryCtx, retryCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)

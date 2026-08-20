@@ -79,8 +79,6 @@ func HandlePanic(operation string) {
 	}
 }
 
-// ParseReverseDNSName parses a reverse DNS name (in-addr.arpa or ip6.arpa)
-// into a net.IP.  Delegates to the library's dnsutil.AddrReverse and converts
 // IsValidFilePath validates a file path for security and existence.
 func IsValidFilePath(path string) bool {
 	abs, err := filepath.Abs(path)
