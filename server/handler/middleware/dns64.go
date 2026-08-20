@@ -90,7 +90,8 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 
 		if aqr != nil && aqr.Err == nil && len(aqr.Answer) > 0 {
 			qr.Answer, qr.Authority, qr.Additional = m.synthesizer.Synthesize(
-				qr.Authority, aqr.Answer, aqr.Authority, aqr.Additional)
+				qr.Authority, aqr.Answer, aqr.Authority, aqr.Additional,
+			)
 			log.Debugf("DNS64: synthesized %d AAAA records for %s", len(qr.Answer), qname)
 		} else {
 			reason := "no A answers"

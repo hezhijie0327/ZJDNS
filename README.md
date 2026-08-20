@@ -9,9 +9,9 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-4.3.0-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-4.3.1-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.27-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
 
 高性能递归 DNS 服务器，内置 DNS 防污染、纯内存缓存、DNSSEC、全协议加密传输（TLS/QUIC/HTTPS/HTTP3/DTLS/(PQ)DNSCrypt/TLCP/DTLCP）及 KTLS 内核卸载。

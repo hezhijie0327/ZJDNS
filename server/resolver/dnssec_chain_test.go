@@ -20,7 +20,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 func init() {
@@ -32,8 +31,8 @@ func init() {
 // genTestKey generates an ECDSA P-256 key pair + DNSKEY + private key for signing.
 func genTestKey(zone string, flags uint16) (*dns.DNSKEY, *ecdsa.PrivateKey) {
 	dnskey := &dns.DNSKEY{
-		Hdr:    dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
-		DNSKEY: rdata.DNSKEY{Flags: flags, Protocol: 3, Algorithm: dns.ECDSAP256SHA256},
+		Hdr:   dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
+		Flags: flags, Protocol: 3, Algorithm: dns.ECDSAP256SHA256,
 	}
 	priv, _ := dnskey.Generate(256)
 	return dnskey, priv.(*ecdsa.PrivateKey)
@@ -47,16 +46,14 @@ func signRRset(rrset []dns.RR, signer string, priv *ecdsa.PrivateKey, keyTag uin
 			Class: dns.ClassINET,
 			TTL:   3600,
 		},
-		RRSIG: rdata.RRSIG{
-			TypeCovered: dns.RRToType(rrset[0]),
-			Algorithm:   dns.ECDSAP256SHA256,
-			Labels:      uint8(dnsutil.Labels(rrset[0].Header().Name)), //nolint:gosec // G115: DNS label count — max 127 fits uint8
-			OrigTTL:     rrset[0].Header().TTL,
-			Expiration:  uint32(time.Now().Add(24 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
-			Inception:   uint32(time.Now().Add(-1 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
-			KeyTag:      keyTag,
-			SignerName:  dnsutil.Fqdn(signer),
-		},
+		TypeCovered: dns.RRToType(rrset[0]),
+		Algorithm:   dns.ECDSAP256SHA256,
+		Labels:      uint8(dnsutil.Labels(rrset[0].Header().Name)), //nolint:gosec // G115: DNS label count — max 127 fits uint8
+		OrigTTL:     rrset[0].Header().TTL,
+		Expiration:  uint32(time.Now().Add(24 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+		Inception:   uint32(time.Now().Add(-1 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+		KeyTag:      keyTag,
+		SignerName:  dnsutil.Fqdn(signer),
 	}
 	_ = rrsig.Sign(priv, rrset, &dns.SignOption{})
 	return rrsig
@@ -65,8 +62,8 @@ func signRRset(rrset []dns.RR, signer string, priv *ecdsa.PrivateKey, keyTag uin
 // aRec creates an A record test helper.
 func aRec(name, ip string) *dns.A {
 	return &dns.A{
-		Hdr: dns.Header{Name: dnsutil.Fqdn(name), Class: dns.ClassINET, TTL: 300},
-		A:   rdata.A{Addr: netip.MustParseAddr(ip)},
+		Hdr:  dns.Header{Name: dnsutil.Fqdn(name), Class: dns.ClassINET, TTL: 300},
+		Addr: netip.MustParseAddr(ip),
 	}
 }
 
@@ -230,11 +227,11 @@ func TestLameDelegation_NonAuthoritativeSameZone(t *testing.T) {
 		Ns: []dns.RR{
 			&dns.NS{
 				Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
-				NS:  rdata.NS{Ns: "dns1." + zone + "."},
+				Ns:  "dns1." + zone + ".",
 			},
 			&dns.NS{
 				Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
-				NS:  rdata.NS{Ns: "dns2." + zone + "."},
+				Ns:  "dns2." + zone + ".",
 			},
 		},
 	}
@@ -269,11 +266,11 @@ func TestLameDelegation_AuthoritativeNODATA(t *testing.T) {
 		Ns: []dns.RR{
 			&dns.NS{
 				Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
-				NS:  rdata.NS{Ns: "ns1." + zone + "."},
+				Ns:  "ns1." + zone + ".",
 			},
 			&dns.NSEC{
-				Hdr:  dns.Header{Name: dnsutil.Fqdn("www." + zone), Class: dns.ClassINET, TTL: 300},
-				NSEC: rdata.NSEC{NextDomain: dnsutil.Fqdn("mail." + zone), TypeBitMap: []uint16{dns.TypeA, dns.TypeAAAA}},
+				Hdr:        dns.Header{Name: dnsutil.Fqdn("www." + zone), Class: dns.ClassINET, TTL: 300},
+				NextDomain: dnsutil.Fqdn("mail." + zone), TypeBitMap: []uint16{dns.TypeA, dns.TypeAAAA},
 			},
 		},
 	}
@@ -352,8 +349,8 @@ func TestIsDNSSECValid_UnverifiableDelegation_SetsDNSBogus(t *testing.T) {
 	// The delegation claimed DS records (childDS non-empty) but the child's
 	// DNSKEYs could not be verified — the answer is genuinely unverifiable.
 	chain := &dnssecChain{childDS: []*dns.DS{{
-		Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
-		DS:  rdata.DS{KeyTag: 12345, Algorithm: dns.ECDSAP256SHA256, DigestType: dns.SHA256, Digest: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+		Hdr:    dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+		KeyTag: 12345, Algorithm: dns.ECDSAP256SHA256, DigestType: dns.SHA256, Digest: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 	}}}
 
 	validated := rr.isDNSSECValid(context.Background(), msg, nil,
@@ -557,7 +554,7 @@ func TestUpdateDNSSECChain_NoDSRecords(t *testing.T) {
 		Ns: []dns.RR{
 			&dns.NS{
 				Hdr: dns.Header{Name: dnsutil.Fqdn(childZone), Class: dns.ClassINET, TTL: 300},
-				NS:  rdata.NS{Ns: "ns1." + childZone + "."},
+				Ns:  "ns1." + childZone + ".",
 			},
 		},
 	}
@@ -603,13 +600,13 @@ func TestNSMatching_AnswerSectionIncluded(t *testing.T) {
 		Answer: []dns.RR{
 			&dns.NS{
 				Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
-				NS:  rdata.NS{Ns: "ns1." + zone + "."},
+				Ns:  "ns1." + zone + ".",
 			},
 		},
 		Ns: []dns.RR{
 			&dns.NS{
 				Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
-				NS:  rdata.NS{Ns: "ns2." + zone + "."},
+				Ns:  "ns2." + zone + ".",
 			},
 		},
 	}
@@ -636,13 +633,11 @@ func TestDSMatching_AnswerSectionIncluded(t *testing.T) {
 	msg := &dns.Msg{
 		Answer: []dns.RR{
 			&dns.DS{
-				Hdr: dns.Header{Name: dnsutil.Fqdn(childZone), Class: dns.ClassINET, TTL: 300},
-				DS: rdata.DS{
-					KeyTag:     12345,
-					Algorithm:  dns.ECDSAP256SHA256,
-					DigestType: dns.SHA256,
-					Digest:     "AAAA",
-				},
+				Hdr:        dns.Header{Name: dnsutil.Fqdn(childZone), Class: dns.ClassINET, TTL: 300},
+				KeyTag:     12345,
+				Algorithm:  dns.ECDSAP256SHA256,
+				DigestType: dns.SHA256,
+				Digest:     "AAAA",
 			},
 		},
 	}
@@ -745,7 +740,7 @@ func TestValidateOrRetry_ClearsStickyEDE(t *testing.T) {
 
 	msg := &dns.Msg{Answer: []dns.RR{a, rrsig}}
 	chain := &dnssecChain{
-		zoneDNSKEYs: []*dns.DNSKEY{{Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600}, DNSKEY: rdata.DNSKEY{Flags: dns.FlagZONE, Protocol: 3, Algorithm: dns.ECDSAP256SHA256}}},
+		zoneDNSKEYs: []*dns.DNSKEY{{Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600}, Flags: dns.FlagZONE, Protocol: 3, Algorithm: dns.ECDSAP256SHA256}},
 	}
 
 	// Simulate a sticky EDE from a previous delegation level.
@@ -778,7 +773,7 @@ func TestValidateOrRetry_SetsEDEOnFailure(t *testing.T) {
 
 	msg := &dns.Msg{Answer: []dns.RR{a, rrsig}}
 	chain := &dnssecChain{
-		zoneDNSKEYs: []*dns.DNSKEY{{Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600}, DNSKEY: rdata.DNSKEY{Flags: dns.FlagZONE, Protocol: 3, Algorithm: dns.ECDSAP256SHA256}}},
+		zoneDNSKEYs: []*dns.DNSKEY{{Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600}, Flags: dns.FlagZONE, Protocol: 3, Algorithm: dns.ECDSAP256SHA256}},
 	}
 
 	_ = rr.validateOrRetry(
@@ -803,7 +798,7 @@ func TestIsValidWithDNSSEC_ClearsStickyEDE(t *testing.T) {
 
 	msg := &dns.Msg{Answer: []dns.RR{a, rrsig}}
 	chain := &dnssecChain{
-		zoneDNSKEYs: []*dns.DNSKEY{{Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600}, DNSKEY: rdata.DNSKEY{Flags: dns.FlagZONE, Protocol: 3, Algorithm: dns.ECDSAP256SHA256}}},
+		zoneDNSKEYs: []*dns.DNSKEY{{Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600}, Flags: dns.FlagZONE, Protocol: 3, Algorithm: dns.ECDSAP256SHA256}},
 	}
 	// Stale EDE from a previous level.
 	chain.lastEDECode = dns.ExtendedErrorDNSBogus

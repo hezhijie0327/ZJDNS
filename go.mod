@@ -1,17 +1,17 @@
 module zjdns
 
-go 1.26.4
+go 1.27.0
 
 require (
-	codeberg.org/miekg/dns v0.6.91-0.20260805153854-f0b0c2e67934
+	codeberg.org/miekg/dns v0.6.98-0.20260819195241-34519f55b714
 	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033
 	github.com/cloudflare/circl v1.6.6-0.20260806151822-33d33c75d9a0
 	github.com/emmansun/gmsm v0.44.1
-	github.com/klauspost/compress v1.19.3-0.20260811110452-dd6de45e8beb
-	github.com/pion/dtls/v3 v3.1.3-0.20260813160346-026b6152bce7
-	github.com/quic-go/quic-go v0.61.1-0.20260813134850-9bdf5153b936
-	gitlab.com/go-extension/http v0.0.0-20260519092405-5b0773857d0f
-	gitlab.com/go-extension/tls v0.0.0-20260715144009-d75c84d8b9d2
+	github.com/klauspost/compress v1.19.3-0.20260817121505-73508b25f222
+	github.com/pion/dtls/v3 v3.1.3-0.20260820090751-c6f948c1c448
+	github.com/quic-go/quic-go v0.61.1-0.20260820060746-cf0c4ffd0ce6
+	gitlab.com/go-extension/http v0.0.0-20260817192224-f5762b77a66a
+	gitlab.com/go-extension/tls v0.0.0-20260817191915-d8b98b0d31de
 	golang.org/x/crypto v0.55.0
 	golang.org/x/net v0.58.0
 	golang.org/x/sync v0.22.0

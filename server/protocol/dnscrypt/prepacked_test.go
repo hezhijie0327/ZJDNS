@@ -9,7 +9,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // TestEncrypt_PrePackedResponse covers C2: a pre-packed cache-hit response
@@ -44,8 +43,8 @@ func TestEncrypt_PrePackedResponse(t *testing.T) {
 	msg.Response = true
 	msg.RecursionAvailable = true
 	msg.Answer = []dns.RR{
-		&dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.1")}},
-		&dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.2")}},
+		&dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")},
+		&dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.2")},
 	}
 	if err := msg.Pack(); err != nil {
 		t.Fatalf("pack response: %v", err)

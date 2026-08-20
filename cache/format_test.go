@@ -10,7 +10,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 func init() {
@@ -36,8 +35,8 @@ func packLegacyResponse(t *testing.T, qname string, id uint16) []byte {
 	m.Response = true
 	m.RecursionAvailable = true
 	m.Answer = []dns.RR{&dns.A{
-		Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300},
-		A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+		Hdr:  dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300},
+		Addr: netip.MustParseAddr("192.0.2.1"),
 	}}
 	if err := m.Pack(); err != nil {
 		t.Fatalf("pack legacy response: %v", err)
@@ -54,7 +53,7 @@ func TestGet_LegacyRawEntry(t *testing.T) {
 
 	qname := "legacy-raw.example.com."
 	mc.Set(qname, dns.TypeA, dns.ClassINET, nil,
-		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.1")}}}, nil, nil, false, 0)
+		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")}}, nil, nil, false, 0)
 
 	wire := packLegacyResponse(t, qname, 0x1234)
 	setLegacyWire(t, mc, qname, wire)
@@ -82,7 +81,7 @@ func TestGet_LegacyRawEntry_MarkerCollision(t *testing.T) {
 
 	qname := "legacy-collision.example.com."
 	mc.Set(qname, dns.TypeA, dns.ClassINET, nil,
-		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.1")}}}, nil, nil, false, 0)
+		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")}}, nil, nil, false, 0)
 
 	wire := packLegacyResponse(t, qname, 0x0201) // ID high byte = 0x02, low byte != 0
 	if wire[0] != cacheFormatPrePacked {
@@ -113,7 +112,7 @@ func TestGet_LegacyRawEntry_ZeroIDLowByte(t *testing.T) {
 
 	qname := "legacy-zero-idlow.example.com."
 	mc.Set(qname, dns.TypeA, dns.ClassINET, nil,
-		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.1")}}}, nil, nil, false, 0)
+		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")}}, nil, nil, false, 0)
 
 	wire := packLegacyResponse(t, qname, 0x0200) // ID = 0x0200: high byte 0x02, low byte 0x00
 	setLegacyWire(t, mc, qname, wire)
@@ -133,7 +132,7 @@ func TestGet_LegacyZstdEntry(t *testing.T) {
 
 	qname := "legacy-zstd.example.com."
 	mc.Set(qname, dns.TypeA, dns.ClassINET, nil,
-		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.1")}}}, nil, nil, false, 0)
+		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")}}, nil, nil, false, 0)
 
 	wire := packLegacyResponse(t, qname, 0x5a5a)
 	setLegacyWire(t, mc, qname, zdnsutil.Compress(wire))
@@ -158,7 +157,7 @@ func TestGet_CorruptOffsetTable(t *testing.T) {
 
 	qname := "corrupt.example.com."
 	mc.Set(qname, dns.TypeA, dns.ClassINET, nil,
-		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.1")}}}, nil, nil, false, 0)
+		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")}}, nil, nil, false, 0)
 
 	// 0x02 marker + numOffsets=0x00FF (255, high byte 0 passes the marker
 	// discriminator) far beyond the 5-byte BLOB — the bounds check must
@@ -180,7 +179,7 @@ func TestGet_PrePacked_StillWorks(t *testing.T) {
 
 	qname := "prepacked.example.com."
 	mc.Set(qname, dns.TypeA, dns.ClassINET, nil,
-		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.1")}}}, nil, nil, false, 0)
+		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")}}, nil, nil, false, 0)
 
 	entry, found, _ := mc.Get(qname, dns.TypeA, dns.ClassINET, nil)
 	if !found {

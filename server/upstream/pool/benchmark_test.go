@@ -12,7 +12,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // ---------------------------------------------------------------------------
@@ -72,13 +71,13 @@ func handleFakePipeConn(conn net.Conn, done chan struct{}) {
 			switch qtype {
 			case dns.TypeA:
 				resp.Answer = []dns.RR{&dns.A{
-					Hdr: dns.Header{Name: req.Question[0].Header().Name, Class: dns.ClassINET, TTL: 60},
-					A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+					Hdr:  dns.Header{Name: req.Question[0].Header().Name, Class: dns.ClassINET, TTL: 60},
+					Addr: netip.MustParseAddr("192.0.2.1"),
 				}}
 			case dns.TypeAAAA:
 				resp.Answer = []dns.RR{&dns.AAAA{
 					Hdr:  dns.Header{Name: req.Question[0].Header().Name, Class: dns.ClassINET, TTL: 60},
-					AAAA: rdata.AAAA{Addr: netip.MustParseAddr("::1")},
+					Addr: netip.MustParseAddr("::1"),
 				}}
 			}
 		}

@@ -20,7 +20,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 	"github.com/cloudflare/circl/sign/ed25519"
 )
 
@@ -521,9 +520,11 @@ func (s *Server) updateKeys() {
 // reference encrypted-dns-server.  A nil previous mints a single window from
 // a fresh random seed — the start of a new chain.
 func (s *Server) deriveAndSign(previous *dnscryptcrypto.CertPair, now uint32) []keyEntry {
-	rc := ResolverConfig{ProviderName: s.providerName}
-	rc.PublicKey = dnscryptcrypto.HexEncodeKey(s.signingSK.Public().(ed25519.PublicKey))
-	rc.PrivateKey = dnscryptcrypto.HexEncodeKey(s.signingSK)
+	rc := ResolverConfig{
+		ProviderName: s.providerName,
+		PublicKey:    dnscryptcrypto.HexEncodeKey(s.signingSK.Public().(ed25519.PublicKey)),
+		PrivateKey:   dnscryptcrypto.HexEncodeKey(s.signingSK),
+	}
 
 	renewalSec := uint32(config.DefaultDNSCryptCertificateRenewal / time.Second)
 	ttlSec := uint32(config.DefaultDNSCryptCertificateTTL / time.Second)
@@ -651,7 +652,7 @@ func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
 				TTL:   ttl,
 				Class: dns.ClassINET,
 			},
-			TXT: rdata.TXT{Txt: classicalTXT},
+			Txt: classicalTXT,
 		})
 		tmp.Authoritative = true
 		tmp.RecursionAvailable = true
@@ -676,7 +677,7 @@ func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
 			TTL:   ttl,
 			Class: dns.ClassINET,
 		},
-		TXT: rdata.TXT{Txt: classicalTXT},
+		Txt: classicalTXT,
 	})
 	if pqFits {
 		reply.Answer = append(reply.Answer, &dns.TXT{
@@ -685,7 +686,7 @@ func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
 				TTL:   ttl,
 				Class: dns.ClassINET,
 			},
-			TXT: rdata.TXT{Txt: pqTXT},
+			Txt: pqTXT,
 		})
 	}
 

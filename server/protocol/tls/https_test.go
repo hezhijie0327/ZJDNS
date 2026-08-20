@@ -7,7 +7,6 @@ import (
 	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 func TestDohCacheControl(t *testing.T) {
@@ -19,7 +18,7 @@ func TestDohCacheControl(t *testing.T) {
 		t.Errorf("empty: got %q, want max-age=0", got)
 	}
 	msg := &dns.Msg{Answer: []dns.RR{
-		&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("1.2.3.4")}},
+		&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("1.2.3.4")},
 	}}
 	if got := dohCacheControl(msg); got != "max-age=300" {
 		t.Errorf("300s: got %q, want max-age=300", got)

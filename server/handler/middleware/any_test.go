@@ -8,7 +8,6 @@ import (
 	"zjdns/server/handler"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // newMsg builds a query message for the given question record.
@@ -65,7 +64,7 @@ func TestAnyMiddleware_NonANY_Delegates(t *testing.T) {
 	}))
 
 	req := new(dns.Msg)
-	req.Question = []dns.RR{&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.1")}}}
+	req.Question = []dns.RR{&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, Addr: netip.MustParseAddr("192.0.2.1")}}
 	qctx := &handler.QueryContext{Req: req}
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)

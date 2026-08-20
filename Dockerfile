@@ -7,8 +7,7 @@ WORKDIR /zjdns
 ADD . /zjdns
 
 ENV \
-    CGO_ENABLED="0" \
-    GOEXPERIMENT="goroutineleakprofile"
+    CGO_ENABLED="0"
 
 RUN \
     wget "https://curl.se/ca/cacert.pem" \
@@ -31,9 +30,6 @@ COPY --from=build_zjdns /zjdns/cacert.pem /etc/ssl/certs/ca-certificates.crt
 COPY --from=build_zjdns /zjdns/zjdns /zjdns
 
 FROM scratch
-
-ENV \
-    GODEBUG="madvdontneed=1"
 
 COPY --from=rebase_zjdns / /
 

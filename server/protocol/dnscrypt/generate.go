@@ -208,7 +208,7 @@ func GenerateDNSCryptConfig(provider, addr string) (string, error) {
 		return "", fmt.Errorf("creating stamp: %w", err)
 	}
 
-	port := addr[strings.LastIndex(addr, ":")+1:]
+	_, port, _ := strings.CutLast(addr, ":")
 
 	cfg := &FullConfig{}
 	cfg.Server.Protocol.DNSCrypt = port

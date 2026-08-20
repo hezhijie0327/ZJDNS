@@ -6,7 +6,6 @@ import (
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 func BenchmarkDetector_Validate(b *testing.B) {
@@ -16,8 +15,8 @@ func BenchmarkDetector_Validate(b *testing.B) {
 	// Root server response with A record for non-TLD (hijack).
 	msg := &dns.Msg{
 		Answer: []dns.RR{&dns.A{
-			Hdr: dns.Header{Name: "www.google.com.", Class: dns.ClassINET, TTL: 300},
-			A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+			Hdr:  dns.Header{Name: "www.google.com.", Class: dns.ClassINET, TTL: 300},
+			Addr: netip.MustParseAddr("192.0.2.1"),
 		}},
 	}
 	b.ResetTimer()
@@ -34,7 +33,7 @@ func BenchmarkDetector_ValidateClean(b *testing.B) {
 	msg := &dns.Msg{
 		Answer: []dns.RR{&dns.NS{
 			Hdr: dns.Header{Name: "com.", Class: dns.ClassINET, TTL: 300},
-			NS:  rdata.NS{Ns: "a.gtld-servers.net."},
+			Ns:  "a.gtld-servers.net.",
 		}},
 	}
 	b.ResetTimer()
@@ -49,8 +48,8 @@ func BenchmarkDetector_IsPoisonedByTLD(b *testing.B) {
 
 	msg := &dns.Msg{
 		Answer: []dns.RR{&dns.A{
-			Hdr: dns.Header{Name: "www.google.com.", Class: dns.ClassINET, TTL: 300},
-			A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+			Hdr:  dns.Header{Name: "www.google.com.", Class: dns.ClassINET, TTL: 300},
+			Addr: netip.MustParseAddr("192.0.2.1"),
 		}},
 	}
 	b.ResetTimer()

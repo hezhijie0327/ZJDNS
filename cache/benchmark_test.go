@@ -9,7 +9,6 @@ import (
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 func BenchmarkStoreSetGet(b *testing.B) {
@@ -18,8 +17,8 @@ func BenchmarkStoreSetGet(b *testing.B) {
 	defer func() { _ = c.Close() }()
 
 	a := &dns.A{
-		Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300},
-		A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+		Hdr:  dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300},
+		Addr: netip.MustParseAddr("192.0.2.1"),
 	}
 
 	b.ResetTimer()
@@ -40,8 +39,8 @@ func BenchmarkStoreParallel(b *testing.B) {
 		for pb.Next() {
 			name := fmt.Sprintf("host%d.example.com.", i%1000)
 			a := &dns.A{
-				Hdr: dns.Header{Name: fmt.Sprintf("host%d.example.com.", i), Class: dns.ClassINET, TTL: 300},
-				A:   rdata.A{Addr: netip.AddrFrom4([4]byte{192, 0, 2, byte(i % 256)})},
+				Hdr:  dns.Header{Name: fmt.Sprintf("host%d.example.com.", i), Class: dns.ClassINET, TTL: 300},
+				Addr: netip.AddrFrom4([4]byte{192, 0, 2, byte(i % 256)}),
 			}
 			c.Set(name, dns.TypeA, dns.ClassINET, nil, []dns.RR{a}, nil, nil, false, 0)
 			c.Get(name, dns.TypeA, dns.ClassINET, nil)
@@ -73,8 +72,8 @@ func BenchmarkStoreGetSpillHit(b *testing.B) {
 	// Pre-fill 1001 distinct entries: host0 overflows the mem cap and lands
 	// on disk, host1000 stays in memory.
 	a := &dns.A{
-		Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300},
-		A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+		Hdr:  dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300},
+		Addr: netip.MustParseAddr("192.0.2.1"),
 	}
 	for i := range 1001 {
 		name := fmt.Sprintf("host%d.example.com.", i)
@@ -103,8 +102,8 @@ func BenchmarkStoreSetWithSpill(b *testing.B) {
 	for i := range 1000 {
 		name := fmt.Sprintf("host%d.example.com.", i)
 		a := &dns.A{
-			Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: 300},
-			A:   rdata.A{Addr: netip.AddrFrom4([4]byte{192, 0, 2, byte(i % 256)})},
+			Hdr:  dns.Header{Name: name, Class: dns.ClassINET, TTL: 300},
+			Addr: netip.AddrFrom4([4]byte{192, 0, 2, byte(i % 256)}),
 		}
 		c.Set(name, dns.TypeA, dns.ClassINET, nil, []dns.RR{a}, nil, nil, false, 0)
 	}
@@ -113,8 +112,8 @@ func BenchmarkStoreSetWithSpill(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		name := fmt.Sprintf("new%d.example.com.", i%1000)
 		a := &dns.A{
-			Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: 300},
-			A:   rdata.A{Addr: netip.AddrFrom4([4]byte{192, 0, 2, byte(i % 256)})},
+			Hdr:  dns.Header{Name: name, Class: dns.ClassINET, TTL: 300},
+			Addr: netip.AddrFrom4([4]byte{192, 0, 2, byte(i % 256)}),
 		}
 		c.Set(name, dns.TypeA, dns.ClassINET, nil, []dns.RR{a}, nil, nil, false, 0)
 	}

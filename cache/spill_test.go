@@ -10,13 +10,12 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 func aRR(name string, ttl uint32) *dns.A {
 	return &dns.A{
-		Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: ttl},
-		A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+		Hdr:  dns.Header{Name: name, Class: dns.ClassINET, TTL: ttl},
+		Addr: netip.MustParseAddr("192.0.2.1"),
 	}
 }
 

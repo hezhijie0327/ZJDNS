@@ -7,7 +7,6 @@ import (
 	"net/netip"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // Synthesizer performs DNS64 AAAA synthesis (RFC 6147) using an RFC 6052
@@ -96,7 +95,7 @@ func (s *Synthesizer) Synthesize(
 		}
 		answer = append(answer, &dns.AAAA{
 			Hdr:  dns.Header{Name: aRec.Hdr.Name, Class: aRec.Hdr.Class, TTL: min(aRec.Hdr.TTL, ttl)},
-			AAAA: rdata.AAAA{Addr: s.MapAddr(aRec.Addr)},
+			Addr: s.MapAddr(aRec.Addr),
 		})
 	}
 	return answer, aAuthority, aAdditional

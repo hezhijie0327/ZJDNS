@@ -117,7 +117,7 @@ func validateLogLevel(cfg *ServerConfig) error {
 
 	// Return an error for truly invalid level strings so validation
 	// fails startup instead of silently defaulting.
-	baseLevel := strings.SplitN(strings.ToLower(levelStr), ":", 2)[0]
+	baseLevel, _, _ := strings.Cut(strings.ToLower(levelStr), ":")
 	switch baseLevel {
 	case "error", "warn", "info", "debug":
 		return nil

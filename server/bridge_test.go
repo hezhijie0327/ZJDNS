@@ -11,7 +11,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 type fakeResponseWriter struct {
@@ -37,8 +36,8 @@ func TestTruncateWire(t *testing.T) {
 	msg.RecursionAvailable = true
 	for range 10 {
 		msg.Answer = append(msg.Answer, &dns.A{
-			Hdr: dns.Header{Name: "example.com.", TTL: 300, Class: dns.ClassINET},
-			A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+			Hdr:  dns.Header{Name: "example.com.", TTL: 300, Class: dns.ClassINET},
+			Addr: netip.MustParseAddr("192.0.2.1"),
 		})
 	}
 	if err := msg.Pack(); err != nil {
@@ -83,8 +82,8 @@ func TestTruncateWire_KeepsOPT(t *testing.T) {
 	msg.RecursionAvailable = true
 	msg.UDPSize = 1232
 	msg.Answer = []dns.RR{&dns.A{
-		Hdr: dns.Header{Name: "example.com.", TTL: 300, Class: dns.ClassINET},
-		A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+		Hdr:  dns.Header{Name: "example.com.", TTL: 300, Class: dns.ClassINET},
+		Addr: netip.MustParseAddr("192.0.2.1"),
 	}}
 	// Force an OPT into the additional section via a pseudo option.
 	msg.Pseudo = append(msg.Pseudo, &dns.EDE{InfoCode: dns.ExtendedErrorNetworkError})

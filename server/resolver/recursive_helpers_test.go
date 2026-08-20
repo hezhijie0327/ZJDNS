@@ -78,7 +78,7 @@ func TestCollectBestNSMatch_FindsNS(t *testing.T) {
 	r := newTestRecursiveWithHelpers()
 	resp := &dns.Msg{
 		Ns: []dns.RR{
-			&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, NS: rdata.NS{Ns: "ns1.example.com."}},
+			&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, Ns: "ns1.example.com."},
 		},
 	}
 	bestMatch, nsRecords, shouldContinue, termRes := r.collectBestNSMatch(
@@ -102,8 +102,8 @@ func TestCollectBestNSMatch_LongestMatch(t *testing.T) {
 	r := newTestRecursiveWithHelpers()
 	resp := &dns.Msg{
 		Ns: []dns.RR{
-			&dns.NS{Hdr: dns.Header{Name: "com.", Class: dns.ClassINET}, NS: rdata.NS{Ns: "a.gtld-servers.net."}},
-			&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, NS: rdata.NS{Ns: "ns1.example.com."}},
+			&dns.NS{Hdr: dns.Header{Name: "com.", Class: dns.ClassINET}, Ns: "a.gtld-servers.net."},
+			&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, Ns: "ns1.example.com."},
 		},
 	}
 	bestMatch, nsRecords, _, _ := r.collectBestNSMatch(
@@ -149,8 +149,8 @@ func TestCollectBestNSMatch_NoMatchReturnsTerminal(t *testing.T) {
 func TestResolveNextNameservers_SkipsInBailiwickNoGlue(t *testing.T) {
 	r := newTestRecursiveWithHelpers() // cache nil, resolver nil
 	nsRecords := []*dns.NS{
-		{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, NS: rdata.NS{Ns: "ns1.example.com."}},
-		{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, NS: rdata.NS{Ns: "ns2.example.com."}},
+		{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, Ns: "ns1.example.com."},
+		{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, Ns: "ns2.example.com."},
 	}
 
 	res := r.resolveNextNameservers(context.Background(), nsRecords, &dns.Msg{}, "www.example.com.", "com.", 0, false)
@@ -168,11 +168,11 @@ func TestResolveNextNameservers_SkipsInBailiwickNoGlue(t *testing.T) {
 func TestResolveNextNameservers_UsesInBailiwickGlue(t *testing.T) {
 	r := newTestRecursiveWithHelpers()
 	nsRecords := []*dns.NS{
-		{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, NS: rdata.NS{Ns: "ns1.example.com."}},
+		{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, Ns: "ns1.example.com."},
 	}
 	resp := &dns.Msg{
 		Extra: []dns.RR{
-			&dns.A{Hdr: dns.Header{Name: "ns1.example.com.", Class: dns.ClassINET}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.1")}},
+			&dns.A{Hdr: dns.Header{Name: "ns1.example.com.", Class: dns.ClassINET}, Addr: netip.MustParseAddr("192.0.2.1")},
 		},
 	}
 
@@ -212,7 +212,7 @@ func TestCheckLameDelegation_NotLame(t *testing.T) {
 			&dns.A{Hdr: dns.Header{Name: dnsutil.Fqdn("www.example.com"), Class: dns.ClassINET, TTL: 300}, A: rdata.A{}},
 		},
 		Ns: []dns.RR{
-			&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, NS: rdata.NS{Ns: "ns1.example.com."}},
+			&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, Ns: "ns1.example.com."},
 		},
 	}
 	termRes := r.checkLameDelegation(resp, "com.", "example.com", false, nil)
@@ -225,7 +225,7 @@ func TestCheckLameDelegation_LameDetected(t *testing.T) {
 	r := newTestRecursiveWithHelpers()
 	resp := &dns.Msg{
 		Ns: []dns.RR{
-			&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, NS: rdata.NS{Ns: "ns1.example.com."}},
+			&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, Ns: "ns1.example.com."},
 		},
 	}
 	termRes := r.checkLameDelegation(resp, "example.com.", "example.com.", false, nil)
@@ -241,7 +241,7 @@ func TestCheckLameDelegation_AuthoritativeNODATA(t *testing.T) {
 	r := newTestRecursiveWithHelpers()
 	resp := &dns.Msg{
 		Ns: []dns.RR{
-			&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, NS: rdata.NS{Ns: "ns1.example.com."}},
+			&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, Ns: "ns1.example.com."},
 		},
 	}
 	resp.Authoritative = true

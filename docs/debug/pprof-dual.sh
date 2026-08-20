@@ -12,6 +12,7 @@
 #   3. goroutine 数压测后稳定（对比同协议前后两次采样）
 #   4. server 端压测全程 heap inuse 收敛（第二轮与第一轮精确一致）
 #   5. 日志 0 PANIC；连接池 "dialed" 每协议 = 1、"falling back" = 0
+#   6. goroutineleak 采样为空（Go 1.27 泄漏检测 GA）
 #
 # 用法: bash docs/debug/pprof-dual.sh [协议...]   # 默认全部 14 个
 # 依赖: dig, curl, go tool pprof, /tmp/zjdns, /tmp/benchclient
@@ -91,8 +92,10 @@ for c in "${CLIENTS[@]}"; do
   LOAD=$(/tmp/benchclient -proto udp -addr "127.0.0.1:$port" -workers "$WORKERS" -seconds "$DUR" 2>&1 | tail -1)
   # 采样（client goroutine + heap, server heap）
   curl -s "http://127.0.0.1:${PPROF[$c]}/debug/pprof/goroutine" -o "$WORK/g-$c.prof"
+  curl -s "http://127.0.0.1:${PPROF[$c]}/debug/pprof/goroutineleak" -o "$WORK/gl-$c.prof"
   curl -s "http://127.0.0.1:${PPROF[$c]}/debug/pprof/heap"      -o "$WORK/h-$c.prof"
   curl -s "http://127.0.0.1:${PPROF[server]}/debug/pprof/heap"  -o "$WORK/hs-$c.prof"
+  curl -s "http://127.0.0.1:${PPROF[server]}/debug/pprof/goroutineleak" -o "$WORK/gls-$c.prof"
 
   G=$(go tool pprof -top "$WORK/g-$c.prof" 2>/dev/null | grep "Showing nodes" | awk '{print $5}')
   kill "$CPID" 2>/dev/null; wait "$CPID" 2>/dev/null
@@ -107,6 +110,10 @@ done
 echo "== summary =="
 echo -n "server heap inuse (after all load): "
 go tool pprof -top -inuse_space "$WORK/hs-${CLIENTS[-1]}.prof" 2>/dev/null | grep "Showing"
+echo -n "server leaked goroutines: "
+go tool pprof -top "$WORK/gls-${CLIENTS[-1]}.prof" 2>/dev/null | grep "Showing nodes" || echo "none"
+echo -n "client leaked goroutines: "
+go tool pprof -top "$WORK/gl-${CLIENTS[-1]}.prof" 2>/dev/null | grep "Showing nodes" || echo "none"
 echo -n "panics in server log:    "; grep -c "PANIC" "$WORK/server.log" || true
 echo -n "panics in client logs:   "; grep -c "PANIC" "$WORK"/client-*.log | grep -v ':0' | wc -l
 echo -n "falling back (all logs): "; grep -c "falling back" "$WORK"/*.log | grep -v ':0' | wc -l

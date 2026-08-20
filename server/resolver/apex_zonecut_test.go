@@ -38,7 +38,7 @@ func (w *mockUDPWriter) Hijack()               {}
 func TestIsApexSOANODATA(t *testing.T) {
 	soa := &dns.SOA{
 		Hdr: dns.Header{Name: "com.cn.", Class: dns.ClassINET, TTL: 300},
-		SOA: rdata.SOA{Ns: "a.dns.cn.", Mbox: "root.cnnic.cn."},
+		Ns:  "a.dns.cn.", Mbox: "root.cnnic.cn.",
 	}
 
 	// aa + NODATA with SOA at the qname → the qname is a zone apex.
@@ -60,7 +60,7 @@ func TestIsApexSOANODATA(t *testing.T) {
 	// SOA at the parent (NXDOMAIN-style denial) — qname is not the apex.
 	parentSoa := &dns.SOA{
 		Hdr: dns.Header{Name: "cn.", Class: dns.ClassINET, TTL: 300},
-		SOA: rdata.SOA{Ns: "a.dns.cn.", Mbox: "root.cnnic.cn."},
+		Ns:  "a.dns.cn.", Mbox: "root.cnnic.cn.",
 	}
 	m = new(dns.Msg)
 	m.Authoritative = true
@@ -94,7 +94,7 @@ func TestCollectBestNSMatch_NXDOMAINRcode(t *testing.T) {
 	msg.Ns = []dns.RR{
 		&dns.SOA{
 			Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
-			SOA: rdata.SOA{Ns: "ns.example.com.", Mbox: "root.example.com."},
+			Ns:  "ns.example.com.", Mbox: "root.example.com.",
 		},
 	}
 
@@ -154,7 +154,7 @@ func TestStripCrossZoneRecords_DropsUnsignedInSignedResponse(t *testing.T) {
 	sig := signRRset([]dns.RR{signed}, "example.com.", zonePriv, zoneKey.KeyTag())
 	unsigned := &dns.TXT{
 		Hdr: dns.Header{Name: "txt.example.com.", Class: dns.ClassINET, TTL: 300},
-		TXT: rdata.TXT{Txt: []string{"unsigned"}},
+		Txt: []string{"unsigned"},
 	}
 	orphanTarget := aRec("mx.example.com.", "192.0.2.3")
 	orphanSig := signRRset([]dns.RR{orphanTarget}, "example.com.", zonePriv, zoneKey.KeyTag())
@@ -327,11 +327,11 @@ func TestAdvanceApexZoneCut(t *testing.T) {
 
 	nsRec := &dns.NS{
 		Hdr: dns.Header{Name: childZone, Class: dns.ClassINET, TTL: 300},
-		NS:  rdata.NS{Ns: "ns." + childZone},
+		Ns:  "ns." + childZone,
 	}
 	glue := &dns.A{
-		Hdr: dns.Header{Name: "ns." + childZone, Class: dns.ClassINET, TTL: 300},
-		A:   rdata.A{Addr: netip.MustParseAddr("127.0.0.1")},
+		Hdr:  dns.Header{Name: "ns." + childZone, Class: dns.ClassINET, TTL: 300},
+		Addr: netip.MustParseAddr("127.0.0.1"),
 	}
 
 	addr := startMockDNS(t, dns.HandlerFunc(func(ctx context.Context, w dns.ResponseWriter, req *dns.Msg) {
@@ -392,7 +392,7 @@ func TestResolveZoneCut_RacedDS(t *testing.T) {
 
 	soa := &dns.SOA{
 		Hdr: dns.Header{Name: parentZone, Class: dns.ClassINET, TTL: 300},
-		SOA: rdata.SOA{Ns: "ns." + parentZone, Mbox: "root." + parentZone},
+		Ns:  "ns." + parentZone, Mbox: "root." + parentZone,
 	}
 
 	var dsQueries atomic.Int32

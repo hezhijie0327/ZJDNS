@@ -15,7 +15,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 type testDNSHandler struct{}
@@ -28,8 +27,8 @@ func (h *testDNSHandler) ServeDNS(req *dns.Msg, _ net.IP, _ bool, _ string) *dns
 	reply.Authoritative = true
 	q := req.Question[0]
 	rr := &dns.A{
-		Hdr: dns.Header{Name: q.Header().Name, Class: dns.ClassINET, TTL: 60},
-		A:   rdata.A{Addr: netip.MustParseAddr("1.2.3.4")},
+		Hdr:  dns.Header{Name: q.Header().Name, Class: dns.ClassINET, TTL: 60},
+		Addr: netip.MustParseAddr("1.2.3.4"),
 	}
 	reply.Answer = append(reply.Answer, rr)
 	return reply
@@ -445,8 +444,8 @@ func (h *bigResponseHandler) ServeDNS(req *dns.Msg, _ net.IP, _ bool, _ string) 
 	for i := range h.n {
 		name := "host" + strconv.Itoa(i) + "." + qname
 		rr := &dns.A{
-			Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: 60},
-			A:   rdata.A{Addr: netip.MustParseAddr("10.0.0.1")},
+			Hdr:  dns.Header{Name: name, Class: dns.ClassINET, TTL: 60},
+			Addr: netip.MustParseAddr("10.0.0.1"),
 		}
 		reply.Answer = append(reply.Answer, rr)
 	}

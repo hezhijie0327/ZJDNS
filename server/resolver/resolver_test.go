@@ -8,7 +8,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // TestQueryResult_TruncatedField verifies the TC bit propagation field exists
@@ -44,15 +43,15 @@ func TestQueryResult_TruncatedField(t *testing.T) {
 
 func cnameRec(name, target string) *dns.CNAME {
 	return &dns.CNAME{
-		Hdr:   dns.Header{Name: dnsutil.Fqdn(name), Class: dns.ClassINET, TTL: 300},
-		CNAME: rdata.CNAME{Target: dnsutil.Fqdn(target)},
+		Hdr:    dns.Header{Name: dnsutil.Fqdn(name), Class: dns.ClassINET, TTL: 300},
+		Target: dnsutil.Fqdn(target),
 	}
 }
 
 func aaaaRec(name, ip string) *dns.AAAA {
 	return &dns.AAAA{
 		Hdr:  dns.Header{Name: dnsutil.Fqdn(name), Class: dns.ClassINET, TTL: 300},
-		AAAA: rdata.AAAA{Addr: netip.MustParseAddr(ip)},
+		Addr: netip.MustParseAddr(ip),
 	}
 }
 

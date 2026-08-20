@@ -9,7 +9,6 @@ import (
 	"zjdns/server/handler"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // TestCacheLookup_HitRecordsCachedRcode verifies a fresh cache hit records the
@@ -66,7 +65,7 @@ func TestCacheLookup_StaleRecordsCachedRcode(t *testing.T) {
 	// expires_at = now + ttl with second-granularity timestamps, so a TTL=1
 	// entry must be read at least 2 seconds later to be reliably expired —
 	// but still within the serve-stale window (DefaultStaleMaxAge).
-	short := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 1}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.1")}}
+	short := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 1}, Addr: netip.MustParseAddr("192.0.2.1")}
 	store.Set("example.com.", dns.TypeA, dns.ClassINET, nil,
 		[]dns.RR{short}, nil, nil, false, dns.RcodeNameError)
 	time.Sleep(2500 * time.Millisecond)

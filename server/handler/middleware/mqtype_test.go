@@ -14,7 +14,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // fakeMQResolver implements handler.Resolver for MQTYPE tests.
@@ -58,7 +57,7 @@ func mqQuery(t *testing.T, types ...uint16) *dns.Msg {
 }
 
 func aRecord(ip string) *dns.A {
-	return &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr(ip)}}
+	return &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr(ip)}
 }
 
 // TestMQTYPE_NoOption_Delegates verifies queries without MQTYPE-Query pass
@@ -153,7 +152,7 @@ func TestMQTYPE_Merge_CacheHit(t *testing.T) {
 
 	// Cache an AAAA entry for the additional type.
 	store.Set("example.com.", dns.TypeAAAA, dns.ClassINET, nil,
-		[]dns.RR{&dns.AAAA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, AAAA: rdata.AAAA{Addr: netip.MustParseAddr("2001:db8::1")}}},
+		[]dns.RR{&dns.AAAA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("2001:db8::1")}},
 		nil, nil, false, 0)
 
 	fake := &fakeMQResolver{results: map[uint16]*resolver.QueryResult{}}
@@ -262,7 +261,7 @@ func TestMQTYPE_Merge_BudgetClientUDPSize(t *testing.T) {
 	store := mqTestStore(t)
 	defer func() { _ = store.Close() }()
 
-	bigTXT := &dns.TXT{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, TXT: rdata.TXT{Txt: []string{strings.Repeat("x", 500)}}}
+	bigTXT := &dns.TXT{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Txt: []string{strings.Repeat("x", 500)}}
 	fake := &fakeMQResolver{results: map[uint16]*resolver.QueryResult{
 		dns.TypeTXT: {Answer: []dns.RR{bigTXT}, Rcode: 0, Cacheable: true},
 	}}
@@ -352,8 +351,8 @@ func TestMQTYPE_Merge_FiltersDNSSECForDO0(t *testing.T) {
 	defer func() { _ = store.Close() }()
 
 	rrsig := &dns.RRSIG{
-		Hdr:   dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
-		RRSIG: rdata.RRSIG{TypeCovered: dns.TypeAAAA, Algorithm: 13, Labels: 2, OrigTTL: 300, Expiration: 4102444800, Inception: 4102444800, KeyTag: 12345, SignerName: "example.com.", Signature: "c2lnbmF0dXJl"},
+		Hdr:         dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
+		TypeCovered: dns.TypeAAAA, Algorithm: 13, Labels: 2, OrigTTL: 300, Expiration: 4102444800, Inception: 4102444800, KeyTag: 12345, SignerName: "example.com.", Signature: "c2lnbmF0dXJl",
 	}
 	entry := []dns.RR{aaaaRecord("2001:db8::1"), rrsig}
 	// The cache key never splits on the DO bit (see buildCacheKey) — one
@@ -412,16 +411,16 @@ func TestMQTYPE_Merge_MaxQTx(t *testing.T) {
 	types := []uint16{dns.TypeAAAA, dns.TypeTXT, dns.TypeCNAME, dns.TypeMX, dns.TypePTR}
 	results := make(map[uint16]*resolver.QueryResult, len(types))
 	for i, qt := range types {
-		rr := dns.RR(&dns.TXT{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, TXT: rdata.TXT{Txt: []string{fmt.Sprintf("type-%d", i)}}})
+		rr := dns.RR(&dns.TXT{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Txt: []string{fmt.Sprintf("type-%d", i)}})
 		switch qt {
 		case dns.TypeAAAA:
 			rr = aaaaRecord("2001:db8::1")
 		case dns.TypeCNAME:
-			rr = &dns.CNAME{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, CNAME: rdata.CNAME{Target: "target.example.com."}}
+			rr = &dns.CNAME{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Target: "target.example.com."}
 		case dns.TypeMX:
-			rr = &dns.MX{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, MX: rdata.MX{Preference: 10, Mx: "mx.example.com."}}
+			rr = &dns.MX{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Preference: 10, Mx: "mx.example.com."}
 		case dns.TypePTR:
-			rr = &dns.PTR{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, PTR: rdata.PTR{Ptr: "target.example.com."}}
+			rr = &dns.PTR{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Ptr: "target.example.com."}
 		}
 		results[qt] = &resolver.QueryResult{Answer: []dns.RR{rr}, Rcode: 0, Cacheable: true}
 	}
@@ -470,7 +469,7 @@ func TestMQTYPE_Merge_MaxQTx(t *testing.T) {
 //     MsgOptionUnpackQuestion); EDNS.pre unpacks it before MQTYPE.pre.
 
 func aaaaRecord(ip string) *dns.AAAA {
-	return &dns.AAAA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, AAAA: rdata.AAAA{Addr: netip.MustParseAddr(ip)}}
+	return &dns.AAAA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr(ip)}
 }
 
 // chainTestDeps builds the AssembleChain dependencies with a real cache store

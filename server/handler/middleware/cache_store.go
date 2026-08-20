@@ -227,8 +227,7 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 		log.Debugf("SECURITY: using DNSSEC EDE %d from recursive resolver", edeCode)
 	}
 	if dnssecStatus == "" {
-		var dnsErr *resolver.DNSSECError
-		if errors.As(queryErr, &dnsErr) {
+		if dnsErr, ok := errors.AsType[*resolver.DNSSECError](queryErr); ok {
 			edeCode = dnsErr.EDECode
 			dnssecStatus = config.DNSSECStatusBogus
 			log.Debugf("SECURITY: DNSSEC error mapped to EDE %d: %s", edeCode, dnsErr.Message)

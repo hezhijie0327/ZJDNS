@@ -11,7 +11,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // newResponseChain wires the Response middleware over a next handler that
@@ -32,8 +31,8 @@ func newResponseChain(t *testing.T, secure bool) (handler.QueryHandler, *dns.Msg
 	packed := new(dns.Msg)
 	dnsutil.SetReply(packed, req)
 	packed.Answer = []dns.RR{&dns.A{
-		Hdr: dns.Header{Name: "example.com.", TTL: 300, Class: dns.ClassINET},
-		A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+		Hdr:  dns.Header{Name: "example.com.", TTL: 300, Class: dns.ClassINET},
+		Addr: netip.MustParseAddr("192.0.2.1"),
 	}}
 	if err := packed.Pack(); err != nil {
 		t.Fatalf("pack pre-packed response: %v", err)
@@ -135,8 +134,8 @@ func prePackedWithNSEC(t *testing.T) (req, packed *dns.Msg) {
 	dnsutil.SetReply(packed, req)
 	packed.RecursionAvailable = true
 	packed.Ns = []dns.RR{
-		&dns.NSEC{Hdr: dns.Header{Name: "alpha.example.com.", Class: dns.ClassINET, TTL: 600}, NSEC: rdata.NSEC{NextDomain: "zulu.example.com."}},
-		&dns.SOA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 900}, SOA: rdata.SOA{Ns: "ns1.example.com.", Mbox: "admin.example.com."}},
+		&dns.NSEC{Hdr: dns.Header{Name: "alpha.example.com.", Class: dns.ClassINET, TTL: 600}, NextDomain: "zulu.example.com."},
+		&dns.SOA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 900}, Ns: "ns1.example.com.", Mbox: "admin.example.com."},
 	}
 	if err := packed.Pack(); err != nil {
 		t.Fatal(err)

@@ -9,7 +9,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // ── Unit tests ───────────────────────────────────────────────────────────────
@@ -58,10 +57,10 @@ func TestParentSideType(t *testing.T) {
 
 func TestMinDelegationTTL(t *testing.T) {
 	makeNS := func(name string, ttl uint32) *dns.NS {
-		return &dns.NS{Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: ttl}, NS: rdata.NS{Ns: "ns1." + name}}
+		return &dns.NS{Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: ttl}, Ns: "ns1." + name}
 	}
 	makeDS := func(name string, ttl uint32) *dns.DS {
-		return &dns.DS{Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: ttl}, DS: rdata.DS{KeyTag: 12345, Algorithm: dns.ECDSAP256SHA256, DigestType: dns.SHA256, Digest: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"}}
+		return &dns.DS{Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: ttl}, KeyTag: 12345, Algorithm: dns.ECDSAP256SHA256, DigestType: dns.SHA256, Digest: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"}
 	}
 
 	t.Run("min across NS and DS", func(t *testing.T) {
@@ -103,8 +102,8 @@ func TestMinDelegationTTL(t *testing.T) {
 }
 
 func TestPackUnpackDS(t *testing.T) {
-	ds1 := &dns.DS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600}, DS: rdata.DS{KeyTag: 12345, Algorithm: dns.ECDSAP256SHA256, DigestType: dns.SHA256, Digest: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}
-	ds2 := &dns.DS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600}, DS: rdata.DS{KeyTag: 54321, Algorithm: dns.ECDSAP256SHA256, DigestType: dns.SHA256, Digest: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"}}
+	ds1 := &dns.DS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600}, KeyTag: 12345, Algorithm: dns.ECDSAP256SHA256, DigestType: dns.SHA256, Digest: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+	ds2 := &dns.DS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600}, KeyTag: 54321, Algorithm: dns.ECDSAP256SHA256, DigestType: dns.SHA256, Digest: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"}
 
 	t.Run("round-trip", func(t *testing.T) {
 		wire := packDS([]*dns.DS{ds1, ds2})
@@ -141,9 +140,9 @@ func TestPackUnpackDS(t *testing.T) {
 
 func TestNSNamesFrom(t *testing.T) {
 	ns := []*dns.NS{
-		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: "ns1.baidu.com."}},
-		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: "ns2.BAIDU.com."}}, // mixed case
-		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: ""}},               // empty Ns
+		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, Ns: "ns1.baidu.com."},
+		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, Ns: "ns2.BAIDU.com."}, // mixed case
+		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, Ns: ""},               // empty Ns
 	}
 
 	names := nsNamesFrom(ns)
@@ -164,11 +163,11 @@ func TestStoreAndLookupDelegation(t *testing.T) {
 	r := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](10000)}
 
 	nsRecords := []*dns.NS{
-		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: "ns1.baidu.com."}},
-		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: "ns2.baidu.com."}},
+		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, Ns: "ns1.baidu.com."},
+		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, Ns: "ns2.baidu.com."},
 	}
 	dsRecords := []*dns.DS{
-		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 1800}, DS: rdata.DS{KeyTag: 11111, Algorithm: dns.ECDSAP256SHA256, DigestType: dns.SHA256, Digest: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"}},
+		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 1800}, KeyTag: 11111, Algorithm: dns.ECDSAP256SHA256, DigestType: dns.SHA256, Digest: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"},
 	}
 	addrs := []string{"1.2.3.4:53", "5.6.7.8:53"}
 	chain := &dnssecChain{childDS: dsRecords}
@@ -210,7 +209,7 @@ func TestLookupDelegationParentSideType(t *testing.T) {
 	r := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](10000)}
 
 	nsRecords := []*dns.NS{
-		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: "ns1.baidu.com."}},
+		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, Ns: "ns1.baidu.com."},
 	}
 	chain := &dnssecChain{} // insecure delegation
 	r.storeDelegation("baidu.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
@@ -235,7 +234,7 @@ func TestStoreDelegationSkipsUnverifiable(t *testing.T) {
 	r := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](10000)}
 
 	nsRecords := []*dns.NS{
-		{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: "ns1.example.com."}},
+		{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600}, Ns: "ns1.example.com."},
 	}
 	chain := &dnssecChain{dsPresentButUnverified: true}
 	r.storeDelegation("example.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
@@ -286,10 +285,10 @@ func TestDelegationSpillRoundTrip(t *testing.T) {
 
 	r1 := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](100)}
 	nsRecords := []*dns.NS{
-		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: "ns1.baidu.com."}},
+		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, Ns: "ns1.baidu.com."},
 	}
 	dsRecords := []*dns.DS{
-		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 1800}, DS: rdata.DS{KeyTag: 11111, Algorithm: dns.ECDSAP256SHA256, DigestType: dns.SHA256, Digest: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"}},
+		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 1800}, KeyTag: 11111, Algorithm: dns.ECDSAP256SHA256, DigestType: dns.SHA256, Digest: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"},
 	}
 	chain := &dnssecChain{childDS: dsRecords}
 	r1.storeDelegation("baidu.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
@@ -327,7 +326,7 @@ func TestDelegationSpillEvictPromote(t *testing.T) {
 	}
 
 	nsRecords := []*dns.NS{
-		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, NS: rdata.NS{Ns: "ns1.baidu.com."}},
+		{Hdr: dns.Header{Name: "baidu.com.", Class: dns.ClassINET, TTL: 3600}, Ns: "ns1.baidu.com."},
 	}
 	chain := &dnssecChain{}
 	r.storeDelegation("baidu.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
@@ -355,7 +354,7 @@ func TestDelegationSpillEvictPromote(t *testing.T) {
 func TestCleanupDelegations(t *testing.T) {
 	r := &Recursive{resolver: &Resolver{}, delegations: lrumap.New[string, *delegationEntry](100)}
 	nsRecords := []*dns.NS{
-		{Hdr: dns.Header{Name: "old.com.", Class: dns.ClassINET, TTL: 1}, NS: rdata.NS{Ns: "ns1.old.com."}},
+		{Hdr: dns.Header{Name: "old.com.", Class: dns.ClassINET, TTL: 1}, Ns: "ns1.old.com."},
 	}
 	chain := &dnssecChain{}
 	r.storeDelegation("old.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)

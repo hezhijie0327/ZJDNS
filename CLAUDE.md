@@ -165,7 +165,7 @@ sh scripts/install-hook.sh                     # Linux / macOS
 pwsh scripts/install-hook.ps1                  # Windows
 ```
 
-Module path: `zjdns` (Go 1.26.4, pure Go — `CGO_ENABLED=0` compatible).
+Module path: `zjdns` (Go 1.27.0, pure Go — `CGO_ENABLED=0` compatible).
 
 Key dependencies: `codeberg.org/miekg/dns` (DNS), `github.com/quic-go/quic-go` (QUIC/DoQ/DoH3), `gitlab.com/go-extension/http` (eHTTP — net/http with native eTLS for DoH), `gitlab.com/go-extension/tls` (eTLS — crypto/tls fork with KTLS), `github.com/pion/dtls/v3` (DTLS 1.2+), `github.com/cloudflare/circl` (X-Wing PQ/T KEM for DNSCrypt), `gitee.com/Trisia/gotlcp` (TLCP + DTLCP — SM2/SM3/SM4, pure Go).
 

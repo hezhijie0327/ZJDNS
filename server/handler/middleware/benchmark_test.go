@@ -11,7 +11,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // BenchmarkResponseServePrePacked measures the Response middleware over a
@@ -31,8 +30,8 @@ func BenchmarkResponseServePrePacked(b *testing.B) {
 	packed := new(dns.Msg)
 	dnsutil.SetReply(packed, req)
 	packed.Answer = []dns.RR{&dns.A{
-		Hdr: dns.Header{Name: "example.com.", TTL: 300, Class: dns.ClassINET},
-		A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+		Hdr:  dns.Header{Name: "example.com.", TTL: 300, Class: dns.ClassINET},
+		Addr: netip.MustParseAddr("192.0.2.1"),
 	}}
 	if err := packed.Pack(); err != nil {
 		b.Fatal(err)
@@ -94,8 +93,8 @@ func BenchmarkResponseServeLargeWire(b *testing.B) {
 	packed.RecursionAvailable = true
 	for range 100 {
 		packed.Answer = append(packed.Answer, &dns.A{
-			Hdr: dns.Header{Name: "example.com.", TTL: 300, Class: dns.ClassINET},
-			A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+			Hdr:  dns.Header{Name: "example.com.", TTL: 300, Class: dns.ClassINET},
+			Addr: netip.MustParseAddr("192.0.2.1"),
 		})
 	}
 	if err := packed.Pack(); err != nil {

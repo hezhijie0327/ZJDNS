@@ -3,6 +3,7 @@ package siphash
 import (
 	"encoding/binary"
 	"math/bits"
+	"slices"
 	"testing"
 )
 
@@ -85,8 +86,8 @@ func referenceSum64(key *[16]byte, msg []byte) uint64 {
 	}
 
 	var last uint64
-	for i := len(msg) - 1; i >= 0; i-- {
-		last |= uint64(msg[i]) << (i * 8)
+	for i, m := range slices.Backward(msg) {
+		last |= uint64(m) << (i * 8)
 	}
 	last |= b
 

@@ -40,7 +40,7 @@ type LatencyProber interface {
 // Handler processes DNS queries by delegating to the assembled middleware
 // chain.  It is a thin adapter between protocol listeners and the chain.
 type Handler struct {
-	closed int32 // hot-path: checked on every query via atomic load
+	closed atomic.Int32 // hot-path: checked on every query via atomic load
 
 	chain             QueryHandler
 	edns              *edns.Handler
@@ -77,10 +77,10 @@ func NewHandler(chain QueryHandler, ednsH *edns.Handler, cacheStore cache.Store,
 // ── Lifecycle ────────────────────────────────────────────────────────────
 
 // IsClosed reports whether the handler has been shut down.
-func (h *Handler) IsClosed() bool { return atomic.LoadInt32(&h.closed) != 0 }
+func (h *Handler) IsClosed() bool { return h.closed.Load() != 0 }
 
 // MarkClosed signals the handler to stop accepting new work.
-func (h *Handler) MarkClosed() { atomic.StoreInt32(&h.closed, 1) }
+func (h *Handler) MarkClosed() { h.closed.Store(1) }
 
 // ── Accessors ────────────────────────────────────────────────────────────
 
@@ -107,7 +107,7 @@ func (h *Handler) UpstreamServers() []*config.UpstreamServer { return h.resolver
 // ServeDNS handles an incoming DNS query from any protocol listener.
 // It creates a QueryContext and delegates to the middleware chain.
 func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg {
-	if atomic.LoadInt32(&h.closed) != 0 {
+	if h.closed.Load() != 0 {
 		msg := BuildResponseMsg(req)
 		msg.Rcode = dns.RcodeServerFailure
 		return msg

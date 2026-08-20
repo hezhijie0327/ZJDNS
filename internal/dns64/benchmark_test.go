@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 func BenchmarkSynthesizer_MapAddr(b *testing.B) {
@@ -20,8 +19,8 @@ func BenchmarkSynthesizer_MapAddr(b *testing.B) {
 func BenchmarkSynthesizer_Synthesize(b *testing.B) {
 	s, _ := New("64:ff9b::/96")
 	aRec := &dns.A{
-		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
-		A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+		Hdr:  dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
+		Addr: netip.MustParseAddr("192.0.2.1"),
 	}
 	b.ResetTimer()
 	for b.Loop() {

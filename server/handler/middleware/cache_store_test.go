@@ -11,7 +11,6 @@ import (
 	"zjdns/server/resolver"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 func testStore(t *testing.T) cache.Store {
@@ -27,7 +26,7 @@ func testQuery(t *testing.T) *dns.Msg {
 }
 
 func testARecord(ip string) *dns.A {
-	return &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr(ip)}}
+	return &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr(ip)}
 }
 
 // ── dnssecCacheable unit tests ──────────────────────────────────────────────

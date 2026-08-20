@@ -159,10 +159,8 @@ func findFreePort(t *testing.T) string {
 }
 
 func isAddrInUse(err error) bool {
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
-		var syscallErr *os.SyscallError
-		if errors.As(opErr.Err, &syscallErr) {
+	if opErr, ok := errors.AsType[*net.OpError](err); ok {
+		if syscallErr, ok := errors.AsType[*os.SyscallError](opErr.Err); ok {
 			if errors.Is(syscallErr.Err, syscall.EADDRINUSE) {
 				return true
 			}

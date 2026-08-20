@@ -8,7 +8,6 @@ import (
 	"zjdns/server/handler"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // Any answers QTYPE=ANY queries with the RFC 8482 minimal response: a single
@@ -40,7 +39,7 @@ func (m *Any) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				TTL:   config.DefaultHINFOTTL,
 				Class: dns.ClassINET,
 			},
-			HINFO: rdata.HINFO{Cpu: "RFC8482", Os: ""},
+			Cpu: "RFC8482", Os: "",
 		}}
 		qctx.Res = msg
 		// CacheServed here is a "response already built — CacheStore has

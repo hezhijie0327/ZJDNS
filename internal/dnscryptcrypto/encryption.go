@@ -111,7 +111,8 @@ func CryptoRandIntn(n int) (int, error) {
 func encryptPadding(packet []byte, minWireSize int) []byte {
 	minWire := max(
 		// +1 for 0x80 delimiter
-		minWireSize, QueryOverhead+len(packet)+1)
+		minWireSize, QueryOverhead+len(packet)+1,
+	)
 	minWire = min((minWire+63)&^63, MaxDNSUDPPacketSize)
 	// The final padding must not push the sealed UDP query past the cap:
 	// Pad re-rounds len(packet)+1 up to the next 64-byte boundary, so the

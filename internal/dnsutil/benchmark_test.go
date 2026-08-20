@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 type testTimeoutError struct{}
@@ -79,7 +78,7 @@ func BenchmarkIsSecureProtocol(b *testing.B) {
 }
 
 func BenchmarkExtractIP(b *testing.B) {
-	a := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.1")}}
+	a := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")}
 	b.ResetTimer()
 	for b.Loop() {
 		_ = ExtractIP(a)
@@ -87,7 +86,7 @@ func BenchmarkExtractIP(b *testing.B) {
 }
 
 func BenchmarkExtractIPString(b *testing.B) {
-	a := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr("192.0.2.1")}}
+	a := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")}
 	b.ResetTimer()
 	for b.Loop() {
 		_, _ = ExtractIPString(a)

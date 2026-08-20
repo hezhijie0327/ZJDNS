@@ -13,7 +13,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
@@ -21,8 +20,8 @@ import (
 // genTestKey generates an ECDSA P-256 key pair + DNSKEY + private key for signing.
 func genTestKey(zone string, flags uint16) (*dns.DNSKEY, *ecdsa.PrivateKey) {
 	dnskey := &dns.DNSKEY{
-		Hdr:    dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
-		DNSKEY: rdata.DNSKEY{Flags: flags, Protocol: 3, Algorithm: dns.ECDSAP256SHA256},
+		Hdr:   dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
+		Flags: flags, Protocol: 3, Algorithm: dns.ECDSAP256SHA256,
 	}
 	priv, _ := dnskey.Generate(256)
 	return dnskey, priv.(*ecdsa.PrivateKey)
@@ -36,16 +35,14 @@ func signRRset(rrset []dns.RR, signer string, priv *ecdsa.PrivateKey, keyTag uin
 			Class: dns.ClassINET,
 			TTL:   3600,
 		},
-		RRSIG: rdata.RRSIG{
-			TypeCovered: dns.RRToType(rrset[0]),
-			Algorithm:   dns.ECDSAP256SHA256,
-			Labels:      uint8(dnsutil.Labels(rrset[0].Header().Name)), //nolint:gosec // G115: DNS label count — protocol-bounded byte
-			OrigTTL:     rrset[0].Header().TTL,
-			Expiration:  uint32(time.Now().Add(24 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
-			Inception:   uint32(time.Now().Add(-1 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
-			KeyTag:      keyTag,
-			SignerName:  dnsutil.Fqdn(signer),
-		},
+		TypeCovered: dns.RRToType(rrset[0]),
+		Algorithm:   dns.ECDSAP256SHA256,
+		Labels:      uint8(dnsutil.Labels(rrset[0].Header().Name)), //nolint:gosec // G115: DNS label count — protocol-bounded byte
+		OrigTTL:     rrset[0].Header().TTL,
+		Expiration:  uint32(time.Now().Add(24 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+		Inception:   uint32(time.Now().Add(-1 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+		KeyTag:      keyTag,
+		SignerName:  dnsutil.Fqdn(signer),
 	}
 	_ = rrsig.Sign(priv, rrset, &dns.SignOption{})
 	return rrsig
@@ -54,8 +51,8 @@ func signRRset(rrset []dns.RR, signer string, priv *ecdsa.PrivateKey, keyTag uin
 // aRec is a helper to create an A record with an IP address.
 func aRec(name, ip string) *dns.A {
 	return &dns.A{
-		Hdr: dns.Header{Name: dnsutil.Fqdn(name), Class: dns.ClassINET, TTL: 300},
-		A:   rdata.A{Addr: netip.MustParseAddr(ip)},
+		Hdr:  dns.Header{Name: dnsutil.Fqdn(name), Class: dns.ClassINET, TTL: 300},
+		Addr: netip.MustParseAddr(ip),
 	}
 }
 
@@ -95,17 +92,15 @@ func TestVerifyRRset_ExpiredSignature(t *testing.T) {
 
 	rrset := []dns.RR{aRec(zone, "192.0.2.1")}
 	rrsig := &dns.RRSIG{
-		Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
-		RRSIG: rdata.RRSIG{
-			TypeCovered: dns.TypeA,
-			Algorithm:   dns.ECDSAP256SHA256,
-			Labels:      3,
-			OrigTTL:     300,
-			Expiration:  uint32(time.Now().Add(-48 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
-			Inception:   uint32(time.Now().Add(-72 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
-			KeyTag:      ksk.KeyTag(),
-			SignerName:  dnsutil.Fqdn(zone),
-		},
+		Hdr:         dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+		TypeCovered: dns.TypeA,
+		Algorithm:   dns.ECDSAP256SHA256,
+		Labels:      3,
+		OrigTTL:     300,
+		Expiration:  uint32(time.Now().Add(-48 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+		Inception:   uint32(time.Now().Add(-72 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+		KeyTag:      ksk.KeyTag(),
+		SignerName:  dnsutil.Fqdn(zone),
 	}
 	_ = rrsig.Sign(priv, rrset, &dns.SignOption{})
 
@@ -142,8 +137,8 @@ func TestVerifyDelegationDS_UnsupportedDigest(t *testing.T) {
 
 	// Digest type 3 (GOST) is not computable by ToDS (SHA1/256/384 only).
 	ds := &dns.DS{
-		Hdr: dns.Header{Name: dnsutil.Fqdn(childZone), Class: dns.ClassINET, TTL: 3600},
-		DS:  rdata.DS{KeyTag: ksk.KeyTag(), Algorithm: dns.ECDSAP256SHA256, DigestType: 3, Digest: "deadbeef"},
+		Hdr:    dns.Header{Name: dnsutil.Fqdn(childZone), Class: dns.ClassINET, TTL: 3600},
+		KeyTag: ksk.KeyTag(), Algorithm: dns.ECDSAP256SHA256, DigestType: 3, Digest: "deadbeef",
 	}
 
 	_, err := cv.VerifyDelegationDS([]*dns.DS{ds}, []*dns.DNSKEY{ksk})
@@ -212,21 +207,19 @@ func TestVerifyRRset_UnsupportedAlgorithm(t *testing.T) {
 	// Algorithm 200 is unknown to miekg/dns — RRSIG.Verify falls through to
 	// its default case and returns ErrAlg.
 	dnskey := &dns.DNSKEY{
-		Hdr:    dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
-		DNSKEY: rdata.DNSKEY{Flags: dns.FlagZONE, Protocol: 3, Algorithm: 200},
+		Hdr:   dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
+		Flags: dns.FlagZONE, Protocol: 3, Algorithm: 200,
 	}
 	rrset := []dns.RR{&dns.A{
-		Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
-		A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+		Hdr:  dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
+		Addr: netip.MustParseAddr("192.0.2.1"),
 	}}
 	now := uint32(log.NowUnix()) //nolint:gosec // G115: DNS timestamp — protocol-bounded uint32
 	rrsig := &dns.RRSIG{
-		Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
-		RRSIG: rdata.RRSIG{
-			TypeCovered: dns.TypeA, Algorithm: 200, Labels: 2,
-			OrigTTL: 3600, Expiration: now + 3600, Inception: now - 3600,
-			KeyTag: dnskey.KeyTag(), SignerName: dnsutil.Fqdn(zone),
-		},
+		Hdr:         dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
+		TypeCovered: dns.TypeA, Algorithm: 200, Labels: 2,
+		OrigTTL: 3600, Expiration: now + 3600, Inception: now - 3600,
+		KeyTag: dnskey.KeyTag(), SignerName: dnsutil.Fqdn(zone),
 	}
 
 	err := cv.VerifyRRset(rrset, rrsig, dnskey)
@@ -241,8 +234,8 @@ func TestAnswerSection_UnsupportedAlgOrderIndependent(t *testing.T) {
 	ecdsaKey, _ := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
 	// DSA key — verification of its RRSIG fails with ErrAlg (EDE 1).
 	dsaKey := &dns.DNSKEY{
-		Hdr:    dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
-		DNSKEY: rdata.DNSKEY{Flags: dns.FlagZONE, Protocol: 3, Algorithm: dns.DSA},
+		Hdr:   dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
+		Flags: dns.FlagZONE, Protocol: 3, Algorithm: dns.DSA,
 	}
 	_, wrongPriv := genTestKey("other.example.com", dns.FlagSEP|dns.FlagZONE)
 	rrset := []dns.RR{aRec(zone, "192.0.2.1")}
@@ -252,12 +245,10 @@ func TestAnswerSection_UnsupportedAlgOrderIndependent(t *testing.T) {
 	// classification must not depend on RRSIG iteration order.
 	now := uint32(log.NowUnix()) //nolint:gosec // G115: DNS timestamp — protocol-bounded uint32
 	dsaSig := &dns.RRSIG{
-		Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
-		RRSIG: rdata.RRSIG{
-			TypeCovered: dns.TypeA, Algorithm: dns.DSA, Labels: 2,
-			OrigTTL: 300, Expiration: now + 3600, Inception: now - 3600,
-			KeyTag: dsaKey.KeyTag(), SignerName: dnsutil.Fqdn(zone),
-		},
+		Hdr:         dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+		TypeCovered: dns.TypeA, Algorithm: dns.DSA, Labels: 2,
+		OrigTTL: 300, Expiration: now + 3600, Inception: now - 3600,
+		KeyTag: dsaKey.KeyTag(), SignerName: dnsutil.Fqdn(zone),
 	}
 	bogusSig := signRRset(rrset, zone, wrongPriv, ecdsaKey.KeyTag())
 
@@ -383,14 +374,14 @@ func TestIsResponseValid_SignedAnswer(t *testing.T) {
 	zsk, zskPriv := genTestKey(zone, dns.FlagZONE)
 
 	aRec := &dns.A{
-		Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
-		A:   rdata.A{Addr: netip.MustParseAddr("203.0.113.1")},
+		Hdr:  dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+		Addr: netip.MustParseAddr("203.0.113.1"),
 	}
 	rrsig := signRRset([]dns.RR{aRec}, zone, zskPriv, zsk.KeyTag())
 
 	response := &dns.Msg{
-		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeSuccess},
-		Answer:    []dns.RR{aRec, rrsig},
+		Rcode:  dns.RcodeSuccess,
+		Answer: []dns.RR{aRec, rrsig},
 	}
 	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk, ksk})
 	if err != nil {
@@ -408,12 +399,12 @@ func TestIsResponseValid_UnsignedAnswer(t *testing.T) {
 	zsk, _ := genTestKey(zone, dns.FlagZONE)
 
 	aRec := &dns.A{
-		Hdr: dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
-		A:   rdata.A{Addr: netip.MustParseAddr("203.0.113.1")},
+		Hdr:  dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
+		Addr: netip.MustParseAddr("203.0.113.1"),
 	}
 	response := &dns.Msg{
-		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeSuccess},
-		Answer:    []dns.RR{aRec},
+		Rcode:  dns.RcodeSuccess,
+		Answer: []dns.RR{aRec},
 	}
 	verified, _ := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
 	if verified {
@@ -424,8 +415,8 @@ func TestIsResponseValid_UnsignedAnswer(t *testing.T) {
 func TestIsResponseValid_NoDNSKEYs(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	response := &dns.Msg{
-		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeSuccess},
-		Answer:    []dns.RR{aRec("test.example.com", "192.0.2.1")},
+		Rcode:  dns.RcodeSuccess,
+		Answer: []dns.RR{aRec("test.example.com", "192.0.2.1")},
 	}
 	verified, _ := cv.IsResponseValid(response, "test.example.com", nil)
 	if verified {
@@ -485,14 +476,14 @@ func TestIsResponseValid_NXDOMAIN(t *testing.T) {
 	qtype := dns.TypeA
 
 	nsec := &dns.NSEC{
-		Hdr:  dns.Header{Name: "aaaa.signed.example.com.", Class: dns.ClassINET, TTL: 300},
-		NSEC: rdata.NSEC{NextDomain: "zzzz.signed.example.com.", TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC}},
+		Hdr:        dns.Header{Name: "aaaa.signed.example.com.", Class: dns.ClassINET, TTL: 300},
+		NextDomain: "zzzz.signed.example.com.", TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC},
 	}
 	rrsig := signRRset([]dns.RR{nsec}, zone, zskPriv, zsk.KeyTag())
 
 	response := &dns.Msg{
-		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeNameError},
-		Ns:        []dns.RR{nsec, rrsig},
+		Rcode: dns.RcodeNameError,
+		Ns:    []dns.RR{nsec, rrsig},
 	}
 	dnsutil.SetQuestion(response, dnsutil.Fqdn(qname), qtype)
 	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
@@ -532,13 +523,13 @@ func TestFullDNSSECChain(t *testing.T) {
 
 	// Step 2: verify a signed A record against child's verified DNSKEYs
 	aRec := &dns.A{
-		Hdr: dns.Header{Name: dnsutil.Fqdn(childZone), Class: dns.ClassINET, TTL: 300},
-		A:   rdata.A{Addr: netip.MustParseAddr("198.51.100.1")},
+		Hdr:  dns.Header{Name: dnsutil.Fqdn(childZone), Class: dns.ClassINET, TTL: 300},
+		Addr: netip.MustParseAddr("198.51.100.1"),
 	}
 	rrsig := signRRset([]dns.RR{aRec}, childZone, childZSKPriv, childZSK.KeyTag())
 	response := &dns.Msg{
-		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeSuccess},
-		Answer:    []dns.RR{aRec, rrsig},
+		Rcode:  dns.RcodeSuccess,
+		Answer: []dns.RR{aRec, rrsig},
 	}
 
 	verifiedKeys := cv.ZoneKeys(childZone)
@@ -589,20 +580,20 @@ func TestIsResponseValid_MixedRRsetWithForeignRRSIG(t *testing.T) {
 	// CNAME record signed by parent zone (valid) +
 	// A record signed by child zone (parent can't verify this RRSIG)
 	cnameRec := &dns.CNAME{
-		Hdr:   dns.Header{Name: dnsutil.Fqdn("query.parent.example.com"), Class: dns.ClassINET, TTL: 300},
-		CNAME: rdata.CNAME{Target: dnsutil.Fqdn("target.child.parent.example.com")},
+		Hdr:    dns.Header{Name: dnsutil.Fqdn("query.parent.example.com"), Class: dns.ClassINET, TTL: 300},
+		Target: dnsutil.Fqdn("target.child.parent.example.com"),
 	}
 	cnameRRSIG := signRRset([]dns.RR{cnameRec}, parentZone, parentZSKPriv, parentZSK.KeyTag())
 
 	aRec := &dns.A{
-		Hdr: dns.Header{Name: dnsutil.Fqdn("target.child.parent.example.com"), Class: dns.ClassINET, TTL: 300},
-		A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+		Hdr:  dns.Header{Name: dnsutil.Fqdn("target.child.parent.example.com"), Class: dns.ClassINET, TTL: 300},
+		Addr: netip.MustParseAddr("192.0.2.1"),
 	}
 	aRRSIG := signRRset([]dns.RR{aRec}, childZone, childZSKPriv, childZSK.KeyTag())
 
 	response := &dns.Msg{
-		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeSuccess},
-		Answer:    []dns.RR{cnameRec, cnameRRSIG, aRec, aRRSIG},
+		Rcode:  dns.RcodeSuccess,
+		Answer: []dns.RR{cnameRec, cnameRRSIG, aRec, aRRSIG},
 	}
 
 	// Validate with ONLY parent zone keys.
@@ -621,8 +612,8 @@ func TestIsResponseValid_MixedRRsetWithForeignRRSIG(t *testing.T) {
 
 func TestMatchesNSECDenial_CNAMEBitSet(t *testing.T) {
 	nsec := &dns.NSEC{
-		Hdr:  dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
-		NSEC: rdata.NSEC{NextDomain: "other.example.com.", TypeBitMap: []uint16{dns.TypeCNAME, dns.TypeRRSIG, dns.TypeNSEC}},
+		Hdr:        dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
+		NextDomain: "other.example.com.", TypeBitMap: []uint16{dns.TypeCNAME, dns.TypeRRSIG, dns.TypeNSEC},
 	}
 	if matchesNSECDenial(nsec, "example.com.", dns.TypeA, "NODATA") {
 		t.Fatal("CNAME bit set: NODATA must be false")
@@ -637,15 +628,15 @@ func TestMatchesNSECDenial_CNAMEBitSet(t *testing.T) {
 
 func TestIsAncestorDelegation(t *testing.T) {
 	ancestor := &dns.NSEC{
-		Hdr:  dns.Header{Name: "com.", Class: dns.ClassINET, TTL: 300},
-		NSEC: rdata.NSEC{NextDomain: "other.com.", TypeBitMap: []uint16{dns.TypeNS}},
+		Hdr:        dns.Header{Name: "com.", Class: dns.ClassINET, TTL: 300},
+		NextDomain: "other.com.", TypeBitMap: []uint16{dns.TypeNS},
 	}
 	if !isAncestorDelegation(ancestor) {
 		t.Fatal("NS=1 SOA=0: should be ancestor delegation")
 	}
 	apex := &dns.NSEC{
-		Hdr:  dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
-		NSEC: rdata.NSEC{NextDomain: "www.example.com.", TypeBitMap: []uint16{dns.TypeNS, dns.TypeSOA, dns.TypeRRSIG, dns.TypeNSEC}},
+		Hdr:        dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
+		NextDomain: "www.example.com.", TypeBitMap: []uint16{dns.TypeNS, dns.TypeSOA, dns.TypeRRSIG, dns.TypeNSEC},
 	}
 	if isAncestorDelegation(apex) {
 		t.Fatal("NS=1 SOA=1: should NOT be ancestor delegation")
@@ -656,13 +647,13 @@ func TestIsAncestorDelegation(t *testing.T) {
 
 func TestHasOptOutInProof(t *testing.T) {
 	noOptOut := []*dns.NSEC3{
-		{Hdr: dns.Header{Name: "abc.com.", Class: dns.ClassINET, TTL: 300}, NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0}},
+		{Hdr: dns.Header{Name: "abc.com.", Class: dns.ClassINET, TTL: 300}, Hash: dns.SHA1, Flags: 0},
 	}
 	if hasOptOutInProof(noOptOut) {
 		t.Fatal("no Opt-Out: should return false")
 	}
 	withOptOut := []*dns.NSEC3{
-		{Hdr: dns.Header{Name: "abc.com.", Class: dns.ClassINET, TTL: 300}, NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 1}},
+		{Hdr: dns.Header{Name: "abc.com.", Class: dns.ClassINET, TTL: 300}, Hash: dns.SHA1, Flags: 1},
 	}
 	if !hasOptOutInProof(withOptOut) {
 		t.Fatal("Opt-Out flag set: should return true")
@@ -687,8 +678,8 @@ func TestNsec3HashLabel(t *testing.T) {
 
 func TestMatchNSEC3(t *testing.T) {
 	nsec3 := &dns.NSEC3{
-		Hdr:   dns.Header{Name: "abcd.example.com.", Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: "eeee", TypeBitMap: []uint16{dns.TypeA}},
+		Hdr:  dns.Header{Name: "abcd.example.com.", Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: "eeee", TypeBitMap: []uint16{dns.TypeA},
 	}
 	verified := []*dns.NSEC3{nsec3}
 
@@ -703,8 +694,8 @@ func TestMatchNSEC3(t *testing.T) {
 func TestHasNSEC3Covering(t *testing.T) {
 	// Interval (aaaa, zzzz) covers bbbb but not 0000
 	nsec3 := &dns.NSEC3{
-		Hdr:   dns.Header{Name: "aaaa.example.com.", Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: "zzzz", TypeBitMap: []uint16{}},
+		Hdr:  dns.Header{Name: "aaaa.example.com.", Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: "zzzz", TypeBitMap: []uint16{},
 	}
 	verified := []*dns.NSEC3{nsec3}
 
@@ -722,24 +713,24 @@ func TestHasNSEC3Covering(t *testing.T) {
 
 func TestNsec3ParamsConsistent(t *testing.T) {
 	same := []*dns.NSEC3{
-		{NSEC3: rdata.NSEC3{Hash: dns.SHA1, Iterations: 5, Salt: "AB"}},
-		{NSEC3: rdata.NSEC3{Hash: dns.SHA1, Iterations: 5, Salt: "AB"}},
+		{Hash: dns.SHA1, Iterations: 5, Salt: "AB"},
+		{Hash: dns.SHA1, Iterations: 5, Salt: "AB"},
 	}
 	if !nsec3ParamsConsistent(same) {
 		t.Error("identical params should be consistent")
 	}
 
 	diffIter := []*dns.NSEC3{
-		{NSEC3: rdata.NSEC3{Hash: dns.SHA1, Iterations: 5, Salt: "AB"}},
-		{NSEC3: rdata.NSEC3{Hash: dns.SHA1, Iterations: 10, Salt: "AB"}},
+		{Hash: dns.SHA1, Iterations: 5, Salt: "AB"},
+		{Hash: dns.SHA1, Iterations: 10, Salt: "AB"},
 	}
 	if nsec3ParamsConsistent(diffIter) {
 		t.Error("different iterations should be inconsistent")
 	}
 
 	diffSalt := []*dns.NSEC3{
-		{NSEC3: rdata.NSEC3{Hash: dns.SHA1, Iterations: 5, Salt: "AB"}},
-		{NSEC3: rdata.NSEC3{Hash: dns.SHA1, Iterations: 5, Salt: "CD"}},
+		{Hash: dns.SHA1, Iterations: 5, Salt: "AB"},
+		{Hash: dns.SHA1, Iterations: 5, Salt: "CD"},
 	}
 	if nsec3ParamsConsistent(diffSalt) {
 		t.Error("different salt should be inconsistent")
@@ -781,13 +772,13 @@ func TestFindClosestEncloser_Valid(t *testing.T) {
 	lowHash := strings.Repeat("0", 32)
 	highHash := strings.Repeat("V", 32)
 	universalCover := &dns.NSEC3{
-		Hdr:   dns.Header{Name: lowHash + "." + zone, Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: highHash, TypeBitMap: []uint16{}},
+		Hdr:  dns.Header{Name: lowHash + "." + zone, Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: highHash, TypeBitMap: []uint16{},
 	}
 	// CE match: owner hash label equals H(ceName).
 	ceMatch := &dns.NSEC3{
-		Hdr:   dns.Header{Name: hCE + "." + zone, Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hCE, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3}},
+		Hdr:  dns.Header{Name: hCE + "." + zone, Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hCE, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3},
 	}
 
 	verified := []*dns.NSEC3{universalCover, ceMatch}
@@ -811,8 +802,8 @@ func TestFindClosestEncloser_BogusMatchWithoutCover(t *testing.T) {
 	hQname := nsec3HashName(qname, dns.SHA1, 0, "")
 
 	directMatch := &dns.NSEC3{
-		Hdr:   dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{dns.TypeA}},
+		Hdr:  dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{dns.TypeA},
 	}
 	verified := []*dns.NSEC3{directMatch}
 	_, ok := findClosestEncloser(verified, qname, dns.SHA1, 0, "")
@@ -828,8 +819,8 @@ func TestFindClosestEncloser_NoCE(t *testing.T) {
 	lowHash := strings.Repeat("0", 32)
 	highHash := strings.Repeat("V", 32)
 	cover := &dns.NSEC3{
-		Hdr:   dns.Header{Name: lowHash + "." + zone, Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: highHash, TypeBitMap: []uint16{}},
+		Hdr:  dns.Header{Name: lowHash + "." + zone, Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: highHash, TypeBitMap: []uint16{},
 	}
 	verified := []*dns.NSEC3{cover}
 	_, ok := findClosestEncloser(verified, qname, dns.SHA1, 0, "")
@@ -853,13 +844,13 @@ func TestMatchesNSEC3Denial_NXDOMAIN(t *testing.T) {
 
 	// Universal cover: covers qname, parent, and wildcard hashes.
 	universalCover := &dns.NSEC3{
-		Hdr:   dns.Header{Name: lowHash + "." + zone, Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: highHash, TypeBitMap: []uint16{}},
+		Hdr:  dns.Header{Name: lowHash + "." + zone, Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: highHash, TypeBitMap: []uint16{},
 	}
 	// CE match
 	ceMatch := &dns.NSEC3{
-		Hdr:   dns.Header{Name: hCE + "." + zone, Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hCE, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3}},
+		Hdr:  dns.Header{Name: hCE + "." + zone, Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hCE, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3},
 	}
 
 	verified := []*dns.NSEC3{universalCover, ceMatch}
@@ -882,8 +873,8 @@ func TestMatchesNSEC3Denial_NXDOMAIN_SingleNSEC3Zone(t *testing.T) {
 	// record covers every hash except its own — including the wildcard hash.
 	// The proof is therefore VALID: CE match + wildcard cover by one record.
 	ceMatch := &dns.NSEC3{
-		Hdr:   dns.Header{Name: hCE + "." + zone, Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hCE, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3}},
+		Hdr:  dns.Header{Name: hCE + "." + zone, Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hCE, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3},
 	}
 	verified := []*dns.NSEC3{ceMatch}
 	if !matchesNSEC3Denial(verified, qname, dns.TypeA, "NXDOMAIN", dns.SHA1, 0, "") {
@@ -900,8 +891,8 @@ func TestMatchesNSEC3Denial_NXDOMAIN_MissingNextCloserCover(t *testing.T) {
 	// An NSEC3 matching H(qname) directly — since this is the first iteration
 	// (no prior cover), findClosestEncloser rejects it as bogus.
 	directMatch := &dns.NSEC3{
-		Hdr:   dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3}},
+		Hdr:  dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3},
 	}
 	verified := []*dns.NSEC3{directMatch}
 	if matchesNSEC3Denial(verified, qname, dns.TypeA, "NXDOMAIN", dns.SHA1, 0, "") {
@@ -915,8 +906,8 @@ func TestMatchesNSEC3Denial_NODATA_Match(t *testing.T) {
 	hQname := nsec3HashName(qname, dns.SHA1, 0, "")
 
 	nsec3 := &dns.NSEC3{
-		Hdr:   dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{dns.TypeRRSIG, dns.TypeNSEC3}},
+		Hdr:  dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{dns.TypeRRSIG, dns.TypeNSEC3},
 	}
 	verified := []*dns.NSEC3{nsec3}
 	if !matchesNSEC3Denial(verified, qname, dns.TypeA, "NODATA", dns.SHA1, 0, "") {
@@ -931,8 +922,8 @@ func TestMatchesNSEC3Denial_NODATA_CNAMEBit(t *testing.T) {
 
 	// CNAME bit set → NODATA must be false (RFC 6840 §4.3).
 	nsec3 := &dns.NSEC3{
-		Hdr:   dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{dns.TypeCNAME, dns.TypeRRSIG, dns.TypeNSEC3}},
+		Hdr:  dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{dns.TypeCNAME, dns.TypeRRSIG, dns.TypeNSEC3},
 	}
 	verified := []*dns.NSEC3{nsec3}
 	if matchesNSEC3Denial(verified, qname, dns.TypeA, "NODATA", dns.SHA1, 0, "") {
@@ -947,8 +938,8 @@ func TestMatchesNSEC3Denial_NODATA_QtypePresent(t *testing.T) {
 
 	// Type A in bitmap → NODATA for A should be false.
 	nsec3 := &dns.NSEC3{
-		Hdr:   dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3}},
+		Hdr:  dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3},
 	}
 	verified := []*dns.NSEC3{nsec3}
 	if matchesNSEC3Denial(verified, qname, dns.TypeA, "NODATA", dns.SHA1, 0, "") {
@@ -963,8 +954,8 @@ func TestMatchesNSEC3Denial_NODATA_EmptyNonTerminal(t *testing.T) {
 	hQname := nsec3HashName(qname, dns.SHA1, 0, "")
 
 	nsec3 := &dns.NSEC3{
-		Hdr:   dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{}},
+		Hdr:  dns.Header{Name: hQname + "." + zone, Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hQname, TypeBitMap: []uint16{},
 	}
 	verified := []*dns.NSEC3{nsec3}
 	if !matchesNSEC3Denial(verified, qname, dns.TypeA, "NODATA", dns.SHA1, 0, "") {
@@ -986,18 +977,18 @@ func TestMatchesNSEC3Denial_WildcardNODATA(t *testing.T) {
 
 	// Universal cover for the CE walk.
 	universalCover := &dns.NSEC3{
-		Hdr:   dns.Header{Name: lowHash + "." + zone, Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: highHash, TypeBitMap: []uint16{}},
+		Hdr:  dns.Header{Name: lowHash + "." + zone, Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: highHash, TypeBitMap: []uint16{},
 	}
 	// CE match
 	ceMatch := &dns.NSEC3{
-		Hdr:   dns.Header{Name: hCE + "." + zone, Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hCE, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3}},
+		Hdr:  dns.Header{Name: hCE + "." + zone, Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hCE, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3},
 	}
 	// Wildcard match: H(*.ce) exists, no TypeAAAA in bitmap.
 	wildcardMatch := &dns.NSEC3{
-		Hdr:   dns.Header{Name: hWildcard + "." + zone, Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hWildcard, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3}},
+		Hdr:  dns.Header{Name: hWildcard + "." + zone, Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 0, Iterations: 0, Salt: "", NextDomain: hWildcard, TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3},
 	}
 
 	verified := []*dns.NSEC3{universalCover, ceMatch, wildcardMatch}
@@ -1017,8 +1008,8 @@ func TestMatchesNSEC3Denial_WildcardNODATA(t *testing.T) {
 func nsec3Rec(name, zone string, flags uint8, nextDomain string, bitmap []uint16) *dns.NSEC3 {
 	h := nsec3HashName(name, dns.SHA1, 0, "")
 	return &dns.NSEC3{
-		Hdr:   dns.Header{Name: h + "." + zone, Class: dns.ClassINET, TTL: 300},
-		NSEC3: rdata.NSEC3{Hash: dns.SHA1, Flags: flags, Iterations: 0, Salt: "", NextDomain: nextDomain, TypeBitMap: bitmap},
+		Hdr:  dns.Header{Name: h + "." + zone, Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: flags, Iterations: 0, Salt: "", NextDomain: nextDomain, TypeBitMap: bitmap,
 	}
 }
 
@@ -1043,8 +1034,8 @@ func TestIsResponseValid_NSEC3NXDOMAIN(t *testing.T) {
 	rrsigCE := signRRset([]dns.RR{ceMatch}, zone, zskPriv, zsk.KeyTag())
 
 	response := &dns.Msg{
-		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeNameError},
-		Ns:        []dns.RR{cover, rrsigCover, ceMatch, rrsigCE},
+		Rcode: dns.RcodeNameError,
+		Ns:    []dns.RR{cover, rrsigCover, ceMatch, rrsigCE},
 	}
 	dnsutil.SetQuestion(response, qname, dns.TypeA)
 
@@ -1070,8 +1061,8 @@ func TestIsResponseValid_NSEC3NODATA(t *testing.T) {
 	rrsigMatch := signRRset([]dns.RR{match}, zone, zskPriv, zsk.KeyTag())
 
 	response := &dns.Msg{
-		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeSuccess},
-		Ns:        []dns.RR{match, rrsigMatch},
+		Rcode: dns.RcodeSuccess,
+		Ns:    []dns.RR{match, rrsigMatch},
 	}
 	dnsutil.SetQuestion(response, qname, dns.TypeA)
 
@@ -1104,8 +1095,8 @@ func TestIsResponseValid_NSEC3OptOut(t *testing.T) {
 	rrsigCE := signRRset([]dns.RR{ceMatch}, zone, zskPriv, zsk.KeyTag())
 
 	response := &dns.Msg{
-		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeNameError},
-		Ns:        []dns.RR{cover, rrsigCover, ceMatch, rrsigCE},
+		Rcode: dns.RcodeNameError,
+		Ns:    []dns.RR{cover, rrsigCover, ceMatch, rrsigCE},
 	}
 	dnsutil.SetQuestion(response, qname, dns.TypeA)
 
@@ -1120,17 +1111,15 @@ func TestIsResponseValid_NSEC3OptOut(t *testing.T) {
 func TestCapValidatedTTL(t *testing.T) {
 	farFuture := uint32(time.Now().Add(24 * time.Hour).Unix()) //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
 	a := &dns.A{
-		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600},
-		A:   rdata.A{Addr: netip.MustParseAddr("1.2.3.4")},
+		Hdr:  dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600},
+		Addr: netip.MustParseAddr("1.2.3.4"),
 	}
 	sig := &dns.RRSIG{
-		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
-		RRSIG: rdata.RRSIG{
-			TypeCovered: dns.TypeA, Algorithm: dns.RSASHA256,
-			OrigTTL: 600, Expiration: farFuture,
-			Inception: uint32(time.Now().Add(-1 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
-			KeyTag:    12345, SignerName: "example.com.",
-		},
+		Hdr:         dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
+		TypeCovered: dns.TypeA, Algorithm: dns.RSASHA256,
+		OrigTTL: 600, Expiration: farFuture,
+		Inception: uint32(time.Now().Add(-1 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+		KeyTag:    12345, SignerName: "example.com.",
 	}
 	answer := []dns.RR{a, sig}
 	CapValidatedTTL(answer, nil, nil)
@@ -1182,8 +1171,8 @@ func TestHasCompactNXNAME(t *testing.T) {
 	// NSEC carrying the NXNAME bit (compact NODATA for a nonexistent name).
 	compact := &dns.Msg{
 		Ns: []dns.RR{&dns.NSEC{
-			Hdr:  dns.Header{Name: "nonexistent.example.com.", Class: dns.ClassINET, TTL: 300},
-			NSEC: rdata.NSEC{NextDomain: "\x00nonexistent.example.com.", TypeBitMap: []uint16{dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNXNAME}},
+			Hdr:        dns.Header{Name: "nonexistent.example.com.", Class: dns.ClassINET, TTL: 300},
+			NextDomain: "\x00nonexistent.example.com.", TypeBitMap: []uint16{dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNXNAME},
 		}},
 	}
 	if !HasCompactNXNAME(compact) {
@@ -1193,8 +1182,8 @@ func TestHasCompactNXNAME(t *testing.T) {
 	// NSEC3 variant.
 	compact3 := &dns.Msg{
 		Ns: []dns.RR{&dns.NSEC3{
-			Hdr:   dns.Header{Name: "0p9mhaveqvm6t7vbl5lop2u3t2rp3tom.example.com.", Class: dns.ClassINET, TTL: 300},
-			NSEC3: rdata.NSEC3{Hash: 1, Iterations: 5, Salt: "aabb", NextDomain: "0p9mhaveqvm6t7vbl5lop2u3t2rp3tom", TypeBitMap: []uint16{dns.TypeNXNAME}},
+			Hdr:  dns.Header{Name: "0p9mhaveqvm6t7vbl5lop2u3t2rp3tom.example.com.", Class: dns.ClassINET, TTL: 300},
+			Hash: 1, Iterations: 5, Salt: "aabb", NextDomain: "0p9mhaveqvm6t7vbl5lop2u3t2rp3tom", TypeBitMap: []uint16{dns.TypeNXNAME},
 		}},
 	}
 	if !HasCompactNXNAME(compact3) {
@@ -1204,8 +1193,8 @@ func TestHasCompactNXNAME(t *testing.T) {
 	// Ordinary NODATA (no NXNAME).
 	plain := &dns.Msg{
 		Ns: []dns.RR{&dns.NSEC{
-			Hdr:  dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
-			NSEC: rdata.NSEC{NextDomain: "zulu.example.com.", TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC}},
+			Hdr:        dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
+			NextDomain: "zulu.example.com.", TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC},
 		}},
 	}
 	if HasCompactNXNAME(plain) {
@@ -1229,15 +1218,15 @@ func TestCompactNODATA_ValidatesAsDenial(t *testing.T) {
 
 	qname := "nonexistent.signed.example.com."
 	nsec := &dns.NSEC{
-		Hdr:  dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300},
-		NSEC: rdata.NSEC{NextDomain: "\x00" + qname, TypeBitMap: []uint16{dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNXNAME}},
+		Hdr:        dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300},
+		NextDomain: "\x00" + qname, TypeBitMap: []uint16{dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNXNAME},
 	}
 	rrsig := signRRset([]dns.RR{nsec}, zone, zskPriv, zsk.KeyTag())
 
 	// Compact NODATA: NOERROR + empty answer + matching NSEC with NXNAME.
 	response := &dns.Msg{
-		MsgHeader: dns.MsgHeader{Rcode: dns.RcodeSuccess},
-		Ns:        []dns.RR{nsec, rrsig},
+		Rcode: dns.RcodeSuccess,
+		Ns:    []dns.RR{nsec, rrsig},
 	}
 	dnsutil.SetQuestion(response, dnsutil.Fqdn(qname), dns.TypeA)
 	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})

@@ -7,7 +7,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // spoofguardResponse packs a DNS response for processPacket.  answers, ns,
@@ -28,7 +27,7 @@ func spoofguardResponse(t *testing.T, answers, ns, extras []dns.RR, rcode uint16
 }
 
 func aRR(ip string) *dns.A {
-	return &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 60}, A: rdata.A{Addr: netip.MustParseAddr(ip)}}
+	return &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 60}, Addr: netip.MustParseAddr(ip)}
 }
 
 func optRR() *dns.OPT {
@@ -73,7 +72,7 @@ func TestSpoofguard_NonEDNS_CNAME_Safe(t *testing.T) {
 	m := &dns.Msg{}
 	dnsutil.SetQuestion(m, "example.com.", dns.TypeA)
 	m.Response = true
-	m.Answer = []dns.RR{&dns.CNAME{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, CNAME: rdata.CNAME{Target: "www.example.net."}}}
+	m.Answer = []dns.RR{&dns.CNAME{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, Target: "www.example.net."}}
 	if err := m.Pack(); err != nil {
 		t.Fatalf("pack: %v", err)
 	}
@@ -95,7 +94,7 @@ func TestSameUDPAnswer(t *testing.T) {
 		m := &dns.Msg{}
 		dnsutil.SetQuestion(m, "example.com.", dns.TypeA)
 		m.Response = true
-		m.Answer = []dns.RR{&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: ttl}, A: rdata.A{Addr: netip.MustParseAddr(ip)}}}
+		m.Answer = []dns.RR{&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: ttl}, Addr: netip.MustParseAddr(ip)}}
 		return m
 	}
 	if !sameUDPAnswer(mk("142.250.80.4", 300), mk("142.250.80.4", 300)) {
@@ -153,7 +152,7 @@ func TestSpoofguard_EDNSPreferredOverNonEDNSFallback(t *testing.T) {
 func TestSpoofguard_FastReturn_AuthoritySignals(t *testing.T) {
 	// NS>0 (referral/NXDOMAIN authority section) — strong authority signal.
 	nsRaw := spoofguardResponse(t, nil, []dns.RR{
-		&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, NS: rdata.NS{Ns: "ns1.example.com."}},
+		&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, Ns: "ns1.example.com."},
 	}, nil, dns.RcodeSuccess)
 	s := &spoofguardState{}
 	if resp := s.processPacket(nsRaw, len(nsRaw), 4096, "1.2.3.4:53", false, 64, true); resp == nil {

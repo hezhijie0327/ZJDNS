@@ -7,7 +7,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // oversizedResponse builds a packed response with n A records — large enough
@@ -21,8 +20,8 @@ func oversizedResponse(b *testing.B, n int) (msg *dns.Msg, wire []byte) {
 	msg.RecursionAvailable = true
 	for range n {
 		msg.Answer = append(msg.Answer, &dns.A{
-			Hdr: dns.Header{Name: "example.com.", TTL: 300, Class: dns.ClassINET},
-			A:   rdata.A{Addr: netip.MustParseAddr("192.0.2.1")},
+			Hdr:  dns.Header{Name: "example.com.", TTL: 300, Class: dns.ClassINET},
+			Addr: netip.MustParseAddr("192.0.2.1"),
 		})
 	}
 	if err := msg.Pack(); err != nil {

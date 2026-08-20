@@ -6,22 +6,21 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 func aRec(name, ip string) *dns.A {
 	return &dns.A{
-		Hdr: dns.Header{Name: dnsutil.Fqdn(name), Class: dns.ClassINET, TTL: 300},
-		A:   rdata.A{Addr: netip.MustParseAddr(ip)},
+		Hdr:  dns.Header{Name: dnsutil.Fqdn(name), Class: dns.ClassINET, TTL: 300},
+		Addr: netip.MustParseAddr(ip),
 	}
 }
 
 func nsRec(name, target string) *dns.NS {
 	return &dns.NS{
 		Hdr: dns.Header{Name: dnsutil.Fqdn(name), Class: dns.ClassINET, TTL: 86400},
-		NS:  rdata.NS{Ns: dnsutil.Fqdn(target)},
+		Ns:  dnsutil.Fqdn(target),
 	}
 }
 

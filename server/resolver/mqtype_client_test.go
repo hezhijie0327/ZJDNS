@@ -7,7 +7,6 @@ import (
 	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 func mqTestMsg() *dns.Msg {
@@ -17,11 +16,11 @@ func mqTestMsg() *dns.Msg {
 }
 
 func mqA(ip string) *dns.A {
-	return &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, A: rdata.A{Addr: netip.MustParseAddr(ip)}}
+	return &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr(ip)}
 }
 
 func mqAAAA(ip string) *dns.AAAA {
-	return &dns.AAAA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, AAAA: rdata.AAAA{Addr: netip.MustParseAddr(ip)}}
+	return &dns.AAAA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr(ip)}
 }
 
 // TestAttachMQType_Subtraction verifies the attach rule: configured types
@@ -133,13 +132,13 @@ func TestParseMQResponse_QTxDuplicate(t *testing.T) {
 // TestStripMQBundled strips merged types + their RRSIGs at the qname while
 // keeping the primary answer and CNAME-chain records.
 func TestStripMQBundled(t *testing.T) {
-	sig := &dns.RRSIG{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, RRSIG: rdata.RRSIG{TypeCovered: dns.TypeAAAA}}
+	sig := &dns.RRSIG{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, TypeCovered: dns.TypeAAAA}
 	answer := []dns.RR{
 		mqA("192.0.2.1"),
 		mqAAAA("2001:db8::1"),
 		sig,
-		&dns.CNAME{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, CNAME: rdata.CNAME{Target: "www.example.net."}},
-		&dns.AAAA{Hdr: dns.Header{Name: "www.example.net.", Class: dns.ClassINET, TTL: 300}, AAAA: rdata.AAAA{Addr: netip.MustParseAddr("2001:db8::2")}}, // chain target record — different owner
+		&dns.CNAME{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Target: "www.example.net."},
+		&dns.AAAA{Hdr: dns.Header{Name: "www.example.net.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("2001:db8::2")}, // chain target record — different owner
 	}
 	out := stripMQBundled(answer, "example.com.", []uint16{dns.TypeAAAA})
 	if len(out) != 3 {
@@ -160,7 +159,7 @@ func TestStripMQBundled(t *testing.T) {
 // TestWarmFromMQResponse_Positive caches the merged records (with RRSIGs).
 func TestWarmFromMQResponse_Positive(t *testing.T) {
 	r := &Resolver{cache: cache.New(config.LimitSettings{}, config.LimitSettings{}, "", "")}
-	sig := &dns.RRSIG{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, RRSIG: rdata.RRSIG{TypeCovered: dns.TypeAAAA}}
+	sig := &dns.RRSIG{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, TypeCovered: dns.TypeAAAA}
 	resp := mqTestMsg()
 	resp.Answer = append(resp.Answer, mqA("192.0.2.1"), mqAAAA("2001:db8::1"), sig)
 	mqr := &dns.MQRESPONSE{Types: []uint16{dns.TypeAAAA}}
@@ -202,7 +201,7 @@ func TestWarmFromMQResponse_Negative(t *testing.T) {
 func TestWarmFromMQResponse_Referral(t *testing.T) {
 	r := &Resolver{cache: cache.New(config.LimitSettings{}, config.LimitSettings{}, "", "")}
 	resp := mqTestMsg()
-	resp.Ns = append(resp.Ns, &dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, NS: rdata.NS{Ns: "ns1.example.com."}})
+	resp.Ns = append(resp.Ns, &dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Ns: "ns1.example.com."})
 	mqr := &dns.MQRESPONSE{Types: []uint16{dns.TypeAAAA}}
 	r.warmFromMQResponse(resp, "example.com.", dns.ClassINET, mqr, nil, true)
 	if _, found, _ := r.cache.Get("example.com.", dns.TypeAAAA, dns.ClassINET, nil); found {

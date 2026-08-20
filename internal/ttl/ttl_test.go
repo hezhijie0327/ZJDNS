@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 // setNow sets NowUnix to a fixed value for deterministic tests.
@@ -226,8 +225,8 @@ func TestElapsed_Future(t *testing.T) {
 
 func TestDeductElapsedCyclical_Normal(t *testing.T) {
 	rr := &dns.A{
-		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 120},
-		A:   rdata.A{Addr: netParseIP(t, "192.0.2.1")},
+		Hdr:  dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 120},
+		Addr: netParseIP(t, "192.0.2.1"),
 	}
 	result := DeductElapsedCyclical([]dns.RR{rr}, 40)
 	if len(result) != 1 {
@@ -240,8 +239,8 @@ func TestDeductElapsedCyclical_Normal(t *testing.T) {
 
 func TestDeductElapsedCyclical_ClampsAtBoundary(t *testing.T) {
 	rr := &dns.A{
-		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 120},
-		A:   rdata.A{Addr: netParseIP(t, "192.0.2.1")},
+		Hdr:  dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 120},
+		Addr: netParseIP(t, "192.0.2.1"),
 	}
 	result := DeductElapsedCyclical([]dns.RR{rr}, 120)
 	if result[0].Header().TTL != 0 {
@@ -251,8 +250,8 @@ func TestDeductElapsedCyclical_ClampsAtBoundary(t *testing.T) {
 
 func TestDeductElapsedCyclical_ClampsPastTTL(t *testing.T) {
 	rr := &dns.A{
-		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 120},
-		A:   rdata.A{Addr: netParseIP(t, "192.0.2.1")},
+		Hdr:  dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 120},
+		Addr: netParseIP(t, "192.0.2.1"),
 	}
 	result := DeductElapsedCyclical([]dns.RR{rr}, 260)
 	// Monotonic: 120 - 260 < 0 → clamped at 0.
@@ -263,12 +262,12 @@ func TestDeductElapsedCyclical_ClampsPastTTL(t *testing.T) {
 
 func TestDeductElapsedCyclical_DifferentRRs(t *testing.T) {
 	rr1 := &dns.A{
-		Hdr: dns.Header{Name: "a.example.com.", Class: dns.ClassINET, TTL: 60},
-		A:   rdata.A{Addr: netParseIP(t, "192.0.2.1")},
+		Hdr:  dns.Header{Name: "a.example.com.", Class: dns.ClassINET, TTL: 60},
+		Addr: netParseIP(t, "192.0.2.1"),
 	}
 	rr2 := &dns.A{
-		Hdr: dns.Header{Name: "b.example.com.", Class: dns.ClassINET, TTL: 120},
-		A:   rdata.A{Addr: netParseIP(t, "192.0.2.2")},
+		Hdr:  dns.Header{Name: "b.example.com.", Class: dns.ClassINET, TTL: 120},
+		Addr: netParseIP(t, "192.0.2.2"),
 	}
 	result := DeductElapsedCyclical([]dns.RR{rr1, rr2}, 80)
 	// Monotonic: rr1 60-80 → clamped 0; rr2 120-80 = 40.
@@ -282,8 +281,8 @@ func TestDeductElapsedCyclical_DifferentRRs(t *testing.T) {
 
 func TestDeductElapsedCyclical_ZeroTTL(t *testing.T) {
 	rr := &dns.A{
-		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 0},
-		A:   rdata.A{Addr: netParseIP(t, "192.0.2.1")},
+		Hdr:  dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 0},
+		Addr: netParseIP(t, "192.0.2.1"),
 	}
 	result := DeductElapsedCyclical([]dns.RR{rr}, 50)
 	if result[0].Header().TTL != 0 {

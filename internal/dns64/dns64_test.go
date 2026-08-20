@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/rdata"
 )
 
 func TestMapAddr_WellKnownPrefix(t *testing.T) {
@@ -75,8 +74,8 @@ func TestSynthesize(t *testing.T) {
 	s, _ := New(defaultPrefix)
 	aAnswer := []dns.RR{
 		&dns.A{
-			Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
-			A:   rdata.A{Addr: netip.MustParseAddr("93.184.216.34")},
+			Hdr:  dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
+			Addr: netip.MustParseAddr("93.184.216.34"),
 		},
 	}
 	answer, _, _ := s.Synthesize(nil, aAnswer, nil, nil)
