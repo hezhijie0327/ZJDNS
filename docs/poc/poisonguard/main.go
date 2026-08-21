@@ -26,9 +26,15 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"net"
 	"os"
 	"strings"
+	"time"
+
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -189,10 +195,92 @@ func verdictColor(v verdict) string {
 
 // ── Main ───────────────────────────────────────────────────────────
 
+// ── Real-network mode ─────────────────────────────────────────────
+
+// realQuery sends a non-recursive query (RD=0) to a root/TLD server and
+// converts the answer section into simRR for the shared detector. A root or
+// TLD server must never return data records for a subdomain — if it does
+// (GFW injection), the detector flags it poisoned.
+func realQuery(server, qname string) ([]simRR, error) {
+	conn, err := net.DialTimeout("udp", server, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+
+	msg := new(dns.Msg)
+	dnsutil.SetQuestion(msg, dnsutil.Fqdn(qname), dns.TypeA)
+	msg.RecursionDesired = false // TLD/root servers only answer authoritatively
+	msg.UDPSize = 1232
+	if err := msg.Pack(); err != nil {
+		return nil, err
+	}
+	if _, err := conn.Write(msg.Data); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 4096)
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	n, err := conn.Read(buf)
+	if err != nil {
+		return nil, err
+	}
+	resp := new(dns.Msg)
+	resp.Data = buf[:n]
+	if err := resp.Unpack(); err != nil {
+		return nil, err
+	}
+	var out []simRR
+	for _, rr := range resp.Answer {
+		out = append(out, simRR{name: rr.Header().Name, rtype: dns.TypeToString[dns.RRToType(rr)]})
+	}
+	return out, nil
+}
+
+func realTest(qname string) {
+	fmt.Println(bold + "Poisonguard Real-Network Mode — Root/TLD Responses on Live Servers" + reset)
+	fmt.Printf("  Query: A %s (RD=0) — data records from root/TLD = injected\n\n", qname)
+
+	d := &detector{}
+	for _, target := range []struct{ label, addr string }{
+		{"root server (a.root-servers.net)", "198.41.0.4:53"},
+		{"TLD server (a.gtld-servers.net)", "192.5.6.30:53"},
+	} {
+		fmt.Printf("  ─ %s ─\n", target.label)
+		rrset, err := realQuery(target.addr, qname)
+		if err != nil {
+			fmt.Printf("  %squery failed: %v%s\n", red, err, reset)
+			continue
+		}
+		if len(rrset) == 0 {
+			fmt.Printf("  no answer records (referral/empty) — %sclean%s\n", green, reset)
+			continue
+		}
+		for _, rr := range rrset {
+			v := d.validate(".", qname, &simResp{answer: []simRR{rr}})
+			mark := green + "clean" + reset
+			if v == poisoned {
+				mark = red + "POISONED" + reset
+			}
+			fmt.Printf("  %-12s %-6s → %s\n", rr.name, rr.rtype, mark)
+		}
+	}
+	fmt.Println("\n  Note: an A record in a root/TLD response for a subdomain is")
+	fmt.Println("  GFW injection — legitimately it can only be a referral (NS/glue).")
+}
+
 func main() {
+	realMode := flag.Bool("real", false, "real-network mode: query root/TLD servers")
+	qname := flag.String("qname", "www.google.com", "query name for -real")
+	flag.Parse()
+
 	if len(os.Args) > 1 && (os.Args[1] == "-h" || os.Args[1] == "--help") {
 		fmt.Println("Poisonguard POC — Root/TLD Hijack Detection")
-		fmt.Println("\nUsage: go run .")
+		fmt.Println("\nUsage: go run . [-real -qname www.google.com]")
+		return
+	}
+
+	if *realMode {
+		realTest(*qname)
 		return
 	}
 

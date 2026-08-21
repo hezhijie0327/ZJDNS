@@ -17,11 +17,18 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/hex"
+	"flag"
 	"fmt"
+	"io"
 	"math/rand/v2"
+	"net"
 	"os"
 	"strings"
+	"time"
+
+	"codeberg.org/miekg/dns"
 )
 
 // ── Constants ─────────────────────────────────────────────────────
@@ -149,10 +156,95 @@ func annotateFrame(data []byte) string {
 
 // ── Main ───────────────────────────────────────────────────────────
 
+// ── Real-network mode ─────────────────────────────────────────────
+
+// tcpQuery sends the DNS query over TCP, optionally segmented, and returns
+// the parsed answer IPs. A reset (RST) from a DPI/GFW device surfaces as a
+// connection error.
+func tcpQuery(server string, segmented bool) (answers []string, err error) {
+	conn, err := net.DialTimeout("tcp", server, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+
+	msg := buildDNSQuery() // frame: 2-byte length + DNS payload
+	if segmented {
+		for i, seg := range segmentMessage(msg, 8) {
+			if _, err := conn.Write(seg); err != nil {
+				return nil, err
+			}
+			// Small inter-segment delay so a DPI sees distinct fragments.
+			time.Sleep(40 * time.Millisecond)
+			fmt.Printf("      segment #%d: %s\n", i+1, spacedHex(seg))
+		}
+	} else {
+		if _, err := conn.Write(msg); err != nil {
+			return nil, err
+		}
+	}
+
+	hdr := make([]byte, 2)
+	if _, err := io.ReadFull(conn, hdr); err != nil {
+		return nil, err // RST lands here on DPI interference
+	}
+	body := make([]byte, binary.BigEndian.Uint16(hdr))
+	if _, err := io.ReadFull(conn, body); err != nil {
+		return nil, err
+	}
+	resp := new(dns.Msg)
+	resp.Data = body
+	if err := resp.Unpack(); err != nil {
+		return nil, err
+	}
+	for _, rr := range resp.Answer {
+		if a, ok := rr.(*dns.A); ok {
+			answers = append(answers, a.Addr.String())
+		}
+	}
+	return answers, nil
+}
+
+func realTest(server string) {
+	fmt.Println(bold + "Splitguard Real-Network Mode — TCP Segmentation on Live Upstream" + reset)
+	fmt.Printf("  Query: A www.google.com → %s (TCP)\n\n", server)
+
+	fmt.Println("  ─ Plain TCP (single write) ─")
+	start := time.Now()
+	answers, err := tcpQuery(server, false)
+	if err != nil {
+		fmt.Printf("  %sFAILED: %v%s (DPI/GFW reset or timeout)\n", red, err, reset)
+	} else {
+		fmt.Printf("  OK in %v: %v\n", time.Since(start).Round(time.Millisecond), answers)
+	}
+
+	fmt.Println("\n  ─ Splitguard TCP (random segments) ─")
+	start = time.Now()
+	answers, err = tcpQuery(server, true)
+	if err != nil {
+		fmt.Printf("  %sFAILED: %v%s (DPI/GFW reset or timeout)\n", red, err, reset)
+	} else {
+		fmt.Printf("  OK in %v: %v\n", time.Since(start).Round(time.Millisecond), answers)
+	}
+
+	fmt.Println("\n  Key Insight: if plain TCP is reset but segmented succeeds,")
+	fmt.Println("  the DPI matched the domain pattern in the stream; segmentation")
+	fmt.Println("  hid it. If both fail, the upstream/port is blocked outright.")
+}
+
 func main() {
+	realMode := flag.Bool("real", false, "real-network mode: query a live upstream over TCP")
+	server := flag.String("server", "8.8.8.8:53", "upstream address for -real")
+	flag.Parse()
+
 	if len(os.Args) > 1 && (os.Args[1] == "-h" || os.Args[1] == "--help") {
 		fmt.Println("Splitguard POC — TCP DNS Segmentation for DPI Evasion")
-		fmt.Println("\nUsage: go run .")
+		fmt.Println("\nUsage: go run . [-real -server 8.8.8.8:53]")
+		return
+	}
+
+	if *realMode {
+		realTest(*server)
 		return
 	}
 

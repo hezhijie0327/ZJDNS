@@ -1,6 +1,6 @@
 # ZJDNS Defense Mechanism POC Programs
 
-Four standalone proof-of-concept programs demonstrating ZJDNS's DNS anti-pollution
+Standalone proof-of-concept programs demonstrating ZJDNS's DNS anti-pollution
 defense mechanisms. Each is a self-contained Go program with rich terminal output.
 
 ## Quick Start
@@ -20,6 +20,24 @@ go run ./poisonguard
 ```
 
 All programs clear the terminal and render color output. Run with `-h` for usage.
+
+## Real-Network Mode
+
+Every POC also supports `-real` to query a live upstream and observe the
+defense against real GFW pollution (measured from a CN network):
+
+```bash
+go run ./hopguard    -real -server 8.8.8.8:53
+go run ./spoofguard  -real -server 8.8.8.8:53 -qname www.google.com
+go run ./splitguard  -real -server 8.8.8.8:53
+go run ./poisonguard -real -qname www.google.com          # queries root/TLD servers
+```
+
+Real-mode observations on 8.8.8.8 (2026-08, CN network): google queries are
+GFW-polluted (fake IPs from Facebook/Twitter segments); spoofguard's AN≥2
+fast-return picks the real 8-answer response over single-answer fakes,
+splitguard's segmented TCP survives the GFW RST that kills plain TCP,
+poisonguard flags the injected A record from a TLD server.
 
 ---
 
@@ -209,7 +227,7 @@ These POC programs mirror the actual ZJDNS implementation:
 | Splitguard | `internal/dnsutil/` | `WriteTCPMsgSegmented()` |
 | Poisonguard | `server/defense/` | `Detector.Validate()` / `Detector.IsPoisonedByTLD()` |
 
-All four mechanisms are configurable per-upstream in `config.UpstreamServer`:
+All mechanisms are configurable per-upstream in `config.UpstreamServer`:
 
 ```go
 type UpstreamServer struct {

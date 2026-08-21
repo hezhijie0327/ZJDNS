@@ -18,11 +18,17 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"math/rand/v2"
+	"net"
 	"os"
 	"slices"
 	"strings"
+	"time"
+
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -148,11 +154,90 @@ func (s *hgState) rebuild() {
 
 // ── Simulation ────────────────────────────────────────────────────
 
+// ── Real-network mode ─────────────────────────────────────────────
+
+// realQuery sends one UDP DNS query and returns the answer IPs and the
+// record TTL of the first A record.
+func realQuery(server, qname string) (ips []string, ttl uint32, err error) {
+	conn, err := net.DialTimeout("udp", server, 5*time.Second)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = conn.Close() }()
+
+	msg := new(dns.Msg)
+	dnsutil.SetQuestion(msg, dnsutil.Fqdn(qname), dns.TypeA)
+	msg.UDPSize = 1232
+	if err := msg.Pack(); err != nil {
+		return nil, 0, err
+	}
+	if _, err := conn.Write(msg.Data); err != nil {
+		return nil, 0, err
+	}
+	buf := make([]byte, 4096)
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	n, err := conn.Read(buf)
+	if err != nil {
+		return nil, 0, err
+	}
+	resp := new(dns.Msg)
+	resp.Data = buf[:n]
+	if err := resp.Unpack(); err != nil {
+		return nil, 0, err
+	}
+	for _, rr := range resp.Answer {
+		if a, ok := rr.(*dns.A); ok {
+			ips = append(ips, a.Addr.String())
+			if ttl == 0 {
+				ttl = a.Hdr.TTL
+			}
+		}
+	}
+	return ips, ttl, nil
+}
+
+func realTest(server string) {
+	fmt.Println(bold + "HopGuard Real-Network Mode — Live Queries (IP TTL needs Linux)" + reset)
+	fmt.Printf("  Upstream: %s\n\n", server)
+	fmt.Println("  NOTE: hopguard fingerprints the IP-layer TTL via control messages,")
+	fmt.Println("  which Windows sockets do not expose — this mode shows the DNS-layer")
+	fmt.Println("  signals a real deployment observes instead (pollution IPs + record TTLs).")
+
+	for _, q := range []string{"www.baidu.com", "www.google.com"} {
+		fmt.Printf("\n  ─ %s ×3 ─\n", q)
+		for i := 1; i <= 3; i++ {
+			ips, ttl, err := realQuery(server, q)
+			if err != nil {
+				fmt.Printf("  query %d: %v\n", i, err)
+				continue
+			}
+			mark := green + "real" + reset
+			if q == "www.google.com" && !strings.HasPrefix(ips[0], "142.251.") &&
+				!strings.HasPrefix(ips[0], "172.217.") && !strings.HasPrefix(ips[0], "74.125.") {
+				mark = red + "POLLUTED" + reset
+			}
+			fmt.Printf("  query %d: TTL=%-4d answers=%v %s\n", i, ttl, ips, mark)
+		}
+	}
+	fmt.Println("\n  On Linux, hopguard additionally fingerprints the IP TTL of each")
+	fmt.Println("  datagram; GFW injections come from a different network location")
+	fmt.Println("  and cannot match the real server's TTL (±2 trusted window).")
+}
+
 func main() {
+	realMode := flag.Bool("real", false, "real-network mode: query a live upstream")
+	server := flag.String("server", "8.8.8.8:53", "upstream address for -real")
+	flag.Parse()
+
 	if len(os.Args) > 1 && (os.Args[1] == "-h" || os.Args[1] == "--help") {
 		fmt.Println("HopGuard POC — IP TTL Fingerprinting for DNS Pollution Detection")
-		fmt.Println("\nUsage: go run .")
+		fmt.Println("\nUsage: go run . [-real -server 8.8.8.8:53]")
 		fmt.Println("\nCompares: Google directly (cold) vs Baidu warm-up → Google (armed).")
+		return
+	}
+
+	if *realMode {
+		realTest(*server)
 		return
 	}
 

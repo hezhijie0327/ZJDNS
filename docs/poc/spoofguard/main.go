@@ -23,12 +23,17 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"math/rand/v2"
+	"net"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -187,10 +192,103 @@ func sameAnswers(a, b []string) bool {
 
 // ── Main ───────────────────────────────────────────────────────────
 
+// ── Real-network mode ─────────────────────────────────────────────
+
+// realCollect sends one query and reads every datagram arriving within the
+// spoofguard window (500ms), converting each into simResp for the shared
+// rule engine. On a polluted path this yields multiple candidates (real +
+// GFW fakes, or fakes only).
+func realCollect(server, qname string) []simResp {
+	conn, err := net.DialTimeout("udp", server, 5*time.Second)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = conn.Close() }()
+
+	msg := new(dns.Msg)
+	dnsutil.SetQuestion(msg, dnsutil.Fqdn(qname), dns.TypeA)
+	msg.UDPSize = 1232  // EDNS: spoofguard expects EDNS from real servers
+	msg.Security = true // DO bit
+	if err := msg.Pack(); err != nil {
+		return nil
+	}
+	if _, err := conn.Write(msg.Data); err != nil {
+		return nil
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+
+	var out []simResp
+	buf := make([]byte, 4096)
+	for {
+		n, err := conn.Read(buf)
+		if err != nil {
+			return out // deadline — window closed
+		}
+		resp := new(dns.Msg)
+		resp.Data = buf[:n]
+		if err := resp.Unpack(); err != nil {
+			continue
+		}
+		r := simResp{rcode: int(resp.Rcode), adFlag: resp.AuthenticatedData, label: "real"}
+		r.hasEDNS = resp.UDPSize > 0 // EDNS echo detected via advertised UDP size
+		for _, rr := range resp.Answer {
+			switch a := rr.(type) {
+			case *dns.A:
+				r.answers = append(r.answers, a.Addr.String())
+			case *dns.CNAME:
+				r.hasCNAME = true
+			}
+		}
+		r.nscount = len(resp.Ns)
+		out = append(out, r)
+	}
+}
+
+func realTest(server, qname string) {
+	fmt.Println(bold + cyan + "  Spoofguard Real-Network Mode — UDP Multi-Read on Live Upstream" + reset)
+	fmt.Printf("  Query: %sA %s%s → %s\n\n", bold, qname, reset, server)
+
+	for round := 1; round <= 3; round++ {
+		start := time.Now()
+		collected := realCollect(server, qname)
+		fmt.Printf("  ─ Round %d: %d datagram(s) in window ─\n", round, len(collected))
+		if len(collected) == 0 {
+			fmt.Printf("  %syellow%s: no response (blocked or timeout)\n", yellow, reset)
+			continue
+		}
+		state := &sgState{}
+		best := (*simResp)(nil)
+		bestVerdict := ""
+		for i, r := range collected {
+			res, verdict := state.processPacket(&r)
+			showResponse(i, &r, time.Since(start))
+			fmt.Printf("    verdict: %s\n", verdict)
+			if res != nil {
+				best, bestVerdict = res, verdict
+			}
+		}
+		if best == nil {
+			best = state.pickBest()
+			bestVerdict = "PICK-BEST"
+		}
+		if best != nil {
+			fmt.Printf("  → served: %s (%s)\n", strings.Join(best.answers, ", "), bestVerdict)
+		} else {
+			fmt.Printf("  → %sno usable candidate%s\n", red, reset)
+		}
+		printHR()
+	}
+}
+
 func main() {
+	realMode := flag.Bool("real", false, "real-network mode: query a live upstream")
+	server := flag.String("server", "8.8.8.8:53", "upstream address for -real")
+	qname := flag.String("qname", "www.google.com", "query name for -real")
+	flag.Parse()
+
 	if len(os.Args) > 1 && (os.Args[1] == "-h" || os.Args[1] == "--help") {
 		fmt.Println("Spoofguard POC — UDP Multi-Read GFW Injection Detection")
-		fmt.Println("\nUsage: go run .")
+		fmt.Println("\nUsage: go run . [-real -server 8.8.8.8:53 -qname www.google.com]")
 		return
 	}
 
@@ -200,6 +298,11 @@ func main() {
 	fmt.Println(bold + cyan + "  ║     Spoofguard — UDP Multi-Read GFW Injection Detection      ║" + reset)
 	fmt.Println(bold + cyan + "  ╚══════════════════════════════════════════════════════════════╝" + reset)
 	fmt.Println()
+
+	if *realMode {
+		realTest(*server, *qname)
+		return
+	}
 
 	// ── Scenario 1: censored domain, EDNS candidate collection ──
 
