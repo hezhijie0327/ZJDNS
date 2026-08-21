@@ -298,6 +298,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | **Spoofguard** | UDP upstream | Multi-read loop: reject `AR=0+NOERROR` without EDNS (bare A/AAAA, GFW signature); accept `AN>=2`/`NS>0`/`AD=1`; collect ambiguous (≤500ms) → pick richest |
 | **Poisonguard** | Recursive | Zone-authority cross-validation on resolved answers |
 | **Splitguard** | TCP upstream | Random [1,4] payload segmentation (no time jitter) |
+| **Capsguard** | All upstream (per-upstream `capsguard`) | `defense.RandomizeCase` flips the case bit of each ASCII letter in the outbound question (draft-vixie-dnsext-dns0x20 §5.1); `ExecuteQuery` discards responses that don't echo the randomized case and retries once unrandomized (§6.4). Cache-hit responses patch the stored wire back to the client's case (`handler/response.go` `patchQuestionCase`) |
 
 ## Key Types
 

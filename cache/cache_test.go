@@ -50,6 +50,34 @@ func TestSet_Get_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestSet_CanonicalizesRecordOwners(t *testing.T) {
+	// Regression: an upstream can echo CapsGuard's randomized question case
+	// into record owners via compression pointers (draft-vixie-dnsext-dns0x20
+	// §5.4) — the cache must store canonical owners so the random case never
+	// leaks into subsequent responses.
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	rr := &dns.CNAME{Hdr: dns.Header{Name: "WwW.BaIDU.CoM.", Class: dns.ClassINET, TTL: 300}, Target: "www.a.shifen.Com."}
+	mc.Set("www.baidu.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
+
+	entry, found, _ := mc.Get("www.baidu.com.", dns.TypeA, dns.ClassINET, nil)
+	if !found {
+		t.Fatal("entry not found")
+	}
+	msg := new(dns.Msg)
+	msg.Data = entry.ResponseWire
+	if err := msg.Unpack(); err != nil {
+		t.Fatalf("unpack cached wire: %v", err)
+	}
+	if len(msg.Answer) != 1 {
+		t.Fatalf("answer = %d records, want 1", len(msg.Answer))
+	}
+	if got := msg.Answer[0].Header().Name; got != "www.baidu.com." {
+		t.Errorf("cached owner %q, want canonical %q", got, "www.baidu.com.")
+	}
+}
+
 func TestGet_Miss(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()

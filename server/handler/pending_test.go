@@ -42,6 +42,10 @@ func TestPendingRequests_LeaderAndFollower(t *testing.T) {
 	})
 
 	<-followerJoined
+	// Allow the follower goroutine to register in Join() before Done() —
+	// otherwise it becomes a new leader and the test fails spuriously
+	// (mirrors the sleep in TestPendingRequests_MultipleFollowers).
+	time.Sleep(time.Millisecond)
 
 	expected := &resolver.QueryResult{Server: "test-server"}
 	pr.Done(tok, expected)

@@ -9,11 +9,13 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
 	zpool "zjdns/internal/pool"
+	"zjdns/server/defense"
 	"zjdns/server/upstream/dnscrypt"
 	"zjdns/server/upstream/plain"
 	"zjdns/server/upstream/pool"
@@ -53,6 +55,11 @@ type Client struct {
 	proxyDialers *lrumap.Map[string, *socks5.Dialer]
 
 	skipVerifyWarned sync.Map // serverName → struct{}{}, dedup SkipTLSVerify warning
+
+	// capsGuardMismatches counts CapsGuard (0x20) echo mismatches for
+	// warn-log sampling (config.DefaultCapsGuardWarnEvery) — the mismatch
+	// path is attacker-triggerable, so Warn must not fire per query.
+	capsGuardMismatches atomic.Uint64
 
 	warmWg sync.WaitGroup // tracks in-flight WarmUpConnections goroutines
 }
@@ -130,6 +137,16 @@ func New() *Client {
 }
 
 // ExecuteQuery sends a DNS query to an upstream server and returns the result.
+//
+// When the upstream enables CapsGuard (config.UpstreamServer.CapsGuard), the
+// question name is 0x20-randomized on every outbound query
+// (draft-vixie-dnsext-dns0x20-00 §5.1): the case bit of each ASCII letter is
+// flipped randomly, and a legitimate response must echo the question
+// byte-for-byte — one extra bit of transaction entropy per ASCII letter
+// (RFC 4343 §3).  A response that does not echo the randomized case — a
+// spoofing signature or a case-rewriting middlebox — is discarded and the
+// query is retried once with the original case (§6.4 fallback; the retry's
+// security equals the pre-CapsGuard baseline).
 func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) *Result {
 	if msg == nil {
 		return &Result{Error: errors.New("nil query message")}
@@ -137,14 +154,91 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	if server == nil {
 		return &Result{Error: errors.New("nil server config")}
 	}
+
 	start := time.Now()
+
+	original := ""
+	if len(msg.Question) > 0 {
+		original = msg.Question[0].Header().Name
+	}
+	log.Debugf("UPSTREAM: querying %s (%s) for %s", server.Address, server.Protocol, original)
+
+	// CapsGuard randomization: flip the case bit of every ASCII letter in
+	// the question name.  The randomized bytes never outlive this message —
+	// the caller packs and sends it, and cached responses are rebuilt from
+	// the canonical qname — so no random case can leak into the cache or
+	// later responses (draft §5.4).
+	//
+	// The question RR is copied before mutating its header: the fan-out
+	// callers (forward.go / nameserver.go) append the SAME RR interface to
+	// every worker's message, so all upstreams share one *Header — mutating
+	// it in place would let concurrent queries overwrite each other's
+	// randomized (or original) name.
+	randomized := false
+	var randName string
+	qtype := uint16(0)
+	if server.CapsGuard && original != "" {
+		qtype = dns.RRToType(msg.Question[0])
+		randName = defense.RandomizeCase(original)
+		if randName != original {
+			qd := msg.Question[0]
+			if newFn, ok := dns.TypeToRR[qtype]; ok {
+				rr := newFn()
+				rr.Header().Name = randName
+				rr.Header().Class = qd.Header().Class
+				msg.Question[0] = rr
+				randomized = true
+			}
+		}
+	}
+
+	result := c.execute(ctx, msg, server)
+
+	// Echo verification (§5.5): when the QID/type/class all match but the
+	// echoed question differs from the randomized name, the response is not
+	// ours — discard it and retry once with the original case (§6.4).
+	// PTR (reverse) queries are exempt from the check: some middleboxes
+	// (Cisco DNS guard) rewrite the case of reverse-lookup qnames, which
+	// would trigger a spurious mismatch on every reverse query (mirrors
+	// unbound's PTR exemption in serviced_query_callback).
+	if randomized && qtype != dns.TypePTR && result.Error == nil && result.Response != nil &&
+		len(result.Response.Question) > 0 &&
+		result.Response.Question[0].Header().Name != randName {
+		log.Debugf("UPSTREAM: %s did not echo the 0x20-cased question for %s — retrying with the original case", server.Address, original)
+		// The mismatch path is attacker-triggerable, so Warn fires only on
+		// every Nth mismatch (§5.3 still wants the signal observable).
+		if n := c.capsGuardMismatches.Add(1); n%config.DefaultCapsGuardWarnEvery == 1 {
+			log.Warnf("SECURITY: upstream %s does not echo 0x20-cased questions (mismatch #%d, e.g. %s) — unrandomized retries serve as fallback", server.Address, n, original)
+		}
+		zpool.DefaultMessage.Put(result.Response)
+		// msg.Question[0] is this call's private copy — safe to restore.
+		msg.Question[0].Header().Name = original
+		result = c.execute(ctx, msg, server)
+	}
+
+	result.Duration = time.Since(start)
+
+	if result.Error != nil {
+		log.Debugf("UPSTREAM: query failed for %s via %s (%s) in %v, error=%v", original, server.Address, result.Protocol, result.Duration, result.Error)
+	} else if result.Response != nil {
+		log.Debugf("UPSTREAM: success for %s via %s (%s) in %v, rcode=%s, answer=%d", original, server.Address, result.Protocol, result.Duration, dns.RcodeToString[result.Response.Rcode], len(result.Response.Answer))
+	}
+
+	return result
+}
+
+// execute performs one DNS exchange attempt: deadline wrapping, protocol
+// dispatch, and DNSCrypt/UDP→TCP fallback.  The 0x20 randomization and echo
+// verification live in ExecuteQuery — the mismatch retry reuses this path
+// with the original-case message — and Duration is accounted there so a
+// retry measures the combined attempts.
+func (c *Client) execute(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) *Result {
 	result := &Result{Server: server.Address, Protocol: server.Protocol}
 
 	qname := ""
 	if len(msg.Question) > 0 {
 		qname = msg.Question[0].Header().Name
 	}
-	log.Debugf("UPSTREAM: querying %s (%s) for %s", server.Address, server.Protocol, qname)
 
 	// Avoid a nested timeout timer when the caller already carries a tighter
 	// deadline (recursive resolution wraps every NS query in a 9s deadline) —
@@ -195,7 +289,6 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 			log.Debugf("UPSTREAM: DNSCrypt query failed for %s via %s: %v", qname, server.Address, result.Error)
 		}
 
-		result.Duration = time.Since(start)
 		result.Protocol = protocol
 		return result
 	}
@@ -255,14 +348,6 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 				}
 			}
 		}
-	}
-
-	result.Duration = time.Since(start)
-
-	if result.Error != nil {
-		log.Debugf("UPSTREAM: query failed for %s via %s (%s) in %v, error=%v", qname, server.Address, result.Protocol, result.Duration, result.Error)
-	} else if result.Response != nil {
-		log.Debugf("UPSTREAM: success for %s via %s (%s) in %v, rcode=%s, answer=%d", qname, server.Address, result.Protocol, result.Duration, dns.RcodeToString[result.Response.Rcode], len(result.Response.Answer))
 	}
 
 	return result

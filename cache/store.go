@@ -634,6 +634,14 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 	answer = zdnsutil.CloneRRs(answer)
 	authority = zdnsutil.CloneRRs(authority)
 
+	// The upstream may echo a CapsGuard-randomized question case into record
+	// owners via compression pointers (draft-vixie-dnsext-dns0x20-00 §5.4) —
+	// canonicalize owners so that random case never reaches the cache or
+	// subsequent responses.  additional was already deep-cloned above.
+	canonicalizeOwners(answer)
+	canonicalizeOwners(authority)
+	canonicalizeOwners(additional)
+
 	// NOTE: the stored wire keeps the RAW records (DNSSEC proofs included —
 	// upstream queries always carry DO=1 per RFC 6840 §5.9, and the cache key
 	// never splits on the client's DO bit — see buildCacheKey).  DNSSEC
@@ -720,6 +728,23 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 }
 
 // ── Set-path helpers ──────────────────────────────────────────────────────
+
+// canonicalizeOwners lowercases every record owner name in place.  An
+// upstream may echo a CapsGuard-randomized question case into record owners
+// via compression pointers (draft-vixie-dnsext-dns0x20-00 §5.4); that random
+// case must not leak into the cache and subsequent responses.  Names that
+// are already lowercase are returned without allocation by strings.ToLower.
+func canonicalizeOwners(rrs []dns.RR) {
+	for _, rr := range rrs {
+		if rr == nil {
+			continue
+		}
+		h := rr.Header()
+		if name := h.Name; name != strings.ToLower(name) {
+			h.Name = strings.ToLower(name)
+		}
+	}
+}
 
 // minTTL returns the smallest positive TTL across all RR sections, falling
 // back to DefaultTTL when no TTLs are found.  The result is capped at

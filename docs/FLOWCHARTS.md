@@ -14,7 +14,7 @@
 - [递归解析流程](#递归解析流程)
 - [DNSSEC 验证链](#dnssec-验证链)
 - [EDNS 处理流程](#edns-处理流程)
-- [DNS 污染检测（四层防御）](#dns-污染检测四层防御)
+- [DNS 污染检测（防御机制）](#dns-污染检测防御机制)
 - [TC→TCP 自动回退](#tctcp-自动回退)
 - [Zone 规则评估](#zone-规则评估)
 - [Singleflight 查询去重](#singleflight-查询去重)
@@ -369,16 +369,18 @@ graph TD
 > Cookie 生命周期（RFC 9018 §4.3）：Server Cookie 有效期 1h、续期阈值 30min、未来容忍 5min；
 > MAC 计算 IPv4 4 字节 / IPv6 16 字节，Reserved 字节计入 hash（防地址族替换攻击）。
 
-## DNS 污染检测（四层防御）
+## DNS 污染检测（防御机制）
 
-所有防御机制均配置在 `UpstreamServer` 上，同时支持转发和递归模式。
+所有防御机制均配置在 `UpstreamServer` 上，同时支持转发和递归模式（递归模式
+由 `protocol: "recursive"` 上游的 guard 标志传播）。
 
 ### 上行查询路径（转发 + 递归通用）
 
 ```mermaid
 graph TD
-    Q[Outbound Query] --> UDP{Transport}
-    Q --> TCP
+    Q[Outbound Query] --> Z20[CapsGuard<br/>随机化问题名大小写<br/>按上游配置]
+    Z20 --> UDP{Transport}
+    Z20 --> TCP
     UDP -->|UDP| HG[HopGuard<br/>IP TTL Fingerprint]
     HG -->|TTL in +-2| SG[Spoofguard<br/>Multi-Read Loop]
     HG -->|TTL mismatch| REJECT[Reject<br/>Silent Drop]
@@ -391,14 +393,18 @@ graph TD
     ACCEPT2 --> UP
     CONFIRM --> UP
     SPG --> UP
+    UP --> ECHO{0x20 回显校验<br/>问题名逐字节匹配?}
+    ECHO -->|匹配| RESP[Valid Response]
+    ECHO -->|不匹配| RETRY[丢弃响应<br/>无 0x20 重试一次]
+    RETRY --> Q
     classDef query fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     classDef defense fill:#fef3c7,stroke:#f59e0b,color:#78350f
     classDef result fill:#d1fae5,stroke:#10b981,color:#064e3b
     classDef reject fill:#fee2e2,stroke:#ef4444,color:#991b1b
     class Q query
-    class HG,SG,SPG,CONFIRM defense
-    class ACCEPT,ACCEPT2,UP result
-    class REJECT,FAIL reject
+    class HG,SG,SPG,CONFIRM,Z20,ECHO defense
+    class ACCEPT,ACCEPT2,UP,RESP result
+    class REJECT,FAIL,RETRY reject
 ```
 
 ### 递归逐跳检测（Poisonguard 专属）
@@ -422,7 +428,7 @@ graph TD
     class POISON poison
 ```
 
-### 四层防御机制
+### 防御机制
 
 | 层 | 机制 | 适用模式 | 作用层 | 检测原理 |
 |---|------|----------|--------|----------|
@@ -430,8 +436,20 @@ graph TD
 | 2 | **SpoofGuard** | 转发+递归 | DNS 报文层 | UDP 多读循环（自适应窗口：单包 150ms / 多包 500ms，同内容重复即确认），fast signal 即收、EDNS 候选决胜、裸单答案重查确认 |
 | 3 | **SplitGuard** | 转发+递归 | TCP 流层 | TCP 分段发送（随机 [1,4] 字节），破坏 DPI 首包特征识别 |
 | 4 | **Poisonguard** | 递归专属 | DNS 内容层 | 每跳 zone-authority 交叉验证，检测越权 A/AAAA 注入 |
+| 5 | **CapsGuard** | 转发+递归（按上游） | 事务 ID 层 | 出站问题名 ASCII 字母大小写随机化（每字母 +1 bit 熵），应答须逐字节回显；不匹配 → 丢弃 + 无 0x20 重试一次（draft-vixie-dnsext-dns0x20 §5.5/§6.4） |
 
 ### 防御机制详解
+
+#### CapsGuard（DNS 0x20，按上游配置）
+
+出站查询在 `ExecuteQuery` 中随机化问题名每个 ASCII 字母的 0x20 bit
+（`server/defense/capsguard.go` `RandomizeCase`），应答必须逐字节回显问题名
+（RFC 4343 §3 大小写不敏感仅限 ASCII）。回显不匹配视为伪造或坏中间盒：
+丢弃响应、以原始大小写重试一次（安全性 = 未启用 CapsGuard 的基线），不
+匹配 Warn 日志按 `config.DefaultCapsGuardWarnEvery` 采样。入站侧
+（`server/handler/response.go` `patchQuestionCase`）在缓存命中响应中把
+存储的 canonical 问题名原地恢复为客户端原始大小写（0x20 翻转不改变 wire
+长度，TTL 偏移不受影响）。
 
 #### HopGuard（IP TTL 指纹）
 

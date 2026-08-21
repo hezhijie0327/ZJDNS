@@ -47,6 +47,7 @@ type Recursive struct {
 	splitguard  bool     // from protocol=recursive upstream
 	poisonguard bool     // from protocol=recursive upstream
 	hopguard    bool     // from protocol=recursive upstream
+	capsguard   bool     // from protocol=recursive upstream
 	mqtype      []uint16 // RFC 10029 MQTYPE-Query types (from protocol=recursive upstream)
 	// addressFamily restricts fan-out to one family ("dual"|"ipv4"|"ipv6",
 	// from server.features.address_family — explicit operator choice).

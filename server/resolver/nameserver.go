@@ -149,6 +149,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			Spoofguard: r.spoofguard && protocol == config.ProtoUDP,
 			Splitguard: r.splitguard && protocol == config.ProtoTCP,
 			HopGuard:   r.hopguard && protocol == config.ProtoUDP,
+			CapsGuard:  r.capsguard, // protocol-agnostic (DNS 0x20 echo check)
 		}
 
 		g.Go(func() error {

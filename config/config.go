@@ -169,6 +169,11 @@ type UpstreamServer struct {
 	Spoofguard     bool     `json:"spoofguard,omitzero"`
 	Splitguard     bool     `json:"splitguard,omitzero"`
 	HopGuard       bool     `json:"hopguard,omitzero"`
+	// CapsGuard randomizes the case bit of every ASCII letter in the outbound
+	// question (DNS 0x20, draft-vixie-dnsext-dns0x20-00 §5.1) and discards
+	// responses that do not echo the randomized case, retrying once with the
+	// original case.  Works over every protocol.
+	CapsGuard bool `json:"capsguard,omitzero"`
 	// MQType lists the QTYPE values (numeric, e.g. [1, 28] for A and AAAA)
 	// to bundle into queries via the RFC 10029 MQTYPE-Query EDNS option — an
 	// A (1) query also asks for AAAA (28).  The primary QTYPE is excluded

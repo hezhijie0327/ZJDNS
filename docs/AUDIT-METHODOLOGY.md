@@ -404,7 +404,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 - 每次审计包含 CrossCut Goroutine 阶段：`grep -rn 'go func' --include='*.go'` 排除 `_test.go`，审计每个 goroutine 是否有 owner（errgroup/WaitGroup/channel）、是否有 `defer HandlePanic`
 - 每次审计包含 CrossCut Resource 阶段：`grep -rn 'func.*Close()' --include='*.go'` 检查每个 `Close()` 是否有 `sync.Once` 或 atomic 守卫，确保幂等
 - 每次审计包含 CrossCut GoVersion 阶段：`go fix ./...` 应用所有现代器；`grep -rn 'for i := len.*-1\|for i := .*-1;.*>=' --include='*.go'` 找手写反向迭代 → `slices.Backward`；`grep -rn 'errors\.As(' --include='*.go'` 评估 → `errors.AsType[T]`
-- 每次审计包含 CrossCut Flowcharts 阶段：检查 `docs/FLOWCHARTS.md` 中的 mermaid 流程图是否覆盖了所有核心功能和协议 —— 整体架构、服务生命周期、快照持久化、中间件管道、缓存查询、递归解析、DNSSEC 验证链、EDNS 处理、四层防御（含每种详解）、TC→TCP 回退、Zone 规则、Singleflight 去重、DNS64 合成、规则集引擎、延迟探测、连接池与协议协商、SOCKS5 代理、协议对照、DNSCrypt 密钥管理、DNSCrypt 加密流程、同步统计记录、UDP 响应截断（RFC 9715）。新增特性/协议/中间件时必须同步更新流程图。
+- 每次审计包含 CrossCut Flowcharts 阶段：检查 `docs/FLOWCHARTS.md` 中的 mermaid 流程图是否覆盖了所有核心功能和协议 —— 整体架构、服务生命周期、快照持久化、中间件管道、缓存查询、递归解析、DNSSEC 验证链、EDNS 处理、防御机制（含每种详解，含 DNS 0x20）、TC→TCP 回退、Zone 规则、Singleflight 去重、DNS64 合成、规则集引擎、延迟探测、连接池与协议协商、SOCKS5 代理、协议对照、DNSCrypt 密钥管理、DNSCrypt 加密流程、同步统计记录、UDP 响应截断（RFC 9715）。新增特性/协议/中间件时必须同步更新流程图。
 
 ---
 

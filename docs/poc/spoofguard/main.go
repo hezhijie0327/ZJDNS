@@ -229,8 +229,10 @@ func realCollect(server, qname string) []simResp {
 		if err := resp.Unpack(); err != nil {
 			continue
 		}
-		r := simResp{rcode: int(resp.Rcode), adFlag: resp.AuthenticatedData, label: "real"}
-		r.hasEDNS = resp.UDPSize > 0 // EDNS echo detected via advertised UDP size
+		r := simResp{
+			rcode: int(resp.Rcode), adFlag: resp.AuthenticatedData, label: "real",
+			hasEDNS: resp.UDPSize > 0,
+		} // EDNS echo detected via advertised UDP size
 		for _, rr := range resp.Answer {
 			switch a := rr.(type) {
 			case *dns.A:

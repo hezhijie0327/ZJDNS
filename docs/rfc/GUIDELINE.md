@@ -35,9 +35,9 @@ Section 标题栏位格式：`[RFC NNNN: 状态]` `合规标记`
 | Informational | 10 |
 | Experimental | 8 |
 | Historic | 6 |
-| Internet-Draft | 3 (DNS Stamp, DNSCrypt, DELEG) |
+| Internet-Draft | 4 (DNS Stamp, DNSCrypt, DELEG, DNS 0x20) |
 | 国密标准 | 1 (TLCP/DTLCP) |
-| **总计** | **108 RFC 条目 / 96 章节**（含 2065/2537、4033/4034/4035 等合并段；90 个 RFC 编号章节 + 6 个非 RFC 章节：DELEG / DNS Stamp / DNSCrypt / SOCKS5 / TLCP / 已知偏离） |
+| **总计** | **109 RFC 条目 / 97 章节**（含 2065/2537、4033/4034/4035 等合并段；90 个 RFC 编号章节 + 7 个非 RFC 章节：DELEG / DNS Stamp / DNSCrypt / DNS 0x20 / SOCKS5 / TLCP / 已知偏离） |
 
 | 合规 | 数量 |
 |------|------|
@@ -1665,6 +1665,26 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 ### 我们的实现
 
 - ⚪ 观望：类型未分配、草案未稳定，暂不接入 zonecut/委托逻辑。miekg/dns 提供 `DELEG`/`DELEGPARAM` 类型与 `deleg` 子包
+
+---
+
+## DNS 0x20 (draft-vixie-dnsext-dns0x20-00)
+
+**在查询 QNAME 的 ASCII 字母上随机化大小写（0x20 bit），使应答必须逐字节回显 question——不修改协议即可将事务 ID 熵从 16 bit 扩展（每个 ASCII 字母 +1 bit），检测伪造应答。**
+
+### 关键点
+
+- §5.1: 每个 ASCII 字母（0x41–0x5A / 0x61–0x7A）编码 1 bit 随机信息；应答方必须忽略这些 bit 但逐字节复制 question（"covert channel"）
+- §5.4: 校验成功后须将原始 question 名写回响应再解压 —— 压缩指针常指回 question 段，否则随机化 bit 会进缓存并污染后续响应
+- §5.5: 0x20 不匹配（QID/端口/类型/类均匹配）→ 丢弃响应、该服务器出列、换其他服务器
+- §6.4: 若某区域所有权威都无法回显 → 用新随机 QID 重试整个序列；若 QID 每次都回显而 0x20 不匹配，可忽略 0x20（坏中间盒）
+- RFC 4343 §3: 大小写不敏感仅限 ASCII 字母 → 大小写翻转不改变 wire 长度（可 in-place patch）
+
+### 我们的实现
+
+- 出站：`server/defense/capsguard.go` `RandomizeCase` + `server/upstream/client.go` `ExecuteQuery` 随机化/回显校验/一次无 0x20 重试（按上游 `capsguard` 开关，全协议，转发+递归）✓
+- 入站：缓存命中响应 patch question 段回显客户端原始大小写（`server/handler/response.go` `patchQuestionCase`）✓
+- 实测（2026-08-21，递归 + 转发双路径）：root / .com TLD / 百度权威（110.242.68.x）/ bilibili 权威（1.12.14.x）/ 腾讯私有 DNS 设备（162.14.44.44, dnse2.com）**全部逐字节回显任意 case 变体**，含 CNAME 链权威——0 mismatch、0 重试；`canonicalizeOwners` 防 §5.4 压缩指针缓存污染 ✓
 
 ---
 

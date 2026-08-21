@@ -111,8 +111,10 @@ authority chain through a proxy when `protocol: recursive` upstream sets
 
 ## Defense Mechanisms
 
-ZJDNS implements four per-upstream defense mechanisms to detect and reject
-DNS pollution attacks. Each is enabled via `UpstreamServer` flags.
+ZJDNS implements five per-upstream defense mechanisms to detect and reject
+DNS pollution attacks. Each is enabled via `UpstreamServer` flags and works
+for both forwarding and recursive modes (the recursive resolver propagates
+the flags of its `protocol: "recursive"` upstream).
 
 | Mechanism | Layer | Algorithm |
 |-----------|-------|-----------|
@@ -120,13 +122,36 @@ DNS pollution attacks. Each is enabled via `UpstreamServer` flags.
 | **Spoofguard** | UDP upstream | Multi-read loop (adaptive window: 150ms single packet, 500ms multi-packet; identical repeats confirm immediately): fast-accept `AN>=2`/`NS>0`/`AD=1`; EDNS responses are candidates (richness tie-break); bare single-answer A/AAAA → collect, re-query-confirm (≤3 rounds) |
 | **Poisonguard** | Recursive | Zone-authority cross-validation on resolved answers |
 | **Splitguard** | TCP upstream | Random [1,4]-byte payload segmentation (no time jitter) |
+| **CapsGuard** | All upstream protocols | Randomize the case bit of every ASCII letter in the outbound question (one bit of transaction entropy per letter, DNS 0x20); discard responses that do not echo the randomized case and retry once unrandomized |
 
 **Implementation locations:**
 - `server/defense/hopguard.go` — HopGuard TTL learning + validation
 - `server/defense/poisonguard.go` — PoisonGuard zone classification
+- `server/defense/capsguard.go` — `RandomizeCase` (0x20 question randomization)
 - `server/upstream/plain/udp.go` — SpoofGuard multi-read loop
 - `server/upstream/plain/tcp.go` — SplitGuard segmentation parameter
 - `server/upstream/pool/tcp.go` — SplitGuard via `WriteTCPMsgSegmented`
+- `server/upstream/client.go` — `ExecuteQuery` CapsGuard randomization, echo verification, unrandomized retry
+
+### CapsGuard
+
+When enabled per-upstream (`capsguard: true`), every outbound query is sent
+with the case bit of each ASCII letter in the question name flipped randomly
+(draft-vixie-dnsext-dns0x20-00 §5.1): the response must echo the question
+byte-for-byte (RFC 4343 §3), so the random case pattern extends the 16-bit
+transaction ID by one bit per letter.  A response whose question does not
+match the randomized case — a spoofing signature or a case-rewriting
+middlebox — is discarded and the query retried once with the original case
+(§6.4 fallback; the retry's security equals the pre-CapsGuard baseline).
+Mismatches are Warn-logged on a sampled basis (every
+`config.DefaultCapsGuardWarnEvery`-th) because the path is attacker-
+triggerable.
+
+The randomized bytes never outlive the outbound message: cached responses are
+rebuilt from the canonical qname, and the server side patches cached-response
+wires back to the client's original case at serve time (`server/handler/
+response.go` `patchQuestionCase`) — so no random case can leak into the cache
+or subsequent responses (§5.4).
 
 ### HopGuard
 
