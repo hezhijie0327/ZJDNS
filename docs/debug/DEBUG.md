@@ -43,7 +43,7 @@ docs/debug/
 │   ├── hopguard-spoofguard.json     # forwarding UDP + hopguard + spoofguard (8.8.8.8)
 │   ├── spoofguard-socks5.json           # forwarding UDP + spoofguard over SOCKS5 proxy
 │   ├── poisonguard.json             # recursive + poisonguard (content detection)
-│   └── recursive-defense.json       # recursive all four: poisonguard + spoofguard + splitguard + hopguard
+│   └── recursive-defense.json       # recursive all five: poisonguard + spoofguard + splitguard + hopguard + capsguard
 └── upstream/               # ZJDNS → external upstream tests
     ├── alidns-tls.json      # AliDNS via TLS
     ├── alidns-https.json    # AliDNS via HTTPS
@@ -514,7 +514,7 @@ dig @127.0.0.1 -p 10533 www.google.com A +short
 pkill -f "poisonguard"
 ```
 
-### Recursive Defense (recursive, all four layers)
+### Recursive Defense (recursive, all five layers)
 
 ```bash
 /tmp/zjdns -config docs/debug/defense/recursive-defense.json &
@@ -526,6 +526,7 @@ dig @127.0.0.1 -p 10533 www.google.com A +short
 # spoofguard: per-hop UDP EDNS OPT gate
 # poisonguard: content detection + hijack-triggered TCP fallback
 # splitguard: segmentation on the TCP fallback to resist RST
+# capsguard: per-hop 0x20 question-case randomization + echo verification
 
 pkill -f "recursive-defense"
 ```

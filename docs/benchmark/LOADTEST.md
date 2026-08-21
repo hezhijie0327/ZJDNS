@@ -154,6 +154,11 @@ for proto in udp tcp tls quic https http3 dtls tlcp http-tlcp dtlcp dnscrypt dns
     /tmp/benchclient -proto "$proto" -addr "$addr" -workers 32 -seconds 5 \
       -o docs/benchmark/loadtest-baseline.txt
   fi
+  # High-QPS machines: back-to-back TCP-family protocols exhaust the
+  # ephemeral port range (TIME_WAIT 60s) — "can't assign requested
+  # address" on tls/https.  Cooldown lets ports recycle (observed 2026-08
+  # on a 100k+ qps host; the 38k-qps baseline machine did not need it).
+  sleep 20
 done
 ```
 

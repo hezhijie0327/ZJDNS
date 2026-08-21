@@ -12,7 +12,8 @@
       "poisonguard": true,
       "spoofguard": true,
       "splitguard": true,
-      "hopguard": true
+      "hopguard": true,
+      "capsguard": true
     }
   ]
 }

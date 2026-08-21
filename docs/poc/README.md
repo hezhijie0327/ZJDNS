@@ -17,6 +17,9 @@ go run ./splitguard
 
 # Poisonguard: root/TLD hijack detection on the recursive walk
 go run ./poisonguard
+
+# CapsGuard: DNS 0x20 question-case randomization + echo verification
+go run ./capsguard
 ```
 
 All programs clear the terminal and render color output. Run with `-h` for usage.
@@ -31,6 +34,7 @@ go run ./hopguard    -real -server 8.8.8.8:53
 go run ./spoofguard  -real -server 8.8.8.8:53 -qname www.google.com
 go run ./splitguard  -real -server 8.8.8.8:53
 go run ./poisonguard -real -qname www.google.com          # queries root/TLD servers
+go run ./capsguard -real -server 8.8.8.8:53 -qname wWw.GoOgLe.CoM
 ```
 
 Real-mode observations on 8.8.8.8 (2026-08, CN network): google queries are

@@ -132,7 +132,7 @@ go test -bench=. -short -benchtime=500ms ./...                 # stable numbers
 go test -bench=BenchmarkServerProcessQuery -benchtime=3s ./cmd/zjdns  # integration QPS
 ```
 
-**106 benchmarks** across 25 test files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
+**116 benchmarks** across 28 test files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
 
 ```bash
 # Update baseline
@@ -272,7 +272,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 > **Note:** Names like `ResponseMiddleware`, `CacheStoreMiddleware`, etc. are descriptive labels for the pipeline. The actual Go types are simply `Response`, `CacheStore`, `MQTYPE`, `Validation`, `Zone`, `Any`, `EDNS`, `CacheLookup`, `DNS64`, and `Resolution`.
 
 ### RFC 10029 MQTYPE (`upstream[*].mqtype`, numeric QTYPE list)
-- Client: outbound queries attach `MQQUERY{config − primary}`; merged records (with RRSIGs) warm the cache; bundled types stripped from the client response; unsupported authority → §3.5 fallback standalone queries (existing concurrent walks)
+- Client: outbound queries attach `MQQUERY{config − primary}`; merged records (with RRSIGs) warm the cache; bundled types stripped from the client response **across the whole CNAME chain** (owner-independent, `stripMQBundled`); unsupported authority → §3.5 fallback standalone queries (existing concurrent walks)
 - Server: `middleware/mqtype.go` merges per §3.4 (RCODE/AA/AD match, RR dedup, size budget that never self-triggers TC, empty-list support signal); 8 FORMERR cases §3.3
 - Never: zonecut DS+NS (RFC A.3 failure), NS-walk serialization
 
@@ -351,6 +351,6 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECUR
 | [docs/benchmark/LOADTEST.md](docs/benchmark/LOADTEST.md) | 全协议压测方法指南（benchclient 直连单端、pprof 双端采集、瓶颈分析） |
 | [docs/benchmark/benchmark-baseline.txt](docs/benchmark/benchmark-baseline.txt) | `go test -bench` 基线（`-benchmem`，CLAUDE.md 命令刷新） |
 | [docs/benchmark/loadtest-baseline.txt](docs/benchmark/loadtest-baseline.txt) | benchclient 全协议 QPS/延迟基线数据（12 协议，每轮更新） |
-| [docs/poc/README.md](docs/poc/README.md) | 防御机制概念验证程序（hopguard/spoofguard/splitguard/poisonguard） |
+| [docs/poc/README.md](docs/poc/README.md) | 防御机制概念验证程序（hopguard/spoofguard/splitguard/poisonguard/capsguard） |
 | [docs/rfc/](docs/rfc/) | Mirrored RFCs and drafts (117 txt files) |
 | [docs/rfc/GUIDELINE.md](docs/rfc/GUIDELINE.md) | RFC 精华指南 — 每个 RFC 的关键常量、协议流程、合规状态 |

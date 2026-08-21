@@ -18,7 +18,7 @@
 | [benchmark/benchmark-baseline.txt](benchmark/benchmark-baseline.txt) | `go test -bench` 单元/集成基线（带 `-benchmem`） | 刷新/对比基准 |
 | [benchmark/loadtest-baseline.txt](benchmark/loadtest-baseline.txt) | benchclient 全协议 QPS/延迟基线（12 协议） | 刷新/对比基准 |
 | [benchmark/loadtest/](benchmark/loadtest/) | benchclient 压测工具源码（复用生产 `upstream.Client`） | 压测 |
-| [poc/](poc/README.md) | 防御机制概念验证程序（hopguard/spoofguard/splitguard/poisonguard） | 演示/教学 |
+| [poc/](poc/README.md) | 防御机制概念验证程序（hopguard/spoofguard/splitguard/poisonguard/capsguard） | 演示/教学 |
 | [rfc/](rfc/GUIDELINE.md) | 镜像的 RFC/draft 存档 + 精华指南 | 查协议规范 |
 
 ## 压测文档边界（三份文档不重叠）
