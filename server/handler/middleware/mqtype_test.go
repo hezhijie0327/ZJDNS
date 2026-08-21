@@ -681,6 +681,31 @@ func TestMergeRRs_Deduplicates(t *testing.T) {
 	}
 }
 
+// TestMergeRRs_CaseInsensitiveDedup verifies that a CNAME merged from the A
+// chain and the AAAA chain collapses to one record even when the targets
+// differ in case (each authority echoes the case of its own query) and TTL
+// (RFC 4343 §3; regression: duplicate CNAMEs in merged responses).
+func TestMergeRRs_CaseInsensitiveDedup(t *testing.T) {
+	a := &dns.CNAME{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Target: "www.example.net."}
+	b := &dns.CNAME{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 257}, Target: "WWW.ExAmPle.NET."}
+	merged := mergeRRs([]dns.RR{a}, []dns.RR{b})
+	if len(merged) != 1 {
+		t.Fatalf("merged length = %d, want 1 (case/TTL variants are the same record)", len(merged))
+	}
+}
+
+// TestMergeRRs_DataBytesStayExact verifies that dedup keeps data bytes exact:
+// two TXT records with different content are distinct even when one is a
+// case variant of the other.
+func TestMergeRRs_DataBytesStayExact(t *testing.T) {
+	a := &dns.TXT{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Txt: []string{"v=spf1 include:Foo"}}
+	b := &dns.TXT{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Txt: []string{"v=spf1 include:foo"}}
+	merged := mergeRRs([]dns.RR{a}, []dns.RR{b})
+	if len(merged) != 2 {
+		t.Fatalf("merged length = %d, want 2 (TXT content is case-sensitive data)", len(merged))
+	}
+}
+
 // ── entryRcode (M6) ───────────────────────────────────────────────────────────
 
 // TestEntryRcode_ExtendedRcode verifies that rcodes >= 16 are read from the

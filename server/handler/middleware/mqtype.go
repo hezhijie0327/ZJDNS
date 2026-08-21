@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"encoding/binary"
+	"strings"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -333,10 +334,38 @@ func mergeRRs(dst, src []dns.RR) []dns.RR {
 	return dst
 }
 
-// equalRR compares two RRs by presentation form — wire-equivalent records
-// (e.g. the SOA shared by multiple NODATA answers) merge to one copy.
+// equalRR compares two RRs for RFC 10029 §3.4 dedup: same type and class,
+// case-insensitively equal owner and rdata names (RFC 4343 §3), TTL ignored.
+// A CNAME merged from the A chain and the AAAA chain differs only in target
+// case — each authority echoes the case of its own query, CapsGuard
+// randomizes per query — and in TTL, and must collapse to one record.
 func equalRR(a, b dns.RR) bool {
-	return a.String() == b.String()
+	if a == nil || b == nil || dns.RRToType(a) != dns.RRToType(b) || a.Header().Class != b.Header().Class {
+		return false
+	}
+	if !dns.EqualName(a.Header().Name, b.Header().Name) {
+		return false
+	}
+	return foldRRData(a) == foldRRData(b)
+}
+
+// foldRRData returns the RR's rdata presentation form (TTL excluded) with
+// embedded domain names folded to lowercase: whitespace-separated tokens
+// ending in '.' are FQDN names and get ASCII-folded, everything else stays
+// byte-exact (TXT content, addresses, numbers).  RFC 4343 §3 folds only
+// ASCII letters, so a literal name is always distinguishable.
+func foldRRData(rr dns.RR) string {
+	fields := strings.Fields(rr.String())
+	if len(fields) < 5 { // "owner TTL class type rdata"
+		return rr.String()
+	}
+	rdata := fields[4:]
+	for i, tok := range rdata {
+		if strings.HasSuffix(tok, ".") {
+			rdata[i] = strings.ToLower(tok)
+		}
+	}
+	return strings.Join(rdata, " ")
 }
 
 // entryAuthoritative reads the AA flag from a pre-packed entry's wire header

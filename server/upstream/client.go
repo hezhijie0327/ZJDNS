@@ -161,7 +161,6 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	if len(msg.Question) > 0 {
 		original = msg.Question[0].Header().Name
 	}
-	log.Debugf("UPSTREAM: querying %s (%s) for %s", server.Address, server.Protocol, original)
 
 	// CapsGuard randomization: flip the case bit of every ASCII letter in
 	// the question name.  The randomized bytes never outlive this message —
@@ -190,6 +189,13 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 				randomized = true
 			}
 		}
+	}
+
+	// Log the name actually sent — after CapsGuard randomization, so the
+	// 0x20 case pattern is visible in the debug log (the caller-facing
+	// original is restored only on a mismatch retry below).
+	if len(msg.Question) > 0 {
+		log.Debugf("UPSTREAM: querying %s (%s) for %s", server.Address, server.Protocol, msg.Question[0].Header().Name)
 	}
 
 	result := c.execute(ctx, msg, server)

@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"net/netip"
+	"slices"
 	"testing"
 	"zjdns/cache"
 	"zjdns/config"
@@ -129,8 +130,11 @@ func TestParseMQResponse_QTxDuplicate(t *testing.T) {
 	}
 }
 
-// TestStripMQBundled strips merged types + their RRSIGs at the qname while
-// keeping the primary answer and CNAME-chain records.
+// TestStripMQBundled strips merged types + their RRSIGs regardless of owner
+// or type: a server-side MQTYPE merge returns bundled records on the whole
+// CNAME chain, and the client asked only for the primary type — chain
+// records must not leak either (regression: A query returned AAAA on CNAME
+// targets).  Exercised across representative type combinations.
 func TestStripMQBundled(t *testing.T) {
 	sig := &dns.RRSIG{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, TypeCovered: dns.TypeAAAA}
 	answer := []dns.RR{
@@ -139,20 +143,40 @@ func TestStripMQBundled(t *testing.T) {
 		sig,
 		&dns.CNAME{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Target: "www.example.net."},
 		&dns.AAAA{Hdr: dns.Header{Name: "www.example.net.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("2001:db8::2")}, // chain target record — different owner
+		&dns.MX{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Preference: 10, Mx: "mail.example.net."},
+		&dns.MX{Hdr: dns.Header{Name: "mail.example.net.", Class: dns.ClassINET, TTL: 300}, Preference: 10, Mx: "mx1.example.net."}, // chain target
+		&dns.TXT{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Txt: []string{"v=spf1"}},
+		&dns.SRV{Hdr: dns.Header{Name: "_sip._tcp.example.com.", Class: dns.ClassINET, TTL: 300}, Priority: 10, Weight: 5, Port: 5060, Target: "sip.example.net."},
 	}
-	out := stripMQBundled(answer, "example.com.", []uint16{dns.TypeAAAA})
-	if len(out) != 3 {
-		t.Fatalf("stripped answer = %d records, want 3", len(out))
+	cases := []struct {
+		name   string
+		bundle []uint16
+		want   int // surviving records
+	}{
+		{"A+AAAA", []uint16{dns.TypeAAAA}, 6},                                 // A, CNAME, MX×2, TXT, SRV
+		{"A+AAAA+MX", []uint16{dns.TypeAAAA, dns.TypeMX}, 4},                  // A, CNAME, TXT, SRV
+		{"A+AAAA+MX+TXT", []uint16{dns.TypeAAAA, dns.TypeMX, dns.TypeTXT}, 3}, // A, CNAME, SRV
+		{"MX+AAAA", []uint16{dns.TypeAAAA}, 6},                                // MX not bundled — A, CNAME, MX×2, TXT, SRV
+		{"A+AAAA+TXT", []uint16{dns.TypeAAAA, dns.TypeTXT}, 5},                // A, CNAME, MX×2, SRV
 	}
-	for _, rr := range out {
-		switch rr.(type) {
-		case *dns.AAAA:
-			if rr.Header().Name == "example.com." {
-				t.Fatal("merged AAAA at qname survived strip")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// stripMQBundled filters in place — clone per case so the table
+			// rows do not pollute each other.
+			out := stripMQBundled(slices.Clone(answer), tc.bundle)
+			if len(out) != tc.want {
+				t.Fatalf("stripped answer = %d records, want %d", len(out), tc.want)
 			}
-		case *dns.RRSIG:
-			t.Fatal("merged RRSIG survived strip")
-		}
+			strip := make(map[uint16]struct{}, len(tc.bundle))
+			for _, t := range tc.bundle {
+				strip[t] = struct{}{}
+			}
+			for _, rr := range out {
+				if _, ok := strip[dns.RRToType(rr)]; ok {
+					t.Fatalf("bundled type %s survived strip at owner %q", dns.TypeToString[dns.RRToType(rr)], rr.Header().Name)
+				}
+			}
+		})
 	}
 }
 

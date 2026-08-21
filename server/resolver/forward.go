@@ -414,7 +414,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 		// would remove the primary records.
 		if len(server.MQType) > 0 && mqr != nil && !mqInvalid && r.cache != nil && !server.SkipCache {
 			r.warmFromMQResponse(queryResult.Response, question.Name, question.Qclass, mqr, ecsResponse, queryResult.Validated)
-			queryResult.Response.Answer = stripMQBundled(queryResult.Response.Answer, question.Name, mqr.Types)
+			queryResult.Response.Answer = stripMQBundled(queryResult.Response.Answer, mqr.Types)
 		}
 
 		select {

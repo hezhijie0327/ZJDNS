@@ -113,8 +113,11 @@ func filterMQTypeRecords(rrs []dns.RR, qname string, qt uint16) ([]dns.RR, bool)
 }
 
 // stripMQBundled removes the merged bundled-type records (and their RRSIGs)
-// from the answer; CNAME-chain records (owner != qname) are untouched.
-func stripMQBundled(answer []dns.RR, qname string, mqtype []uint16) []dns.RR {
+// from the answer, regardless of owner: a MQTYPE merge returns the bundled
+// types on the whole CNAME chain (owner != qname), and the client asked only
+// for the primary type — bundled records must never reach it (RFC 10029 §3.4
+// server-side merges leak through otherwise).
+func stripMQBundled(answer []dns.RR, mqtype []uint16) []dns.RR {
 	if len(answer) == 0 || len(mqtype) == 0 {
 		return answer
 	}
@@ -124,11 +127,6 @@ func stripMQBundled(answer []dns.RR, qname string, mqtype []uint16) []dns.RR {
 	}
 	out := answer[:0]
 	for _, rr := range answer {
-		h := rr.Header()
-		if !strings.EqualFold(h.Name, qname) {
-			out = append(out, rr)
-			continue
-		}
 		t := dns.RRToType(rr)
 		if _, ok := strip[t]; ok {
 			continue

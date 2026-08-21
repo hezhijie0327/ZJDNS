@@ -78,6 +78,132 @@ func TestSet_CanonicalizesRecordOwners(t *testing.T) {
 	}
 }
 
+func TestSet_CanonicalizesRRDataNames(t *testing.T) {
+	// Regression: a mixed-case CNAME target would miss the case-sensitive
+	// compression map during Pack, staying fully encoded with the upstream's
+	// randomized case — on cache hits the target then shows a different case
+	// than the owner.  rdata names are folded too, so the target compresses
+	// against the canonical question and unpacks with the same case as the
+	// owner (after the serve-time question patch).
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	rr := &dns.CNAME{
+		Hdr:    dns.Header{Name: "WwW.BaIDU.CoM.", Class: dns.ClassINET, TTL: 300},
+		Target: "WWw.A.SHiFEN.CoM.",
+	}
+	mc.Set("www.baidu.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
+
+	entry, found, _ := mc.Get("www.baidu.com.", dns.TypeA, dns.ClassINET, nil)
+	if !found {
+		t.Fatal("entry not found")
+	}
+	msg := new(dns.Msg)
+	msg.Data = entry.ResponseWire
+	if err := msg.Unpack(); err != nil {
+		t.Fatalf("unpack cached wire: %v", err)
+	}
+	if len(msg.Answer) != 1 {
+		t.Fatalf("answer = %d records, want 1", len(msg.Answer))
+	}
+	cname, ok := msg.Answer[0].(*dns.CNAME)
+	if !ok {
+		t.Fatalf("answer[0] = %T, want *dns.CNAME", msg.Answer[0])
+	}
+	if got := cname.Target; got != "www.a.shifen.com." {
+		t.Errorf("cached target %q, want canonical %q", got, "www.a.shifen.com.")
+	}
+}
+
+func TestSet_CanonicalizesUncommonRRDataNames(t *testing.T) {
+	// The rdata fold covers every name-bearing RR type (mirrors the fork's
+	// compare generator) — spot-check the less common ones: SVCB target,
+	// NAPTR replacement, SOA ns/mbox, RRSIG signer.
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	svcb := &dns.SVCB{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Target: "SvCb.ExAmPle.Net."}
+	naptr := &dns.NAPTR{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Replacement: "NaPtR.ExAmPle.Net."}
+	soa := &dns.SOA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Ns: "Ns1.ExAmPle.Net.", Mbox: "HoStMaStEr.ExAmPle.Net."}
+	sig := &dns.RRSIG{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, TypeCovered: dns.TypeA, SignerName: "ExAmPle.CoM.", Algorithm: 8, Labels: 2, OrigTTL: 300, KeyTag: 1234}
+	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{svcb, naptr, soa, sig}, nil, nil, false, 0)
+
+	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil)
+	if !found {
+		t.Fatal("entry not found")
+	}
+	msg := new(dns.Msg)
+	msg.Data = entry.ResponseWire
+	if err := msg.Unpack(); err != nil {
+		t.Fatalf("unpack cached wire: %v", err)
+	}
+	want := []struct {
+		typ  string
+		name string
+	}{
+		{"SVCB", "svcb.example.net."},
+		{"NAPTR", "naptr.example.net."},
+		{"SOA", "ns1.example.net."},
+		{"RRSIG", "example.com."},
+	}
+	for _, w := range want {
+		found := false
+		for _, rr := range msg.Answer {
+			if dns.TypeToString[dns.RRToType(rr)] != w.typ {
+				continue
+			}
+			found = true
+			var got string
+			switch t := rr.(type) {
+			case *dns.SVCB:
+				got = t.Target
+			case *dns.NAPTR:
+				got = t.Replacement
+			case *dns.SOA:
+				got = t.Ns
+			case *dns.RRSIG:
+				got = t.SignerName
+			}
+			if got != w.name {
+				t.Errorf("%s name %q, want %q", w.typ, got, w.name)
+			}
+		}
+		if !found {
+			t.Errorf("%s record missing from cached wire", w.typ)
+		}
+	}
+}
+
+func TestSet_CanonicalizePreservesTXTData(t *testing.T) {
+	// The presentation-form fold must never touch quoted rdata: TXT content
+	// is data, not names — including a dot-terminated token inside quotes.
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	txt := &dns.TXT{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Txt: []string{"txt.example.", "KeepCase"}}
+	mc.Set("example.com.", dns.TypeTXT, dns.ClassINET, nil, []dns.RR{txt}, nil, nil, false, 0)
+
+	entry, found, _ := mc.Get("example.com.", dns.TypeTXT, dns.ClassINET, nil)
+	if !found {
+		t.Fatal("entry not found")
+	}
+	msg := new(dns.Msg)
+	msg.Data = entry.ResponseWire
+	if err := msg.Unpack(); err != nil {
+		t.Fatalf("unpack cached wire: %v", err)
+	}
+	if len(msg.Answer) != 1 {
+		t.Fatalf("answer = %d records, want 1", len(msg.Answer))
+	}
+	got, ok := msg.Answer[0].(*dns.TXT)
+	if !ok {
+		t.Fatalf("answer[0] = %T, want *dns.TXT", msg.Answer[0])
+	}
+	if len(got.Txt) != 2 || got.Txt[0] != "txt.example." || got.Txt[1] != "KeepCase" {
+		t.Errorf("TXT content altered by canonicalization: %v", got.Txt)
+	}
+}
+
 func TestGet_Miss(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()

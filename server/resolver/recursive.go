@@ -253,7 +253,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		if len(r.mqtype) > 0 {
 			if mqr, invalid := parseMQResponse(response); mqr != nil && !invalid {
 				r.resolver.warmFromMQResponse(response, queryQuestion.Name, queryQuestion.Qclass, mqr, ecsResponse, cryptoValidated)
-				response.Answer = stripMQBundled(response.Answer, queryQuestion.Name, mqr.Types)
+				response.Answer = stripMQBundled(response.Answer, mqr.Types)
 			}
 		}
 
