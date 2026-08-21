@@ -1,7 +1,9 @@
 package dnssec
 
 import (
+	"crypto"
 	"crypto/ecdsa"
+	"crypto/mldsa"
 	"errors"
 	"net/netip"
 	"strings"
@@ -28,7 +30,7 @@ func genTestKey(zone string, flags uint16) (*dns.DNSKEY, *ecdsa.PrivateKey) {
 }
 
 // signRRset signs an RRset with the given private key and returns the RRSIG.
-func signRRset(rrset []dns.RR, signer string, priv *ecdsa.PrivateKey, keyTag uint16) *dns.RRSIG {
+func signRRset(rrset []dns.RR, signer string, priv crypto.Signer, keyTag uint16, alg uint8) *dns.RRSIG {
 	rrsig := &dns.RRSIG{
 		Hdr: dns.Header{
 			Name:  dnsutil.Fqdn(signer),
@@ -36,7 +38,7 @@ func signRRset(rrset []dns.RR, signer string, priv *ecdsa.PrivateKey, keyTag uin
 			TTL:   3600,
 		},
 		TypeCovered: dns.RRToType(rrset[0]),
-		Algorithm:   dns.ECDSAP256SHA256,
+		Algorithm:   alg,
 		Labels:      uint8(dnsutil.Labels(rrset[0].Header().Name)), //nolint:gosec // G115: DNS label count — protocol-bounded byte
 		OrigTTL:     rrset[0].Header().TTL,
 		Expiration:  uint32(time.Now().Add(24 * time.Hour).Unix()), //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
@@ -64,7 +66,7 @@ func TestVerifyRRset_ValidSignature(t *testing.T) {
 	ksk, priv := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
 
 	rrset := []dns.RR{aRec(zone, "192.0.2.1")}
-	rrsig := signRRset(rrset, zone, priv, ksk.KeyTag())
+	rrsig := signRRset(rrset, zone, priv, ksk.KeyTag(), dns.ECDSAP256SHA256)
 
 	if err := cv.VerifyRRset(rrset, rrsig, ksk); err != nil {
 		t.Errorf("valid signature should pass: %v", err)
@@ -78,7 +80,7 @@ func TestVerifyRRset_WrongKey(t *testing.T) {
 	wrongKey, _ := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
 
 	rrset := []dns.RR{aRec(zone, "192.0.2.1")}
-	rrsig := signRRset(rrset, zone, priv, ksk.KeyTag())
+	rrsig := signRRset(rrset, zone, priv, ksk.KeyTag(), dns.ECDSAP256SHA256)
 
 	if err := cv.VerifyRRset(rrset, rrsig, wrongKey); err == nil {
 		t.Error("signature with wrong key should fail")
@@ -228,6 +230,48 @@ func TestVerifyRRset_UnsupportedAlgorithm(t *testing.T) {
 	}
 }
 
+func TestVerifyRRset_MLDSA44(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	zone := "test.example.com"
+
+	// ML-DSA-44 (draft-westerbaan-dnssec-mldsa): alg 18, seed-derived keys of
+	// 256 bits — see miekg/dns dnssec_keygen.go.
+	dnskey := &dns.DNSKEY{
+		Hdr:   dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 3600},
+		Flags: dns.FlagSEP | dns.FlagZONE, Protocol: 3, Algorithm: dns.MLDSA44,
+	}
+	priv, err := dnskey.Generate(256)
+	if err != nil {
+		t.Fatalf("MLDSA44 key generation failed: %v", err)
+	}
+	mldsaPriv, ok := priv.(*mldsa.PrivateKey)
+	if !ok {
+		t.Fatalf("MLDSA44 Generate should return *mldsa.PrivateKey, got %T", priv)
+	}
+
+	rrset := []dns.RR{aRec(zone, "192.0.2.1")}
+	rrsig := signRRset(rrset, zone, mldsaPriv, dnskey.KeyTag(), dns.MLDSA44)
+
+	if err := cv.VerifyRRset(rrset, rrsig, dnskey); err != nil {
+		t.Errorf("valid MLDSA44 signature should pass: %v", err)
+	}
+
+	// Tampered rrset — the signature covers the original IP only.
+	tampered := []dns.RR{aRec(zone, "192.0.2.2")}
+	if err := cv.VerifyRRset(tampered, rrsig, dnskey); err == nil {
+		t.Error("MLDSA44 signature over a tampered rrset should fail")
+	}
+
+	// DS chain of trust: the draft mandates SHA-384 for ML-DSA DS records.
+	ds := dnskey.ToDS(dns.SHA384)
+	if ds == nil {
+		t.Fatal("MLDSA44 ToDS(SHA384) returned nil")
+	}
+	if _, err := cv.VerifyDelegationDS([]*dns.DS{ds}, []*dns.DNSKEY{dnskey}); err != nil {
+		t.Errorf("MLDSA44 DS chain should verify: %v", err)
+	}
+}
+
 func TestAnswerSection_UnsupportedAlgOrderIndependent(t *testing.T) {
 	cv := NewCryptoValidator(nil)
 	zone := "example.com"
@@ -250,7 +294,7 @@ func TestAnswerSection_UnsupportedAlgOrderIndependent(t *testing.T) {
 		OrigTTL: 300, Expiration: now + 3600, Inception: now - 3600,
 		KeyTag: dsaKey.KeyTag(), SignerName: dnsutil.Fqdn(zone),
 	}
-	bogusSig := signRRset(rrset, zone, wrongPriv, ecdsaKey.KeyTag())
+	bogusSig := signRRset(rrset, zone, wrongPriv, ecdsaKey.KeyTag(), dns.ECDSAP256SHA256)
 
 	answer := []dns.RR{aRec(zone, "192.0.2.1"), dsaSig, bogusSig}
 	_, err := cv.isAnswerSectionValid(answer, nil, []*dns.DNSKEY{ecdsaKey, dsaKey})
@@ -320,7 +364,7 @@ func TestSelfVerifyDNSKEY_Valid(t *testing.T) {
 	for i, k := range dnskeys {
 		rrset[i] = k
 	}
-	rrsig := signRRset(rrset, zone, kskPriv, ksk.KeyTag())
+	rrsig := signRRset(rrset, zone, kskPriv, ksk.KeyTag(), dns.ECDSAP256SHA256)
 
 	if err := cv.SelfVerifyDNSKEY(dnskeys, []*dns.RRSIG{rrsig}); err != nil {
 		t.Errorf("self-verify should pass for valid self-signed DNSKEY: %v", err)
@@ -339,7 +383,7 @@ func TestSelfVerifyDNSKEY_ForeignSignature(t *testing.T) {
 	for i, k := range dnskeys {
 		rrset[i] = k
 	}
-	rrsig := signRRset(rrset, zone, wrongPriv, wrongKey.KeyTag())
+	rrsig := signRRset(rrset, zone, wrongPriv, wrongKey.KeyTag(), dns.ECDSAP256SHA256)
 
 	if err := cv.SelfVerifyDNSKEY(dnskeys, []*dns.RRSIG{rrsig}); err == nil {
 		t.Error("self-verify should fail when signed by foreign key")
@@ -356,7 +400,7 @@ func TestSelfVerifyDNSKEY_NoSEPKey(t *testing.T) {
 	for i, k := range dnskeys {
 		rrset[i] = k
 	}
-	rrsig := signRRset(rrset, zone, zskPriv, zsk.KeyTag())
+	rrsig := signRRset(rrset, zone, zskPriv, zsk.KeyTag(), dns.ECDSAP256SHA256)
 
 	// RFC 4034 §2.1.2: SEP is a deployment convention, not a validation
 	// requirement — a non-SEP key may sign the DNSKEY RRset (jellyfin.org).
@@ -377,7 +421,7 @@ func TestIsResponseValid_SignedAnswer(t *testing.T) {
 		Hdr:  dns.Header{Name: dnsutil.Fqdn(zone), Class: dns.ClassINET, TTL: 300},
 		Addr: netip.MustParseAddr("203.0.113.1"),
 	}
-	rrsig := signRRset([]dns.RR{aRec}, zone, zskPriv, zsk.KeyTag())
+	rrsig := signRRset([]dns.RR{aRec}, zone, zskPriv, zsk.KeyTag(), dns.ECDSAP256SHA256)
 
 	response := &dns.Msg{
 		Rcode:  dns.RcodeSuccess,
@@ -479,7 +523,7 @@ func TestIsResponseValid_NXDOMAIN(t *testing.T) {
 		Hdr:        dns.Header{Name: "aaaa.signed.example.com.", Class: dns.ClassINET, TTL: 300},
 		NextDomain: "zzzz.signed.example.com.", TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC},
 	}
-	rrsig := signRRset([]dns.RR{nsec}, zone, zskPriv, zsk.KeyTag())
+	rrsig := signRRset([]dns.RR{nsec}, zone, zskPriv, zsk.KeyTag(), dns.ECDSAP256SHA256)
 
 	response := &dns.Msg{
 		Rcode: dns.RcodeNameError,
@@ -526,7 +570,7 @@ func TestFullDNSSECChain(t *testing.T) {
 		Hdr:  dns.Header{Name: dnsutil.Fqdn(childZone), Class: dns.ClassINET, TTL: 300},
 		Addr: netip.MustParseAddr("198.51.100.1"),
 	}
-	rrsig := signRRset([]dns.RR{aRec}, childZone, childZSKPriv, childZSK.KeyTag())
+	rrsig := signRRset([]dns.RR{aRec}, childZone, childZSKPriv, childZSK.KeyTag(), dns.ECDSAP256SHA256)
 	response := &dns.Msg{
 		Rcode:  dns.RcodeSuccess,
 		Answer: []dns.RR{aRec, rrsig},
@@ -583,13 +627,13 @@ func TestIsResponseValid_MixedRRsetWithForeignRRSIG(t *testing.T) {
 		Hdr:    dns.Header{Name: dnsutil.Fqdn("query.parent.example.com"), Class: dns.ClassINET, TTL: 300},
 		Target: dnsutil.Fqdn("target.child.parent.example.com"),
 	}
-	cnameRRSIG := signRRset([]dns.RR{cnameRec}, parentZone, parentZSKPriv, parentZSK.KeyTag())
+	cnameRRSIG := signRRset([]dns.RR{cnameRec}, parentZone, parentZSKPriv, parentZSK.KeyTag(), dns.ECDSAP256SHA256)
 
 	aRec := &dns.A{
 		Hdr:  dns.Header{Name: dnsutil.Fqdn("target.child.parent.example.com"), Class: dns.ClassINET, TTL: 300},
 		Addr: netip.MustParseAddr("192.0.2.1"),
 	}
-	aRRSIG := signRRset([]dns.RR{aRec}, childZone, childZSKPriv, childZSK.KeyTag())
+	aRRSIG := signRRset([]dns.RR{aRec}, childZone, childZSKPriv, childZSK.KeyTag(), dns.ECDSAP256SHA256)
 
 	response := &dns.Msg{
 		Rcode:  dns.RcodeSuccess,
@@ -1030,8 +1074,8 @@ func TestIsResponseValid_NSEC3NXDOMAIN(t *testing.T) {
 	// CE match at the zone apex.
 	ceMatch := nsec3Rec(zone, zone, 0, nsec3HashName(zone, dns.SHA1, 0, ""), []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC3})
 
-	rrsigCover := signRRset([]dns.RR{cover}, zone, zskPriv, zsk.KeyTag())
-	rrsigCE := signRRset([]dns.RR{ceMatch}, zone, zskPriv, zsk.KeyTag())
+	rrsigCover := signRRset([]dns.RR{cover}, zone, zskPriv, zsk.KeyTag(), dns.ECDSAP256SHA256)
+	rrsigCE := signRRset([]dns.RR{ceMatch}, zone, zskPriv, zsk.KeyTag(), dns.ECDSAP256SHA256)
 
 	response := &dns.Msg{
 		Rcode: dns.RcodeNameError,
@@ -1058,7 +1102,7 @@ func TestIsResponseValid_NSEC3NODATA(t *testing.T) {
 
 	// NSEC3 matching H(www.example.com.) — name exists, type absent.
 	match := nsec3Rec(qname, zone, 0, nsec3HashName(qname, dns.SHA1, 0, ""), []uint16{dns.TypeRRSIG, dns.TypeNSEC3})
-	rrsigMatch := signRRset([]dns.RR{match}, zone, zskPriv, zsk.KeyTag())
+	rrsigMatch := signRRset([]dns.RR{match}, zone, zskPriv, zsk.KeyTag(), dns.ECDSAP256SHA256)
 
 	response := &dns.Msg{
 		Rcode: dns.RcodeSuccess,
@@ -1091,8 +1135,8 @@ func TestIsResponseValid_NSEC3OptOut(t *testing.T) {
 
 	ceMatch := nsec3Rec(zone, zone, 0, nsec3HashName(zone, dns.SHA1, 0, ""), []uint16{dns.TypeA, dns.TypeNSEC3, dns.TypeRRSIG})
 
-	rrsigCover := signRRset([]dns.RR{cover}, zone, zskPriv, zsk.KeyTag())
-	rrsigCE := signRRset([]dns.RR{ceMatch}, zone, zskPriv, zsk.KeyTag())
+	rrsigCover := signRRset([]dns.RR{cover}, zone, zskPriv, zsk.KeyTag(), dns.ECDSAP256SHA256)
+	rrsigCE := signRRset([]dns.RR{ceMatch}, zone, zskPriv, zsk.KeyTag(), dns.ECDSAP256SHA256)
 
 	response := &dns.Msg{
 		Rcode: dns.RcodeNameError,
@@ -1133,7 +1177,7 @@ func TestVerifyRRset_SignatureExpired(t *testing.T) {
 	zone := "test.example.com"
 	ksk, priv := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
 	rrset := []dns.RR{aRec(zone, "192.0.2.1")}
-	rrsig := signRRset(rrset, zone, priv, ksk.KeyTag())
+	rrsig := signRRset(rrset, zone, priv, ksk.KeyTag(), dns.ECDSAP256SHA256)
 	// Manually expire the signature
 	rrsig.Expiration = uint32(time.Now().Add(-1 * time.Hour).Unix()) //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
 	rrsig.Inception = uint32(time.Now().Add(-2 * time.Hour).Unix())  //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
@@ -1152,7 +1196,7 @@ func TestVerifyRRset_SignatureNotYet(t *testing.T) {
 	zone := "test.example.com"
 	ksk, priv := genTestKey(zone, dns.FlagSEP|dns.FlagZONE)
 	rrset := []dns.RR{aRec(zone, "192.0.2.1")}
-	rrsig := signRRset(rrset, zone, priv, ksk.KeyTag())
+	rrsig := signRRset(rrset, zone, priv, ksk.KeyTag(), dns.ECDSAP256SHA256)
 	rrsig.Inception = uint32(time.Now().Add(2 * time.Hour).Unix())  //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
 	rrsig.Expiration = uint32(time.Now().Add(3 * time.Hour).Unix()) //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
 
@@ -1221,7 +1265,7 @@ func TestCompactNODATA_ValidatesAsDenial(t *testing.T) {
 		Hdr:        dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300},
 		NextDomain: "\x00" + qname, TypeBitMap: []uint16{dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNXNAME},
 	}
-	rrsig := signRRset([]dns.RR{nsec}, zone, zskPriv, zsk.KeyTag())
+	rrsig := signRRset([]dns.RR{nsec}, zone, zskPriv, zsk.KeyTag(), dns.ECDSAP256SHA256)
 
 	// Compact NODATA: NOERROR + empty answer + matching NSEC with NXNAME.
 	response := &dns.Msg{

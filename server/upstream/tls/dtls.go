@@ -142,9 +142,9 @@ func (c *Client) dialDTLSConn(ctx context.Context, addr string, server *config.U
 	var dtlsOpts []dtls.ClientOption
 	// DTLS 1.3 preferred, 1.2 fallback for older servers (RFC 9147 §4.2.2).
 	// NOTE: our own server is 1.3-only (see server/protocol/tls/dtls.go) —
-	// a dual-version [1.2,1.3] server would deadlock this client due to a
-	// pion bug (dual-stack handshake never completes). Revisit when pion
-	// ships the fix and the server widens its range.
+	// a dual-version [1.2,1.3] server still deadlocks this dual-stack client
+	// in current pion (dual-stack server HRR exchange never completes).
+	// Revisit when pion fixes the dual-stack server path.
 	dtlsOpts = append(dtlsOpts,
 		dtls.WithMinVersion(protocol.Version1_2),
 		dtls.WithMaxVersion(protocol.Version1_3),

@@ -539,12 +539,15 @@ pkill -f "recursive-defense"
 > `certificate.tls.cert_file` / `certificate.tls.key_file`.
 
 > [!WARNING]
-> **ZJDNS serves DTLS 1.3 only** (a pion dual-stack negotiation bug deadlocks
-> the handshake — see `server/protocol/tls/dtls.go`). RouteDNS's DTLS client
-> builds a default `dtls.Config{}` (1.2+1.3) with no version option, so the
-> current RouteDNS release **cannot connect**. ZJDNS ↔ ZJDNS DTLS (loopback)
-> and pure-1.3 clients work; revisit once RouteDNS exposes a DTLS version
-> knob or pion fixes the dual-stack path.
+> **ZJDNS serves DTLS 1.3 only** (see `server/protocol/tls/dtls.go`): a
+> dual-stack [1.2,1.3] server still deadlocks against a dual-stack client
+> (i.e. our own upstream client) in current pion — the dual-stack server's
+> DTLS 1.3 HelloRetryRequest exchange never completes with a client still in
+> version negotiation, so both sides wait and the handshake times out. The
+> 1.3-only server path works with dual-stack clients (negotiates 1.3) and
+> pure-1.3 clients; pure-1.2 clients (e.g. RouteDNS's default DTLS client)
+> **cannot connect**. ZJDNS ↔ ZJDNS DTLS (loopback) works. Revisit when pion
+> fixes the dual-stack server HRR path.
 
 ### Setup (one-time)
 

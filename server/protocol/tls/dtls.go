@@ -32,13 +32,20 @@ func (s *Server) startDTLSServer() error {
 		}
 
 		listener, err := dtls.ListenWithOptions("udp", udpAddr,
-			// DTLS 1.3 only.  Dual-version [1.2,1.3] is blocked by a pion bug:
-			// the dual-stack client (negotiateVersionClient) never retransmits
-			// its ClientHello, so the server's fsm13 wait() is never woken to
-			// parse the cached ClientHello — the handshake deadlocks with zero
-			// packets exchanged.  This breaks ZJDNS client ↔ ZJDNS server
-			// (both [1.2,1.3]); external pure-1.2 clients still connect.
-			// Revisit after pion fixes upstream.
+			// DTLS 1.3 only.  A dual-stack server [1.2,1.3] still deadlocks
+			// against a dual-stack client (i.e. our own upstream client) in
+			// pion v3.1.3-0.20260821014627: the server's DTLS 1.3 Flight 0
+			// cannot complete its HelloRetryRequest exchange with a client
+			// that is still in version negotiation (negotiateVersionClient
+			// only accepts ServerHello/HelloVerifyRequest) — server spins
+			// re-sending, client waits, handshake times out. The 1.3-only
+			// server path (prepareHandshakeStart13, no version negotiation)
+			// completes the 1.3 handshake with dual-stack clients fine, so
+			// we stay 1.3-only. Verified against pion's TestDTLSDualStack*,
+			// ZJDNS E2E (see DEBUG.md) and probe clients: 1.3-only server +
+			// {dual-stack, pure-1.3} clients OK; pure-1.2 clients (RouteDNS)
+			// cannot connect, as before. Revisit when pion fixes the
+			// dual-stack server HRR path.
 			dtls.WithMinVersion(protocol.Version1_3),
 			dtls.WithMaxVersion(protocol.Version1_3),
 			dtls.WithCertificates(s.stdCert),
