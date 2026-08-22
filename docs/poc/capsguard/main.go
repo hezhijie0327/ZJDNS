@@ -96,8 +96,8 @@ func spoofer(name string) (string, bool) {
 
 // ── One CapsGuard query cycle ─────────────────────────────────────
 
-// simulate runs one query against a simulated server, printing each attempt.
-func simulate(name string, srv simServer, retries *int) []row {
+// simulate runs one query against a simulated server, collecting the rows.
+func simulate(name string, srv simServer) []row {
 	var rows []row
 	orig := dnsutil.Fqdn(name)
 
@@ -111,32 +111,39 @@ func simulate(name string, srv simServer, retries *int) []row {
 	rows = append(rows, row{1, randName, echo, "DISCARD — echo mismatch", false})
 
 	// §6.4: retry once with the original case, no verification.
-	*retries++
 	echo2, _ := srv(orig)
 	rows = append(rows, row{2, orig, echo2, "ACCEPT — §6.4 baseline retry", true})
 	return rows
 }
 
-func printScenario(title string, srv simServer, name string) {
-	fmt.Printf("\n  %s━━━ %s ━━━%s\n", red, title, reset)
-	var total int
-	rows := make([]row, 0, 12)
-	for i := 1; i <= 6; i++ {
-		var retries int
-		rows = append(rows, simulate(name, srv, &retries)...)
-		total += retries
-	}
+// renderRows renders the attempt table shared by simulation and real-network
+// modes, returning the number of §6.4 retries (id==2 rows).
+func renderRows(rows []row) int {
 	fmt.Printf("\n  ┌──────┬─────────────────────────┬─────────────────────────┬─────────────────────────┐\n")
 	fmt.Printf("  │ %s%-4s%s │ %s%-23s%s │ %s%-23s%s │ %s%-23s%s │\n", cyan, "try", reset, cyan, "sent (0x20)", reset, cyan, "echoed", reset, cyan, "verdict", reset)
 	fmt.Printf("  ├──────┼─────────────────────────┼─────────────────────────┼─────────────────────────┤\n")
+	retries := 0
 	for _, r := range rows {
 		color := green
 		if !r.ok {
 			color = red
 		}
+		if r.id == 2 {
+			retries++
+		}
 		fmt.Printf("  │ %s%-4d%s │ %-23s │ %-23s │ %s%-23s%s │\n", color, r.id, reset, r.sent, r.echo, color, r.decision, reset)
 	}
 	fmt.Printf("  └──────┴─────────────────────────┴─────────────────────────┴─────────────────────────┘\n")
+	return retries
+}
+
+func printScenario(title string, srv simServer, name string) {
+	fmt.Printf("\n  %s━━━ %s ━━━%s\n", red, title, reset)
+	rows := make([]row, 0, 12)
+	for i := 1; i <= 6; i++ {
+		rows = append(rows, simulate(name, srv)...)
+	}
+	total := renderRows(rows)
 	fmt.Printf("\n  %s→ 6 queries: %d unrandomized retries (mismatch rate = %d/6)%s\n", yellow, total, total, reset)
 }
 
@@ -177,31 +184,35 @@ func exchange(server, name string) (string, error) {
 }
 
 func realTest(server, qname string) {
-	fmt.Printf("\n  %sUpstream: %s    Qname: %s%s\n\n", dim, server, qname, reset)
-	for i := 1; i <= 5; i++ {
-		orig := dnsutil.Fqdn(qname)
+	fmt.Printf("  %sUpstream: %s    Qname: %s%s\n", dim, server, qname, reset)
+	fmt.Printf("\n  %s━━━ Scenario: live upstream — 0x20 echo verification ━━━%s\n", red, reset)
+	var rows []row
+	queries := 0
+	orig := dnsutil.Fqdn(qname)
+	for i := range 5 {
 		randName := randomizeCase(orig)
 
 		echo, err := exchange(server, randName)
 		if err != nil {
-			fmt.Printf("  %s✗ attempt %d failed: %v%s\n", red, i, err, reset)
+			fmt.Printf("  %s✗ query %d failed: %v%s\n", red, i+1, err, reset)
 			continue
 		}
+		queries++
 		if echo == randName {
-			fmt.Printf("  %s✓ attempt %d: sent %-24s echoed %-24s → ACCEPT (0x20 echo verified)%s\n",
-				green, i, randName, echo, reset)
-		} else {
-			fmt.Printf("  %s✗ attempt %d: sent %-24s echoed %-24s → mismatch, retrying unrandomized%s\n",
-				red, i, randName, echo, reset)
-			echo2, err := exchange(server, orig)
-			if err != nil {
-				fmt.Printf("  %s  retry failed: %v%s\n", red, err, reset)
-				continue
-			}
-			fmt.Printf("  %s  retry: sent %-24s echoed %-24s → ACCEPT (§6.4 baseline)%s\n",
-				green, orig, echo2, reset)
+			rows = append(rows, row{1, randName, echo, "ACCEPT — echo matches 0x20", true})
+			continue
 		}
+		rows = append(rows, row{1, randName, echo, "DISCARD — echo mismatch", false})
+		echo2, err := exchange(server, orig)
+		if err != nil {
+			fmt.Printf("  %s  retry failed: %v%s\n", red, err, reset)
+			continue
+		}
+		rows = append(rows, row{2, orig, echo2, "ACCEPT — §6.4 baseline retry", true})
 	}
+	total := renderRows(rows)
+	fmt.Printf("\n  %s→ %d queries: %d unrandomized retries (mismatch rate = %d/%d)%s\n",
+		yellow, queries, total, total, queries, reset)
 }
 
 func main() {

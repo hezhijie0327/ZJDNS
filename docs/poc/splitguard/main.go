@@ -243,11 +243,6 @@ func main() {
 		return
 	}
 
-	if *realMode {
-		realTest(*server)
-		return
-	}
-
 	msg := buildDNSQuery()
 
 	fmt.Print("\033[2J\033[H")
@@ -256,6 +251,12 @@ func main() {
 	fmt.Println(bold + cyan + "  ║          Splitguard — TCP Segmentation for DPI Evasion           ║" + reset)
 	fmt.Println(bold + cyan + "  ╚══════════════════════════════════════════════════════════════════╝" + reset)
 	fmt.Println()
+
+	if *realMode {
+		realTest(*server)
+		return
+	}
+
 	fmt.Printf("  Query: %sA www.google.com%s  (DNS-over-TCP, %dB total)\n\n", bold, reset, len(msg))
 
 	// ── Normal TCP Write ────────────────────────────────────────

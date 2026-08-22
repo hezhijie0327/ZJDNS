@@ -37,4 +37,4 @@
 - **新增 RFC**：先 `cp rfc{number}.txt docs/rfc/` 再实现（见 rfc/GUIDELINE.md）
 - **审计报告**：存 `audit/YYYY-MM-<主题>/`，命名规范见 AUDIT-METHODOLOGY.md §7
 - **基线更新**：benchmark 与 loadtest 两条基线在每次性能相关改动后刷新
-- **POC**：防御机制原型与 `server/defense/` 实现对应，改动实现时同步检查
+- **POC**：防御机制原型与 `server/defense/` 实现对应，改动实现时同步检查；新增/修改 POC 前先读 poc/GUIDELINE.md（界面与代码约定）

@@ -279,11 +279,6 @@ func main() {
 		return
 	}
 
-	if *realMode {
-		realTest(*qname)
-		return
-	}
-
 	d := &detector{}
 
 	fmt.Print("\033[2J\033[H")
@@ -292,6 +287,12 @@ func main() {
 	fmt.Println(bold + cyan + "  ║    Poisonguard — Root/TLD Hijack Detection (recursive walk)  ║" + reset)
 	fmt.Println(bold + cyan + "  ╚══════════════════════════════════════════════════════════════╝" + reset)
 	fmt.Println()
+
+	if *realMode {
+		realTest(*qname)
+		return
+	}
+
 	fmt.Println("  GFW pattern (measured): bare A/AAAA injected at root, TLD, and")
 	fmt.Println("  authoritative levels; root/TLD levels never legitimately return")
 	fmt.Println("  data records for a subdomain — so injection there is unambiguous.")

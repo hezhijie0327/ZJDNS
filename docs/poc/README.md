@@ -220,6 +220,43 @@ TLD probe: injected A → force TCP  → true; legitimate referral → false
 
 ---
 
+## CapsGuard — DNS 0x20 Question-Case Randomization
+
+**File:** `capsguard/main.go`
+**Source:** `server/defense/capsguard.go` (`RandomizeCase`) + `server/upstream/client.go` (`ExecuteQuery`)
+
+### Problem
+DNS responses carry no transaction identity beyond the 16-bit ID. The GFW
+injects fake responses that don't know the per-query randomized question case —
+but every legitimate DNS response MUST echo the query name byte-for-byte
+(RFC 4343 §3). Case randomization turns the question itself into
+unpredictable transaction entropy.
+
+### How It Works
+1. **Randomization (§5.1):** each ASCII letter in the outbound question carries
+   1 random bit — the case bit is flipped with 50% probability
+   (draft-vixie-dnsext-dns0x20).
+2. **Echo verification:** the response must echo the question case exactly;
+   a mismatch means the responder never saw the real query → discard.
+3. **§6.4 fallback:** after a mismatch, the query is retried once with the
+   original case so case-rewriting middleboxes keep service working.
+4. **Cache hits** patch the stored wire back to the client's question case
+   (`handler/response.go` `patchQuestionCase`).
+
+### Demo Output (scenarios A–C)
+```
+Scenario A: 0x20-capable server       → every query accepted first try (0 retries)
+Scenario B: case-rewriting middlebox  → DISCARD + §6.4 unrandomized retry per query
+Scenario C: spoofer (wrong echo)      → every attempt discarded → SERVFAIL
+```
+
+### Key Insight
+> The spoofer must guess the per-query case pattern — 2^n bits of entropy where
+> n is the number of ASCII letters in the question. Legitimate servers echo the
+> question transparently, so verification costs zero extra round-trips.
+
+---
+
 ## Architecture Notes
 
 These POC programs mirror the actual ZJDNS implementation:
@@ -230,6 +267,7 @@ These POC programs mirror the actual ZJDNS implementation:
 | Spoofguard | `server/upstream/plain/` | `processPacket()` / `pickBest()` / `executeUDPCollect()` |
 | Splitguard | `internal/dnsutil/` | `WriteTCPMsgSegmented()` |
 | Poisonguard | `server/defense/` | `Detector.Validate()` / `Detector.IsPoisonedByTLD()` |
+| Capsguard | `server/defense/` + `server/upstream/` | `RandomizeCase()` / `ExecuteQuery()` |
 
 All mechanisms are configurable per-upstream in `config.UpstreamServer`:
 
@@ -239,6 +277,7 @@ type UpstreamServer struct {
     Spoofguard  bool `json:"spoofguard,omitzero"`
     Splitguard  bool `json:"splitguard,omitzero"`
     HopGuard    bool `json:"hopguard,omitzero"`
+    CapsGuard   bool `json:"capsguard,omitzero"`
     // ...
 }
 ```

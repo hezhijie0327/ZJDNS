@@ -29,6 +29,8 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
+	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -54,6 +56,35 @@ type ttlCount struct {
 	count int
 }
 
+type realRow struct {
+	id       int
+	domain   string
+	ipTTL    int // -1 = unavailable (Windows); the fingerprint source when present
+	recTTL   uint32
+	answers  []string
+	polluted bool
+	armed    bool
+	accept   bool
+	err      string
+}
+
+// realPkt is one datagram received for a real query: answer IPs plus the
+// IP-layer TTL from the control message (hopguard's fingerprint).
+type realPkt struct {
+	ips    []string
+	ipTTL  int
+	recTTL uint32
+}
+
+// ttlCapture mirrors internal/ipttl: the x/net control-message API enables
+// IP TTL (IPv4) / HopLimit (IPv6) capture on a UDP connection, resolving the
+// platform socket option internally (Linux/Darwin/FreeBSD). Windows yields
+// nil here, degrading hopguard to TTL-less operation.
+type ttlCapture struct {
+	pc4 *ipv4.PacketConn
+	pc6 *ipv6.PacketConn
+}
+
 // ── Constants ─────────────────────────────────────────────────────
 
 const (
@@ -72,6 +103,14 @@ const (
 )
 
 // ── Helpers ───────────────────────────────────────────────────────
+
+// ttl returns the IP-layer TTL when available, else the record TTL.
+func (r *realRow) ttl() uint32 {
+	if r.ipTTL >= 0 {
+		return uint32(r.ipTTL) //nolint:gosec // G115: IP TTL is 1–255
+	}
+	return r.recTTL
+}
 
 func rpad(s string, w int) string {
 	vis := len(s)
@@ -156,72 +195,303 @@ func (s *hgState) rebuild() {
 
 // ── Real-network mode ─────────────────────────────────────────────
 
-// realQuery sends one UDP DNS query and returns the answer IPs and the
-// record TTL of the first A record.
-func realQuery(server, qname string) (ips []string, ttl uint32, err error) {
-	conn, err := net.DialTimeout("udp", server, 5*time.Second)
+func newTTLCapture(conn *net.UDPConn) *ttlCapture {
+	c := &ttlCapture{}
+	addr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		return nil
+	}
+	if addr.IP.To4() != nil {
+		c.pc4 = ipv4.NewPacketConn(conn)
+		if err := c.pc4.SetControlMessage(ipv4.FlagTTL, true); err != nil {
+			return nil
+		}
+		return c
+	}
+	if addr.IP.IsUnspecified() {
+		// Dual-stack wildcard: try IPv4 first; fall back to IPv6.
+		c.pc4 = ipv4.NewPacketConn(conn)
+		if err := c.pc4.SetControlMessage(ipv4.FlagTTL, true); err == nil {
+			return c
+		}
+		c.pc4 = nil
+	}
+	c.pc6 = ipv6.NewPacketConn(conn)
+	if err := c.pc6.SetControlMessage(ipv6.FlagHopLimit, true); err != nil {
+		return nil
+	}
+	return c
+}
+
+// readFrom reads one datagram; ttl is -1 when no control message arrived.
+func (c *ttlCapture) readFrom(buf []byte) (n, ttl int, err error) {
+	if c.pc4 != nil {
+		n, cm, _, err := c.pc4.ReadFrom(buf)
+		if cm != nil {
+			return n, cm.TTL, nil
+		}
+		return n, -1, err
+	}
+	n, cm, _, err := c.pc6.ReadFrom(buf)
+	if cm != nil {
+		return n, cm.HopLimit, nil
+	}
+	return n, -1, err
+}
+
+// hasIPRecvTTL probes whether the platform delivers the received IP TTL.
+func hasIPRecvTTL() bool {
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err != nil {
-		return nil, 0, err
+		return false
 	}
 	defer func() { _ = conn.Close() }()
+	return newTTLCapture(conn) != nil
+}
+
+// realQuery sends one UDP DNS query and collects every datagram in a 500ms
+// window (GFW fakes arrive first, the real answer later), returning each
+// packet's answers and IP-layer TTL.
+func realQuery(server, qname string, recvTTL bool) ([]realPkt, error) {
+	conn, err := net.DialTimeout("udp", server, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+	uc := conn.(*net.UDPConn) //nolint:forcetypeassert // DialTimeout("udp") always yields *UDPConn
+
+	var tc *ttlCapture
+	if recvTTL {
+		tc = newTTLCapture(uc)
+	}
 
 	msg := new(dns.Msg)
 	dnsutil.SetQuestion(msg, dnsutil.Fqdn(qname), dns.TypeA)
 	msg.UDPSize = 1232
 	if err := msg.Pack(); err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	if _, err := conn.Write(msg.Data); err != nil {
-		return nil, 0, err
+	if _, err := uc.Write(msg.Data); err != nil {
+		return nil, err
 	}
+	_ = uc.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+
+	var out []realPkt
 	buf := make([]byte, 4096)
-	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	n, err := conn.Read(buf)
-	if err != nil {
-		return nil, 0, err
-	}
-	resp := new(dns.Msg)
-	resp.Data = buf[:n]
-	if err := resp.Unpack(); err != nil {
-		return nil, 0, err
-	}
-	for _, rr := range resp.Answer {
-		if a, ok := rr.(*dns.A); ok {
-			ips = append(ips, a.Addr.String())
-			if ttl == 0 {
-				ttl = a.Hdr.TTL
+	first := time.Now()
+	for {
+		var n int
+		pktTTL := -1
+		if tc != nil {
+			n, pktTTL, err = tc.readFrom(buf)
+		} else {
+			n, err = uc.Read(buf)
+		}
+		if err != nil {
+			return out, nil // deadline — window closed
+		}
+		resp := new(dns.Msg)
+		resp.Data = buf[:n]
+		if err := resp.Unpack(); err != nil {
+			continue
+		}
+		pkt := realPkt{ipTTL: pktTTL}
+		for _, rr := range resp.Answer {
+			if a, ok := rr.(*dns.A); ok {
+				pkt.ips = append(pkt.ips, a.Addr.String())
+				if pkt.recTTL == 0 {
+					pkt.recTTL = a.Hdr.TTL
+				}
 			}
 		}
+		out = append(out, pkt)
+		if len(out) == 1 {
+			// First packet seen — allow up to 200ms total for peers (GFW
+			// fakes first, the real answer at ~65–180ms).
+			_ = uc.SetReadDeadline(first.Add(200 * time.Millisecond))
+		}
+		if len(out) >= 2 && time.Since(first) > 150*time.Millisecond {
+			return out, nil // fakes present and the real-answer window covered
+		}
 	}
-	return ips, ttl, nil
+}
+
+// isPolluted reports whether the first answer IP is outside the known clean
+// segments for the queried domain (real-network heuristic: GFW fakes come
+// from Facebook/SoftLayer segments, the real answer is 142.251.x/172.217.x/74.125.x).
+func isPolluted(domain string, ips []string) bool {
+	if len(ips) == 0 {
+		return false
+	}
+	if domain == "www.google.com" {
+		ip := ips[0]
+		return !strings.HasPrefix(ip, "142.251.") && !strings.HasPrefix(ip, "172.217.") &&
+			!strings.HasPrefix(ip, "74.125.")
+	}
+	return false
+}
+
+// collectRows runs n live queries, feeding clean packets into st (the
+// hgState learning loop) and rendering each received datagram as a row.
+func collectRows(server, domain string, startID, n int, recvTTL bool, st *hgState) []realRow {
+	var rows []realRow
+	id := startID
+	for range n {
+		pkts, err := realQuery(server, domain, recvTTL)
+		if err != nil {
+			rows = append(rows, realRow{id: id, domain: domain, ipTTL: -1, err: err.Error()})
+			id++
+			continue
+		}
+		for _, p := range pkts {
+			r := realRow{
+				id: id, domain: domain, ipTTL: p.ipTTL, recTTL: p.recTTL,
+				answers: p.ips, polluted: isPolluted(domain, p.ips), armed: st.armed,
+			}
+			if r.ipTTL > 0 {
+				ttl := uint8(r.ipTTL) //nolint:gosec // G115: IP TTL is 1–255
+				r.accept = st.validate(ttl)
+				if !r.polluted {
+					st.feed(ttl) // learn only from clean (non-polluted) packets
+				}
+			}
+			rows = append(rows, r)
+			id++
+		}
+	}
+	return rows
+}
+
+// shortAnswers renders up to two IPs plus a count ellipsis (34-char column).
+func shortAnswers(ips []string) string {
+	switch len(ips) {
+	case 0:
+		return dim + "no A record" + reset
+	case 1:
+		return ips[0]
+	case 2:
+		return strings.Join(ips, ", ")
+	default:
+		return strings.Join(ips[:2], ", ") + fmt.Sprintf(" …(%d)", len(ips))
+	}
+}
+
+func renderRealHeader() {
+	fmt.Println("  ┌──────┬─────────────────┬───────┬────────┬────────────┬──────────────────────────────────┐")
+	fmt.Println("  │  #   │ Domain          │ TTL   │ Source │ Verdict    │ Answers                  │")
+	fmt.Println("  ├──────┼─────────────────┼───────┼────────┼────────────┼──────────────────────────────────┤")
+}
+
+func renderRealFooter() {
+	fmt.Println("  └──────┴─────────────────┴───────┴────────┴────────────┴──────────────────────────────────┘")
+}
+
+func renderRealRow(r *realRow) {
+	src := green + "REAL" + reset
+	if r.polluted {
+		src = red + "GFW " + reset
+	}
+	var verdict string
+	switch {
+	case r.err != "":
+		verdict = red + "FAILED" + reset
+	case !r.armed:
+		verdict = dim + "LEARN" + reset
+	case r.accept:
+		verdict = green + "PASS ✓" + reset
+	default:
+		verdict = red + "REJECT ✗" + reset
+	}
+	ans := shortAnswers(r.answers)
+	fmt.Printf("  │ %-4d │ %-15s │ %-5d │ %s │ %s │ %s │\n",
+		r.id, r.domain, r.ttl(), rpad(src, 8), rpad(verdict, 12), rpad(ans, 32))
+}
+
+func renderRealTable(rows []realRow) {
+	renderRealHeader()
+	for i := range rows {
+		renderRealRow(&rows[i])
+	}
+	renderRealFooter()
+}
+
+// trustedTTLs returns the armed TTL set sorted ascending.
+func trustedTTLs(s *hgState) []int {
+	var out []int
+	for t := range s.trusted {
+		out = append(out, int(t))
+	}
+	slices.Sort(out)
+	return out
 }
 
 func realTest(server string) {
-	fmt.Println(bold + "HopGuard Real-Network Mode — Live Queries (IP TTL needs Linux)" + reset)
-	fmt.Printf("  Upstream: %s\n\n", server)
-	fmt.Println("  NOTE: hopguard fingerprints the IP-layer TTL via control messages,")
-	fmt.Println("  which Windows sockets do not expose — this mode shows the DNS-layer")
-	fmt.Println("  signals a real deployment observes instead (pollution IPs + record TTLs).")
+	recvTTL := hasIPRecvTTL() // macOS/Linux deliver IP TTL; Windows does not
 
-	for _, q := range []string{"www.baidu.com", "www.google.com"} {
-		fmt.Printf("\n  ─ %s ×3 ─\n", q)
-		for i := 1; i <= 3; i++ {
-			ips, ttl, err := realQuery(server, q)
-			if err != nil {
-				fmt.Printf("  query %d: %v\n", i, err)
-				continue
+	fmt.Println(bold + "HopGuard Real-Network Mode — Live Queries" + reset)
+	if recvTTL {
+		fmt.Printf("  Upstream: %s    Tolerance: ±%d    Learning: %d samples    IP-TTL fingerprint: %sACTIVE%s\n\n",
+			server, fluctuation, minSamples, green, reset)
+	} else {
+		fmt.Printf("  Upstream: %s    Tolerance: ±%d    Learning: %d samples    IP-TTL fingerprint: %sUNAVAILABLE%s\n",
+			server, fluctuation, minSamples, red, reset)
+		fmt.Println("  (Windows sockets expose no IP TTL — showing DNS-layer signals: pollution IPs + record TTLs)")
+		fmt.Println()
+	}
+
+	// ── Scenario A: Google directly (cold) ─────────────────────
+	fmt.Printf("  %s━━━ Scenario A: Google directly (no warm-up) ━━━%s\n\n", red, reset)
+	cold := newHGState()
+	rowsA := collectRows(server, "www.google.com", 1, 3, recvTTL, cold)
+	fmt.Printf("  HopGuard state: %sNOT ARMED%s (%d clean samples, need %d)\n\n", red, reset, cold.samples, minSamples)
+	renderRealTable(rowsA)
+	pollutedA, rejectedA := 0, 0
+	for _, r := range rowsA {
+		if r.polluted {
+			pollutedA++
+			if !r.accept && r.armed {
+				rejectedA++
 			}
-			mark := green + "real" + reset
-			if q == "www.google.com" && !strings.HasPrefix(ips[0], "142.251.") &&
-				!strings.HasPrefix(ips[0], "172.217.") && !strings.HasPrefix(ips[0], "74.125.") {
-				mark = red + "POLLUTED" + reset
-			}
-			fmt.Printf("  query %d: TTL=%-4d answers=%v %s\n", i, ttl, ips, mark)
 		}
 	}
-	fmt.Println("\n  On Linux, hopguard additionally fingerprints the IP TTL of each")
-	fmt.Println("  datagram; GFW injections come from a different network location")
-	fmt.Println("  and cannot match the real server's TTL (±2 trusted window).")
+	fmt.Printf("  %sResult: %d/%d GFW fakes PASSED — still learning, can't reject yet%s\n",
+		red, pollutedA-rejectedA, pollutedA, reset)
+
+	// ── Scenario B: Baidu warm-up → Google ─────────────────────
+	fmt.Println()
+	fmt.Println()
+	fmt.Printf("  %s━━━ Scenario B: Baidu warm-up → Google ━━━%s\n\n", green, reset)
+	warm := newHGState()
+	baiduRows := collectRows(server, "www.baidu.com", 1, minSamples, recvTTL, warm)
+	rowsB := collectRows(server, "www.google.com", 4, 3, recvTTL, warm)
+	renderRealHeader()
+	for i := range baiduRows[:3] {
+		renderRealRow(&baiduRows[i])
+	}
+	fmt.Printf("  │ %-4s │ %-15s │ %-5s │ %-8s │ %-12s │ %-32s │\n", "···", "···", "···", "···", "···", "···")
+	fmt.Println("  ├──────┴─────────────────┴───────┴────────┴────────────┴──────────────────────────────────┤")
+	fmt.Printf("  %s▲ ARMED after %d Baidu queries — trusted TTLs: %v (±%d)%s\n",
+		yellow, warm.samples, trustedTTLs(warm), fluctuation, reset)
+	fmt.Println("  ├──────┬─────────────────┬───────┬────────┬────────────┬──────────────────────────────────┤")
+	for i := range rowsB {
+		renderRealRow(&rowsB[i])
+	}
+	renderRealFooter()
+	pollutedB, rejectedB := 0, 0
+	for _, r := range rowsB {
+		if r.polluted {
+			pollutedB++
+			if !r.accept && r.armed {
+				rejectedB++
+			}
+		}
+	}
+	fmt.Printf("  %sResult: %d/%d GFW fakes REJECTED — armed from Baidu warm-up%s\n",
+		green, rejectedB, pollutedB, reset)
+
+	fmt.Println("\n  GFW injections come from a different network location and cannot match")
+	fmt.Println("  the real server's IP-layer TTL (±2 trusted window); baidu shares the")
+	fmt.Println("  same path to 8.8.8.8, so its clean traffic arms the fingerprint.")
 }
 
 func main() {
@@ -235,6 +505,13 @@ func main() {
 		fmt.Println("\nCompares: Google directly (cold) vs Baidu warm-up → Google (armed).")
 		return
 	}
+
+	fmt.Print("\033[2J\033[H")
+	fmt.Println()
+	fmt.Println(bold + cyan + "  ╔══════════════════════════════════════════════════════════════╗" + reset)
+	fmt.Println(bold + cyan + "  ║       HopGuard — IP TTL Fingerprinting Anti-Pollution        ║" + reset)
+	fmt.Println(bold + cyan + "  ╚══════════════════════════════════════════════════════════════╝" + reset)
+	fmt.Println()
 
 	if *realMode {
 		realTest(*server)
@@ -333,12 +610,6 @@ func main() {
 
 	// ── Render ──────────────────────────────────────────────────
 
-	fmt.Print("\033[2J\033[H")
-	fmt.Println()
-	fmt.Println(bold + cyan + "  ╔══════════════════════════════════════════════════════════════╗" + reset)
-	fmt.Println(bold + cyan + "  ║       HopGuard — IP TTL Fingerprinting Anti-Pollution        ║" + reset)
-	fmt.Println(bold + cyan + "  ╚══════════════════════════════════════════════════════════════╝" + reset)
-	fmt.Println()
 	fmt.Printf("  Upstream: 8.8.8.8    Real TTL: %d±1    Tolerance: ±%d    Learning: %d samples\n\n",
 		realBaseTTL, fluctuation, minSamples)
 
