@@ -40,6 +40,18 @@ var DefaultMessage = NewMessage()
 // DefaultMessage comment for the rationale behind global pools.
 var DefaultBuffer = NewBuffer(SecureBufferSize, defaultBufferSize)
 
+// packBufPool reuses outbound query packing buffers.  Outbound DNS queries
+// (header + question + EDNS) fit comfortably in UDPBufferSize (1232);
+// msg.Pack reuses msg.Data's capacity, so pre-setting Data to a pooled
+// buffer makes Pack allocation-free on the hot path — Message.Put zeroes
+// Data, so without this pool every packed query allocated fresh.
+var packBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, UDPBufferSize)
+		return &b
+	},
+}
+
 // NewMessage creates a new Message.
 func NewMessage() *Message {
 	return &Message{
@@ -121,5 +133,24 @@ func (b *Buffer) Put(buf []byte) {
 		buf = buf[:b.size]
 		clear(buf)
 		b.pool.Put(&buf)
+	}
+}
+
+// AcquirePackBuf returns a zero-length, UDPBufferSize-capacity packing
+// buffer.  Set it as msg.Data before Pack: Pack reuses the capacity when
+// the message fits, and callers release via ReleasePackBuf after the
+// packed bytes have been consumed (the write/encrypt completes before the
+// release).
+func AcquirePackBuf() []byte {
+	bp := packBufPool.Get().(*[]byte)
+	return (*bp)[:0]
+}
+
+// ReleasePackBuf returns a packing buffer to the pool when its capacity
+// matches the class.  Pack-grown buffers (an oversized message) are
+// dropped.  No clear: Pack writes every byte of the serialized message.
+func ReleasePackBuf(b []byte) {
+	if cap(b) == UDPBufferSize {
+		packBufPool.Put(&b)
 	}
 }

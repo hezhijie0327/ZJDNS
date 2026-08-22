@@ -138,9 +138,22 @@ func (c *Client) executeOnce(
 	server *config.UpstreamServer,
 	useTCP bool,
 ) (*dns.Msg, bool, error) {
-	if err := msg.Pack(); err != nil {
-		return nil, false, fmt.Errorf("packing dns query: %w", err)
+	// Pooled pack buffer — prepareQuery consumes msg.Data synchronously
+	// (encrypting into a fresh output), so the buffer is released right
+	// after the encryption (see plain/udp.go executeUDPPooled).
+	packBuf := pool.AcquirePackBuf()
+	msg.Data = packBuf
+	packErr := msg.Pack()
+	msgData := msg.Data
+	if packErr != nil {
+		pool.ReleasePackBuf(packBuf)
+		msg.Data = nil
+		return nil, false, fmt.Errorf("packing dns query: %w", packErr)
 	}
+	if cap(msgData) != pool.UDPBufferSize {
+		pool.ReleasePackBuf(packBuf) // Pack grew past the class — recycle it, drop the grown buffer
+	}
+	msg.Data = nil
 
 	q := &dnscryptcrypto.EncryptedQuery{
 		ESVersion:   state.esVersion,
@@ -153,8 +166,9 @@ func (c *Client) executeOnce(
 	}
 	state.mu.Lock()
 	q.MinQueryLen = int(state.minQueryLen.Load())
-	encrypted, clientNonce, sharedKey, err := prepareQuery(state, q, msg.Data)
+	encrypted, clientNonce, sharedKey, err := prepareQuery(state, q, msgData)
 	state.mu.Unlock()
+	pool.ReleasePackBuf(msgData) // class-capacity check inside; grown buffers are dropped
 	if err != nil {
 		return nil, false, fmt.Errorf("encrypting dnscrypt query: %w", err)
 	}

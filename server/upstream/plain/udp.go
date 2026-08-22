@@ -155,14 +155,28 @@ func (c *Client) executeUDPPooled(ctx context.Context, msg *dns.Msg, server *con
 	originalID := msg.ID
 	trackingID := uc.NextID()
 	msg.ID = trackingID
+	// Pack into a pooled buffer — msg.Pack reuses msg.Data's capacity, and
+	// Message.Put zeroes Data, so this avoids the per-query pack allocation.
+	// The buffer is released only after Exchange has consumed msgData (a
+	// concurrent PackQuery would otherwise overwrite the wire in flight).
+	packBuf := pool.AcquirePackBuf()
+	msg.Data = packBuf
 	packErr := msg.Pack()
 	msgData := msg.Data
-	msg.ID = originalID
 	if packErr != nil {
+		pool.ReleasePackBuf(packBuf)
+		msg.Data = nil
+		msg.ID = originalID
 		return nil, packErr
 	}
+	if cap(msgData) != pool.UDPBufferSize {
+		pool.ReleasePackBuf(packBuf) // Pack grew past the class — recycle it, drop the grown buffer
+	}
+	msg.Data = nil
+	msg.ID = originalID
 
 	payload, err := uc.Exchange(ctx, msgData, string([]byte{byte(trackingID >> 8), byte(trackingID)})) //nolint:gosec // G115: DNS ID fits uint16
+	pool.ReleasePackBuf(msgData)                                                                       // class-capacity check inside; grown buffers are dropped
 	if err != nil {
 		if uc.IsDead() {
 			c.udpPool.Remove(uc)
@@ -255,17 +269,29 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 	for round := 0; ; round++ {
 		trackingID := uc.NextID()
 		msg.ID = trackingID
-		if packErr := msg.Pack(); packErr != nil {
+		// Pooled pack buffer per round — released after ExchangeCollect's
+		// synchronous write (see executeUDPPooled).
+		packBuf := pool.AcquirePackBuf()
+		msg.Data = packBuf
+		packErr := msg.Pack()
+		msgData := msg.Data
+		if packErr != nil {
+			pool.ReleasePackBuf(packBuf)
+			msg.Data = nil
 			if previous != nil {
 				pool.DefaultMessage.Put(previous)
 			}
 			return nil, packErr
 		}
-		msgData := msg.Data
+		if cap(msgData) != pool.UDPBufferSize {
+			pool.ReleasePackBuf(packBuf) // Pack grew past the class — recycle it, drop the grown buffer
+		}
+		msg.Data = nil
 		msg.ID = originalID
 
 		matchKey := string([]byte{byte(trackingID >> 8), byte(trackingID)}) //nolint:gosec // G115: DNS ID — protocol-bounded uint16
 		collectCh, err := uc.ExchangeCollect(ctx, msgData, matchKey)
+		pool.ReleasePackBuf(msgData) // class-capacity check inside; grown buffers are dropped
 		if err != nil {
 			if uc.IsDead() {
 				c.udpPool.Remove(uc)
