@@ -265,20 +265,20 @@ func (s *Store) scan() error {
 	s.tail = fi.Size()
 	s.sparse = make([]sparseEntry, 0, blockCount)
 
-	var (
-		keyLenBuf  [2]byte
-		tsBuf      [8]byte
-		ttlBuf     [4]byte
-		flagBuf    [1]byte
-		wireLenBuf [4]byte
-	)
+	var keyLenBuf [2]byte
+	// recBuf is reused across readRecord calls: the per-record buffers
+	// (keyBuf make + 4 fixed-field buffers + string copies) were ~19M
+	// allocations on a 6.7M-record spill file.  The string(rec[:keyLen])
+	// conversion still copies — the map keys must outlive the reused buffer.
+	recBuf := make([]byte, 0, recordHeaderLen-2+256)
 	pos := int64(headerLen)
 	blockStart := pos
 	var firstKey string
 	records := 0
-	// readRecord reads the fixed fields of the record at the current fd
-	// position, skipping the wire without allocating.  Returns false on
-	// EOF/truncation/corruption — the caller drops the tail there.
+	// readRecord reads the key and fixed fields of the record at the current
+	// fd position in two syscalls (keyLen prefix, then key+fields in one
+	// ReadFull), skipping the wire without allocating or reading it.  Returns
+	// false on EOF/truncation/corruption — the caller drops the tail there.
 	readRecord := func() (key string, ts int64, ttl int, validated bool, wireLen int, ok bool) {
 		if _, err := io.ReadFull(s.f, keyLenBuf[:]); err != nil {
 			return "", 0, 0, false, 0, false
@@ -287,34 +287,33 @@ func (s *Store) scan() error {
 		if keyLen == 0 || keyLen > maxKeyLen {
 			return "", 0, 0, false, 0, false
 		}
-		keyBuf := make([]byte, keyLen)
-		if _, err := io.ReadFull(s.f, keyBuf); err != nil {
+		need := recordHeaderLen - 2 + keyLen // key + ts(8) + ttl(4) + flags(1) + wire_len(4)
+		if cap(recBuf) < need {
+			recBuf = make([]byte, need)
+		} else {
+			recBuf = recBuf[:need]
+		}
+		if _, err := io.ReadFull(s.f, recBuf); err != nil {
 			return "", 0, 0, false, 0, false
 		}
-		if _, err := io.ReadFull(s.f, tsBuf[:]); err != nil {
-			return "", 0, 0, false, 0, false
-		}
-		if _, err := io.ReadFull(s.f, ttlBuf[:]); err != nil {
-			return "", 0, 0, false, 0, false
-		}
-		if _, err := io.ReadFull(s.f, flagBuf[:]); err != nil {
-			return "", 0, 0, false, 0, false
-		}
-		if _, err := io.ReadFull(s.f, wireLenBuf[:]); err != nil {
-			return "", 0, 0, false, 0, false
-		}
-		wireLen = int(binary.BigEndian.Uint32(wireLenBuf[:]))
+		ts = int64(binary.BigEndian.Uint64(recBuf[keyLen : keyLen+8]))   //nolint:gosec // G115: unix seconds fit int64
+		ttl = int(binary.BigEndian.Uint32(recBuf[keyLen+8 : keyLen+12])) //nolint:gosec // G115: ttl is uint32, fits int on all platforms
+		validated = recBuf[keyLen+12]&1 != 0
+		wireLen = int(binary.BigEndian.Uint32(recBuf[keyLen+13 : keyLen+17])) //nolint:gosec // G115: wire length bounded by maxWireLen
 		if wireLen > maxWireLen {
 			return "", 0, 0, false, 0, false
 		}
-		if _, err := io.CopyN(io.Discard, s.f, int64(wireLen)); err != nil {
+		// Skip the wire with a seek, not a CopyN-to-Discard: the latter both
+		// allocated an io.LimitReader per record (6.7M objects on a
+		// 6.7M-record file) and read the payload bytes off disk just to
+		// discard them — a full-file read at every Open.  Seek is O(1); the
+		// post-seek bound check preserves CopyN's EOF semantics (a record
+		// claiming bytes past the physical EOF is corrupt).
+		newPos, err := s.f.Seek(int64(wireLen), io.SeekCurrent)
+		if err != nil || newPos > s.tail {
 			return "", 0, 0, false, 0, false
 		}
-		return string(keyBuf),
-			int64(binary.BigEndian.Uint64(tsBuf[:])), //nolint:gosec // G115: unix seconds fit int64
-			int(binary.BigEndian.Uint32(ttlBuf[:])),
-			flagBuf[0]&1 != 0,
-			wireLen, true
+		return string(recBuf[:keyLen]), ts, ttl, validated, wireLen, true
 	}
 
 	// Sorted region: group records into blocks for the sparse index.

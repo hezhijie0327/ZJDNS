@@ -719,3 +719,33 @@ func BenchmarkGet(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkOpen measures the startup scan: a 10K-record spill file reopened
+// per iteration.  The scan walks every record header and skips the wire
+// payloads — the restart cost on a large deployment spill file.
+func BenchmarkOpen(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "bench.bin")
+	st, err := Create(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	wire := bytes.Repeat([]byte{0xAA}, 400)
+	for i := range 10000 {
+		if err := st.Put(fmt.Sprintf("key-%05d.example.", i), int64(i), 300, true, wire); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		st, err := Open(path)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := st.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
