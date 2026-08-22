@@ -121,22 +121,24 @@ func ReleaseUDPPayload(packet []byte) { releasePacketBuf(packet) }
 
 // releasePacketBuf returns a pooled payload buffer to its tier, keyed by
 // capacity class.  Heap buffers (cap not matching a tier) are left for the GC.
+// No clear: the only writer (readLoop's copy) always fills the consumed
+// range [0:n] before delivery, and the slice length bounds every reader to
+// n — a memset per released packet (up to 16KB on the large tier) was pure
+// cost on the loaded-server profile, same reasoning as spillfile's block
+// buffers.
 func releasePacketBuf(packet []byte) {
 	switch cap(packet) {
 	case packetBufSmall:
 		bp := &packet
 		*bp = (*bp)[:packetBufSmall]
-		clear(*bp)
 		packetBufSmallPool.Put(bp)
 	case packetBufMedium:
 		bp := &packet
 		*bp = (*bp)[:packetBufMedium]
-		clear(*bp)
 		packetBufMediumPool.Put(bp)
 	case packetBufLarge:
 		bp := &packet
 		*bp = (*bp)[:packetBufLarge]
-		clear(*bp)
 		packetBufLargePool.Put(bp)
 	}
 }

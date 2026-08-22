@@ -535,21 +535,13 @@ func TestPacketBufTiers(t *testing.T) {
 		if got := cap(packet); got != tt.wantCap {
 			t.Errorf("acquire(%d): cap = %d, want %d", tt.size, got, tt.wantCap)
 		}
-		for i := range packet {
-			packet[i] = 0xAA
-		}
 		release()
-		// Re-acquire: capacity class survives the round-trip, and the release
-		// cleared the buffer — no stale response bytes leak to the next query.
+		// Re-acquire: capacity class survives the round-trip.  No clear on
+		// release — readLoop's copy always fills the consumed range [0:n]
+		// and the slice length bounds every reader to n.
 		packet2, release2 := acquirePacketBuf(tt.size)
 		if got := cap(packet2); got != tt.wantCap {
 			t.Errorf("acquire(%d) after release: cap = %d, want %d", tt.size, got, tt.wantCap)
-		}
-		for _, b := range packet2 {
-			if b != 0 {
-				t.Errorf("acquire(%d) after release: buffer not cleared (byte 0x%02x)", tt.size, b)
-				break
-			}
 		}
 		release2()
 	}
