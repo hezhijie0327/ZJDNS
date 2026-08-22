@@ -55,11 +55,15 @@ func (c *Client) Close() {
 	}
 }
 
-// ReapDeadUDP drops dead sockets from the UDP pool — an idle-recycled
-// readLoop socket otherwise stays pinned under its address key until that
-// address is queried again.  Called periodically by the server (H1).
-func (c *Client) ReapDeadUDP() {
+// ReapDead drops dead sockets/connections from the UDP and TCP pools — an
+// idle-recycled readLoop socket otherwise stays pinned under its address key
+// (counting against the global cap) until that address is queried again.
+// Called periodically by the server.
+func (c *Client) ReapDead() {
 	if c != nil && c.udpPool != nil {
 		c.udpPool.ReapDead()
+	}
+	if c != nil && c.tcpPool != nil {
+		c.tcpPool.ReapDead()
 	}
 }

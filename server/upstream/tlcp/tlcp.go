@@ -11,6 +11,7 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/internal/resolv"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -93,7 +94,7 @@ func (c *Client) dialTLCPConn(ctx context.Context, addr string, tlcpConfig *tlcp
 		tcpConn, err = proxyDialer.DialContext(ctx, "tcp", addr)
 	} else {
 		var d net.Dialer
-		tcpConn, err = d.DialContext(ctx, "tcp", addr)
+		tcpConn, err = resolv.Default.DialContext(ctx, "tcp", addr, &d)
 	}
 	if err != nil {
 		return nil, err

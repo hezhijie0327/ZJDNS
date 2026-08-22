@@ -10,6 +10,7 @@ import (
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/internal/resolv"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -63,7 +64,7 @@ func (c *Client) dialTLSConn(ctx context.Context, addr string, tlsConfig *eTLS.C
 		tcpConn, err = proxyDialer.DialContext(ctx, "tcp", addr)
 	} else {
 		var d net.Dialer
-		tcpConn, err = d.DialContext(ctx, "tcp", addr)
+		tcpConn, err = resolv.Default.DialContext(ctx, "tcp", addr, &d)
 	}
 	if err != nil {
 		return nil, err

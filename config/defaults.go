@@ -217,6 +217,12 @@ const (
 	DefaultAcceptRetryDelay      = 100 * time.Millisecond // DoT/DoQ accept retry sleep
 	DefaultSweepInterval         = 5 * time.Minute        // periodic cleanup sweep
 	DefaultTCPWriteMuStaleCutoff = 2 * time.Minute        // stale TCP write mutex cutoff
+	// DefaultPoolReapInterval is the dead-socket reap window for all upstream
+	// connection pools.  Idle-recycled sockets keep pinning a read buffer plus
+	// an FD and stay counted against each pool's global cap until reaped — a
+	// 5-minute sweep let them starve the cap and forced eviction churn, so the
+	// pool reap runs on its own short interval instead.
+	DefaultPoolReapInterval = 30 * time.Second
 
 	DefaultCookieSecretRotationInterval = 24 * time.Hour // RFC 7873 §7.1: default lifetime 1 day
 	DefaultECSRefreshInterval           = 15 * time.Minute
@@ -228,16 +234,18 @@ const (
 
 const (
 	DefaultMaxPipe  = 16 // max in-flight queries per TCP/DoT connection
-	DefaultMaxConns = 4  // max connections per upstream
-	// DefaultMaxPoolTotalConns caps the total live connections across ALL
-	// upstream keys in one pool instance — recursive resolution otherwise
-	// opens up to 4 sockets per distinct authoritative NS address (UDP) or
-	// forced-TCP upstream (TCP/QUIC) with no global bound (H1).  Sized for
-	// a personal deployment (a handful of forwarding upstreams at 4 conns
-	// each, or a recursive walk's root+TLD+auth working set) while bounding
-	// pool memory: 9 pool instances × 32 = 288 sockets max, each UDP socket
-	// pinning a 16 KB read buffer and each QUIC connection hundreds of KB.
-	DefaultMaxPoolTotalConns       = 32
+	DefaultMaxConns = 8  // max connections per upstream
+	// DefaultMaxPoolTotalConns bounds the live connections across ALL upstream
+	// keys in one pool instance.  Recursive resolution fans out to every
+	// authoritative NS address (one pool key per ip:port) plus TLD probes; a
+	// small cap forced eviction of in-flight sockets, whose failed queries
+	// fell through to per-query dials and re-entered the pool — a self-
+	// reinforcing churn loop.  The cap is now a soft ceiling (in-flight
+	// sockets are never evicted; idle sockets idle-recycle at 30s and the 30s
+	// reap reclaims their slots), so 512 mostly bounds the QUIC side (each
+	// connection is hundreds of KB) rather than the 16 KB-buffer UDP side:
+	// 9 pool instances × 512 × 16 KB ≈ 73 MB transient worst case.
+	DefaultMaxPoolTotalConns       = 512
 	DefaultMaxProbes               = 16    // max concurrent latency probes
 	DefaultMaxIncomingStreams      = 65535 // QUIC max incoming streams (RFC 9250: one stream per query — 256 exhausted a client's stream quota in seconds, then every query waited on MAX_STREAMS behind quic-go's 25ms ACK delay)
 	DefaultMaxConcurrentStreams    = 64    // QUIC concurrent in-flight stream limit

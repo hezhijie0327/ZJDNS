@@ -85,21 +85,21 @@ func (c *RawConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 	}
 
 	if c.closed.Load() {
-		return nil, fmt.Errorf("raw pool: connection to %s is closed", c.addr)
+		return nil, ErrConnClosed
 	}
 
 	resultCh := make(chan []byte, 1)
 	c.mu.Lock()
 	if c.closed.Load() {
 		c.mu.Unlock()
-		return nil, fmt.Errorf("raw pool: connection to %s closed before write", c.addr)
+		return nil, ErrConnClosed
 	}
 	if _, dup := c.inflight[matchKey]; dup {
 		c.mu.Unlock()
 		// Match-key collision (2^-96 for DNSCrypt nonces, ID reuse for plain
 		// DNS after 65536 queries) — fail the new exchange; the caller falls
 		// back to a per-query dial.
-		return nil, fmt.Errorf("raw pool: match key collision on %s", c.addr)
+		return nil, ErrKeyCollision
 	}
 	c.inflight[matchKey] = &rawPending{resultCh: resultCh}
 	c.mu.Unlock()
@@ -134,13 +134,13 @@ func (c *RawConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 	c.writeMu.Unlock()
 	if err != nil {
 		c.close()
-		return nil, fmt.Errorf("raw pool: write to %s: %w", c.addr, err)
+		return nil, errors.Join(ErrWriteFailed, err)
 	}
 
 	select {
 	case resp := <-resultCh:
 		if resp == nil {
-			return nil, fmt.Errorf("raw pool: connection to %s closed", c.addr)
+			return nil, ErrConnClosed
 		}
 		return resp, nil
 	case <-ctx.Done():
@@ -269,7 +269,7 @@ func (p *RawPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc fu
 			return p.dialAndAdd(ctx, key, dialAddr, dialFunc)
 		}
 		p.mu.Unlock()
-		return nil, fmt.Errorf("raw pool: no available connection to %s", key)
+		return nil, ErrNoAvailableSocket
 	}
 
 	liveConns := make([]*RawConn, 0, len(conns))
@@ -330,7 +330,7 @@ func (p *RawPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc
 		if dialErr == nil {
 			_ = conn.Close()
 		}
-		return nil, fmt.Errorf("raw pool: pool shut down for %s", key)
+		return nil, ErrPoolShutdown
 	}
 	if dialErr != nil {
 		p.mu.Unlock()
@@ -345,7 +345,7 @@ func (p *RawPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc
 			p.mu.Unlock()
 			c.close()
 			log.Debugf("TCPPOOL: raw pool for %s already at limit (%d), discarding extra connection", key, p.maxConns)
-			return nil, fmt.Errorf("raw pool: max conns reached for %s", key)
+			return nil, ErrMaxConnsReached
 		}
 		p.conns[key] = append(p.conns[key], c)
 		n := len(p.conns[key])
@@ -384,12 +384,17 @@ func (p *RawPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc
 
 // evictOne removes one connection from the pool to make room for a new dial,
 // preferring (1) dead connections (already closed — nil victim), (2) idle
-// live connections (nothing in flight) oldest first, (3) any live connection
-// oldest first.  Must be called with p.mu held; skip is never evicted.  The
+// live connections (nothing in flight) oldest first.  In-flight connections
+// are NEVER evicted: killing a busy connection fails every exchange waiting
+// on it, and the callers fall through to per-query dials that re-enter the
+// pool — a self-reinforcing dial/evict churn loop under saturation.  When
+// every connection is busy the pool overshoots maxTotal transiently; idle
+// connections self-close via the read-loop idle timeout and ReapDead reclaims
+// their slots.  Must be called with p.mu held; skip is never evicted.  The
 // live victim is returned WITHOUT closing — the caller closes it outside
 // p.mu (ABBA convention, as in Remove/Shutdown).
 func (p *RawPool) evictOne(skip *RawConn) (victim *RawConn, removed bool) {
-	// (1) Dead connections cost a slot while waiting for lazy pruning —
+	// (1) Dead connections cost a slot while waiting for the reap —
 	// drop them without closing anything (their readLoop already closed).
 	for key, conns := range p.conns {
 		for i, c := range conns {
@@ -404,39 +409,56 @@ func (p *RawPool) evictOne(skip *RawConn) (victim *RawConn, removed bool) {
 			return nil, true
 		}
 	}
-	// (2)+(3): least-recently-used live connection.  Prefer idle connections
-	// — an in-flight eviction costs its waiters a failed exchange; an idle
-	// one costs nothing.
-	for preferIdle := true; ; preferIdle = false {
-		var victimKey string
-		var victimIdx int
-		oldest := int64(math.MaxInt64)
-		for key, conns := range p.conns {
-			for i, c := range conns {
-				if c == skip || c.IsDead() {
-					continue
-				}
-				if preferIdle && c.inFlight.Load() > 0 {
-					continue
-				}
-				if last := c.lastUsed.Load(); last < oldest {
-					oldest = last
-					victim, victimKey, victimIdx = c, key, i
-				}
+	// (2): least-recently-used idle connection — an in-flight eviction costs
+	// its waiters a failed exchange; an idle one costs nothing.
+	var victimKey string
+	var victimIdx int
+	oldest := int64(math.MaxInt64)
+	for key, conns := range p.conns {
+		for i, c := range conns {
+			if c == skip || c.IsDead() || c.inFlight.Load() > 0 {
+				continue
+			}
+			if last := c.lastUsed.Load(); last < oldest {
+				oldest = last
+				victim, victimKey, victimIdx = c, key, i
 			}
 		}
-		if victim == nil {
-			if preferIdle {
-				continue // second pass: in-flight connections allowed
+	}
+	if victim == nil {
+		return nil, false // only busy connections left — soft-cap overshoot
+	}
+	p.conns[victimKey] = append(p.conns[victimKey][:victimIdx], p.conns[victimKey][victimIdx+1:]...)
+	if len(p.conns[victimKey]) == 0 {
+		delete(p.conns, victimKey)
+	}
+	p.total--
+	return victim, true
+}
+
+// ReapDead drops dead connections from every pool key and deletes keys with
+// no live connections left.  Called periodically by the server — a connection
+// idle-recycled by its readLoop otherwise stays pinned under its address key
+// (counting against the global cap) until that address is queried again.
+func (p *RawPool) ReapDead() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key, conns := range p.conns {
+		live := conns[:0]
+		for _, c := range conns {
+			if !c.IsDead() {
+				live = append(live, c)
 			}
-			return nil, false
 		}
-		p.conns[victimKey] = append(p.conns[victimKey][:victimIdx], p.conns[victimKey][victimIdx+1:]...)
-		if len(p.conns[victimKey]) == 0 {
-			delete(p.conns, victimKey)
+		removed := len(conns) - len(live)
+		if removed > 0 {
+			p.total -= removed
 		}
-		p.total--
-		return victim, true
+		if len(live) == 0 {
+			delete(p.conns, key)
+			continue
+		}
+		p.conns[key] = live
 	}
 }
 

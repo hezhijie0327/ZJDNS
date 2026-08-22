@@ -73,6 +73,20 @@ func (c *Client) Close() {
 	}
 }
 
+// ReapDead drops dead connections from the TLCP and DTLCP pools.  Called
+// periodically by the server.
+func (c *Client) ReapDead() {
+	if c == nil {
+		return
+	}
+	if c.tlcpPool != nil {
+		c.tlcpPool.ReapDead()
+	}
+	if c.dtlcpPool != nil {
+		c.dtlcpPool.ReapDead()
+	}
+}
+
 // tlcpClientConfig builds a gotlcp/tlcp Config for upstream TLCP connections.
 //
 // NOTE: this project has no per-upstream SM2 CA-file config, so verification

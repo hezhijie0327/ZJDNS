@@ -12,6 +12,7 @@ import (
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/resolv"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -146,6 +147,13 @@ func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 
 	tlsCfg := tlsConfig.Clone()
 	tlsCfg.NextProtos = config.NextProtoDOH3
+	if tlsCfg.ServerName == "" {
+		// quic-go derives SNI from the dial-addr hostname when ServerName is
+		// empty — pin it to the URL host before the dial closure switches to
+		// a cached IP (resolv SNI safety contract).  Set once at transport
+		// creation: the Dial closure runs concurrently per connection.
+		tlsCfg.ServerName = host
+	}
 
 	quicCfg := c.getQUICConfig("doh3:"+key, tlsConfig.InsecureSkipVerify)
 
@@ -169,7 +177,7 @@ func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 					if err != nil {
 						return nil, fmt.Errorf("proxy ListenPacket: %w", err)
 					}
-					remoteAddr, err := net.ResolveUDPAddr("udp", host)
+					remoteAddr, err := resolv.Default.ResolveUDPAddr(ctx, host)
 					if err != nil {
 						_ = pconn.Close()
 						return nil, fmt.Errorf("resolve %s: %w", host, err)
@@ -184,7 +192,13 @@ func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 					}
 					return conn, nil
 				}
-				conn, err := quic.DialAddrEarly(ctx, host, tlsCfg, cpy)
+				// Dial an IP literal from the resolution cache (SNI already
+				// pinned to the URL host at transport creation).
+				dialAddr := host
+				if resolved, rErr := resolv.Default.ResolveUDPAddr(ctx, host); rErr == nil {
+					dialAddr = resolved.String()
+				}
+				conn, err := quic.DialAddrEarly(ctx, dialAddr, tlsCfg, cpy)
 				if err == nil {
 					log.Debugf("UPSTREAM: DoH3 negotiated for %s — cipher=%s resumed=%v 0-RTT=%v",
 						host, tls.CipherSuiteName(conn.ConnectionState().TLS.CipherSuite),

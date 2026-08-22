@@ -11,6 +11,7 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/internal/resolv"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -24,7 +25,15 @@ import (
 // differently than gotlcp. Track gotlcp upstream for a fix to the
 // connected-socket issue.
 func dialDTLCP(ctx context.Context, network, addr string, cfg *dtlcp.Config) (*dtlcp.Conn, error) {
-	remoteAddr, err := net.ResolveUDPAddr(network, addr)
+	// Pin SNI to the original hostname before the dial addr becomes a cached
+	// IP (resolv SNI safety contract); cfg is built per query, so mutation is
+	// safe.  Mirrors the DoH-over-TLCP default at http_tlcp.go.
+	if cfg.ServerName == "" {
+		if h, _, err := net.SplitHostPort(addr); err == nil && net.ParseIP(h) == nil {
+			cfg.ServerName = h
+		}
+	}
+	remoteAddr, err := resolv.Default.ResolveUDPAddr(ctx, addr)
 	if err != nil {
 		return nil, fmt.Errorf("dtlcp: resolve %s: %w", addr, err)
 	}
@@ -150,7 +159,7 @@ func (c *Client) dialDTLCPConn(ctx context.Context, addr string, server *config.
 		if pErr != nil {
 			return nil, fmt.Errorf("dtlcp: proxy ListenPacket: %w", pErr)
 		}
-		remoteAddr, rErr := net.ResolveUDPAddr("udp", serverAddr)
+		remoteAddr, rErr := resolv.Default.ResolveUDPAddr(ctx, serverAddr)
 		if rErr != nil {
 			_ = pconn.Close()
 			return nil, fmt.Errorf("dtlcp: resolve %s: %w", serverAddr, rErr)

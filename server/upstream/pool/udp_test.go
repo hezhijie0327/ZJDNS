@@ -190,14 +190,14 @@ func TestUDPPool_AcquireReuses(t *testing.T) {
 		return d.DialContext(ctx, "udp", a)
 	}
 
-	c1, err := p.Acquire(context.Background(), addr, addr, dialFunc)
+	c1, err := p.Acquire(context.Background(), addr, addr, false, dialFunc)
 	if err != nil {
 		t.Fatalf("acquire 1: %v", err)
 	}
 	if _, err := c1.Exchange(context.Background(), []byte("01query"), "01"); err != nil {
 		t.Fatalf("exchange: %v", err)
 	}
-	c2, err := p.Acquire(context.Background(), addr, addr, dialFunc)
+	c2, err := p.Acquire(context.Background(), addr, addr, false, dialFunc)
 	if err != nil {
 		t.Fatalf("acquire 2: %v", err)
 	}
@@ -223,11 +223,11 @@ func TestUDPPool_ReapDead(t *testing.T) {
 	}
 
 	// Two keys, one live socket each.
-	c1, err := p.Acquire(context.Background(), addr1, addr1, dialFunc)
+	c1, err := p.Acquire(context.Background(), addr1, addr1, false, dialFunc)
 	if err != nil {
 		t.Fatalf("acquire 1: %v", err)
 	}
-	c2, err := p.Acquire(context.Background(), addr2, addr2, dialFunc)
+	c2, err := p.Acquire(context.Background(), addr2, addr2, false, dialFunc)
 	if err != nil {
 		t.Fatalf("acquire 2: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestUDPPool_ReapDeadKeepsLive(t *testing.T) {
 		return d.DialContext(ctx, "udp", a)
 	}
 
-	c1, err := p.Acquire(context.Background(), addr, addr, dialFunc)
+	c1, err := p.Acquire(context.Background(), addr, addr, false, dialFunc)
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestUDPPool_ReapDeadKeepsLive(t *testing.T) {
 	dead := c1
 	dead.close()
 	// A fresh live socket — keep.
-	if _, err := p.Acquire(context.Background(), addr, addr, dialFunc); err != nil {
+	if _, err := p.Acquire(context.Background(), addr, addr, false, dialFunc); err != nil {
 		t.Fatalf("acquire live: %v", err)
 	}
 
@@ -309,11 +309,11 @@ func TestUDPPool_GlobalCapEvictsLRU(t *testing.T) {
 		return d.DialContext(ctx, "udp", a)
 	}
 
-	c1, err := p.Acquire(context.Background(), addr1, addr1, dialFunc)
+	c1, err := p.Acquire(context.Background(), addr1, addr1, false, dialFunc)
 	if err != nil {
 		t.Fatalf("acquire 1: %v", err)
 	}
-	c2, err := p.Acquire(context.Background(), addr2, addr2, dialFunc)
+	c2, err := p.Acquire(context.Background(), addr2, addr2, false, dialFunc)
 	if err != nil {
 		t.Fatalf("acquire 2: %v", err)
 	}
@@ -321,7 +321,7 @@ func TestUDPPool_GlobalCapEvictsLRU(t *testing.T) {
 	c1.lastUsed.Store(100)
 	c2.lastUsed.Store(200)
 
-	c3, err := p.Acquire(context.Background(), addr3, addr3, dialFunc)
+	c3, err := p.Acquire(context.Background(), addr3, addr3, false, dialFunc)
 	if err != nil {
 		t.Fatalf("acquire 3: %v", err)
 	}
@@ -370,11 +370,11 @@ func TestUDPPool_GlobalCapPrefersIdle(t *testing.T) {
 		return d.DialContext(ctx, "udp", a)
 	}
 
-	c1, err := p.Acquire(context.Background(), addr1, addr1, dialFunc)
+	c1, err := p.Acquire(context.Background(), addr1, addr1, false, dialFunc)
 	if err != nil {
 		t.Fatalf("acquire 1: %v", err)
 	}
-	c2, err := p.Acquire(context.Background(), addr2, addr2, dialFunc)
+	c2, err := p.Acquire(context.Background(), addr2, addr2, false, dialFunc)
 	if err != nil {
 		t.Fatalf("acquire 2: %v", err)
 	}
@@ -383,7 +383,7 @@ func TestUDPPool_GlobalCapPrefersIdle(t *testing.T) {
 	c2.lastUsed.Store(200)
 	c1.inFlight.Add(1)
 
-	if _, err := p.Acquire(context.Background(), addr3, addr3, dialFunc); err != nil {
+	if _, err := p.Acquire(context.Background(), addr3, addr3, false, dialFunc); err != nil {
 		t.Fatalf("acquire 3: %v", err)
 	}
 
@@ -409,18 +409,18 @@ func TestUDPPool_GlobalCapDeadFirst(t *testing.T) {
 		return d.DialContext(ctx, "udp", a)
 	}
 
-	c1, err := p.Acquire(context.Background(), addr1, addr1, dialFunc)
+	c1, err := p.Acquire(context.Background(), addr1, addr1, false, dialFunc)
 	if err != nil {
 		t.Fatalf("acquire 1: %v", err)
 	}
-	c2, err := p.Acquire(context.Background(), addr2, addr2, dialFunc)
+	c2, err := p.Acquire(context.Background(), addr2, addr2, false, dialFunc)
 	if err != nil {
 		t.Fatalf("acquire 2: %v", err)
 	}
 	// Kill c1 the way readLoop does — close() only, the pool never hears.
 	c1.close()
 
-	c3, err := p.Acquire(context.Background(), addr3, addr3, dialFunc)
+	c3, err := p.Acquire(context.Background(), addr3, addr3, false, dialFunc)
 	if err != nil {
 		t.Fatalf("acquire 3: %v", err)
 	}
@@ -440,6 +440,83 @@ func TestUDPPool_GlobalCapDeadFirst(t *testing.T) {
 	}
 	if total != 2 {
 		t.Errorf("total = %d, want 2", total)
+	}
+}
+
+// TestUDPPool_GlobalCapBusyOvershoot verifies the soft-cap contract: when
+// every socket in a pool at maxTotal has queries in flight, a new dial is
+// NOT forced through eviction of a busy socket (which would fail its
+// waiters and re-enter the dial churn loop) — the pool overshoots maxTotal
+// and the new socket is served.
+func TestUDPPool_GlobalCapBusyOvershoot(t *testing.T) {
+	_, addr1 := startFakeUDPServer(t, 0)
+	_, addr2 := startFakeUDPServer(t, 0)
+	_, addr3 := startFakeUDPServer(t, 0)
+	p := NewUDPPool(4, 16, 2, testKeyExtractor) // maxTotal = 2
+
+	dialFunc := func(ctx context.Context, a string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "udp", a)
+	}
+
+	c1, err := p.Acquire(context.Background(), addr1, addr1, false, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 1: %v", err)
+	}
+	c2, err := p.Acquire(context.Background(), addr2, addr2, false, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 2: %v", err)
+	}
+	// Both sockets busy — the only way the old code made room at the cap.
+	c1.inFlight.Add(1)
+	c2.inFlight.Add(1)
+	defer c1.inFlight.Add(-1)
+	defer c2.inFlight.Add(-1)
+
+	c3, err := p.Acquire(context.Background(), addr3, addr3, false, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 3: %v", err)
+	}
+	if c3 == nil {
+		t.Fatal("acquire 3 returned nil socket")
+	}
+	if c1.IsDead() || c2.IsDead() {
+		t.Error("busy sockets must never be evicted at the global cap")
+	}
+	p.mu.Lock()
+	total := p.total
+	p.mu.Unlock()
+	if total != 3 {
+		t.Errorf("total = %d, want 3 (soft-cap overshoot)", total)
+	}
+}
+
+// TestUDPPool_AcquireWantTTL verifies TTL capture is only created when the
+// caller asked for it (hopguard upstreams) — spoofguard-only and plain
+// upstreams dial TTL-free sockets.
+func TestUDPPool_AcquireWantTTL(t *testing.T) {
+	_, addr := startFakeUDPServer(t, 0)
+	p := NewUDPPool(4, 16, 0, testKeyExtractor)
+
+	dialFunc := func(ctx context.Context, a string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "udp", a)
+	}
+
+	plain, err := p.Acquire(context.Background(), addr, addr, false, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire (no TTL): %v", err)
+	}
+	if plain.Capture() != nil {
+		t.Error("socket acquired without wantTTL must have no TTL capture")
+	}
+
+	hg, err := p.Acquire(context.Background(), addr+"|hg", addr, true, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire (TTL): %v", err)
+	}
+	if hg.Capture() == nil {
+		t.Skip("platform does not support TTL capture — nil capture is the documented degradation")
 	}
 }
 

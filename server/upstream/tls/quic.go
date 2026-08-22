@@ -14,6 +14,7 @@ import (
 	"zjdns/internal/doq"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/internal/resolv"
 
 	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
@@ -50,7 +51,7 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 			if err != nil {
 				return nil, fmt.Errorf("proxy ListenPacket: %w", err)
 			}
-			remoteAddr, err := net.ResolveUDPAddr("udp", key)
+			remoteAddr, err := resolv.Default.ResolveUDPAddr(timeoutCtx, key)
 			if err != nil {
 				_ = pconn.Close()
 				return nil, fmt.Errorf("resolve %s: %w", key, err)
@@ -76,7 +77,18 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 			}()
 			return conn, nil
 		}
-		conn, err := quic.DialAddrEarly(timeoutCtx, key, dialTLS, c.getQUICConfig(configKey, tlsConfig.InsecureSkipVerify))
+		// Dial an IP literal from the resolution cache so quic-go's internal
+		// per-dial resolution is skipped.  quic-go derives SNI from the
+		// dial-addr hostname when ServerName is empty — pin it to the original
+		// host first, so IP-dialing keeps the configured identity.
+		dialAddr := key
+		if host, _, splitErr := net.SplitHostPort(key); splitErr == nil && net.ParseIP(host) == nil && dialTLS.ServerName == "" {
+			dialTLS.ServerName = host
+		}
+		if resolved, rErr := resolv.Default.ResolveUDPAddr(timeoutCtx, key); rErr == nil {
+			dialAddr = resolved.String()
+		}
+		conn, err := quic.DialAddrEarly(timeoutCtx, dialAddr, dialTLS, c.getQUICConfig(configKey, tlsConfig.InsecureSkipVerify))
 		if err == nil {
 			log.Debugf("UPSTREAM: DoQ negotiated for %s — cipher=%s resumed=%v 0-RTT=%v",
 				key, tls.CipherSuiteName(conn.ConnectionState().TLS.CipherSuite),

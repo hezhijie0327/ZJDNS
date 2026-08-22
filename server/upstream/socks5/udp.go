@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/resolv"
 )
 
 // ---------------------------------------------------------------------------
@@ -246,7 +247,10 @@ func (d *Dialer) DialUDP(ctx context.Context, targetAddr string) (net.Conn, erro
 	if conn == nil {
 		return nil, errors.New("socks5: UDP relay torn down before use")
 	}
-	udpAddr, err := net.ResolveUDPAddr("udp", targetAddr)
+	// Note: the SOCKS5 UDP header carries the resolved IP instead of the
+	// domain — standard proxies are indifferent; only proxies that resolve
+	// targets themselves see a change.
+	udpAddr, err := resolv.Default.ResolveUDPAddr(ctx, targetAddr)
 	if err != nil {
 		_ = fresh.Close()
 		return nil, fmt.Errorf("socks5: resolve target %s: %w", targetAddr, err)

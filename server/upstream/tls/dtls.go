@@ -12,6 +12,7 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/internal/resolv"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -152,8 +153,17 @@ func (c *Client) dialDTLSConn(ctx context.Context, addr string, server *config.U
 	if server.SkipTLSVerify {
 		dtlsOpts = append(dtlsOpts, dtls.WithInsecureSkipVerify(true))
 	}
-	if tlsConfig.ServerName != "" {
-		dtlsOpts = append(dtlsOpts, dtls.WithServerName(tlsConfig.ServerName))
+	sni := tlsConfig.ServerName
+	if sni == "" && !server.SkipTLSVerify {
+		// pion derives SNI from the dial addr when ServerName is unset — with
+		// the dial addr switching to a cached IP, pin the original hostname
+		// (resolv SNI safety contract).
+		if h, _, err := net.SplitHostPort(serverAddr); err == nil && net.ParseIP(h) == nil {
+			sni = h
+		}
+	}
+	if sni != "" {
+		dtlsOpts = append(dtlsOpts, dtls.WithServerName(sni))
 	}
 	if c.dtlsSessions != nil {
 		dtlsOpts = append(dtlsOpts, dtls.WithSessionStore(c.dtlsSessions))
@@ -174,7 +184,7 @@ func (c *Client) dialDTLSConn(ctx context.Context, addr string, server *config.U
 		if pErr != nil {
 			return nil, fmt.Errorf("dtls: proxy ListenPacket: %w", pErr)
 		}
-		udpAddr, rErr := net.ResolveUDPAddr("udp", serverAddr)
+		udpAddr, rErr := resolv.Default.ResolveUDPAddr(ctx, serverAddr)
 		if rErr != nil {
 			_ = pconn.Close()
 			return nil, fmt.Errorf("dtls: resolve %s: %w", serverAddr, rErr)
@@ -185,7 +195,7 @@ func (c *Client) dialDTLSConn(ctx context.Context, addr string, server *config.U
 			return nil, fmt.Errorf("dtls: client %s: %w", serverAddr, pErr)
 		}
 	} else {
-		udpAddr, rErr := net.ResolveUDPAddr("udp", serverAddr)
+		udpAddr, rErr := resolv.Default.ResolveUDPAddr(ctx, serverAddr)
 		if rErr != nil {
 			return nil, fmt.Errorf("dtls: resolve %s: %w", serverAddr, rErr)
 		}

@@ -632,6 +632,32 @@ func TestCorruptTailAfterMerge(t *testing.T) {
 	}
 }
 
+// TestBlockBufTiers verifies the tiered block-buffer pools: buffers land in
+// the smallest fitting tier and oversized blocks allocate fresh (never
+// pooled).  Capacity class must survive the release round-trip.
+func TestBlockBufTiers(t *testing.T) {
+	tests := []struct {
+		size    int
+		wantCap int
+	}{
+		{100, blockBufSmall},
+		{10 * 1024, blockBufMedium},
+		{200 * 1024, blockBufLarge},
+		{300 * 1024, 300 * 1024}, // beyond the largest tier — fresh alloc, no pool
+	}
+	for _, tt := range tests {
+		buf := acquireBlockBuf(tt.size)
+		if got := cap(buf); got != tt.wantCap {
+			t.Errorf("acquire(%d): cap = %d, want %d", tt.size, got, tt.wantCap)
+		}
+		releaseBlockBuf(buf)
+		buf2 := acquireBlockBuf(tt.size)
+		if got := cap(buf2); got != tt.wantCap {
+			t.Errorf("re-acquire(%d): cap = %d, want %d", tt.size, got, tt.wantCap)
+		}
+	}
+}
+
 func BenchmarkPut(b *testing.B) {
 	st, err := Create(filepath.Join(b.TempDir(), "bench.bin"))
 	if err != nil {

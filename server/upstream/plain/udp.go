@@ -12,6 +12,7 @@ import (
 	"zjdns/internal/ipttl"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/internal/resolv"
 	"zjdns/server/defense"
 	zpool "zjdns/server/upstream/pool"
 	socks5 "zjdns/server/upstream/socks5"
@@ -57,6 +58,17 @@ var spoofguardBufPool = sync.Pool{
 		return &b
 	},
 }
+
+// Sentinel errors for the spoofguard/hopguard collect paths — the per-query
+// errors.New sites were ~700M allocations on a loaded server; callers only
+// check err == nil, so the strings carried no information.
+var (
+	errQuestionMismatch   = errors.New("plain: pooled UDP response question mismatch")
+	errCollectClosed      = errors.New("plain: pooled udp connection closed during spoofguard collect")
+	errAmbiguousNoConfirm = errors.New("plain: ambiguous UDP response (single-answer, no EDNS) — no matching confirmation")
+	errAmbiguous          = errors.New("plain: ambiguous UDP response (single-answer, no EDNS)")
+	errNoResponse         = errors.New("plain: no UDP response received")
+)
 
 // ExecuteUDP sends a DNS query over UDP to the upstream server, optionally
 // routing through a SOCKS5 proxy. When server.Spoofguard is true, uses raw
@@ -112,18 +124,20 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 // acquireUDP gets a pooled UDP socket for the server, dialing through the
 // SOCKS5 proxy when configured.  The pool key includes the proxy so direct
 // and proxied sockets never share a relay, and the ASSOCIATE handshake is
-// paid once per socket instead of per query.
-func (c *Client) acquireUDP(ctx context.Context, addr, proxy string, proxyDialer *socks5.Dialer) (*zpool.UDPConn, error) {
+// paid once per socket instead of per query.  wantTTL requests IP TTL
+// capture on freshly dialed sockets — only hopguard consumes it, so
+// spoofguard-only and plain upstreams dial TTL-free sockets.
+func (c *Client) acquireUDP(ctx context.Context, addr, proxy string, wantTTL bool, proxyDialer *socks5.Dialer) (*zpool.UDPConn, error) {
 	key := addr
 	if proxy != "" {
 		key = addr + "|" + proxy
 	}
-	return c.udpPool.Acquire(ctx, key, addr, func(dialCtx context.Context, a string) (net.Conn, error) {
+	return c.udpPool.Acquire(ctx, key, addr, wantTTL, func(dialCtx context.Context, a string) (net.Conn, error) {
 		if proxyDialer != nil {
 			return proxyDialer.DialUDP(dialCtx, a)
 		}
 		var d net.Dialer
-		return d.DialContext(dialCtx, "udp", a)
+		return resolv.Default.DialContext(dialCtx, "udp", a, &d)
 	})
 }
 
@@ -133,7 +147,7 @@ func (c *Client) acquireUDP(ctx context.Context, addr, proxy string, proxyDialer
 // datagram (ID collision after wrap-around, or a buggy server echoing a stale
 // reply) can never be served as this query's response.
 func (c *Client) executeUDPPooled(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
-	uc, err := c.acquireUDP(ctx, server.Address, server.Proxy, c.getProxy(server))
+	uc, err := c.acquireUDP(ctx, server.Address, server.Proxy, false, c.getProxy(server))
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +188,7 @@ func (c *Client) executeUDPPooled(ctx context.Context, msg *dns.Msg, server *con
 	// different question.
 	if !matchQuestion(response, msg) {
 		pool.DefaultMessage.Put(response)
-		return nil, errors.New("plain: pooled UDP response question mismatch")
+		return nil, errQuestionMismatch
 	}
 	return response, nil
 }
@@ -198,7 +212,7 @@ func matchQuestion(response, query *dns.Msg) bool {
 // readLoop captures the IP TTL via control messages); when capture is
 // unavailable (e.g. Windows), HopGuard degrades to TTL-less operation.
 func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
-	uc, err := c.acquireUDP(ctx, server.Address, server.Proxy, c.getProxy(server))
+	uc, err := c.acquireUDP(ctx, server.Address, server.Proxy, server.HopGuard, c.getProxy(server))
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +309,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					if sg.last != nil {
 						return sg.last, nil
 					}
-					return nil, errors.New("pooled udp connection closed during spoofguard collect")
+					return nil, errCollectClosed
 				}
 				// Gate on 12 bytes first — processPacket reads raw[6..9] for
 				// the fast-signal checks; a 2-9 byte datagram with a matching
@@ -391,7 +405,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					previous = resp
 					if round+1 >= config.DefaultSpoofguardConfirmRounds || now.After(maxDeadline) {
 						pool.DefaultMessage.Put(resp)
-						return nil, errors.New("ambiguous UDP response (single-answer, no EDNS) — no matching confirmation")
+						return nil, errAmbiguousNoConfirm
 					}
 					break collect // re-query in the next round
 				}
@@ -402,7 +416,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 							pool.DefaultMessage.Put(previous)
 						}
 						uc.ReleaseCollect(matchKey)
-						return nil, errors.New("no UDP response received")
+						return nil, errNoResponse
 					}
 					if sg.last != nil || sg.nonEDNSSafe || sg.rejected <= 1 {
 						if hg != nil {
@@ -421,7 +435,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 						pool.DefaultMessage.Put(previous)
 					}
 					uc.ReleaseCollect(matchKey)
-					return nil, errors.New("ambiguous UDP response (single-answer, no EDNS)")
+					return nil, errAmbiguous
 				}
 			}
 		}

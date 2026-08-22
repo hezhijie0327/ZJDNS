@@ -194,6 +194,96 @@ func TestRawPool_GlobalCapEvictsLRU(t *testing.T) {
 	}
 }
 
+// TestConnPool_GlobalCapBusyOvershoot verifies the soft-cap contract for the
+// TCP pool: with every connection busy at maxTotal, a new dial overshoots
+// the cap instead of evicting an in-flight connection and failing its
+// waiters (the dial-churn loop).
+func TestConnPool_GlobalCapBusyOvershoot(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	p := NewConnPool(4, 16, 2) // maxTotal = 2
+
+	dialFunc := func(ctx context.Context, a string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "tcp", a)
+	}
+
+	c1, err := p.Acquire(context.Background(), "key1", l.Addr().String(), dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 1: %v", err)
+	}
+	c2, err := p.Acquire(context.Background(), "key2", l.Addr().String(), dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 2: %v", err)
+	}
+	c1.inFlight.Add(1)
+	c2.inFlight.Add(1)
+	defer c1.inFlight.Add(-1)
+	defer c2.inFlight.Add(-1)
+
+	c3, err := p.Acquire(context.Background(), "key3", l.Addr().String(), dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 3: %v", err)
+	}
+	if c3 == nil {
+		t.Fatal("acquire 3 returned nil connection")
+	}
+	if c1.IsDead() || c2.IsDead() {
+		t.Error("busy connections must never be evicted at the global cap")
+	}
+	p.mu.Lock()
+	total := p.total
+	p.mu.Unlock()
+	if total != 3 {
+		t.Errorf("total = %d, want 3 (soft-cap overshoot)", total)
+	}
+}
+
+// TestRawPool_GlobalCapBusyOvershoot verifies the raw-frame pool enforces
+// the same soft-cap contract.
+func TestRawPool_GlobalCapBusyOvershoot(t *testing.T) {
+	_, addr := startFakeRawServer(t, 0)
+	p := NewRawPool(4, 16, 2, rawTestExtractor)
+
+	dialFunc := func(ctx context.Context, a string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "tcp", a)
+	}
+
+	c1, err := p.Acquire(context.Background(), "key1", addr, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 1: %v", err)
+	}
+	c2, err := p.Acquire(context.Background(), "key2", addr, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 2: %v", err)
+	}
+	c1.inFlight.Add(1)
+	c2.inFlight.Add(1)
+	defer c1.inFlight.Add(-1)
+	defer c2.inFlight.Add(-1)
+
+	c3, err := p.Acquire(context.Background(), "key3", addr, dialFunc)
+	if err != nil {
+		t.Fatalf("acquire 3: %v", err)
+	}
+	if c3 == nil {
+		t.Fatal("acquire 3 returned nil connection")
+	}
+	if c1.IsDead() || c2.IsDead() {
+		t.Error("busy connections must never be evicted at the global cap")
+	}
+	p.mu.Lock()
+	total := p.total
+	p.mu.Unlock()
+	if total != 3 {
+		t.Errorf("total = %d, want 3 (soft-cap overshoot)", total)
+	}
+}
+
 // TestQUIC_GlobalCapEvictsLRU verifies the QUIC pool enforces the same
 // global cap against a real loopback QUIC pair.
 func TestQUIC_GlobalCapEvictsLRU(t *testing.T) {

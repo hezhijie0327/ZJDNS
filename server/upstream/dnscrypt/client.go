@@ -17,6 +17,7 @@ import (
 	"zjdns/internal/lrumap"
 	"zjdns/internal/pending"
 	"zjdns/internal/pool"
+	"zjdns/internal/resolv"
 	zpool "zjdns/server/upstream/pool"
 	socks5 "zjdns/server/upstream/socks5"
 
@@ -59,6 +60,11 @@ const maxTCRetries = 7
 var respBufPool = sync.Pool{
 	New: func() any { b := make([]byte, dnscryptcrypto.MaxDNSUDPPacketSize); return &b },
 }
+
+// errReadResponse wraps pooled-exchange read failures (the hot per-query
+// failure path); the wrapped error stays errors.As-visible (dnscrypt tests
+// match net-error timeouts through it).
+var errReadResponse = errors.New("dnscrypt: reading response failed")
 
 // New creates a Client for DNSCrypt DNS queries.
 func New(getProxy func(*config.UpstreamServer) *socks5.Dialer) *Client {
@@ -173,12 +179,12 @@ func (c *Client) executeOnce(
 	var pooledTCP *zpool.RawConn
 	var conn net.Conn
 	if !useTCP && c.udpPool != nil {
-		pooledUDP, err = c.udpPool.Acquire(ctx, poolKey, state.serverAddress, func(dialCtx context.Context, addr string) (net.Conn, error) {
+		pooledUDP, err = c.udpPool.Acquire(ctx, poolKey, state.serverAddress, false, func(dialCtx context.Context, addr string) (net.Conn, error) {
 			if proxyDialer != nil {
 				return proxyDialer.DialUDP(dialCtx, addr)
 			}
 			var d net.Dialer
-			return d.DialContext(dialCtx, "udp", addr)
+			return resolv.Default.DialContext(dialCtx, "udp", addr, &d)
 		})
 		if err != nil {
 			// Pool saturated or dial failed — fall back to a per-query dial
@@ -191,7 +197,7 @@ func (c *Client) executeOnce(
 				return proxyDialer.DialContext(dialCtx, "tcp", addr)
 			}
 			var d net.Dialer
-			return d.DialContext(dialCtx, "tcp", addr)
+			return resolv.Default.DialContext(dialCtx, "tcp", addr, &d)
 		})
 		if err != nil {
 			// Pool saturated or dial failed — fall back to a per-query dial
@@ -208,8 +214,7 @@ func (c *Client) executeOnce(
 				conn, err = proxyDialer.DialUDP(ctx, state.serverAddress)
 			}
 		} else {
-			dialer := &net.Dialer{}
-			conn, err = dialer.DialContext(ctx, network, state.serverAddress)
+			conn, err = resolv.Default.DialContext(ctx, network, state.serverAddress, &net.Dialer{})
 		}
 		if err != nil {
 			return nil, false, fmt.Errorf("dialing dnscrypt server %s: %w", state.serverAddress, err)
@@ -238,7 +243,7 @@ func (c *Client) executeOnce(
 				c.udpPool.Remove(pooledUDP)
 			}
 			// Same as TCP: a read error is not a certificate problem.
-			return nil, false, fmt.Errorf("reading dnscrypt response: %w", err)
+			return nil, false, errors.Join(errReadResponse, err)
 		}
 	case pooledTCP != nil:
 		// Pooled TCP: the raw pool frames the encrypted query and routes the
@@ -250,7 +255,7 @@ func (c *Client) executeOnce(
 				c.tcpPool.Remove(pooledTCP)
 			}
 			// Same as raw TCP: a read error is not a certificate problem.
-			return nil, false, fmt.Errorf("reading dnscrypt response: %w", err)
+			return nil, false, errors.Join(errReadResponse, err)
 		}
 	case useTCP:
 		if writeErr := dnscryptcrypto.WritePrefixed(encrypted, conn); writeErr != nil {
@@ -463,5 +468,19 @@ func (c *Client) Close() {
 	}
 	if c.tcpPool != nil {
 		c.tcpPool.Shutdown()
+	}
+}
+
+// ReapDead drops dead sockets/connections from the DNSCrypt UDP and TCP
+// pools.  Called periodically by the server.
+func (c *Client) ReapDead() {
+	if c == nil {
+		return
+	}
+	if c.udpPool != nil {
+		c.udpPool.ReapDead()
+	}
+	if c.tcpPool != nil {
+		c.tcpPool.ReapDead()
 	}
 }

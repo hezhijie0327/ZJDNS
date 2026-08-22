@@ -95,7 +95,7 @@ func (p *QUIC) Acquire(ctx context.Context, key string, dialFunc func(context.Co
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
-		return nil, fmt.Errorf("client: pool shut down for %s", key)
+		return nil, ErrPoolShutdown
 	}
 	live := p.conns[key][:0]
 	for _, pc := range p.conns[key] {
@@ -133,12 +133,12 @@ func (p *QUIC) Acquire(ctx context.Context, key string, dialFunc func(context.Co
 		if p.closed {
 			p.mu.Unlock()
 			pc.close()
-			return nil, fmt.Errorf("client: pool shut down for %s", key)
+			return nil, ErrPoolShutdown
 		}
 		if len(p.conns[key]) >= p.maxConns {
 			p.mu.Unlock()
 			pc.close()
-			return nil, fmt.Errorf("client: pool filled during dial for %s", key)
+			return nil, ErrMaxConnsReached
 		}
 		p.conns[key] = append(p.conns[key], pc)
 		p.total++
@@ -168,14 +168,17 @@ func (p *QUIC) Acquire(ctx context.Context, key string, dialFunc func(context.Co
 	}
 
 	p.mu.Unlock()
-	return nil, fmt.Errorf("client: no available connection to %s", key)
+	return nil, ErrNoAvailableSocket
 }
 
 // evictOne removes one connection from the pool to make room for a new dial,
 // preferring (1) dead connections (already closed — nil victim), (2) the
 // least-recently-used live connection.  QUIC multiplexes queries over
 // per-connection streams, so there is no per-conn in-flight signal to prefer
-// idle connections over.  Must be called with p.mu held; skip is never
+// idle connections over — unlike the UDP/TCP/Raw pools (which never evict
+// in-flight connections), a busy QUIC connection may be evicted; its dial
+// cost is bounded by 0-RTT resumption, and this matches the pre-soft-cap
+// behavior deliberately.  Must be called with p.mu held; skip is never
 // evicted.  The live victim is returned WITHOUT closing — the caller closes
 // it outside p.mu.
 func (p *QUIC) evictOne(skip *QUICConn) (victim *QUICConn, removed bool) {
@@ -218,6 +221,32 @@ func (p *QUIC) evictOne(skip *QUICConn) (victim *QUICConn, removed bool) {
 	}
 	p.total--
 	return victim, true
+}
+
+// ReapDead drops dead connections from every pool key and deletes keys with
+// no live connections left.  Called periodically by the server — a peer-
+// closed connection otherwise stays pinned under its address key (counting
+// against the global cap) until that address is queried again.
+func (p *QUIC) ReapDead() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key, conns := range p.conns {
+		live := conns[:0]
+		for _, c := range conns {
+			if !c.isDead() {
+				live = append(live, c)
+			}
+		}
+		removed := len(conns) - len(live)
+		if removed > 0 {
+			p.total -= removed
+		}
+		if len(live) == 0 {
+			delete(p.conns, key)
+			continue
+		}
+		p.conns[key] = live
+	}
 }
 
 // WarmUp dials a new QUIC connection and adds it to the pool without returning

@@ -99,6 +99,23 @@ func (c *Client) SetKTLS(tx, rx bool) {
 	c.ktlsRX = rx
 }
 
+// ReapDead drops dead connections from the DoT, DTLS and DoQ pools.  Called
+// periodically by the server.
+func (c *Client) ReapDead() {
+	if c == nil {
+		return
+	}
+	if c.dotPool != nil {
+		c.dotPool.ReapDead()
+	}
+	if c.dtlsPool != nil {
+		c.dtlsPool.ReapDead()
+	}
+	if c.quicPool != nil {
+		c.quicPool.ReapDead()
+	}
+}
+
 // Close shuts down all pooled connections and transports owned by this client.
 func (c *Client) Close() {
 	if c == nil {

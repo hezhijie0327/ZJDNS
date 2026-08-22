@@ -408,14 +408,27 @@ func (c *Client) SetKTLS(tx, rx bool) {
 	c.tlsClient.SetKTLS(tx, rx)
 }
 
-// ReapDeadConns drops idle-recycled dead sockets from the UDP pools so
-// unused authoritative addresses do not pin memory and fds forever (H1).
-// Called periodically by the server.
+// ReapDeadConns drops idle-recycled dead sockets/connections from ALL
+// outbound pools (plain UDP/TCP, DoT, DTLS, DoQ, TLCP/DTLCP, DNSCrypt) so
+// unused authoritative addresses do not pin memory and fds forever and do
+// not keep counting against each pool's global cap.  Called periodically by
+// the server.
 func (c *Client) ReapDeadConns() {
-	if c == nil || c.plainClient == nil {
+	if c == nil {
 		return
 	}
-	c.plainClient.ReapDeadUDP()
+	if c.plainClient != nil {
+		c.plainClient.ReapDead()
+	}
+	if c.tlsClient != nil {
+		c.tlsClient.ReapDead()
+	}
+	if c.tlcpClient != nil {
+		c.tlcpClient.ReapDead()
+	}
+	if c.dnscryptClient != nil {
+		c.dnscryptClient.ReapDead()
+	}
 }
 
 // Close shuts down all pooled connections and transports.

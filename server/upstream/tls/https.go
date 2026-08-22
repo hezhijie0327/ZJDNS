@@ -12,6 +12,7 @@ import (
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/resolv"
 
 	"codeberg.org/miekg/dns"
 	eHTTP "gitlab.com/go-extension/http"
@@ -168,7 +169,7 @@ func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxy
 		}
 	} else {
 		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			conn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+			conn, err := resolv.Default.DialContext(ctx, network, addr, &net.Dialer{})
 			if err != nil {
 				return nil, err
 			}

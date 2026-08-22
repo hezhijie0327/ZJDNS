@@ -11,6 +11,7 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/internal/resolv"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -51,7 +52,7 @@ func (c *Client) ExecuteTCP(ctx context.Context, msg *dns.Msg, server *config.Up
 				return proxyDialer.DialContext(dialCtx, "tcp", addr)
 			}
 			var d net.Dialer
-			return d.DialContext(dialCtx, "tcp", addr)
+			return resolv.Default.DialContext(dialCtx, "tcp", addr, &d)
 		})
 		if err == nil {
 			pc.SetSegmentation(segSize)

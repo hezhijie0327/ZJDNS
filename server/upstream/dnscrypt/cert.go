@@ -8,6 +8,7 @@ import (
 	"time"
 	"zjdns/config"
 	"zjdns/internal/log"
+	"zjdns/internal/resolv"
 	zpool "zjdns/server/upstream/pool"
 
 	"codeberg.org/miekg/dns"
@@ -69,12 +70,12 @@ func (c *Client) fetchCertUDP(ctx context.Context, addr string, query []byte, se
 		if proxyDialer != nil {
 			key += "|" + server.Proxy
 		}
-		uc, err := c.udpPool.Acquire(ctx, key, addr, func(dialCtx context.Context, a string) (net.Conn, error) {
+		uc, err := c.udpPool.Acquire(ctx, key, addr, false, func(dialCtx context.Context, a string) (net.Conn, error) {
 			if proxyDialer != nil {
 				return proxyDialer.DialUDP(dialCtx, a)
 			}
 			var d net.Dialer
-			return d.DialContext(dialCtx, "udp", a)
+			return resolv.Default.DialContext(dialCtx, "udp", a, &d)
 		})
 		if err == nil {
 			respPayload, err := uc.Exchange(ctx, query, string(query[:2]))
@@ -118,7 +119,7 @@ func (c *Client) fetchCertTCP(ctx context.Context, addr string, query []byte, se
 				return proxyDialer.DialContext(dialCtx, "tcp", a)
 			}
 			var d net.Dialer
-			return d.DialContext(dialCtx, "tcp", a)
+			return resolv.Default.DialContext(dialCtx, "tcp", a, &d)
 		})
 		if err == nil {
 			respPayload, err := rc.Exchange(ctx, query, string(query[:2]))

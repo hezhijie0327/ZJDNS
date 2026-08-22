@@ -15,6 +15,7 @@ require (
 	golang.org/x/crypto v0.55.0
 	golang.org/x/net v0.58.0
 	golang.org/x/sync v0.22.0
+	golang.org/x/sys v0.47.0
 )
 
 require (
@@ -34,6 +35,5 @@ require (
 	gitlab.com/go-extension/rand v0.0.0-20240303103951-707937a049b5 // indirect
 	gitlab.com/go-extension/utils v0.0.0-20251006173700-b62b19cda891 // indirect
 	go.uber.org/mock v0.6.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 )

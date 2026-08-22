@@ -23,7 +23,7 @@ func (s *Server) startBackgroundTasks() {
 	s.startECSRefresh()
 	s.startPrefetchCooldownCleanup()
 	s.startTCPWriteMuSweep()
-	s.startUDPPoolReap()
+	s.startPoolReap()
 	s.startStateMaintenance()
 	s.setupSignalHandling()
 }
@@ -193,11 +193,13 @@ func (s *Server) startECSRefresh() {
 	})
 }
 
-// startUDPPoolReap periodically drops dead sockets from the outbound UDP
-// pools — an idle-recycled socket otherwise stays pinned under its address
-// key until that address is queried again (H1).
-func (s *Server) startUDPPoolReap() {
-	s.runBackgroundTicker("UDP pool reap", config.DefaultSweepInterval, func() {
+// startPoolReap periodically drops dead sockets/connections from all
+// outbound pools — an idle-recycled socket otherwise stays pinned under its
+// address key (counting against the global cap) until that address is
+// queried again.  The short interval keeps dead sockets from starving the
+// pools' caps between queries.
+func (s *Server) startPoolReap() {
+	s.runBackgroundTicker("pool reap", config.DefaultPoolReapInterval, func() {
 		if s.queryClient != nil {
 			s.queryClient.ReapDeadConns()
 		}

@@ -107,30 +107,76 @@ const (
 	maxBlockBufBytes = 256 * 1024
 )
 
-// blockBufPool reuses sorted-block read buffers on the spill-hit hot path.
-var blockBufPool = sync.Pool{
-	New: func() any {
-		b := make([]byte, 0, 4096)
-		return &b
-	},
-}
+// Tiered block-buffer pools for the spill-hit hot path: the single-tier pool
+// grew every buffer to the largest block it ever served (~64 KB at
+// blockRecords × 500 B) and kept them — ~2400 retained 64 KB buffers pinned
+// 155 MB live on a loaded server.  Tiering mirrors pool/udp.go's packetBuf
+// pattern: per-size-class pools keyed by capacity, so a small tail block
+// reuses a small buffer and the working set tracks actual block sizes.
+const (
+	blockBufSmall  = 4 * 1024         // small stores and trailing (short) blocks
+	blockBufMedium = 64 * 1024        // nominal block size: blockRecords(128) × ~500 B
+	blockBufLarge  = maxBlockBufBytes // 256 KB — pathological blocks, pool cap
+)
 
-// acquireBlockBuf returns a buffer of at least n bytes from the pool.
-func acquireBlockBuf(n int) []byte {
-	bp := blockBufPool.Get().(*[]byte)
-	if cap(*bp) < n {
-		b := make([]byte, n)
-		blockBufPool.Put(bp)
-		return b
+var (
+	blockBufSmallPool = sync.Pool{
+		New: func() any {
+			b := make([]byte, 0, blockBufSmall)
+			return &b
+		},
 	}
-	return (*bp)[:n]
+	blockBufMediumPool = sync.Pool{
+		New: func() any {
+			b := make([]byte, 0, blockBufMedium)
+			return &b
+		},
+	}
+	blockBufLargePool = sync.Pool{
+		New: func() any {
+			b := make([]byte, 0, blockBufLarge)
+			return &b
+		},
+	}
+)
+
+// acquireBlockBuf returns a buffer of at least n bytes from the smallest
+// tier that fits; oversized blocks allocate fresh (never pooled).
+func acquireBlockBuf(n int) []byte {
+	switch {
+	case n <= blockBufSmall:
+		bp := blockBufSmallPool.Get().(*[]byte)
+		return (*bp)[:n]
+	case n <= blockBufMedium:
+		bp := blockBufMediumPool.Get().(*[]byte)
+		return (*bp)[:n]
+	case n <= blockBufLarge:
+		bp := blockBufLargePool.Get().(*[]byte)
+		return (*bp)[:n]
+	default:
+		return make([]byte, n)
+	}
 }
 
-// releaseBlockBuf returns a pooled block buffer; buffers grown beyond the
-// pool cap are dropped rather than grown in place.
+// releaseBlockBuf returns a tiered block buffer to its class pool; buffers
+// that grew in place to odd sizes (the old single-tier pool's retention
+// source) are dropped for the GC.  No clear: the only consumers fill the
+// requested range with ReadAt before reading, so stale bytes are never
+// observed (a memset per 64KB block read cost ~55% on BenchmarkGetSorted).
 func releaseBlockBuf(b []byte) {
-	if cap(b) <= maxBlockBufBytes {
-		blockBufPool.Put(&b)
+	switch cap(b) {
+	case blockBufSmall:
+		bp := &b
+		*bp = (*bp)[:blockBufSmall]
+		blockBufSmallPool.Put(bp)
+	case blockBufMedium:
+		bp := &b
+		*bp = (*bp)[:blockBufMedium]
+		blockBufMediumPool.Put(bp)
+	case blockBufLarge:
+		bp := &b
+		*bp = (*bp)[:blockBufLarge]
+		blockBufLargePool.Put(bp)
 	}
 }
 

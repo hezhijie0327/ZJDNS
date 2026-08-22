@@ -168,21 +168,21 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 	}
 
 	if c.closed.Load() {
-		return nil, fmt.Errorf("udp client: connection to %s is closed", c.addr)
+		return nil, ErrConnClosed
 	}
 
 	resultCh := make(chan []byte, 1)
 	c.mu.Lock()
 	if c.closed.Load() {
 		c.mu.Unlock()
-		return nil, fmt.Errorf("udp client: connection to %s closed before write", c.addr)
+		return nil, ErrConnClosed
 	}
 	if _, dup := c.inflight[matchKey]; dup {
 		c.mu.Unlock()
 		// Match-key collision (2^-96 for DNSCrypt nonces, ID reuse for plain
 		// DNS after 65536 queries) — fail the new query; the caller retries
 		// on a fresh connection.
-		return nil, fmt.Errorf("udp client: match key collision on %s", c.addr)
+		return nil, ErrKeyCollision
 	}
 	c.inflight[matchKey] = &udpPending{resultCh: resultCh}
 	c.mu.Unlock()
@@ -211,13 +211,13 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 	c.writeMu.Unlock()
 	if err != nil {
 		c.close()
-		return nil, fmt.Errorf("udp client: write to %s: %w", c.addr, err)
+		return nil, errors.Join(ErrWriteFailed, err)
 	}
 
 	select {
 	case resp := <-resultCh:
 		if resp == nil {
-			return nil, fmt.Errorf("udp client: connection to %s closed", c.addr)
+			return nil, ErrConnClosed
 		}
 		return resp, nil
 	case <-ctx.Done():
@@ -244,7 +244,7 @@ func (c *UDPConn) ExchangeCollect(ctx context.Context, payload []byte, matchKey 
 	if c.closed.Load() {
 		c.inFlight.Add(-1)
 		<-c.capacity
-		return nil, fmt.Errorf("udp client: connection to %s is closed", c.addr)
+		return nil, ErrConnClosed
 	}
 
 	collectCh := make(chan collectPacket, 4)
@@ -253,13 +253,13 @@ func (c *UDPConn) ExchangeCollect(ctx context.Context, payload []byte, matchKey 
 		c.mu.Unlock()
 		c.inFlight.Add(-1)
 		<-c.capacity
-		return nil, fmt.Errorf("udp client: connection to %s closed before write", c.addr)
+		return nil, ErrConnClosed
 	}
 	if _, dup := c.inflight[matchKey]; dup {
 		c.mu.Unlock()
 		c.inFlight.Add(-1)
 		<-c.capacity
-		return nil, fmt.Errorf("udp client: match key collision on %s", c.addr)
+		return nil, ErrKeyCollision
 	}
 	c.inflight[matchKey] = &udpPending{collectCh: collectCh}
 	c.mu.Unlock()
@@ -276,7 +276,7 @@ func (c *UDPConn) ExchangeCollect(ctx context.Context, payload []byte, matchKey 
 		drainCollectCh(collectCh)
 		c.inFlight.Add(-1)
 		<-c.capacity
-		return nil, fmt.Errorf("udp client: write to %s: %w", c.addr, err)
+		return nil, errors.Join(ErrWriteFailed, err)
 	}
 	return collectCh, nil
 }
@@ -465,17 +465,21 @@ func NewUDPPool(maxConns, maxPipe, maxTotal int, extractKey func(payload []byte)
 	}
 }
 
-// Acquire gets a reusable UDP socket, dialing a new one if needed.
-func (p *UDPPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) (*UDPConn, error) {
+// Acquire gets a reusable UDP socket, dialing a new one if needed.  wantTTL
+// requests IP TTL/HopLimit capture on freshly dialed sockets (hopguard);
+// sockets dialed without it serve TTL-less reads (callers treat TTL 0 as
+// "not confident"), which avoids the ipttl setup — and its per-packet
+// control-message cost — for upstreams that never consume TTL.
+func (p *UDPPool) Acquire(ctx context.Context, key, dialAddr string, wantTTL bool, dialFunc func(context.Context, string) (net.Conn, error)) (*UDPConn, error) {
 	p.mu.Lock()
 	conns := p.conns[key]
 
 	if len(conns) == 0 {
 		if p.dialing[key] < p.maxConns {
-			return p.dialAndAdd(ctx, key, dialAddr, dialFunc)
+			return p.dialAndAdd(ctx, key, dialAddr, wantTTL, dialFunc)
 		}
 		p.mu.Unlock()
-		return nil, fmt.Errorf("udp client: no available socket to %s", key)
+		return nil, ErrNoAvailableSocket
 	}
 
 	liveConns := make([]*UDPConn, 0, len(conns))
@@ -509,7 +513,7 @@ func (p *UDPPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc fu
 	}
 
 	if len(liveConns)+p.dialing[key] < p.maxConns {
-		c, err := p.dialAndAdd(ctx, key, dialAddr, dialFunc)
+		c, err := p.dialAndAdd(ctx, key, dialAddr, wantTTL, dialFunc)
 		if err != nil && leastLoaded != nil && !leastLoaded.IsDead() {
 			return leastLoaded, nil
 		}
@@ -525,7 +529,7 @@ func (p *UDPPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc fu
 
 // dialAndAdd dials a new socket and adds it to the pool.  Must be called with
 // p.mu held; releases and re-acquires the lock during dial.
-func (p *UDPPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) (*UDPConn, error) {
+func (p *UDPPool) dialAndAdd(ctx context.Context, key, dialAddr string, wantTTL bool, dialFunc func(context.Context, string) (net.Conn, error)) (*UDPConn, error) {
 	p.dialing[key]++
 	p.mu.Unlock()
 
@@ -541,18 +545,23 @@ func (p *UDPPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc
 		if dialErr == nil {
 			_ = conn.Close()
 		}
-		return nil, fmt.Errorf("udp client: pool shut down for %s", key)
+		return nil, ErrPoolShutdown
 	}
 	if dialErr != nil {
 		p.mu.Unlock()
 		return nil, fmt.Errorf("udp client: dial %s: %w", key, dialErr)
 	}
 
-	// TTL/HopLimit capture for the read loop — nil on platforms without
-	// control-message support (e.g. Windows) or non-UDP sockets.
+	// TTL/HopLimit capture for the read loop — only when the caller asked
+	// for it (hopguard upstreams).  ipttl.New is a one-time socket setup with
+	// a per-read control-message cost, so sockets for upstreams that never
+	// consume TTL skip it entirely.  nil on platforms without control-message
+	// support (e.g. Windows) or non-UDP sockets.
 	var capture *ipttl.Capture
-	if udpConn, ok := conn.(*net.UDPConn); ok {
-		capture = ipttl.New(udpConn)
+	if wantTTL {
+		if udpConn, ok := conn.(*net.UDPConn); ok {
+			capture = ipttl.New(udpConn)
+		}
 	}
 
 	c := &UDPConn{
@@ -574,7 +583,7 @@ func (p *UDPPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc
 			p.mu.Unlock()
 			c.close()
 			log.Debugf("UDPPOOL: pool for %s already at limit (%d), discarding extra socket", key, p.maxConns)
-			return nil, fmt.Errorf("udp client: max conns reached for %s", key)
+			return nil, ErrMaxConnsReached
 		}
 		p.conns[key] = append(p.conns[key], c)
 		p.mu.Unlock()
@@ -612,9 +621,15 @@ func (p *UDPPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc
 // evictOne removes one socket from the pool to make room for a new dial,
 // preferring (1) dead sockets awaiting the periodic ReapDead sweep (already
 // closed — nil victim), (2) idle live sockets (nothing in flight) oldest
-// first, (3) any live socket oldest first.  Must be called with p.mu held;
-// skip is never evicted.  The live victim is returned WITHOUT closing — the
-// caller closes it outside p.mu (ABBA convention, as in Remove/Shutdown).
+// first.  In-flight sockets are NEVER evicted: killing a busy socket fails
+// every query waiting on it, and the callers fall through to per-query dials
+// that re-enter the pool — a self-reinforcing dial/evict churn loop under
+// saturation (the remote pprof finding that drove this soft-cap).  When
+// every socket is busy the pool overshoots maxTotal transiently; idle
+// sockets self-close via the read-loop idle timeout and ReapDead reclaims
+// their slots.  Must be called with p.mu held; skip is never evicted.  The
+// live victim is returned WITHOUT closing — the caller closes it outside
+// p.mu (ABBA convention, as in Remove/Shutdown).
 func (p *UDPPool) evictOne(skip *UDPConn) (victim *UDPConn, removed bool) {
 	// (1) Dead sockets cost a slot while waiting for ReapDead — drop them
 	// without closing anything (their readLoop already closed the conn).
@@ -631,40 +646,31 @@ func (p *UDPPool) evictOne(skip *UDPConn) (victim *UDPConn, removed bool) {
 			return nil, true
 		}
 	}
-	// (2)+(3): least-recently-used live socket.  Prefer idle sockets — an
-	// in-flight eviction costs its waiters a failed query; an idle one costs
-	// nothing.
-	for preferIdle := true; ; preferIdle = false {
-		var victimKey string
-		var victimIdx int
-		oldest := int64(math.MaxInt64)
-		for key, conns := range p.conns {
-			for i, c := range conns {
-				if c == skip || c.IsDead() {
-					continue
-				}
-				if preferIdle && c.inFlight.Load() > 0 {
-					continue
-				}
-				if last := c.lastUsed.Load(); last < oldest {
-					oldest = last
-					victim, victimKey, victimIdx = c, key, i
-				}
+	// (2): least-recently-used idle socket — an in-flight eviction costs its
+	// waiters a failed query; an idle one costs nothing.
+	var victimKey string
+	var victimIdx int
+	oldest := int64(math.MaxInt64)
+	for key, conns := range p.conns {
+		for i, c := range conns {
+			if c == skip || c.IsDead() || c.inFlight.Load() > 0 {
+				continue
+			}
+			if last := c.lastUsed.Load(); last < oldest {
+				oldest = last
+				victim, victimKey, victimIdx = c, key, i
 			}
 		}
-		if victim == nil {
-			if preferIdle {
-				continue // second pass: in-flight sockets allowed
-			}
-			return nil, false
-		}
-		p.conns[victimKey] = append(p.conns[victimKey][:victimIdx], p.conns[victimKey][victimIdx+1:]...)
-		if len(p.conns[victimKey]) == 0 {
-			delete(p.conns, victimKey)
-		}
-		p.total--
-		return victim, true
 	}
+	if victim == nil {
+		return nil, false // only busy sockets left — soft-cap overshoot
+	}
+	p.conns[victimKey] = append(p.conns[victimKey][:victimIdx], p.conns[victimKey][victimIdx+1:]...)
+	if len(p.conns[victimKey]) == 0 {
+		delete(p.conns, victimKey)
+	}
+	p.total--
+	return victim, true
 }
 
 // replaceDead removes and returns a dead socket from the pool.  Must be called
