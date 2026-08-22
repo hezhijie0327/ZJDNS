@@ -211,10 +211,12 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 		len(result.Response.Question) > 0 &&
 		result.Response.Question[0].Header().Name != randName {
 		log.Debugf("UPSTREAM: %s did not echo the 0x20-cased question for %s — retrying with the original case", server.Address, original)
-		// The mismatch path is attacker-triggerable, so Warn fires only on
-		// every Nth mismatch (§5.3 still wants the signal observable).
+		// The mismatch path is attacker-triggerable — Debug only: a loaded
+		// recursive walk against non-0x20-compliant authorities would
+		// otherwise log Warn per upstream (mismatch counts stay observable
+		// at Debug for operations, draft-vixie-dnsext-dns0x20-00 §5.3).
 		if n := c.capsGuardMismatches.Add(1); n%config.DefaultCapsGuardWarnEvery == 1 {
-			log.Warnf("SECURITY: upstream %s does not echo 0x20-cased questions (mismatch #%d, e.g. %s) — unrandomized retries serve as fallback", server.Address, n, original)
+			log.Debugf("SECURITY: upstream %s does not echo 0x20-cased questions (mismatch #%d, e.g. %s) — unrandomized retries serve as fallback", server.Address, n, original)
 		}
 		zpool.DefaultMessage.Put(result.Response)
 		// msg.Question[0] is this call's private copy — safe to restore.

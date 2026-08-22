@@ -147,7 +147,7 @@ func (c *Client) acquireUDP(ctx context.Context, addr, proxy string, wantTTL boo
 // datagram (ID collision after wrap-around, or a buggy server echoing a stale
 // reply) can never be served as this query's response.
 func (c *Client) executeUDPPooled(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
-	uc, err := c.acquireUDP(ctx, server.Address, server.Proxy, false, c.getProxy(server))
+	uc, err := c.acquireUDP(ctx, server.Address, server.Proxy, server.HopGuard, c.getProxy(server))
 	if err != nil {
 		return nil, err
 	}
@@ -225,8 +225,11 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 	if server.HopGuard {
 		hg = c.hopGuard
 		if uc.Capture() == nil {
+			// nil capture is the defined degradation (proxy relays, non-unix
+			// platforms) — Debug, not Warn: the recursive walk touches one
+			// new NS address after another, and a Warn per address floods.
 			if _, warned := c.hopguardWarned.LoadOrStore(server.Address, true); !warned {
-				log.Warnf("UPSTREAM: hopguard TTL/HopLimit capture not available on %s", server.Address)
+				log.Debugf("UPSTREAM: hopguard TTL/HopLimit capture not available on %s", server.Address)
 			}
 		}
 	}
@@ -543,7 +546,7 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 		tc = ipttl.New(udpConn)
 		if tc == nil {
 			if _, warned := c.hopguardWarned.LoadOrStore(server.Address, true); !warned {
-				log.Warnf("UPSTREAM: hopguard TTL/HopLimit capture not available on %s", server.Address)
+				log.Debugf("UPSTREAM: hopguard TTL/HopLimit capture not available on %s", server.Address)
 			}
 		}
 	}

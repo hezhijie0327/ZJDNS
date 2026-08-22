@@ -202,9 +202,9 @@ const (
 	DefaultQUICSecondQueryProbeTimeout = 100 * time.Millisecond // DoQ: probe for a second query on the same stream (RFC 9250 §4.3.3)
 
 	// DefaultCapsGuardWarnEvery samples the CapsGuard (0x20) echo-mismatch
-	// warn log — the check sits on the per-query hot path and a spoofing
-	// attacker can trigger it at will, so only every Nth mismatch reaches
-	// Warn (draft-vixie-dnsext-dns0x20-00 §5.3 still wants the mismatch
+	// debug log — the check sits on the per-query hot path and a spoofing
+	// attacker can trigger it at will, so only every Nth mismatch is logged
+	// (draft-vixie-dnsext-dns0x20-00 §5.3 still wants the mismatch
 	// observable for operations).
 	DefaultCapsGuardWarnEvery = 100
 )
