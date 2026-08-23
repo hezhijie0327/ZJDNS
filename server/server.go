@@ -337,13 +337,17 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 		cfg.Server.Certificate.TLS.IsEnabled() &&
 		cfg.Server.Certificate.TLCP.IsEnabled()
 	// UDP port sharing: detect per-protocol-pair sharing.
-	certsReady := cfg.Server.Certificate.TLS.IsEnabled() && cfg.Server.Certificate.TLCP.IsEnabled()
+	// Each combination only checks the certificates it actually needs:
+	// QUIC/DTLS/HTTP3 use TLS certs; DTLCP/DTLCP use TLCP certs.
 	dtlsDTLCPShare := cfg.Server.Protocol.DTLS != "" &&
-		cfg.Server.Protocol.DTLS == cfg.Server.Protocol.DTLCP && certsReady
+		cfg.Server.Protocol.DTLS == cfg.Server.Protocol.DTLCP &&
+		cfg.Server.Certificate.TLS.IsEnabled() && cfg.Server.Certificate.TLCP.IsEnabled()
 	quicDTLSShare := cfg.Server.Protocol.QUIC != "" &&
-		cfg.Server.Protocol.QUIC == cfg.Server.Protocol.DTLS && certsReady
+		cfg.Server.Protocol.QUIC == cfg.Server.Protocol.DTLS &&
+		cfg.Server.Certificate.TLS.IsEnabled()
 	quicDTLCPShare := cfg.Server.Protocol.QUIC != "" &&
-		cfg.Server.Protocol.QUIC == cfg.Server.Protocol.DTLCP && certsReady
+		cfg.Server.Protocol.QUIC == cfg.Server.Protocol.DTLCP &&
+		cfg.Server.Certificate.TLS.IsEnabled() && cfg.Server.Certificate.TLCP.IsEnabled()
 
 	// DNSCrypt shared-port detection:
 	//   - TCP 443: DNSCrypt + DoH + HTTPoverTLCP (length-prefix demux)
