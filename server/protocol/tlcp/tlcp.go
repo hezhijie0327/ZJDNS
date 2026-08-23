@@ -63,6 +63,11 @@ func (s *Server) startDOTServer() error {
 	return nil
 }
 
+// ServeDOT accepts TLCP DoT connections from a listener (exported for shared-port Manager).
+func (s *Server) ServeDOT(listener net.Listener) {
+	s.serveDOT(listener)
+}
+
 func (s *Server) serveDOT(listener net.Listener) {
 	defer zdnsutil.HandlePanic("TLCP DoT server")
 	for {

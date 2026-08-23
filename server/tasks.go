@@ -327,6 +327,10 @@ func (s *Server) shutdownServer() {
 		}
 	}
 
+	if s.sharedManager != nil {
+		s.sharedManager.Shutdown()
+	}
+
 	// Wait for background and cache-refresh goroutines BEFORE closing the
 	// query client — inflight refresh/resolve goroutines need outbound
 	// connections to complete.

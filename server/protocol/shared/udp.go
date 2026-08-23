@@ -1,15 +1,42 @@
-package tlcp
+package shared
 
 import (
+	"io"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 	"zjdns/internal/demux"
-	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+
+	zdnsutil "zjdns/internal/dnsutil"
 )
+
+// ---------------------------------------------------------------------------
+// Types — all type declarations first (decorder: type → const → var → func).
+// ---------------------------------------------------------------------------
+
+// DemuxPacket is one datagram routed to a per-client queue.
+type DemuxPacket struct {
+	Data []byte
+	Addr net.Addr
+}
+
+// DemuxPacketConn routes one client's datagrams from the shared listener
+// socket.  ReadFrom drains the per-client queue (filled by the dispatch
+// loop); WriteTo sends back through the shared socket so the client
+// always sees the listener's source port.
+type DemuxPacketConn struct {
+	Shared  *net.UDPConn
+	Remote  net.Addr
+	Ch      chan DemuxPacket
+	closed  atomic.Bool
+	dlMu    sync.Mutex
+	dlCh    chan struct{}
+	dlTimer *time.Timer
+}
 
 // addrKey is an allocation-free map key for UDP client addresses.
 // Fixed-size arrays are comparable, unlike net.UDPAddr's IP slice.
@@ -19,16 +46,13 @@ type addrKey struct {
 }
 
 // packetBuf is a pooled datagram buffer passed through dispatch channels.
-// The consumer copies data out and returns the buffer to packetBufPool.
+// The consumer copies data out and returns the buffer to PacketBufPool.
 type packetBuf struct {
 	data []byte
 	src  *net.UDPAddr
 	n    int
 }
 
-// dtlsClientConn implements net.PacketConn for a single DTLS client.
-// ReadFrom blocks until a datagram arrives from the dispatch loop;
-// WriteTo sends through the shared UDP socket.
 type dtlsClientConn struct {
 	ch     chan packetBuf
 	shared *net.UDPConn
@@ -41,9 +65,6 @@ type dtlsAcceptResult struct {
 	addr net.Addr
 }
 
-// dtlsPacketListener implements dtlsnet.PacketListener.  The unified
-// dispatch loop pushes new DTLS clients to acceptCh and all DTLS
-// datagrams to the per-client dtlsClientConn channels.
 type dtlsPacketListener struct {
 	udpConn  *net.UDPConn
 	acceptCh chan dtlsAcceptResult
@@ -53,9 +74,6 @@ type dtlsPacketListener struct {
 	done     chan struct{}
 }
 
-// quicPacketConn implements net.PacketConn for the QUIC transport.
-// The dispatch loop pushes QUIC packets into ch; quic.Transport's
-// read loop reads from ch via ReadFrom.
 type quicPacketConn struct {
 	ch     chan packetBuf
 	shared *net.UDPConn
@@ -63,20 +81,114 @@ type quicPacketConn struct {
 	done   chan struct{}
 }
 
-// sharedDTLSClient tracks a DTLCP client in the shared UDP dispatch.
-// It mirrors dtlcpListener's per-client fields but writes through the
-// shared UDP socket.
 type sharedDTLSClient struct {
 	mu    sync.Mutex
-	conns map[addrKey]*demuxPacketConn
+	conns map[addrKey]*DemuxPacketConn
 }
 
-var packetBufPool = sync.Pool{
+// ---------------------------------------------------------------------------
+// Vars
+// ---------------------------------------------------------------------------
+
+// PacketBufPool manages pooled datagram buffers.  The dispatch loop
+// allocates from the pool; consumers copy data out and return the buffer.
+var PacketBufPool = sync.Pool{
 	New: func() any {
 		b := make([]byte, pool.SecureBufferSize)
 		return &b
 	},
 }
+
+// ---------------------------------------------------------------------------
+// DemuxPacketConn methods
+// ---------------------------------------------------------------------------
+
+func (d *DemuxPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
+	for {
+		d.dlMu.Lock()
+		dl := d.dlCh
+		d.dlMu.Unlock()
+		if dl == nil {
+			pkt, ok := <-d.Ch
+			if !ok {
+				return 0, nil, net.ErrClosed
+			}
+			return d.copyPacket(p, pkt)
+		}
+		select {
+		case pkt, ok := <-d.Ch:
+			if !ok {
+				return 0, nil, net.ErrClosed
+			}
+			return d.copyPacket(p, pkt)
+		case <-dl:
+			d.dlMu.Lock()
+			still := d.dlCh == dl
+			d.dlMu.Unlock()
+			if still {
+				return 0, nil, os.ErrDeadlineExceeded
+			}
+		}
+	}
+}
+
+// copyPacket copies a queued datagram into p, surfacing
+// io.ErrShortBuffer when p is too small instead of silently truncating.
+// The pooled datagram buffer is always returned to PacketBufPool.
+func (d *DemuxPacketConn) copyPacket(p []byte, pkt DemuxPacket) (int, net.Addr, error) {
+	// Restore the full pool buffer before returning it to the pool.
+	// pkt.Data is a sub-slice ([:n]) of the pool buffer; the pool expects
+	// the original SecureBufferSize-length slice (New returns make([]byte, N)).
+	full := pkt.Data[:cap(pkt.Data)]
+	if len(p) < len(pkt.Data) {
+		PacketBufPool.Put(&full)
+		return 0, pkt.Addr, io.ErrShortBuffer
+	}
+	n := copy(p, pkt.Data)
+	PacketBufPool.Put(&full)
+	return n, pkt.Addr, nil
+}
+
+func (d *DemuxPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+	return d.Shared.WriteTo(p, addr)
+}
+
+func (d *DemuxPacketConn) Close() error {
+	if d.closed.CompareAndSwap(false, true) {
+		close(d.Ch)
+	}
+	return nil
+}
+
+func (d *DemuxPacketConn) LocalAddr() net.Addr  { return d.Shared.LocalAddr() }
+func (d *DemuxPacketConn) RemoteAddr() net.Addr { return d.Remote }
+
+func (d *DemuxPacketConn) SetDeadline(t time.Time) error    { return d.SetReadDeadline(t) }
+func (d *DemuxPacketConn) SetWriteDeadline(time.Time) error { return nil }
+func (d *DemuxPacketConn) setReadDeadlineLocked(t time.Time) {
+	if d.dlTimer != nil {
+		d.dlTimer.Stop()
+		d.dlTimer = nil
+	}
+	d.dlCh = nil
+	if t.IsZero() {
+		return
+	}
+	ch := make(chan struct{})
+	d.dlCh = ch
+	d.dlTimer = time.AfterFunc(time.Until(t), func() { close(ch) })
+}
+
+func (d *DemuxPacketConn) SetReadDeadline(t time.Time) error {
+	d.dlMu.Lock()
+	defer d.dlMu.Unlock()
+	d.setReadDeadlineLocked(t)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// DTLS client conn
+// ---------------------------------------------------------------------------
 
 func makeAddrKey(a *net.UDPAddr) addrKey {
 	var k addrKey
@@ -89,21 +201,17 @@ func makeAddrKey(a *net.UDPAddr) addrKey {
 	return k
 }
 
-// ---------------------------------------------------------------------------
-// dtlsClientConn — per-DTLS-client net.PacketConn
-// ---------------------------------------------------------------------------
-
 func (c *dtlsClientConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	pkt, ok := <-c.ch
 	if !ok {
 		return 0, nil, net.ErrClosed
 	}
 	if len(p) < pkt.n {
-		packetBufPool.Put(&pkt.data)
+		PacketBufPool.Put(&pkt.data)
 		return 0, pkt.src, net.ErrClosed
 	}
 	n := copy(p, pkt.data[:pkt.n])
-	packetBufPool.Put(&pkt.data)
+	PacketBufPool.Put(&pkt.data)
 	return n, pkt.src, nil
 }
 
@@ -124,6 +232,10 @@ func (c *dtlsClientConn) SetDeadline(_ time.Time) error      { return nil }
 func (c *dtlsClientConn) SetReadDeadline(_ time.Time) error  { return nil }
 func (c *dtlsClientConn) SetWriteDeadline(_ time.Time) error { return nil }
 
+// ---------------------------------------------------------------------------
+// DTLS packet listener
+// ---------------------------------------------------------------------------
+
 func newDTLSPacketListener(udpConn *net.UDPConn) *dtlsPacketListener {
 	return &dtlsPacketListener{
 		udpConn:  udpConn,
@@ -133,7 +245,6 @@ func newDTLSPacketListener(udpConn *net.UDPConn) *dtlsPacketListener {
 	}
 }
 
-// Accept implements dtlsnet.PacketListener.
 func (l *dtlsPacketListener) Accept() (net.PacketConn, net.Addr, error) {
 	select {
 	case r, ok := <-l.acceptCh:
@@ -146,7 +257,6 @@ func (l *dtlsPacketListener) Accept() (net.PacketConn, net.Addr, error) {
 	}
 }
 
-// Close implements dtlsnet.PacketListener.
 func (l *dtlsPacketListener) Close() error {
 	if l.closed.CompareAndSwap(false, true) {
 		close(l.done)
@@ -159,7 +269,6 @@ func (l *dtlsPacketListener) Close() error {
 	return nil
 }
 
-// Addr implements dtlsnet.PacketListener.
 func (l *dtlsPacketListener) Addr() net.Addr { return l.udpConn.LocalAddr() }
 
 // dispatch routes a DTLS datagram to the per-client channel, creating a
@@ -180,7 +289,6 @@ func (l *dtlsPacketListener) dispatch(src *net.UDPAddr, pb *[]byte, n int) {
 		l.clients[key] = cc
 		l.mu.Unlock()
 
-		// Notify Accept() about the new DTLS client.
 		select {
 		case l.acceptCh <- dtlsAcceptResult{conn: cc, addr: src}:
 		default:
@@ -189,15 +297,19 @@ func (l *dtlsPacketListener) dispatch(src *net.UDPAddr, pb *[]byte, n int) {
 		l.mu.Unlock()
 	}
 
-	cpBuf := packetBufPool.Get().(*[]byte)
+	cpBuf := PacketBufPool.Get().(*[]byte)
 	copy(*cpBuf, (*pb)[:n])
 	select {
 	case cc.ch <- packetBuf{data: *cpBuf, src: src, n: n}:
 	default:
-		packetBufPool.Put(cpBuf)
+		PacketBufPool.Put(cpBuf)
 	}
-	packetBufPool.Put(pb)
+	PacketBufPool.Put(pb)
 }
+
+// ---------------------------------------------------------------------------
+// QUIC packet conn
+// ---------------------------------------------------------------------------
 
 func newQUICPacketConn(udpConn *net.UDPConn) *quicPacketConn {
 	return &quicPacketConn{
@@ -214,7 +326,7 @@ func (c *quicPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 			return 0, nil, net.ErrClosed
 		}
 		n := copy(p, pkt.data[:pkt.n])
-		packetBufPool.Put(&pkt.data)
+		PacketBufPool.Put(&pkt.data)
 		return n, pkt.src, nil
 	case <-c.done:
 		return 0, nil, net.ErrClosed
@@ -237,39 +349,33 @@ func (c *quicPacketConn) SetDeadline(_ time.Time) error      { return nil }
 func (c *quicPacketConn) SetReadDeadline(_ time.Time) error  { return nil }
 func (c *quicPacketConn) SetWriteDeadline(_ time.Time) error { return nil }
 
-// dispatch pushes a QUIC datagram into the channel (non-blocking; drops on full).
-// The pooled buffer pb is consumed or returned to the pool.
 func (c *quicPacketConn) dispatch(src *net.UDPAddr, pb *[]byte, n int) {
 	select {
 	case c.ch <- packetBuf{data: *pb, src: src, n: n}:
 	default:
-		packetBufPool.Put(pb)
+		PacketBufPool.Put(pb)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// startSharedDTLSServer — main entry point
+// startDTLS — main entry point
 // ---------------------------------------------------------------------------
 
-// startSharedDTLSServer binds a single UDP socket and dispatches datagrams
-// to QUIC (quic-go via quicPacketConn), DTLS (pion/dtls via dtlsPacketListener)
-// and DTLCP (gotlcp/dtlcp via per-client demuxPacketConn) based on the first
-// datagram's record header.
-func (s *Server) startSharedDTLSServer() error {
-	addrs, err := zdnsutil.ResolveBindAddrs("udp", s.shared.DTLSPort)
+func (m *Manager) startDTLS() error {
+	addrs, err := zdnsutil.ResolveBindAddrs("udp", m.cfg.DTLSPort)
 	if err != nil {
 		return err
 	}
 
 	switch {
-	case s.shared.DOQHandler != nil && s.shared.DTLSHandler != nil:
-		log.Infof("TLCP: Shared DoQ+DTLS+DTLCP server started on %v", addrs)
-	case s.shared.DOQHandler != nil:
-		log.Infof("TLCP: Shared DoQ+DTLCP server started on %v", addrs)
-	case s.shared.DTLSHandler != nil:
-		log.Infof("TLCP: Shared DTLS+DTLCP server started on %v", addrs)
+	case m.cfg.DOQHandler != nil && m.cfg.DTLSHandler != nil:
+		log.Infof("SHARED: DoQ+DTLS+DTLCP server started on %v", addrs)
+	case m.cfg.DOQHandler != nil:
+		log.Infof("SHARED: DoQ+DTLCP server started on %v", addrs)
+	case m.cfg.DTLSHandler != nil:
+		log.Infof("SHARED: DTLS+DTLCP server started on %v", addrs)
 	default:
-		log.Infof("TLCP: Shared UDP server started on %v", addrs)
+		log.Infof("SHARED: UDP server started on %v", addrs)
 	}
 	for _, addr := range addrs {
 		udpAddr, err := net.ResolveUDPAddr("udp", addr)
@@ -282,95 +388,87 @@ func (s *Server) startSharedDTLSServer() error {
 			return err
 		}
 
-		s.listenerMu.Lock()
-		s.sharedUDPConn = udpConn
-		s.listenerMu.Unlock()
+		m.mu.Lock()
+		m.udpConn = udpConn
+		m.mu.Unlock()
 
-		// DTLS PacketListener — fed by the dispatch loop.
 		dtlsPL := newDTLSPacketListener(udpConn)
 
-		s.listenerMu.Lock()
-		s.sharedDTLSPktLstnr = dtlsPL
-		s.listenerMu.Unlock()
+		m.mu.Lock()
+		m.dtlsPL = dtlsPL
+		m.mu.Unlock()
 
-		// DTLCP per-client dispatch state.
 		dtlcpState := &sharedDTLSClient{
-			conns: make(map[addrKey]*demuxPacketConn),
+			conns: make(map[addrKey]*DemuxPacketConn),
 		}
 
-		// QUIC PacketConn — fed by the dispatch loop (optional).
 		var quicPC *quicPacketConn
-		if s.shared.DOQHandler != nil {
+		if m.cfg.DOQHandler != nil {
 			quicPC = newQUICPacketConn(udpConn)
-			s.listenerMu.Lock()
-			s.sharedQUICPktConn = quicPC
-			s.listenerMu.Unlock()
+			m.mu.Lock()
+			m.quicPC = quicPC
+			m.mu.Unlock()
 
-			// QUIC side: the TLS server's HandleDOQFromPacketConn
-			// creates a quic.Transport and runs the accept loop.
 			capturedQUIC := quicPC
-			s.serverGroup.Go(func() error {
+			m.host.Go(func() error {
 				defer zdnsutil.HandlePanic("Shared DoQ server")
-				if err := s.shared.DOQHandler(capturedQUIC); err != nil {
-					if s.ctx.Err() != nil {
+				if err := m.cfg.DOQHandler(capturedQUIC); err != nil {
+					if m.host.Ctx().Err() != nil {
 						return nil
 					}
-					log.Warnf("TLCP: shared DoQ error: %v", err)
+					log.Warnf("SHARED: DoQ error: %v", err)
 				}
 				return nil
 			})
 		}
 
-		// DTLS side: the TLS server's HandleDTLSFromPacketListener
-		// creates a pion/dtls listener and runs the accept loop (optional).
-		if s.shared.DTLSHandler != nil {
-			s.serverGroup.Go(func() error {
+		if m.cfg.DTLSHandler != nil {
+			m.host.Go(func() error {
 				defer zdnsutil.HandlePanic("Shared DTLS server")
-				if err := s.shared.DTLSHandler(dtlsPL); err != nil {
-					if s.ctx.Err() != nil {
+				if err := m.cfg.DTLSHandler(dtlsPL); err != nil {
+					if m.host.Ctx().Err() != nil {
 						return nil
 					}
-					log.Warnf("TLCP: shared DTLS error: %v", err)
+					log.Warnf("SHARED: DTLS error: %v", err)
 				}
 				return nil
 			})
 		}
 
-		// Unified dispatch loop: read → detect → route.
 		capturedUDP := udpConn
 		capturedDTLS := dtlsPL
 		capturedDTLCP := dtlcpState
 		capturedQUICPC := quicPC
-		s.serverGroup.Go(func() error {
+		m.host.Go(func() error {
 			defer zdnsutil.HandlePanic("Shared DoQ+DTLS+DTLCP dispatch")
-			s.sharedUDPDispatchLoop(capturedUDP, capturedDTLS, capturedDTLCP, capturedQUICPC)
+			m.udpDispatchLoop(capturedUDP, capturedDTLS, capturedDTLCP, capturedQUICPC)
 			return nil
 		})
 	}
 	return nil
 }
 
-// sharedUDPDispatchLoop reads datagrams from the shared UDP socket,
+// udpDispatchLoop reads datagrams from the shared UDP socket,
 // detects QUIC vs DTLS vs DTLCP from the first datagram of each client,
 // and routes subsequent datagrams accordingly.
 //
-// Per-packet allocation-free: the read buffer is pooled (packetBufPool),
+// Per-packet allocation-free: the read buffer is pooled (PacketBufPool),
 // the map key is a value-type addrKey (no src.String()), and the pooled
 // buffer is passed through channels — consumers copy out and return it.
-func (s *Server) sharedUDPDispatchLoop(
+func (m *Manager) udpDispatchLoop(
 	udpConn *net.UDPConn,
 	dtlsPL *dtlsPacketListener,
 	dtlcpState *sharedDTLSClient,
 	quicPC *quicPacketConn,
 ) {
-	peerProto := make(map[addrKey]string) // client addr → detected protocol
+	peerProto := make(map[addrKey]string)
 	var peerMu sync.RWMutex
 
 	buf := make([]byte, pool.SecureBufferSize)
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-m.groupCtx.Done():
 			return
 		default:
 		}
@@ -378,7 +476,7 @@ func (s *Server) sharedUDPDispatchLoop(
 		n, src, err := udpConn.ReadFromUDP(buf)
 		if err != nil {
 			select {
-			case <-s.ctx.Done():
+			case <-m.groupCtx.Done():
 				return
 			default:
 			}
@@ -388,13 +486,11 @@ func (s *Server) sharedUDPDispatchLoop(
 			return
 		}
 
-		// Acquire a pooled buffer for this datagram.
-		pb := packetBufPool.Get().(*[]byte)
+		pb := PacketBufPool.Get().(*[]byte)
 		copy(*pb, buf[:n])
 
 		key := makeAddrKey(src)
 
-		// Determine protocol (cached per client).
 		peerMu.RLock()
 		proto, known := peerProto[key]
 		peerMu.RUnlock()
@@ -402,7 +498,7 @@ func (s *Server) sharedUDPDispatchLoop(
 		if !known {
 			proto = demux.DetectUDPProtocol((*pb)[:n])
 			if proto == "" {
-				packetBufPool.Put(pb)
+				PacketBufPool.Put(pb)
 				continue
 			}
 			peerMu.Lock()
@@ -415,24 +511,24 @@ func (s *Server) sharedUDPDispatchLoop(
 			if quicPC != nil {
 				quicPC.dispatch(src, pb, n)
 			} else {
-				packetBufPool.Put(pb)
+				PacketBufPool.Put(pb)
 			}
 
 		case demux.ProtoDTLS:
-			if s.shared.DTLSHandler != nil {
+			if m.cfg.DTLSHandler != nil {
 				dtlsPL.dispatch(src, pb, n)
 			} else {
-				packetBufPool.Put(pb)
+				PacketBufPool.Put(pb)
 			}
 
 		case demux.ProtoDTLCP:
 			dtlcpState.mu.Lock()
 			dc, ok := dtlcpState.conns[key]
 			if !ok {
-				dc = &demuxPacketConn{
-					shared: udpConn,
-					remote: src,
-					ch:     make(chan demuxPacket, 32),
+				dc = &DemuxPacketConn{
+					Shared: udpConn,
+					Remote: src,
+					Ch:     make(chan DemuxPacket, 32),
 				}
 				dtlcpState.conns[key] = dc
 				dtlcpState.mu.Unlock()
@@ -440,9 +536,9 @@ func (s *Server) sharedUDPDispatchLoop(
 				capturedDC := dc
 				capturedSrc := src
 				capturedKey := key
-				s.serverGroup.Go(func() error {
+				m.host.Go(func() error {
 					defer zdnsutil.HandlePanic("Shared DTLCP client")
-					s.serveDTLCPClient(s.dtlcpConfig, capturedDC, capturedSrc, func() {
+					m.cfg.ServeDTLCP(capturedDC, capturedSrc, func() {
 						dtlcpState.mu.Lock()
 						delete(dtlcpState.conns, capturedKey)
 						dtlcpState.mu.Unlock()
@@ -454,9 +550,9 @@ func (s *Server) sharedUDPDispatchLoop(
 			}
 
 			select {
-			case dc.ch <- demuxPacket{data: *pb, addr: src}:
+			case dc.Ch <- DemuxPacket{Data: (*pb)[:n], Addr: src}:
 			default:
-				packetBufPool.Put(pb)
+				PacketBufPool.Put(pb)
 			}
 		}
 	}

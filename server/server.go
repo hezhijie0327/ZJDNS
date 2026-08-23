@@ -23,6 +23,7 @@ import (
 	"zjdns/server/defense"
 	"zjdns/server/handler"
 	"zjdns/server/handler/middleware"
+	"zjdns/server/protocol/shared"
 	"zjdns/server/protocol/tls"
 	"zjdns/server/resolver"
 	"zjdns/server/resolver/dnssec"
@@ -53,6 +54,7 @@ type Server struct {
 	tlcpServer     *servertlcp.Server
 	dnscryptServer *serverdnscrypt.Server
 	plain          *serverplain.Server
+	sharedManager  *shared.Manager
 	pprofServers   []*http.Server
 	shutdown       chan struct{}
 	shutdownOnce   sync.Once // guards close(shutdown) — a second shutdownServer call would double-close (M-3-6)
@@ -187,6 +189,12 @@ func (s *Server) initQueryClient(cfg *config.ServerConfig) *upstream.Client {
 func SetRootFilesDir(dir string) {
 	zdnsutil.SetRootFilesDir(dir)
 }
+
+// Go implements shared.Host: schedules f on the background errgroup.
+func (s *Server) Go(f func() error) { s.backgroundGroup.Go(f) }
+
+// Ctx implements shared.Host: returns the background context.
+func (s *Server) Ctx() context.Context { return s.backgroundCtx }
 
 // isRecursiveMode reports whether any upstream server uses the built-in
 // recursive resolver.  Recursion is explicit-only: an empty upstream list
@@ -373,18 +381,29 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 		s.tls = tlsSrv
 	}
 
-	// Build the shared-port config now that the TLS server exists.
-	var sharedCfg *servertlcp.SharedPortsConfig
+	// Create the TLCP server before the shared Manager so that TLCP-side
+	// handlers can be wired into the shared config.
+	if cfg.Server.Certificate.TLCP.IsEnabled() && (cfg.Server.Protocol.TLCP != "" || cfg.Server.Protocol.HTTPTLCP.Port != "" || cfg.Server.Protocol.DTLCP != "" || wantSharedUDP) {
+		tlcpSrv, err := servertlcp.New(&cfg.Server.Certificate.TLCP, cfg.Server.Protocol.TLCP, cfg.Server.Protocol.HTTPTLCP.Port, cfg.Server.Protocol.HTTPTLCP.Endpoint, cfg.Server.Protocol.DTLCP)
+		if err != nil {
+			return fmt.Errorf("TLCP server init: %w", err)
+		}
+		s.tlcpServer = tlcpSrv
+	}
+
+	// Build the shared-port Manager now that both protocol servers exist.
 	if (wantShared || wantSharedDOT || wantSharedUDP) && s.tls != nil {
-		sharedCfg = &servertlcp.SharedPortsConfig{}
+		sharedCfg := shared.Config{}
 		if wantShared {
 			sharedCfg.Port = cfg.Server.Protocol.HTTPS.Port
 			sharedCfg.TLSCfg = s.tls.ETLSConfigForDOH()
 			sharedCfg.DOHHandler = s.tls.DOHHandler()
+			sharedCfg.DOHTLCP = http.HandlerFunc(s.tlcpServer.ServeDOH)
 		}
 		if wantSharedDOT {
 			sharedCfg.DOTPort = cfg.Server.Protocol.TLS
 			sharedCfg.DOTHandler = s.tls.HandleDOTFromListener
+			sharedCfg.DOTTLCP = s.tlcpServer.ServeDOT
 		}
 		if wantSharedUDP {
 			sharedCfg.DTLSPort = cfg.Server.Protocol.DTLS
@@ -398,6 +417,13 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 		if quicDTLSShare || quicDTLCPShare {
 			sharedCfg.DOQHandler = s.tls.HandleDOQFromPacketConn
 		}
+		if s.tlcpServer != nil {
+			sharedCfg.ServeDTLCP = s.tlcpServer.ServeDTLCPClient
+			sharedCfg.WrapConn = func(c net.Conn, nextProtos []string) net.Conn {
+				return s.tlcpServer.WrapTLCPConn(c, nextProtos)
+			}
+		}
+		s.sharedManager = shared.New(s, &sharedCfg)
 	}
 
 	if cfg.Server.Protocol.DNSCrypt != "" {
@@ -408,20 +434,6 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 			return fmt.Errorf("DNSCrypt server init: %w", err)
 		}
 		s.dnscryptServer = dnscryptSrv
-	}
-
-	if cfg.Server.Certificate.TLCP.IsEnabled() && (cfg.Server.Protocol.TLCP != "" || cfg.Server.Protocol.HTTPTLCP.Port != "" || cfg.Server.Protocol.DTLCP != "" || wantSharedUDP) {
-		var tlcpSrv *servertlcp.Server
-		var err error
-		if sharedCfg != nil {
-			tlcpSrv, err = servertlcp.New(&cfg.Server.Certificate.TLCP, cfg.Server.Protocol.TLCP, cfg.Server.Protocol.HTTPTLCP.Port, cfg.Server.Protocol.HTTPTLCP.Endpoint, cfg.Server.Protocol.DTLCP, sharedCfg)
-		} else {
-			tlcpSrv, err = servertlcp.New(&cfg.Server.Certificate.TLCP, cfg.Server.Protocol.TLCP, cfg.Server.Protocol.HTTPTLCP.Port, cfg.Server.Protocol.HTTPTLCP.Endpoint, cfg.Server.Protocol.DTLCP)
-		}
-		if err != nil {
-			return fmt.Errorf("TLCP server init: %w", err)
-		}
-		s.tlcpServer = tlcpSrv
 	}
 
 	s.plain = serverplain.New(cfg)
@@ -506,6 +518,11 @@ func (s *Server) Start() error {
 	}
 
 	if s.tlcpServer != nil {
+		if s.sharedManager != nil {
+			if err := s.sharedManager.Start(); err != nil {
+				return fmt.Errorf("shared port startup: %w", err)
+			}
+		}
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("TLCP server")
 			if err := s.tlcpServer.Start(s); err != nil {

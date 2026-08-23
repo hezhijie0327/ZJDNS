@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"io"
 	"net"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,32 +12,11 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
+	"zjdns/server/protocol/shared"
 
 	"codeberg.org/miekg/dns"
 	"gitee.com/Trisia/gotlcp/dtlcp"
 )
-
-// demuxPacket is one datagram routed to a per-client queue.
-type demuxPacket struct {
-	data []byte
-	addr net.Addr
-}
-
-// demuxPacketConn routes one client's datagrams from the shared listener
-// socket.  ReadFrom drains the per-client queue (filled by the accept
-// loop's dispatch); WriteTo sends back through the shared socket so the
-// client always sees the listener's source port — gotlcp's readDatagram
-// drops datagrams from any other source address, so a per-connection
-// socket with a fresh port would never deliver responses.
-type demuxPacketConn struct {
-	shared  *net.UDPConn
-	remote  net.Addr
-	ch      chan demuxPacket
-	closed  atomic.Bool
-	dlMu    sync.Mutex
-	dlCh    chan struct{}
-	dlTimer *time.Timer
-}
 
 // dtlcpListener implements net.Listener over UDP.  The accept loop reads
 // every datagram from the shared socket and dispatches it to the owning
@@ -51,7 +28,7 @@ type dtlcpListener struct {
 	udpConn *net.UDPConn
 	cfg     *dtlcp.Config
 	mu      sync.Mutex
-	conns   map[string]*demuxPacketConn
+	conns   map[string]*shared.DemuxPacketConn
 	closed  atomic.Bool
 }
 
@@ -59,92 +36,12 @@ func newDTLCPListener(udpConn *net.UDPConn, cfg *dtlcp.Config) *dtlcpListener {
 	return &dtlcpListener{
 		udpConn: udpConn,
 		cfg:     cfg,
-		conns:   make(map[string]*demuxPacketConn),
+		conns:   make(map[string]*shared.DemuxPacketConn),
 	}
 }
 
-func (d *demuxPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
-	for {
-		d.dlMu.Lock()
-		dl := d.dlCh
-		d.dlMu.Unlock()
-		if dl == nil {
-			pkt, ok := <-d.ch
-			if !ok {
-				return 0, nil, net.ErrClosed
-			}
-			return d.copyPacket(p, pkt)
-		}
-		select {
-		case pkt, ok := <-d.ch:
-			if !ok {
-				return 0, nil, net.ErrClosed
-			}
-			return d.copyPacket(p, pkt)
-		case <-dl:
-			// Deadline fired; a stale timer from a previous deadline may
-			// have raced a fresh packet — loop once to re-check the queue
-			// before surfacing the timeout.
-			d.dlMu.Lock()
-			still := d.dlCh == dl
-			d.dlMu.Unlock()
-			if still {
-				return 0, nil, os.ErrDeadlineExceeded
-			}
-		}
-	}
-}
-
-// copyPacket copies a queued datagram into p, surfacing io.ErrShortBuffer
-// when p is too small instead of silently truncating (a truncated record
-// would be indistinguishable from network corruption and churn the
-// connection; M-3-5).  The pooled datagram buffer is always returned to
-// packetBufPool after the copy (or on error) to avoid leaks.
-func (d *demuxPacketConn) copyPacket(p []byte, pkt demuxPacket) (int, net.Addr, error) {
-	if len(p) < len(pkt.data) {
-		packetBufPool.Put(&pkt.data)
-		return 0, pkt.addr, io.ErrShortBuffer
-	}
-	n := copy(p, pkt.data)
-	packetBufPool.Put(&pkt.data)
-	return n, pkt.addr, nil
-}
-
-func (d *demuxPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
-	return d.shared.WriteTo(p, addr)
-}
-
-func (d *demuxPacketConn) Close() error {
-	if d.closed.CompareAndSwap(false, true) {
-		close(d.ch)
-	}
-	return nil
-}
-
-func (d *demuxPacketConn) LocalAddr() net.Addr  { return d.shared.LocalAddr() }
-func (d *demuxPacketConn) RemoteAddr() net.Addr { return d.remote }
-
-func (d *demuxPacketConn) SetDeadline(t time.Time) error    { return d.SetReadDeadline(t) }
-func (d *demuxPacketConn) SetWriteDeadline(time.Time) error { return nil } // UDP writes never block
-func (d *demuxPacketConn) setReadDeadlineLocked(t time.Time) {
-	if d.dlTimer != nil {
-		d.dlTimer.Stop()
-		d.dlTimer = nil
-	}
-	d.dlCh = nil
-	if t.IsZero() {
-		return
-	}
-	ch := make(chan struct{})
-	d.dlCh = ch
-	d.dlTimer = time.AfterFunc(time.Until(t), func() { close(ch) })
-}
-
-func (d *demuxPacketConn) SetReadDeadline(t time.Time) error {
-	d.dlMu.Lock()
-	defer d.dlMu.Unlock()
-	d.setReadDeadlineLocked(t)
-	return nil
+func (d *dtlcpListener) Addr() net.Addr {
+	return d.udpConn.LocalAddr()
 }
 
 // startDTLCPServer binds UDP sockets and starts DTLCP listeners for
@@ -231,10 +128,10 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 		l.mu.Lock()
 		dc, ok := l.conns[key]
 		if !ok {
-			dc = &demuxPacketConn{
-				shared: l.udpConn,
-				remote: src,
-				ch:     make(chan demuxPacket, 32),
+			dc = &shared.DemuxPacketConn{
+				Shared: l.udpConn,
+				Remote: src,
+				Ch:     make(chan shared.DemuxPacket, 32),
 			}
 			l.conns[key] = dc
 			l.mu.Unlock()
@@ -259,20 +156,26 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 
 		// Queue the datagram.  A full queue means the client is flooding —
 		// drop it (UDP semantics; DTLCP retransmits handshake flights).
-		pb := packetBufPool.Get().(*[]byte)
+		pb := shared.PacketBufPool.Get().(*[]byte)
 		copy(*pb, buf[:n])
 		select {
-		case dc.ch <- demuxPacket{data: *pb, addr: src}:
+		case dc.Ch <- shared.DemuxPacket{Data: (*pb)[:n], Addr: src}:
 		default:
-			packetBufPool.Put(pb)
+			shared.PacketBufPool.Put(pb)
 		}
 	}
+}
+
+// ServeDTLCPClient completes the DTLCP handshake and serves queries on one
+// client connection (exported for shared-port Manager).
+func (s *Server) ServeDTLCPClient(pc net.PacketConn, src *net.UDPAddr, cleanup func()) {
+	s.serveDTLCPClient(s.dtlcpConfig, pc.(*shared.DemuxPacketConn), src, cleanup)
 }
 
 // serveDTLCPClient completes the DTLCP handshake and serves queries on one
 // client connection.  The cleanup function is called on exit to remove the
 // client from the dispatch map (varies between standalone and shared mode).
-func (s *Server) serveDTLCPClient(cfg *dtlcp.Config, dc *demuxPacketConn, src *net.UDPAddr, cleanup func()) {
+func (s *Server) serveDTLCPClient(cfg *dtlcp.Config, dc *shared.DemuxPacketConn, src *net.UDPAddr, cleanup func()) {
 	defer func() {
 		_ = dc.Close()
 		if cleanup != nil {
@@ -423,7 +326,7 @@ func (l *dtlcpListener) Close() error {
 		return nil
 	}
 	l.closed.Store(true)
-	conns := make([]*demuxPacketConn, 0, len(l.conns))
+	conns := make([]*shared.DemuxPacketConn, 0, len(l.conns))
 	for _, dc := range l.conns {
 		conns = append(conns, dc)
 	}
@@ -433,8 +336,4 @@ func (l *dtlcpListener) Close() error {
 		_ = dc.Close()
 	}
 	return l.udpConn.Close()
-}
-
-func (l *dtlcpListener) Addr() net.Addr {
-	return l.udpConn.LocalAddr()
 }

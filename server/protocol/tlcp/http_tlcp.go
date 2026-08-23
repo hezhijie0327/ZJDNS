@@ -58,6 +58,11 @@ func (s *Server) startDOHServer() error {
 	return nil
 }
 
+// ServeDOH handles HTTPoverTLCP requests (exported for shared-port Manager).
+func (s *Server) ServeDOH(w http.ResponseWriter, r *http.Request) {
+	s.serveDOH(w, r)
+}
+
 func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 	if s == nil || s.handler == nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
