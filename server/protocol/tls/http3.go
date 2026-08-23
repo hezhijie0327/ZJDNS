@@ -116,3 +116,42 @@ func (s *Server) startDOH3Server(port string) error {
 
 	return nil
 }
+
+// handleHTTP3Connections runs the accept loop for DoH3 QUIC connections.
+// Shared with HandleHTTP3FromPacketConn (shared-port mode) and
+// startDOH3Server (standalone mode).
+func (s *Server) handleHTTP3Connections(h3Listener *quic.EarlyListener) {
+	for {
+		conn, err := h3Listener.Accept(s.ctx)
+		if err != nil {
+			if s.ctx.Err() != nil {
+				return
+			}
+			log.Debugf("TLS: DoH3 ACCEPT error: %v", err)
+			time.Sleep(config.DefaultAcceptRetryDelay)
+			continue
+		}
+		if conn == nil {
+			continue
+		}
+
+		// Admission cap: quic.Config only limits streams, not
+		// connections — a single client could otherwise open
+		// unbounded QUIC connections and exhaust goroutines.
+		select {
+		case s.quicConnSem <- struct{}{}:
+		default:
+			log.Debugf("TLS: DoH3 connection limit reached, rejecting %s", conn.RemoteAddr())
+			_ = conn.CloseWithError(doq.QUICCodeExcessiveLoad, "connection limit reached")
+			continue
+		}
+		s.serverGroup.Go(func() error {
+			defer zdnsutil.HandlePanic("DoH3 connection handler")
+			defer func() { <-s.quicConnSem }()
+			if err := s.h3Server.ServeQUICConn(conn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Debugf("TLS: DoH3 connection error: %v", err)
+			}
+			return nil
+		})
+	}
+}

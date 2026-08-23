@@ -4,6 +4,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -82,6 +83,11 @@ type quicPacketConn struct {
 }
 
 type sharedDTLSClient struct {
+	mu    sync.Mutex
+	conns map[addrKey]*DemuxPacketConn
+}
+
+type sharedDNSCryptClient struct {
 	mu    sync.Mutex
 	conns map[addrKey]*DemuxPacketConn
 }
@@ -358,25 +364,37 @@ func (c *quicPacketConn) dispatch(src *net.UDPAddr, pb *[]byte, n int) {
 }
 
 // ---------------------------------------------------------------------------
-// startDTLS — main entry point
+// startUDPGroup — start one UDP shared port group
 // ---------------------------------------------------------------------------
 
-func (m *Manager) startDTLS() error {
-	addrs, err := zdnsutil.ResolveBindAddrs("udp", m.cfg.DTLSPort)
+func (m *Manager) startUDPGroup(g *UDPGroup) error {
+	addrs, err := zdnsutil.ResolveBindAddrs("udp", g.Port)
 	if err != nil {
 		return err
 	}
 
-	switch {
-	case m.cfg.DOQHandler != nil && m.cfg.DTLSHandler != nil:
-		log.Infof("SHARED: DoQ+DTLS+DTLCP server started on %v", addrs)
-	case m.cfg.DOQHandler != nil:
-		log.Infof("SHARED: DoQ+DTLCP server started on %v", addrs)
-	case m.cfg.DTLSHandler != nil:
-		log.Infof("SHARED: DTLS+DTLCP server started on %v", addrs)
-	default:
-		log.Infof("SHARED: UDP server started on %v", addrs)
+	// Build a log label reflecting the active protocol combination.
+	label := "SHARED"
+	var parts []string
+	if g.DOQHandler != nil {
+		parts = append(parts, "DoQ")
 	}
+	if g.HTTP3Handler != nil {
+		parts = append(parts, "DoH3")
+	}
+	if g.DTLSHandler != nil {
+		parts = append(parts, "DTLS")
+	}
+	if g.ServeDTLCP != nil {
+		parts = append(parts, "DTLCP")
+	}
+	if g.ServeDNSCrypt != nil {
+		parts = append(parts, "DNSCrypt")
+	}
+	if len(parts) > 0 {
+		label += ": " + joinStrings(parts, "+")
+	}
+	log.Infof("%s server started on %v", label, addrs)
 	for _, addr := range addrs {
 		udpAddr, err := net.ResolveUDPAddr("udp", addr)
 		if err != nil {
@@ -388,31 +406,29 @@ func (m *Manager) startDTLS() error {
 			return err
 		}
 
-		m.mu.Lock()
-		m.udpConn = udpConn
-		m.mu.Unlock()
-
-		dtlsPL := newDTLSPacketListener(udpConn)
-
-		m.mu.Lock()
-		m.dtlsPL = dtlsPL
-		m.mu.Unlock()
-
-		dtlcpState := &sharedDTLSClient{
-			conns: make(map[addrKey]*DemuxPacketConn),
+		rt := &udpRuntime{
+			cfg:  g,
+			conn: udpConn,
 		}
 
-		var quicPC *quicPacketConn
-		if m.cfg.DOQHandler != nil {
-			quicPC = newQUICPacketConn(udpConn)
-			m.mu.Lock()
-			m.quicPC = quicPC
-			m.mu.Unlock()
+		if g.DTLSHandler != nil || g.ServeDTLCP != nil {
+			rt.dtlsPL = newDTLSPacketListener(udpConn)
+		}
 
-			capturedQUIC := quicPC
+		if g.ServeDNSCrypt != nil {
+			rt.dcState = &sharedDNSCryptClient{
+				conns: make(map[addrKey]*DemuxPacketConn),
+			}
+		}
+
+		if g.DOQHandler != nil {
+			rt.quicPC = newQUICPacketConn(udpConn)
+
+			capturedQUIC := rt.quicPC
+			capturedHandler := g.DOQHandler
 			m.host.Go(func() error {
 				defer zdnsutil.HandlePanic("Shared DoQ server")
-				if err := m.cfg.DOQHandler(capturedQUIC); err != nil {
+				if err := capturedHandler(capturedQUIC); err != nil {
 					if m.host.Ctx().Err() != nil {
 						return nil
 					}
@@ -422,10 +438,29 @@ func (m *Manager) startDTLS() error {
 			})
 		}
 
-		if m.cfg.DTLSHandler != nil {
+		if g.HTTP3Handler != nil {
+			rt.h3PC = newQUICPacketConn(udpConn)
+
+			capturedH3 := rt.h3PC
+			capturedHandler := g.HTTP3Handler
+			m.host.Go(func() error {
+				defer zdnsutil.HandlePanic("Shared DoH3 server")
+				if err := capturedHandler(capturedH3); err != nil {
+					if m.host.Ctx().Err() != nil {
+						return nil
+					}
+					log.Warnf("SHARED: DoH3 error: %v", err)
+				}
+				return nil
+			})
+		}
+
+		if g.DTLSHandler != nil {
+			capturedDTLS := rt.dtlsPL
+			capturedHandler := g.DTLSHandler
 			m.host.Go(func() error {
 				defer zdnsutil.HandlePanic("Shared DTLS server")
-				if err := m.cfg.DTLSHandler(dtlsPL); err != nil {
+				if err := capturedHandler(capturedDTLS); err != nil {
 					if m.host.Ctx().Err() != nil {
 						return nil
 					}
@@ -435,32 +470,56 @@ func (m *Manager) startDTLS() error {
 			})
 		}
 
-		capturedUDP := udpConn
-		capturedDTLS := dtlsPL
-		capturedDTLCP := dtlcpState
-		capturedQUICPC := quicPC
+		m.mu.Lock()
+		m.udpRuntimes = append(m.udpRuntimes, rt)
+		m.mu.Unlock()
+
+		capturedRT := rt
 		m.host.Go(func() error {
-			defer zdnsutil.HandlePanic("Shared DoQ+DTLS+DTLCP dispatch")
-			m.udpDispatchLoop(capturedUDP, capturedDTLS, capturedDTLCP, capturedQUICPC)
+			defer zdnsutil.HandlePanic("Shared UDP dispatch")
+			m.udpDispatchLoop(capturedRT)
 			return nil
 		})
 	}
 	return nil
 }
 
+// joinStrings joins strings with a separator (avoids importing strings
+// for a single Join call in the log label builder).
+func joinStrings(elems []string, sep string) string {
+	if len(elems) == 0 {
+		return ""
+	}
+	var result strings.Builder
+	result.WriteString(elems[0])
+	for _, e := range elems[1:] {
+		result.WriteString(sep + e)
+	}
+	return result.String()
+}
+
 // udpDispatchLoop reads datagrams from the shared UDP socket,
-// detects QUIC vs DTLS vs DTLCP from the first datagram of each client,
-// and routes subsequent datagrams accordingly.
+// detects DNSCrypt vs QUIC vs DTLS vs DTLCP from the first datagram of
+// each client, and routes subsequent datagrams accordingly.
+// DNSCrypt classification (via ClassifyDNSCrypt callback) runs before
+// QUIC/DTLS/DTLCP detection because DNSCrypt client magic may collide
+// with those protocols' byte ranges.
 //
 // Per-packet allocation-free: the read buffer is pooled (PacketBufPool),
 // the map key is a value-type addrKey (no src.String()), and the pooled
 // buffer is passed through channels — consumers copy out and return it.
-func (m *Manager) udpDispatchLoop(
-	udpConn *net.UDPConn,
-	dtlsPL *dtlsPacketListener,
-	dtlcpState *sharedDTLSClient,
-	quicPC *quicPacketConn,
-) {
+func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
+	g := rt.cfg
+	udpConn := rt.conn
+	dtlsPL := rt.dtlsPL
+	quicPC := rt.quicPC
+	h3PC := rt.h3PC
+	dnscryptState := rt.dcState
+
+	dtlcpState := &sharedDTLSClient{
+		conns: make(map[addrKey]*DemuxPacketConn),
+	}
+
 	peerProto := make(map[addrKey]string)
 	var peerMu sync.RWMutex
 
@@ -496,7 +555,22 @@ func (m *Manager) udpDispatchLoop(
 		peerMu.RUnlock()
 
 		if !known {
-			proto = demux.DetectUDPProtocol((*pb)[:n])
+			// 1. DNSCrypt encrypted query detection (priority — client_magic
+			//    may collide with QUIC/DTLS byte ranges).
+			if g.ClassifyDNSCrypt != nil {
+				proto = g.ClassifyDNSCrypt((*pb)[:n])
+			}
+			// 2. Standard QUIC/DTLS/DTLCP detection.
+			if proto == "" {
+				proto = demux.DetectUDPProtocol((*pb)[:n])
+			}
+			// 3. DNSCrypt cert handshake fallback: the cert fetch is a
+			//    plain DNS TXT query (no client_magic), so it does not match
+			//    steps 1–2.  Route to DNSCrypt when configured — it handles
+			//    both cert handshakes and encrypted queries.
+			if proto == "" && g.ServeDNSCrypt != nil {
+				proto = demux.ProtoDNSCrypt
+			}
 			if proto == "" {
 				PacketBufPool.Put(pb)
 				continue
@@ -508,14 +582,20 @@ func (m *Manager) udpDispatchLoop(
 
 		switch proto {
 		case demux.ProtoQUIC:
-			if quicPC != nil {
+			// Route to DoQ handler if available; otherwise fall back
+			// to HTTP3 handler (both use QUIC and are indistinguishable
+			// at the byte level — port assignment determines the protocol).
+			switch {
+			case quicPC != nil:
 				quicPC.dispatch(src, pb, n)
-			} else {
+			case h3PC != nil:
+				h3PC.dispatch(src, pb, n)
+			default:
 				PacketBufPool.Put(pb)
 			}
 
 		case demux.ProtoDTLS:
-			if m.cfg.DTLSHandler != nil {
+			if g.DTLSHandler != nil {
 				dtlsPL.dispatch(src, pb, n)
 			} else {
 				PacketBufPool.Put(pb)
@@ -536,9 +616,10 @@ func (m *Manager) udpDispatchLoop(
 				capturedDC := dc
 				capturedSrc := src
 				capturedKey := key
+				capturedHandler := g.ServeDTLCP
 				m.host.Go(func() error {
 					defer zdnsutil.HandlePanic("Shared DTLCP client")
-					m.cfg.ServeDTLCP(capturedDC, capturedSrc, func() {
+					capturedHandler(capturedDC, capturedSrc, func() {
 						dtlcpState.mu.Lock()
 						delete(dtlcpState.conns, capturedKey)
 						dtlcpState.mu.Unlock()
@@ -547,6 +628,47 @@ func (m *Manager) udpDispatchLoop(
 				})
 			} else {
 				dtlcpState.mu.Unlock()
+			}
+
+			select {
+			case dc.Ch <- DemuxPacket{Data: (*pb)[:n], Addr: src}:
+			default:
+				PacketBufPool.Put(pb)
+			}
+
+		case demux.ProtoDNSCrypt:
+			if dnscryptState == nil || g.ServeDNSCrypt == nil {
+				PacketBufPool.Put(pb)
+				continue
+			}
+			dnscryptState.mu.Lock()
+			dc, ok := dnscryptState.conns[key]
+			if !ok {
+				dc = &DemuxPacketConn{
+					Shared: udpConn,
+					Remote: src,
+					Ch:     make(chan DemuxPacket, 32),
+				}
+				dnscryptState.conns[key] = dc
+				dnscryptState.mu.Unlock()
+
+				capturedDC := dc
+				capturedHandler := g.ServeDNSCrypt
+				m.host.Go(func() error {
+					defer zdnsutil.HandlePanic("Shared DNSCrypt UDP client")
+					for {
+						pkt, pktOk := <-capturedDC.Ch
+						if !pktOk {
+							return nil
+						}
+						capturedHandler(m.host.Ctx(), pkt.Data, pkt.Addr, capturedDC)
+						// Return the pool buffer after synchronous processing.
+						full := pkt.Data[:cap(pkt.Data)]
+						PacketBufPool.Put(&full)
+					}
+				})
+			} else {
+				dnscryptState.mu.Unlock()
 			}
 
 			select {

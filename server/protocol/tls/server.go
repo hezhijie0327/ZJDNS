@@ -52,6 +52,7 @@ type Config struct {
 	SkipDOT       bool // skip standalone DoT listener (shared TCP port with TLCP DoT)
 	SkipDTLS      bool // skip standalone DTLS listener (shared UDP port with DTLCP)
 	SkipDOQ       bool // skip standalone DoQ listener (shared UDP port with DTLCP)
+	SkipHTTP3     bool // skip standalone DoH3 listener (shared UDP port with DNSCrypt)
 }
 
 // Server manages TLS-based secure DNS protocol listeners and their lifecycle.
@@ -234,7 +235,7 @@ func (s *Server) Start() error {
 		})
 	}
 
-	if s.cfg.HTTP3Port != "" {
+	if s.cfg.HTTP3Port != "" && !s.cfg.SkipHTTP3 {
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("DoH3 server")
 			if err := s.startDOH3Server(s.cfg.HTTP3Port); err != nil {
@@ -516,6 +517,51 @@ func (s *Server) HandleDOQFromPacketConn(pc net.PacketConn) error {
 	s.listenerMu.Unlock()
 
 	s.handleDOQConnections(listener)
+	return nil
+}
+
+// HandleHTTP3FromPacketConn serves DoH3 connections from an external
+// PacketConn.  Used by the shared-port Manager when HTTP3 shares a UDP
+// port with DNSCrypt.  The caller provides a net.PacketConn fed by the
+// UDP dispatch loop.
+func (s *Server) HandleHTTP3FromPacketConn(pc net.PacketConn) error {
+	addrCache := lrumap.New[string, time.Time](config.DefaultQUICAddrCacheSize)
+
+	transport := &quic.Transport{
+		Conn:                pc,
+		VerifySourceAddress: makeAddrValidator(addrCache),
+	}
+	s.listenerMu.Lock()
+	s.h3Transports = append(s.h3Transports, transport)
+	s.listenerMu.Unlock()
+
+	tlsConfig := s.QUICTLSConfig().Clone()
+	tlsConfig.NextProtos = config.NextProtoDOH3
+
+	quicConfig := &quic.Config{
+		MaxIdleTimeout:        config.DefaultQUICServerIdleTimeout,
+		MaxIncomingStreams:    config.DefaultMaxIncomingStreams,
+		MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
+		Allow0RTT:             true,
+		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
+	}
+
+	s.listenerMu.Lock()
+	if s.h3Server == nil {
+		s.h3Server = &http3.Server{Handler: s}
+	}
+	s.listenerMu.Unlock()
+
+	listener, err := transport.ListenEarly(tlsConfig, quicConfig)
+	if err != nil {
+		return err
+	}
+
+	s.listenerMu.Lock()
+	s.h3Listeners = append(s.h3Listeners, listener)
+	s.listenerMu.Unlock()
+
+	s.handleHTTP3Connections(listener)
 	return nil
 }
 

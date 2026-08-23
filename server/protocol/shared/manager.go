@@ -25,30 +25,73 @@ type Host interface {
 	Ctx() context.Context
 }
 
+// TCPGroup describes one TCP shared port and its protocol handlers.
+// A typical deployment has two groups: one for HTTPS+HTTPoverTLCP+DNSCrypt
+// on port 443 and one for DoT+DoT(TLCP) on port 853.
+type TCPGroup struct {
+	Port       string
+	TLSCfg     *eTLS.Config
+	NextProtos []string // TLS NextProtos (e.g. config.NextProtoDOH or config.NextProtoDOT)
+
+	// TLS side: either DOHHandler (HTTP-level) or DOTHandler (raw listener).
+	DOHHandler eHTTP.Handler
+	DOTHandler func(net.Listener) error
+
+	// TLCP side: either DOHTLCP (HTTP-level) or DOTTLCP (raw listener).
+	DOHTLCP http.Handler
+	DOTTLCP func(net.Listener)
+
+	// DNSCrypt TCP (only on HTTPS port).
+	ServeDNSCryptTCP func(ctx context.Context, conn net.Conn)
+
+	// TLCP connection wrapping.
+	WrapConn func(c net.Conn, nextProtos []string) net.Conn
+}
+
+// UDPGroup describes one UDP shared port and its protocol handlers.
+// A typical deployment has one group (e.g. QUIC+DTLS+DTLCP on 853);
+// a multi-port deployment (e.g. QUIC on 853 and DNSCrypt+HTTP3 on 443)
+// uses two groups.
+type UDPGroup struct {
+	Port             string
+	DOQHandler       func(net.PacketConn) error
+	HTTP3Handler     func(net.PacketConn) error
+	DTLSHandler      func(dtlsnet.PacketListener) error
+	ServeDTLCP       func(pc net.PacketConn, src *net.UDPAddr, cleanup func())
+	ServeDNSCrypt    func(ctx context.Context, data []byte, src net.Addr, pc net.PacketConn)
+	ClassifyDNSCrypt func(data []byte) string
+}
+
 // Config carries all handlers and configuration the Manager needs from
 // the TLS and TLCP protocol servers.  All fields are optional; the
 // Manager starts only the port pairs for which handlers are provided.
 type Config struct {
-	// TCP 443: HTTPS + HTTPoverTLCP.
-	Port       string
-	TLSCfg     *eTLS.Config  // TLS config for the TLS-side connections
-	DOHHandler eHTTP.Handler // DOH handler for the TLS-side
-	DOHTLCP    http.Handler  // HTTPoverTLCP handler for the TLCP-side
+	// TCP shared port groups.  Each group binds one TCP port and
+	// demultiplexes among TLS/TLCP/DNSCrypt by record-layer detection.
+	TCPGroups []TCPGroup
 
-	// TCP 853: TLS(DoT) + TLCP(DoT).
-	DOTPort    string
-	DOTHandler func(net.Listener) error // TLS-side DoT handler
-	DOTTLCP    func(net.Listener)       // TLCP-side DoT accept loop
+	// UDP shared port groups.  Each group binds one UDP port and
+	// demultiplexes among its configured protocols.
+	UDPGroups []UDPGroup
+}
 
-	// UDP 853: QUIC(DoQ) + DTLS + DTLCP.
-	DTLSPort    string
-	DTLSHandler func(dtlsnet.PacketListener) error
-	DOQHandler  func(net.PacketConn) error
-	ServeDTLCP  func(pc net.PacketConn, src *net.UDPAddr, cleanup func())
+// tcpRuntime holds the runtime state for one TCP shared port group.
+type tcpRuntime struct {
+	cfg     *TCPGroup
+	demux   tcpDemuxCloser
+	dohSrv  *eHTTP.Server
+	tlcpSrv *http.Server
+	tlcpLn  net.Listener
+}
 
-	// TLCP connection wrapping for the TLCP-side on shared TCP ports.
-	// WrapConn wraps a raw net.Conn with the TLCP protocol handshake.
-	WrapConn func(c net.Conn, nextProtos []string) net.Conn
+// udpRuntime holds the runtime state for one UDP shared port group.
+type udpRuntime struct {
+	cfg     *UDPGroup
+	conn    *net.UDPConn
+	dtlsPL  *dtlsPacketListener
+	quicPC  *quicPacketConn
+	h3PC    *quicPacketConn
+	dcState *sharedDNSCryptClient
 }
 
 // Manager manages shared-port resources for all protocol pairs.
@@ -59,17 +102,11 @@ type Manager struct {
 	cfg  *Config
 
 	mu sync.Mutex
-	// TCP 443 shared resources.
-	dohDemux tcpDemuxCloser
-	dohSrv   *eHTTP.Server
-	tlcpSrv  *http.Server
-	// TCP 853 shared resources.
-	dotDemux  tcpDemuxCloser
-	dotTLCPln net.Listener
-	// UDP 853 shared resources.
-	udpConn     *net.UDPConn
-	dtlsPL      *dtlsPacketListener
-	quicPC      *quicPacketConn
+	// TCP shared port runtimes (one per TCPGroup).
+	tcpRuntimes []*tcpRuntime
+	// UDP shared port runtimes (one per UDPGroup).
+	udpRuntimes []*udpRuntime
+
 	group       *errgroup.Group
 	groupCtx    context.Context
 	groupCancel context.CancelCauseFunc
@@ -97,18 +134,13 @@ func New(host Host, cfg *Config) *Manager {
 
 // Start launches all configured shared-port listeners.
 func (m *Manager) Start() error {
-	if m.cfg.Port != "" {
-		if err := m.startDOH(); err != nil {
+	for i := range m.cfg.TCPGroups {
+		if err := m.startTCPGroup(&m.cfg.TCPGroups[i]); err != nil {
 			return err
 		}
 	}
-	if m.cfg.DOTPort != "" {
-		if err := m.startDOT(); err != nil {
-			return err
-		}
-	}
-	if m.cfg.DTLSPort != "" {
-		if err := m.startDTLS(); err != nil {
+	for i := range m.cfg.UDPGroups {
+		if err := m.startUDPGroup(&m.cfg.UDPGroups[i]); err != nil {
 			return err
 		}
 	}
@@ -120,42 +152,40 @@ func (m *Manager) Shutdown() {
 	m.groupCancel(errors.New("shared port shutdown"))
 
 	m.mu.Lock()
-	dohSrv := m.dohSrv
-	tlcpSrv := m.tlcpSrv
-	dohDemux := m.dohDemux
-	dotDemux := m.dotDemux
-	dotTLCPln := m.dotTLCPln
-	quicPC := m.quicPC
-	dtlsPL := m.dtlsPL
-	udpConn := m.udpConn
+	tcpRTs := append([]*tcpRuntime(nil), m.tcpRuntimes...)
+	udpRTs := append([]*udpRuntime(nil), m.udpRuntimes...)
 	m.mu.Unlock()
 
-	if dohSrv != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
-		_ = dohSrv.Shutdown(ctx)
-		cancel()
+	for _, rt := range tcpRTs {
+		if rt.dohSrv != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
+			_ = rt.dohSrv.Shutdown(ctx)
+			cancel()
+		}
+		if rt.tlcpSrv != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
+			_ = rt.tlcpSrv.Shutdown(ctx)
+			cancel()
+		}
+		if rt.tlcpLn != nil {
+			_ = rt.tlcpLn.Close()
+		}
+		if rt.demux != nil {
+			_ = rt.demux.Close()
+		}
 	}
-	if tlcpSrv != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
-		_ = tlcpSrv.Shutdown(ctx)
-		cancel()
-	}
-	if dohDemux != nil {
-		_ = dohDemux.Close()
-	}
-	if dotTLCPln != nil {
-		_ = dotTLCPln.Close()
-	}
-	if dotDemux != nil {
-		_ = dotDemux.Close()
-	}
-	if quicPC != nil {
-		_ = quicPC.Close()
-	}
-	if dtlsPL != nil {
-		_ = dtlsPL.Close()
-	}
-	if udpConn != nil {
-		_ = udpConn.Close()
+	for _, rt := range udpRTs {
+		if rt.quicPC != nil {
+			_ = rt.quicPC.Close()
+		}
+		if rt.h3PC != nil {
+			_ = rt.h3PC.Close()
+		}
+		if rt.dtlsPL != nil {
+			_ = rt.dtlsPL.Close()
+		}
+		if rt.conn != nil {
+			_ = rt.conn.Close()
+		}
 	}
 }

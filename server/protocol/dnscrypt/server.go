@@ -204,6 +204,39 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, 
 	return s, nil
 }
 
+// SetHandler configures the DNS handler used for resolving decrypted
+// queries.  Must be called before StartBackground (shared-port mode) or
+// Start (standalone mode).  In standalone mode Start sets it implicitly.
+func (s *Server) SetHandler(h edns.DNSHandler) {
+	s.mu.Lock()
+	s.handler = h
+	s.mu.Unlock()
+}
+
+// StartBackground launches the key renewal loop without creating any
+// listeners.  Used in shared-port mode where the shared Manager routes
+// packets to the DNSCrypt Server instead of the Server owning its own
+// UDP/TCP sockets.  The caller must ensure StartBackground is called
+// before any packets are routed.
+func (s *Server) StartBackground() {
+	s.mu.Lock()
+	s.started = true
+	s.mu.Unlock()
+	go s.renewalLoop()
+}
+
+// HasClientMagic reports whether data begins with a recognised DNSCrypt
+// client magic prefix (any active cert's classical or PQ magic, or the
+// PQ resumption magic).  Used by the shared-port dispatch loop to
+// classify incoming datagrams before QUIC/DTLS/DTLCP detection.
+func (s *Server) HasClientMagic(data []byte) bool {
+	if len(data) < dnscryptcrypto.ClientMagicSize {
+		return false
+	}
+	return s.hasClientMagic(data[:dnscryptcrypto.ClientMagicSize]) ||
+		bytes.Equal(data[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:])
+}
+
 // ResetKeys regenerates the DNSCrypt crypto state from fresh random keys:
 // a single new cert window replaces all current windows and the state is
 // persisted immediately (CHAOS zjdns.dnscrypt.clear).  The provider identity

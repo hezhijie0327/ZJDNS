@@ -386,11 +386,31 @@ func validatePorts(cfg *ServerConfig) error {
 		transport string
 	}
 	var sharedGroups []sharedGroup
-	// TCP 443: HTTPS + HTTPoverTLCP (record-layer demux).
-	if proto.HTTPS.Port != "" && proto.HTTPS.Port == proto.HTTPTLCP.Port {
+	// TCP 443: HTTPS + HTTPoverTLCP + DNSCrypt (record-layer / length-prefix demux).
+	// Any subset of these may share the same TCP port.
+	if tcp443Fields := func() []string {
+		port := proto.HTTPS.Port
+		if port == "" {
+			return nil
+		}
+		var f []string
+		if proto.HTTPS.Port == port {
+			f = append(f, "server.protocol.https.port")
+		}
+		if proto.HTTPTLCP.Port == port {
+			f = append(f, "server.protocol.http_tlcp.port")
+		}
+		if proto.DNSCrypt != "" && proto.DNSCrypt == port {
+			f = append(f, "server.protocol.dnscrypt")
+		}
+		if len(f) < 2 {
+			return nil
+		}
+		return f
+	}(); tcp443Fields != nil {
 		sharedGroups = append(sharedGroups, sharedGroup{
 			port:      proto.HTTPS.Port,
-			fields:    []string{"server.protocol.https.port", "server.protocol.http_tlcp.port"},
+			fields:    tcp443Fields,
 			transport: "tcp",
 		})
 	}
@@ -402,37 +422,43 @@ func validatePorts(cfg *ServerConfig) error {
 			transport: "tcp",
 		})
 	}
-	// UDP 853: QUIC(DoQ) + DTLS + DTLCP (first-datagram demux).
-	// Any subset of these protocols may share the same port.
-	if proto.QUIC != "" && proto.QUIC == proto.DTLS && proto.DTLS == proto.DTLCP {
-		// All three on the same port — covers all 2-protocol subsets.
-		sharedGroups = append(sharedGroups, sharedGroup{
-			port:      proto.QUIC,
-			fields:    []string{"server.protocol.quic", "server.protocol.dtls", "server.protocol.dtlcp"},
-			transport: "udp",
-		})
-	} else {
-		// Partial pairs when not all three share the same port.
-		if proto.QUIC != "" && proto.QUIC == proto.DTLS {
-			sharedGroups = append(sharedGroups, sharedGroup{
-				port:      proto.QUIC,
-				fields:    []string{"server.protocol.quic", "server.protocol.dtls"},
-				transport: "udp",
-			})
+	// UDP shared: QUIC(DoQ) + DTLS + DTLCP + DNSCrypt + HTTP3 (first-datagram demux).
+	// Any subset (≥2) of these may share the same UDP port (any port).
+	// Multiple independent shared groups are allowed (e.g. 853 and 443).
+	// Note: QUIC(DoQ) and HTTP3 are both QUIC-based and indistinguishable at
+	// the byte level; they must not coexist on the same shared port.
+	{
+		candidates := []struct {
+			port  string
+			field string
+		}{
+			{proto.QUIC, "server.protocol.quic"},
+			{proto.DTLS, "server.protocol.dtls"},
+			{proto.DTLCP, "server.protocol.dtlcp"},
 		}
-		if proto.QUIC != "" && proto.QUIC == proto.DTLCP {
-			sharedGroups = append(sharedGroups, sharedGroup{
-				port:      proto.QUIC,
-				fields:    []string{"server.protocol.quic", "server.protocol.dtlcp"},
-				transport: "udp",
-			})
+		if proto.DNSCrypt != "" {
+			candidates = append(candidates, struct {
+				port  string
+				field string
+			}{proto.DNSCrypt, "server.protocol.dnscrypt"})
 		}
-		if proto.DTLS != "" && proto.DTLS == proto.DTLCP {
-			sharedGroups = append(sharedGroups, sharedGroup{
-				port:      proto.DTLS,
-				fields:    []string{"server.protocol.dtls", "server.protocol.dtlcp"},
-				transport: "udp",
-			})
+		if proto.HTTP3.Port != "" {
+			candidates = append(candidates, struct {
+				port  string
+				field string
+			}{proto.HTTP3.Port, "server.protocol.http3.port"})
+		}
+		// Group candidates by port; emit a sharedGroup for each port with ≥2 protocols.
+		portFields := map[string][]string{}
+		for _, c := range candidates {
+			if c.port != "" {
+				portFields[c.port] = append(portFields[c.port], c.field)
+			}
+		}
+		for port, fields := range portFields {
+			if len(fields) >= 2 {
+				sharedGroups = append(sharedGroups, sharedGroup{port: port, fields: fields, transport: "udp"})
+			}
 		}
 	}
 	// sharedGroupFields returns the allowed field set for e's port if it

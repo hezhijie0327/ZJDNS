@@ -27,17 +27,59 @@ func (q *queueListener) Accept() (net.Conn, error) { return q.inner.Accept() }
 func (q *queueListener) Close() error              { return q.inner.Close() }
 func (q *queueListener) Addr() net.Addr            { return q.inner.Addr() }
 
-// startDOH creates a single TCP listener on the shared DOH port and uses a
+// startTCPGroup creates a single TCP listener on the group's port and uses a
 // TCP demux to route connections by record-layer protocol:
-//   - TLS (major=0x03) → eTLS wrap → eHTTP.Server (DOH handler from TLS server)
-//   - TLCP (major=0x01) → TLCP wrap → http.Server (HTTPoverTLCP handler)
-func (m *Manager) startDOH() error {
-	addrs, err := zdnsutil.ResolveBindAddrs("tcp", m.cfg.Port)
+//   - TLS (first byte 0x14–0x17, version 0x03) → eTLS wrap → handler
+//   - TLCP (first byte 0x16, version 0x01) → TLCP wrap → handler
+//   - DNSCrypt (first byte 0x00–0x04) → DNSCrypt TCP handler (optional)
+//
+// The TLS handler is either DOHHandler (HTTP-level, port 443) or
+// DOTHandler (raw listener, port 853).  Similarly for TLCP: DOHTLCP
+// (HTTP-level) or DOTTLCP (raw listener).
+func (m *Manager) startTCPGroup(g *TCPGroup) error {
+	addrs, err := zdnsutil.ResolveBindAddrs("tcp", g.Port)
 	if err != nil {
 		return fmt.Errorf("resolve bind addrs: %w", err)
 	}
 
-	log.Infof("SHARED: DoH+HTTPoverTLCP server started on %v", addrs)
+	// Build the route map; DNSCrypt is optional.
+	routes := map[string]func(net.Conn) net.Conn{
+		demux.ProtoTLS: func(c net.Conn) net.Conn {
+			return c // eTLS.NewListener below handles the handshake
+		},
+		demux.ProtoTLCP: func(c net.Conn) net.Conn {
+			return g.WrapConn(c, g.NextProtos)
+		},
+	}
+	if g.ServeDNSCryptTCP != nil {
+		routes[demux.ProtoDNSCrypt] = func(c net.Conn) net.Conn {
+			return c // bufferedConn replays 5 demux bytes
+		}
+	}
+
+	// Build a log label reflecting the active protocol combination.
+	label := "SHARED"
+	var parts []string
+	if g.DOHHandler != nil || g.DOTHandler != nil {
+		parts = append(parts, "DoT")
+		if g.DOHHandler != nil {
+			parts[0] = "DoH"
+		}
+	}
+	if g.DOHTLCP != nil || g.DOTTLCP != nil {
+		parts = append(parts, "HTTPoverTLCP")
+		if g.DOTTLCP != nil && g.DOHTLCP == nil {
+			parts[len(parts)-1] = "DoT(TLCP)"
+		}
+	}
+	if g.ServeDNSCryptTCP != nil {
+		parts = append(parts, "DNSCrypt")
+	}
+	if len(parts) > 0 {
+		label += ": " + joinStrings(parts, "+")
+	}
+	log.Infof("%s server started on %v", label, addrs)
+
 	for _, addr := range addrs {
 		rawListener, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -49,156 +91,131 @@ func (m *Manager) startDOH() error {
 				Listener:        rawListener,
 				KeepAlivePeriod: config.DefaultTCPKeepAlivePeriod,
 			},
-			Routes: map[string]func(net.Conn) net.Conn{
-				demux.ProtoTLS: func(c net.Conn) net.Conn {
-					return c // eTLS.NewListener below handles the handshake
-				},
-				demux.ProtoTLCP: func(c net.Conn) net.Conn {
-					return m.cfg.WrapConn(c, config.NextProtoDOH)
-				},
-			},
+			Routes: routes,
 		})
 
+		rt := &tcpRuntime{cfg: g, demux: d}
+
 		m.mu.Lock()
-		m.dohDemux = d
+		m.tcpRuntimes = append(m.tcpRuntimes, rt)
 		m.mu.Unlock()
 
-		// TLS side: eTLS.NewListener → eHTTP.Server.
+		// TLS side: eTLS.NewListener → handler.
 		tlsListener := d.Listener(demux.ProtoTLS)
 		if tlsListener != nil {
 			limited := zdnsutil.NewLimitListener(tlsListener, config.DefaultServerGoroutineLimit)
 
-			tlsConfig := m.cfg.TLSCfg.Clone()
-			tlsConfig.NextProtos = config.NextProtoDOH
-			tlsConfig.GetConfigForClient = sharedTLSConfigForClient(m.cfg.TLSCfg, config.NextProtoDOH)
+			tlsConfig := g.TLSCfg.Clone()
+			tlsConfig.NextProtos = g.NextProtos
+			tlsConfig.GetConfigForClient = sharedTLSConfigForClient(g.TLSCfg, g.NextProtos)
 
-			httpsListener := eTLS.NewListener(limited, tlsConfig)
+			if g.DOHHandler != nil {
+				// HTTP-level: eTLS.Listener → eHTTP.Server.
+				httpsListener := eTLS.NewListener(limited, tlsConfig)
 
-			dohSrv := &eHTTP.Server{
-				Handler:           m.cfg.DOHHandler,
-				ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
-				WriteTimeout:      config.DefaultHTTPServerWriteTimeout,
-				IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
-			}
-			m.mu.Lock()
-			m.dohSrv = dohSrv
-			m.mu.Unlock()
+				dohSrv := &eHTTP.Server{
+					Handler:           g.DOHHandler,
+					ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
+					WriteTimeout:      config.DefaultHTTPServerWriteTimeout,
+					IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
+				}
+				rt.dohSrv = dohSrv
 
-			capturedSrv := dohSrv
-			capturedLn := httpsListener
-			m.host.Go(func() error {
-				defer zdnsutil.HandlePanic("Shared DoH (TLS) server")
-				if err := capturedSrv.Serve(capturedLn); err != nil && !errors.Is(err, eHTTP.ErrServerClosed) {
-					if m.host.Ctx().Err() != nil {
-						return nil
+				capturedSrv := dohSrv
+				capturedLn := httpsListener
+				m.host.Go(func() error {
+					defer zdnsutil.HandlePanic("Shared DoH (TLS) server")
+					if err := capturedSrv.Serve(capturedLn); err != nil && !errors.Is(err, eHTTP.ErrServerClosed) {
+						if m.host.Ctx().Err() != nil {
+							return nil
+						}
+						log.Warnf("SHARED: DoH (TLS) serve error: %v", err)
 					}
-					log.Warnf("SHARED: DoH (TLS) serve error: %v", err)
-				}
-				return nil
-			})
-		}
+					return nil
+				})
+			} else if g.DOTHandler != nil {
+				// Raw listener: eTLS.Listener → DOTHandler.
+				dotListener := eTLS.NewListener(limited, tlsConfig)
 
-		// TLCP side: http.Server with the HTTPoverTLCP handler.
-		tlcpListener := d.Listener(demux.ProtoTLCP)
-		if tlcpListener != nil {
-			tlcpSrv := &http.Server{
-				Handler:           m.cfg.DOHTLCP,
-				ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
-				WriteTimeout:      config.DefaultHTTPServerWriteTimeout,
-				IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
-				TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
-			}
-			m.mu.Lock()
-			m.tlcpSrv = tlcpSrv
-			m.mu.Unlock()
-
-			capturedTLCP := tlcpSrv
-			capturedTLCPln := tlcpListener
-			m.host.Go(func() error {
-				defer zdnsutil.HandlePanic("Shared DoH (TLCP) server")
-				if err := capturedTLCP.Serve(capturedTLCPln); err != nil && err != http.ErrServerClosed {
-					log.Warnf("SHARED: DoH (TLCP) serve error: %v", err)
-				}
-				return nil
-			})
-		}
-	}
-	return nil
-}
-
-// startDOT creates a single TCP listener on the shared DOT port and uses a
-// TCP demux to route connections by record-layer protocol:
-//   - TLS (major=0x03) → eTLS wrap → DOTHandler
-//   - TLCP (major=0x01) → TLCP wrap → DOTTLCP accept loop
-func (m *Manager) startDOT() error {
-	addrs, err := zdnsutil.ResolveBindAddrs("tcp", m.cfg.DOTPort)
-	if err != nil {
-		return fmt.Errorf("resolve bind addrs: %w", err)
-	}
-
-	log.Infof("SHARED: DoT+DoT(TLCP) server started on %v", addrs)
-	for _, addr := range addrs {
-		rawListener, err := net.Listen("tcp", addr)
-		if err != nil {
-			return fmt.Errorf("TCP listen on %s: %w", addr, err)
-		}
-
-		d := demux.NewTCPDemux(demux.TCPConfig{
-			Inner: &zdnsutil.TCPKeepAliveListener{
-				Listener:        rawListener,
-				KeepAlivePeriod: config.DefaultTCPKeepAlivePeriod,
-			},
-			Routes: map[string]func(net.Conn) net.Conn{
-				demux.ProtoTLS: func(c net.Conn) net.Conn {
-					return c // eTLS.NewListener below handles the handshake
-				},
-				demux.ProtoTLCP: func(c net.Conn) net.Conn {
-					return m.cfg.WrapConn(c, config.NextProtoDOT)
-				},
-			},
-		})
-
-		m.mu.Lock()
-		m.dotDemux = d
-		m.mu.Unlock()
-
-		// TLS side: eTLS.NewListener → DOTHandler.
-		tlsListener := d.Listener(demux.ProtoTLS)
-		if tlsListener != nil {
-			limited := zdnsutil.NewLimitListener(tlsListener, config.DefaultServerGoroutineLimit)
-
-			tlsConfig := m.cfg.TLSCfg.Clone()
-			tlsConfig.NextProtos = config.NextProtoDOT
-			tlsConfig.GetConfigForClient = sharedTLSConfigForClient(m.cfg.TLSCfg, config.NextProtoDOT)
-
-			dotListener := eTLS.NewListener(limited, tlsConfig)
-
-			capturedLn := dotListener
-			m.host.Go(func() error {
-				defer zdnsutil.HandlePanic("Shared DoT (TLS) server")
-				if err := m.cfg.DOTHandler(capturedLn); err != nil {
-					if m.host.Ctx().Err() != nil {
-						return nil
+				capturedLn := dotListener
+				capturedHandler := g.DOTHandler
+				m.host.Go(func() error {
+					defer zdnsutil.HandlePanic("Shared DoT (TLS) server")
+					if err := capturedHandler(capturedLn); err != nil {
+						if m.host.Ctx().Err() != nil {
+							return nil
+						}
+						log.Warnf("SHARED: DoT (TLS) error: %v", err)
 					}
-					log.Warnf("SHARED: DoT (TLS) error: %v", err)
-				}
-				return nil
-			})
+					return nil
+				})
+			}
 		}
 
-		// TLCP side: queueListener → DOTTLCP accept loop.
+		// TLCP side: queueListener → handler.
 		tlcpQueue := d.Listener(demux.ProtoTLCP)
 		if tlcpQueue != nil {
 			ql := &queueListener{inner: tlcpQueue}
-			m.mu.Lock()
-			m.dotTLCPln = ql
-			m.mu.Unlock()
 
+			if g.DOHTLCP != nil {
+				// HTTP-level: http.Server.
+				tlcpSrv := &http.Server{
+					Handler:           g.DOHTLCP,
+					ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
+					WriteTimeout:      config.DefaultHTTPServerWriteTimeout,
+					IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
+					TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+				}
+				rt.tlcpSrv = tlcpSrv
+
+				capturedTLCP := tlcpSrv
+				capturedTLCPln := ql
+				m.host.Go(func() error {
+					defer zdnsutil.HandlePanic("Shared DoH (TLCP) server")
+					if err := capturedTLCP.Serve(capturedTLCPln); err != nil && err != http.ErrServerClosed {
+						log.Warnf("SHARED: DoH (TLCP) serve error: %v", err)
+					}
+					return nil
+				})
+			} else if g.DOTTLCP != nil {
+				// Raw listener.
+				rt.tlcpLn = ql
+
+				capturedQL := ql
+				capturedHandler := g.DOTTLCP
+				m.host.Go(func() error {
+					defer zdnsutil.HandlePanic("Shared DoT (TLCP) server")
+					capturedHandler(capturedQL)
+					return nil
+				})
+			}
+		}
+
+		// DNSCrypt side: accept loop dispatching to ServeDNSCryptTCP.
+		dnscryptQueue := d.Listener(demux.ProtoDNSCrypt)
+		if dnscryptQueue != nil {
+			ql := &queueListener{inner: dnscryptQueue}
 			capturedQL := ql
+			capturedHandler := g.ServeDNSCryptTCP
 			m.host.Go(func() error {
-				defer zdnsutil.HandlePanic("Shared DoT (TLCP) server")
-				m.cfg.DOTTLCP(capturedQL)
-				return nil
+				defer zdnsutil.HandlePanic("Shared DNSCrypt TCP server")
+				for {
+					conn, err := capturedQL.Accept()
+					if err != nil {
+						if m.host.Ctx().Err() != nil {
+							return nil
+						}
+						if !zdnsutil.IsTemporaryError(err) {
+							return nil
+						}
+						continue
+					}
+					capturedConn := conn
+					m.host.Go(func() error {
+						capturedHandler(m.host.Ctx(), capturedConn)
+						return nil
+					})
+				}
 			})
 		}
 	}

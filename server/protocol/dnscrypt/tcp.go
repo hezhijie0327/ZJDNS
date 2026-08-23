@@ -119,6 +119,45 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 	}
 }
 
+// HandleSharedTCPConn processes a single TCP connection received via a
+// shared-port listener.  conn already includes the demux-buffered prefix
+// bytes (replayed via bufferedConn).  This is the shared-port counterpart
+// of the per-connection logic inside serveTCP.
+func (s *Server) HandleSharedTCPConn(ctx context.Context, conn net.Conn) {
+	if !s.isStarted() {
+		_ = conn.Close()
+		return
+	}
+
+	s.mu.Lock()
+	s.tcpConns[conn] = struct{}{}
+	s.mu.Unlock()
+
+	select {
+	case s.workerCap <- struct{}{}:
+	default:
+		_ = conn.Close()
+		s.mu.Lock()
+		delete(s.tcpConns, conn)
+		s.mu.Unlock()
+		return
+	}
+
+	s.mu.Lock()
+	s.wg.Go(func() {
+		defer zdnsutil.HandlePanic("Shared DNSCrypt TCP handler")
+		defer func() { <-s.workerCap }()
+		defer func() {
+			_ = conn.Close()
+			s.mu.Lock()
+			delete(s.tcpConns, conn)
+			s.mu.Unlock()
+		}()
+		s.handleTCPConnection(ctx, conn)
+	})
+	s.mu.Unlock()
+}
+
 // handleTCPConnection processes queries on a TCP connection until the peer
 // closes it or a read error occurs.  The connection persists across queries
 // (RFC 7766 §4 — the DNSCrypt draft leaves connection lifetime unspecified;

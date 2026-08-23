@@ -19,11 +19,12 @@ type bufferedConn struct {
 
 // Protocol family identifiers returned by DetectTCPProtocol and DetectUDPProtocol.
 const (
-	ProtoTLS   = "tls"
-	ProtoTLCP  = "tlcp"
-	ProtoQUIC  = "quic"
-	ProtoDTLS  = "dtls"
-	ProtoDTLCP = "dtlcp"
+	ProtoTLS      = "tls"
+	ProtoTLCP     = "tlcp"
+	ProtoQUIC     = "quic"
+	ProtoDTLS     = "dtls"
+	ProtoDTLCP    = "dtlcp"
+	ProtoDNSCrypt = "dnscrypt"
 )
 
 // tcpRecordHeaderLen is the TLS/TLCP record layer header length:
@@ -57,25 +58,35 @@ func (c *bufferedConn) Read(b []byte) (int, error) {
 // layer header and returns the detected protocol family together with a
 // wrapper connection that replays the buffered bytes on subsequent reads.
 //
-// Detection rules (major version byte):
+// Detection rules (first byte → content type vs length prefix):
 //
-//	0x03 → "tls"  (TLS 1.0–1.3, record version 0x0301–0x0304)
-//	0x01 → "tlcp" (TLCP, record version 0x0101)
-//	other → ""    (unknown)
+//	0x14–0x17 → TLS record content type; inspect version byte (header[1]):
+//	  0x03 → "tls"  (TLS 1.0–1.3, record version 0x0301–0x0304)
+//	  0x01 → "tlcp" (TLCP, record version 0x0101)
+//	0x00–0x04 → "dnscrypt" (DNSCrypt 2-byte length prefix; max query ~1260 B)
+//	other     → "" (unknown)
 func DetectTCPProtocol(conn net.Conn) (protocol string, detected net.Conn, err error) {
 	header := make([]byte, tcpRecordHeaderLen)
 	if _, err = io.ReadFull(conn, header); err != nil {
 		return "", nil, err
 	}
 
-	major := header[1]
-	switch major {
-	case 0x03:
-		protocol = ProtoTLS
-	case 0x01:
-		protocol = ProtoTLCP
+	first := header[0]
+	switch {
+	case first >= 0x14 && first <= 0x17:
+		// TLS record content type range: handshake(0x16), CCS(0x14),
+		// alert(0x15), application_data(0x17).
+		switch header[1] {
+		case 0x03:
+			protocol = ProtoTLS
+		case 0x01:
+			protocol = ProtoTLCP
+		}
 	default:
-		protocol = ""
+		// DNSCrypt TCP frames begin with a 2-byte big-endian length prefix.
+		// Queries are at most ~1260 bytes (MaxDNSUDPPacketSize), so the
+		// high byte is 0x00–0x04 — no overlap with TLS content types.
+		protocol = ProtoDNSCrypt
 	}
 
 	return protocol, &bufferedConn{Conn: conn, buf: header}, nil

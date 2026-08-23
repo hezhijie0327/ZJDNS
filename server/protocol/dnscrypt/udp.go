@@ -27,9 +27,11 @@ type responseWriter interface {
 }
 
 // udpResponseWriter writes DNSCrypt-encrypted responses over UDP.
+// conn is net.PacketConn so it works with both a dedicated *net.UDPConn
+// (standalone mode) and a shared DemuxPacketConn (shared-port mode).
 type udpResponseWriter struct {
-	conn    *net.UDPConn
-	addr    *net.UDPAddr
+	conn    net.PacketConn
+	addr    net.Addr
 	req     *dns.Msg
 	query   *dnscryptcrypto.EncryptedQuery
 	encrypt func(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP bool) ([]byte, error)
@@ -44,8 +46,17 @@ func (w *udpResponseWriter) WriteMsg(_ context.Context, m *dns.Msg) error {
 	if err != nil {
 		return err
 	}
-	_, err = w.conn.WriteToUDP(res, w.addr)
+	_, err = w.conn.WriteTo(res, w.addr)
 	return err
+}
+
+// HandleSharedUDPPacket processes a single UDP datagram received via a
+// shared-port listener.  pc is the shared socket used for writing responses;
+// src is the client address.  This is the shared-port counterpart of
+// handleUDPPacket: the same decrypt/encrypt/handshake logic, but the
+// response writer targets the shared socket instead of a dedicated one.
+func (s *Server) HandleSharedUDPPacket(ctx context.Context, b []byte, src net.Addr, pc net.PacketConn) {
+	s.processUDPPacket(ctx, b, src, pc)
 }
 
 // serveUDP reads and handles DNSCrypt UDP messages.
@@ -134,7 +145,7 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 // pool is at capacity.  It must not block meaningfully: decryption is fast
 // (shared-key cache) and the middleware chain is never invoked — the query is
 // answered SERVFAIL, the handshake served from the current cert window.
-func (s *Server) handleSaturated(ctx context.Context, b []byte, addr *net.UDPAddr, udpConn *net.UDPConn) {
+func (s *Server) handleSaturated(ctx context.Context, b []byte, addr net.Addr, pc net.PacketConn) {
 	if !s.hasClientMagic(b[:dnscryptcrypto.ClientMagicSize]) && !bytes.Equal(b[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:]) {
 		// Certificate handshake — cheap, serve it (dropping on anti-
 		// amplification violation: the client retries over TCP).
@@ -144,7 +155,7 @@ func (s *Server) handleSaturated(ctx context.Context, b []byte, addr *net.UDPAdd
 			return
 		}
 		if len(reply) <= len(b) {
-			if _, err := udpConn.WriteToUDP(reply, addr); err != nil {
+			if _, err := pc.WriteTo(reply, addr); err != nil {
 				log.Debugf("DNSCRYPT: UDP write error to %s: %v", addr, err)
 			}
 		}
@@ -159,7 +170,7 @@ func (s *Server) handleSaturated(ctx context.Context, b []byte, addr *net.UDPAdd
 	dnsutil.SetReply(resp, m)
 	resp.Rcode = dns.RcodeServerFailure
 	rw := &udpResponseWriter{
-		conn:    udpConn,
+		conn:    pc,
 		addr:    addr,
 		req:     m,
 		query:   q,
@@ -170,8 +181,11 @@ func (s *Server) handleSaturated(ctx context.Context, b []byte, addr *net.UDPAdd
 	}
 }
 
-// handleUDPPacket processes a single UDP datagram.
-func (s *Server) handleUDPPacket(ctx context.Context, b []byte, addr *net.UDPAddr, udpConn *net.UDPConn) {
+// processUDPPacket is the shared core for both handleUDPPacket (standalone
+// mode, pc=*net.UDPConn) and HandleSharedUDPPacket (shared-port mode,
+// pc=DemuxPacketConn).  It handles encrypted queries and certificate
+// handshakes, writing responses via pc.WriteTo.
+func (s *Server) processUDPPacket(ctx context.Context, b []byte, src net.Addr, pc net.PacketConn) {
 	if !s.hasClientMagic(b[:dnscryptcrypto.ClientMagicSize]) && !bytes.Equal(b[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:]) {
 		reply, err := s.handleHandshake(b, true)
 		if err != nil {
@@ -202,10 +216,10 @@ func (s *Server) handleUDPPacket(ctx context.Context, b []byte, addr *net.UDPAdd
 			}
 			log.Debugf("DNSCRYPT: UDP cert response (%d bytes) exceeds request (%d bytes) — returning TC", origLen, len(b))
 		}
-		if _, err := udpConn.WriteToUDP(reply, addr); err != nil {
-			log.Debugf("DNSCRYPT: UDP write error to %s: %v", addr, err)
+		if _, err := pc.WriteTo(reply, src); err != nil {
+			log.Debugf("DNSCRYPT: UDP write error to %s: %v", src, err)
 		}
-		log.Debugf("DNSCRYPT: UDP handshake response sent to %s", addr)
+		log.Debugf("DNSCRYPT: UDP handshake response sent to %s", src)
 		return
 	}
 
@@ -214,11 +228,11 @@ func (s *Server) handleUDPPacket(ctx context.Context, b []byte, addr *net.UDPAdd
 		log.Debugf("DNSCRYPT: failed to decrypt UDP query: %v", err)
 		return
 	}
-	log.Debugf("DNSCRYPT: decrypted UDP query from %s", addr)
+	log.Debugf("DNSCRYPT: decrypted UDP query from %s", src)
 
 	rw := &udpResponseWriter{
-		conn:    udpConn,
-		addr:    addr,
+		conn:    pc,
+		addr:    src,
 		req:     m,
 		query:   q,
 		encrypt: s.encrypt,
@@ -226,6 +240,11 @@ func (s *Server) handleUDPPacket(ctx context.Context, b []byte, addr *net.UDPAdd
 	if err := s.serveDNS(ctx, rw, m, config.ProtoDNSCrypt); err != nil {
 		log.Debugf("DNSCRYPT: serveDNS UDP error: %v", err)
 	}
+}
+
+// handleUDPPacket processes a single UDP datagram (standalone mode).
+func (s *Server) handleUDPPacket(ctx context.Context, b []byte, addr *net.UDPAddr, udpConn *net.UDPConn) {
+	s.processUDPPacket(ctx, b, addr, udpConn)
 }
 
 // setUDPSocketOptions configures the UDP socket for reading packet info.

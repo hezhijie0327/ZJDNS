@@ -1,0 +1,12 @@
+{
+  "server": {
+    "log_level": "debug",
+    "protocol": { "udp": "22444", "tcp": "22444" }
+  },
+  "upstream": [
+    {
+      "address": "sdns://AQAAAAAAAAAADzEyNy4wLjAuMToyMDQ0MyBU_6jM_HymrJTrMP6Xrhpkf_8U5-zTYMpa5lwRHywjeyAyLmRuc2NyeXB0LWNlcnQuempkbnMtdGVzdC5sb2NhbA",
+      "protocol": "dnscrypt"
+    }
+  ]
+}

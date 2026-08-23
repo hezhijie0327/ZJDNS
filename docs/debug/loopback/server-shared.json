@@ -10,12 +10,18 @@
       "dtls": "20853",
       "dtlcp": "20853",
       "https": { "port": "20443", "endpoint": "/dns-query" },
-      "http_tlcp": { "port": "20443", "endpoint": "/dns-query" }
+      "http_tlcp": { "port": "20443", "endpoint": "/dns-query" },
+      "http3": { "port": "20443", "endpoint": "/dns-query" },
+      "dnscrypt": "20443"
     },
     "certificate": {
       "domain": "zjdns-test.local",
       "tls": { "self_signed": true },
-      "tlcp": { "self_signed": true }
+      "tlcp": { "self_signed": true },
+      "dnscrypt": {
+        "private_key": "1A58FB447665ABF7FEA009B2750A9AB8528B2269CCB443192E82F4029C79592354FFA8CCFC7CA6AC94EB30FE97AE1A647FFF14E7ECD360CA5AE65C111F2C237B",
+        "public_key": "54FFA8CCFC7CA6AC94EB30FE97AE1A647FFF14E7ECD360CA5AE65C111F2C237B"
+      }
     },
     "features": {
       "cache": {}
