@@ -76,7 +76,7 @@ func (m *Manager) startTCPGroup(g *TCPGroup) error {
 		parts = append(parts, "DNSCrypt")
 	}
 	if len(parts) > 0 {
-		label += ": " + joinStrings(parts, "+")
+		label += ": " + joinStrings(parts, ", ")
 	}
 	log.Infof("%s server started on %v", label, addrs)
 

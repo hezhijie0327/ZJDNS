@@ -324,13 +324,14 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 // silently skip (M-low).
 func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Handler) error {
 	// Detect shared ports early so protocol servers can coordinate:
-	//   - TCP 443: HTTPS + HTTPoverTLCP (record-layer demux)
+	//   - TCP 443: HTTPS + HTTPoverTLCP + DNSCrypt (any subset ≥2)
 	//   - TCP 853: TLS(DoT) + TLCP(DoT) (record-layer demux)
-	//   - UDP 853: any combination of QUIC(DoQ), DTLS, DTLCP (first-datagram demux)
+	//   - UDP:     any combination of QUIC(DoQ), DTLS, DTLCP, DNSCrypt, HTTP3
 	wantShared := cfg.Server.Protocol.HTTPS.Port != "" &&
-		cfg.Server.Protocol.HTTPS.Port == cfg.Server.Protocol.HTTPTLCP.Port &&
 		cfg.Server.Certificate.TLS.IsEnabled() &&
-		cfg.Server.Certificate.TLCP.IsEnabled()
+		((cfg.Server.Protocol.HTTPS.Port == cfg.Server.Protocol.HTTPTLCP.Port && cfg.Server.Certificate.TLCP.IsEnabled()) ||
+			(cfg.Server.Protocol.DNSCrypt != "" && cfg.Server.Protocol.DNSCrypt == cfg.Server.Protocol.HTTPS.Port &&
+				cfg.Server.Certificate.DNSCrypt.PublicKey != "" && cfg.Server.Certificate.DNSCrypt.PrivateKey != ""))
 	wantSharedDOT := cfg.Server.Protocol.TLS != "" &&
 		cfg.Server.Protocol.TLS == cfg.Server.Protocol.TLCP &&
 		cfg.Server.Certificate.TLS.IsEnabled() &&
@@ -343,11 +344,10 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 		cfg.Server.Protocol.QUIC == cfg.Server.Protocol.DTLS && certsReady
 	quicDTLCPShare := cfg.Server.Protocol.QUIC != "" &&
 		cfg.Server.Protocol.QUIC == cfg.Server.Protocol.DTLCP && certsReady
-	wantSharedUDP := dtlsDTLCPShare || quicDTLSShare || quicDTLCPShare
 
 	// DNSCrypt shared-port detection:
 	//   - TCP 443: DNSCrypt + DoH + HTTPoverTLCP (length-prefix demux)
-	//   - UDP 443: DNSCrypt + QUIC/DTLS/DTLCP (client-magic demux)
+	//   - UDP:     DNSCrypt + QUIC/DTLS/DTLCP/HTTP3 (client-magic demux)
 	dnsCryptReady := cfg.Server.Protocol.DNSCrypt != "" &&
 		cfg.Server.Certificate.DNSCrypt.PublicKey != "" &&
 		cfg.Server.Certificate.DNSCrypt.PrivateKey != ""
@@ -358,6 +358,22 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 			cfg.Server.Protocol.DNSCrypt == cfg.Server.Protocol.HTTP3.Port ||
 			cfg.Server.Protocol.DNSCrypt == cfg.Server.Protocol.DTLS ||
 			cfg.Server.Protocol.DNSCrypt == cfg.Server.Protocol.DTLCP)
+	// wantSharedUDP: true when ANY two UDP protocols share a port.
+	wantSharedUDP := dtlsDTLCPShare || quicDTLSShare || quicDTLCPShare || wantSharedDNSUDP
+
+	// Per-protocol "port is shared" checks for skip flags and handler wiring.
+	// Each is true when the protocol's UDP port has ≥2 protocols on it.
+	quicPortShared := (cfg.Server.Protocol.QUIC != "") &&
+		(cfg.Server.Protocol.QUIC == cfg.Server.Protocol.DTLS ||
+			cfg.Server.Protocol.QUIC == cfg.Server.Protocol.DTLCP ||
+			(dnsCryptReady && cfg.Server.Protocol.QUIC == cfg.Server.Protocol.DNSCrypt))
+	dtlsPortShared := (cfg.Server.Protocol.DTLS != "") &&
+		(cfg.Server.Protocol.DTLS == cfg.Server.Protocol.QUIC ||
+			cfg.Server.Protocol.DTLS == cfg.Server.Protocol.DTLCP ||
+			(dnsCryptReady && cfg.Server.Protocol.DTLS == cfg.Server.Protocol.DNSCrypt))
+	http3PortShared := (cfg.Server.Protocol.HTTP3.Port != "") &&
+		(dnsCryptReady && cfg.Server.Protocol.HTTP3.Port == cfg.Server.Protocol.DNSCrypt)
+	_ = http3PortShared // used below in SkipHTTP3
 
 	if cfg.Server.Certificate.TLS.IsEnabled() {
 		tlsCfg := tls.Config{
@@ -382,15 +398,13 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 		if wantSharedDOT {
 			tlsCfg.SkipDOT = true
 		}
-		if dtlsDTLCPShare || quicDTLSShare {
+		if dtlsPortShared {
 			tlsCfg.SkipDTLS = true
 		}
-		if quicDTLSShare || quicDTLCPShare {
+		if quicPortShared {
 			tlsCfg.SkipDOQ = true
 		}
-		// Skip standalone HTTP3 when it shares a UDP port with DNSCrypt
-		// (the shared Manager routes packets via demux instead).
-		if dnsCryptReady && cfg.Server.Protocol.DNSCrypt == cfg.Server.Protocol.HTTP3.Port {
+		if http3PortShared {
 			tlsCfg.SkipHTTP3 = true
 		}
 		tlsSrv, err := tls.New(h, &tlsCfg)
@@ -402,7 +416,7 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 
 	// Create the TLCP server before the shared Manager so that TLCP-side
 	// handlers can be wired into the shared config.
-	if cfg.Server.Certificate.TLCP.IsEnabled() && (cfg.Server.Protocol.TLCP != "" || cfg.Server.Protocol.HTTPTLCP.Port != "" || cfg.Server.Protocol.DTLCP != "" || wantSharedUDP) {
+	if cfg.Server.Certificate.TLCP.IsEnabled() && (cfg.Server.Protocol.TLCP != "" || cfg.Server.Protocol.HTTPTLCP.Port != "" || cfg.Server.Protocol.DTLCP != "") {
 		tlcpSrv, err := servertlcp.New(&cfg.Server.Certificate.TLCP, cfg.Server.Protocol.TLCP, cfg.Server.Protocol.HTTPTLCP.Port, cfg.Server.Protocol.HTTPTLCP.Endpoint, cfg.Server.Protocol.DTLCP)
 		if err != nil {
 			return fmt.Errorf("TLCP server init: %w", err)
@@ -439,8 +453,10 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 				TLSCfg:     s.tls.ETLSConfigForDOH(),
 				NextProtos: config.NextProtoDOH,
 				DOHHandler: s.tls.DOHHandler(),
-				DOHTLCP:    http.HandlerFunc(s.tlcpServer.ServeDOH),
 				WrapConn:   wrapConn,
+			}
+			if s.tlcpServer != nil {
+				g.DOHTLCP = http.HandlerFunc(s.tlcpServer.ServeDOH)
 			}
 			if s.dnscryptServer != nil && wantSharedDNSTCP {
 				g.ServeDNSCryptTCP = s.dnscryptServer.HandleSharedTCPConn
@@ -460,51 +476,76 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 		sharedCfg.TCPGroups = tcpGroups
 		if wantSharedUDP {
 			// Determine the primary UDP port from QUIC/DTLS/DTLCP.
-			primaryPort := cfg.Server.Protocol.DTLS
+			primaryPort := cfg.Server.Protocol.QUIC
+			if primaryPort == "" {
+				primaryPort = cfg.Server.Protocol.DTLS
+			}
 			if primaryPort == "" {
 				primaryPort = cfg.Server.Protocol.DTLCP
 			}
-
-			// DNSCrypt+HTTP3 share the primary port when they map to
-			// the same port as QUIC/DTLS/DTLCP.
-			dnsCryptOnPrimary := wantSharedDNSUDP &&
-				cfg.Server.Protocol.DNSCrypt == primaryPort
-			dnsCryptHTTP3OnSeparatePort := wantSharedDNSUDP && !dnsCryptOnPrimary
+			hasQuicDTLSDTLCP := primaryPort != ""
 
 			// Build UDP groups (pre-allocate capacity 2 so pointers
 			// remain stable after append).
 			udpGroups := make([]shared.UDPGroup, 0, 2)
 
-			// Primary group: QUIC/DTLS/DTLCP (+ DNSCrypt/HTTP3 if same port).
-			primary := shared.UDPGroup{Port: primaryPort}
-			if quicDTLSShare || quicDTLCPShare {
-				primary.DOQHandler = s.tls.HandleDOQFromPacketConn
-			}
-			if dtlsDTLCPShare || quicDTLSShare {
-				primary.DTLSHandler = s.tls.HandleDTLSFromPacketListener
-			}
-			if s.tlcpServer != nil {
-				primary.ServeDTLCP = s.tlcpServer.ServeDTLCPClient
-			}
-			if dnsCryptOnPrimary {
-				primary.ServeDNSCrypt = s.dnscryptServer.HandleSharedUDPPacket
-				primary.ClassifyDNSCrypt = func(data []byte) string {
-					if s.dnscryptServer.HasClientMagic(data) {
-						return "dnscrypt"
+			if hasQuicDTLSDTLCP {
+				// Primary group: QUIC/DTLS/DTLCP (+ DNSCrypt/HTTP3 if same port).
+				dnsCryptOnPrimary := wantSharedDNSUDP &&
+					cfg.Server.Protocol.DNSCrypt == primaryPort
+
+				// Only create the primary group if there are actual
+				// handlers (i.e. protocols share or DNSCrypt joins).
+				hasPrimaryHandlers := quicPortShared || dtlsPortShared ||
+					dnsCryptOnPrimary || s.tlcpServer != nil
+
+				if hasPrimaryHandlers {
+					primary := shared.UDPGroup{Port: primaryPort}
+					if quicPortShared {
+						primary.DOQHandler = s.tls.HandleDOQFromPacketConn
 					}
-					return ""
+					if dtlsPortShared {
+						primary.DTLSHandler = s.tls.HandleDTLSFromPacketListener
+					}
+					if s.tlcpServer != nil && cfg.Server.Protocol.DTLCP != "" {
+						primary.ServeDTLCP = s.tlcpServer.ServeDTLCPClient
+					}
+					if dnsCryptOnPrimary {
+						primary.ServeDNSCrypt = s.dnscryptServer.HandleSharedUDPPacket
+						primary.ClassifyDNSCrypt = func(data []byte) string {
+							if s.dnscryptServer.HasClientMagic(data) {
+								return "dnscrypt"
+							}
+							return ""
+						}
+						if cfg.Server.Protocol.HTTP3.Port == primaryPort {
+							primary.HTTP3Handler = s.tls.HandleHTTP3FromPacketConn
+						}
+					}
+					udpGroups = append(udpGroups, primary)
 				}
-				if cfg.Server.Protocol.HTTP3.Port == primaryPort {
-					primary.HTTP3Handler = s.tls.HandleHTTP3FromPacketConn
-				}
-			}
-			udpGroups = append(udpGroups, primary)
 
-			// Secondary group: DNSCrypt+HTTP3 on a different port.
-			if dnsCryptHTTP3OnSeparatePort {
-				udpGroups = append(udpGroups, shared.UDPGroup{
+				// Secondary group: DNSCrypt (+ HTTP3) on a different port.
+				if wantSharedDNSUDP && !dnsCryptOnPrimary {
+					sec := shared.UDPGroup{
+						Port:          cfg.Server.Protocol.DNSCrypt,
+						ServeDNSCrypt: s.dnscryptServer.HandleSharedUDPPacket,
+						ClassifyDNSCrypt: func(data []byte) string {
+							if s.dnscryptServer.HasClientMagic(data) {
+								return "dnscrypt"
+							}
+							return ""
+						},
+					}
+					if cfg.Server.Protocol.HTTP3.Port == cfg.Server.Protocol.DNSCrypt {
+						sec.HTTP3Handler = s.tls.HandleHTTP3FromPacketConn
+					}
+					udpGroups = append(udpGroups, sec)
+				}
+			} else if wantSharedDNSUDP {
+				// No QUIC/DTLS/DTLCP — DNSCrypt (+ HTTP3 if same port).
+				g := shared.UDPGroup{
 					Port:          cfg.Server.Protocol.DNSCrypt,
-					HTTP3Handler:  s.tls.HandleHTTP3FromPacketConn,
 					ServeDNSCrypt: s.dnscryptServer.HandleSharedUDPPacket,
 					ClassifyDNSCrypt: func(data []byte) string {
 						if s.dnscryptServer.HasClientMagic(data) {
@@ -512,21 +553,11 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 						}
 						return ""
 					},
-				})
-			}
-
-			// Also handle DNSCrypt-only shared UDP (no QUIC/DTLS/DTLCP).
-			if wantSharedDNSUDP && !wantSharedUDP {
-				udpGroups = append(udpGroups, shared.UDPGroup{
-					Port:          cfg.Server.Protocol.DNSCrypt,
-					ServeDNSCrypt: s.dnscryptServer.HandleSharedUDPPacket,
-					ClassifyDNSCrypt: func(data []byte) string {
-						if s.dnscryptServer.HasClientMagic(data) {
-							return "dnscrypt"
-						}
-						return ""
-					},
-				})
+				}
+				if cfg.Server.Protocol.HTTP3.Port == cfg.Server.Protocol.DNSCrypt {
+					g.HTTP3Handler = s.tls.HandleHTTP3FromPacketConn
+				}
+				udpGroups = append(udpGroups, g)
 			}
 
 			sharedCfg.UDPGroups = udpGroups
