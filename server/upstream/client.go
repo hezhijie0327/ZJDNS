@@ -379,13 +379,17 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 	case config.ProtoHTTP3:
 		return c.tlsClient.ExecuteHTTP3(ctx, msg, server)
 	case config.ProtoDTLS:
+		// RFC 8094 §3.3: fall back to TLS when DTLS fails (e.g. PMTU
+		// drops large responses).  This works when DTLS and TLS share
+		// the same port — the standard deployment is port 853 where
+		// DTLS is UDP and TLS (DoT) is TCP.  The fallback dials TCP
+		// to the same address; if the upstream has no TLS listener on
+		// that port the fallback fails with "connection refused" (no
+		// worse than no fallback at all).
 		resp, err := c.tlsClient.ExecuteDTLS(ctx, msg, server)
 		if err == nil {
 			return resp, nil
 		}
-		// RFC 8094 §3.3: large DNS responses that exceed the
-		// Path MTU are silently dropped by the server.  Fall
-		// back to TLS when DTLS fails.
 		log.Debugf("UPSTREAM: DTLS query failed for %s, falling back to TLS: %v", server.Address, err)
 		return c.tlsClient.ExecuteTLS(ctx, msg, server)
 	case config.ProtoTLCP:
@@ -393,11 +397,12 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 	case config.ProtoHTTPTLCP:
 		return c.tlcpClient.ExecuteHTTPTLCP(ctx, msg, server)
 	case config.ProtoDTLCP:
+		// Same RFC 8094 §3.3 pattern as DTLS→TLS: fall back to TLCP
+		// when DTLCP fails.  Works when both share the same port.
 		resp, err := c.tlcpClient.ExecuteDTLCP(ctx, msg, server)
 		if err == nil {
 			return resp, nil
 		}
-		// Same PMTU limitation as DTLS — fall back to TLCP.
 		log.Debugf("UPSTREAM: DTLCP query failed for %s, falling back to TLCP: %v", server.Address, err)
 		return c.tlcpClient.ExecuteTLCP(ctx, msg, server)
 	default:

@@ -57,6 +57,12 @@ func (c *Client) ExecuteTLS(ctx context.Context, msg *dns.Msg, server *config.Up
 
 // dialTLSConn establishes a TCP connection (optionally proxied), performs a
 // TLS handshake over it, and returns the resulting TLS connection.
+//
+// The handshake is completed explicitly before returning — deferring it to
+// the first Write would deadlock once the connection enters the pool:
+// newConn() starts a readLoop goroutine that reads from the same conn, and
+// both the readLoop and the lazy handshake block on the underlying TCP Read,
+// neither making progress (confirmed via tls.(*Conn).readFromUntil stack).
 func (c *Client) dialTLSConn(ctx context.Context, addr string, tlsConfig *eTLS.Config, proxyDialer *socks5.Dialer) (net.Conn, error) {
 	var tcpConn net.Conn
 	var err error
@@ -73,11 +79,17 @@ func (c *Client) dialTLSConn(ctx context.Context, addr string, tlsConfig *eTLS.C
 		_ = tc.SetKeepAlive(true)
 		_ = tc.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)
 	}
-	// Defer the handshake: the first Write on the TLS conn will trigger it.
-	// When ClientSessionCache has a valid session ticket, this allows TLS 1.3
-	// 0-RTT early data — the DNS query is sent as part of the ClientHello,
-	// saving one RTT on reconnection (RFC 8446 §2.3).
 	tlsConn := eTLS.Client(tcpConn, tlsConfig)
+	// Complete the handshake under the caller's context before the
+	// connection enters the pool (readLoop starts immediately).  When
+	// ClientSessionCache has a valid session ticket, TLS 1.3 0-RTT early
+	// data is not possible here because the handshake must complete before
+	// readLoop starts — the first real query after the handshake still
+	// benefits from the resumed session on subsequent connections.
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		_ = tcpConn.Close()
+		return nil, fmt.Errorf("tls: handshake %s: %w", addr, err)
+	}
 	return tlsConn, nil
 }
 
