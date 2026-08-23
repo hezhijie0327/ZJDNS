@@ -42,7 +42,7 @@ kdig @127.0.0.1 -p 853 example.com +quic          # DoQ
 kdig @127.0.0.1 -p 443 example.com +https         # DoH
 
 # 验证 DNSCrypt
-dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
+dig @127.0.0.1 -p 443 2.dnscrypt-cert.example.com TXT
 ```
 
 ## 核心特性
@@ -65,11 +65,11 @@ dig @127.0.0.1 -p 8443 2.dnscrypt-cert.example.com TXT
 | DoT | 853 | TCP + TLS 1.3 | [RFC 7858](docs/rfc/rfc7858.txt) |
 | DoQ | 853 | QUIC | [RFC 9250](docs/rfc/rfc9250.txt) |
 | DoH / DoH3 | 443 | HTTP/2 + HTTP/3 | [RFC 8484](docs/rfc/rfc8484.txt) / [RFC 9114](docs/rfc/rfc9114.txt) |
-| DTLS | 8853 | UDP + DTLS 1.2+ | [RFC 8094](docs/rfc/rfc8094.txt) |
-| DNSCrypt | 8443 | UDP/TCP + PQ KEM | [draft-denis-dprive-dnscrypt](docs/rfc/draft-denis-dprive-dnscrypt.txt) |
-| TLCP DoT | 9853 | TCP + SM2/SM3/SM4 | GB/T 38636-2020 |
-| TLCP DoH | 9443 | HTTP + SM2/SM3/SM4 | GB/T 38636-2020 |
-| DTLCP | 9853 | UDP + SM2/SM3/SM4 | GM/T 0128-2023 |
+| DTLS | 853 | UDP + DTLS 1.2+ | [RFC 8094](docs/rfc/rfc8094.txt) |
+| DNSCrypt | 443 | UDP/TCP + PQ KEM | [draft-denis-dprive-dnscrypt](docs/rfc/draft-denis-dprive-dnscrypt.txt) |
+| TLCP DoT | 853 | TCP + SM2/SM3/SM4 | GB/T 38636-2020 |
+| TLCP DoH | 443 | HTTP + SM2/SM3/SM4 | GB/T 38636-2020 |
+| DTLCP | 853 | UDP + SM2/SM3/SM4 | GM/T 0128-2023 |
 
 ### 安全
 - **DNSSEC**：完整密码学信任链（DNSKEY→DS→RRSIG），NSEC/NSEC3 否定回答（[RFC 5155](docs/rfc/rfc5155.txt)），REVOKE 位检查（[RFC 5011](docs/rfc/rfc5011.txt)）
@@ -180,14 +180,14 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 { "server": { "protocol": {
   "udp": "53",          // 标准 DNS
   "tls": "853",         // DoT
-  "quic": "853",        // DoQ（与 DoT 共享 853 端口）
+  "quic": "853",        // DoQ（与 DoT 共享 UDP 853）
   "https": { "port": "443", "endpoint": "/dns-query" },  // DoH
-  "http3": { "port": "443", "endpoint": "/dns-query" },  // DoH3
-  "dtls": "8853",       // DTLS
-  "dnscrypt": "8443",   // DNSCrypt（需 certificate.dnscrypt 配置密钥）
-  "tlcp": "9853",       // TLCP DoT（需 certificate.tlcp 配置 SM2 证书）
-  "http_tlcp": { "port": "9443", "endpoint": "/dns-query" },  // TLCP DoH
-  "dtlcp": "9853"       // DTLCP
+  "http3": { "port": "443", "endpoint": "/dns-query" },  // DoH3（与 DoH 共享 UDP 443）
+  "dtls": "853",        // DTLS（与 DoQ 共享 UDP 853）
+  "dnscrypt": "443",    // DNSCrypt（与 DoH 共享 TCP 443，需 certificate.dnscrypt 配置密钥）
+  "tlcp": "853",        // TLCP DoT（与 DoT 共享 TCP 853，需 certificate.tlcp 配置 SM2 证书）
+  "http_tlcp": { "port": "443", "endpoint": "/dns-query" },  // TLCP DoH（与 DoH 共享 TCP 443）
+  "dtlcp": "853"        // DTLCP（与 DoQ 共享 UDP 853）
 } }
 ```
 

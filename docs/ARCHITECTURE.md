@@ -227,7 +227,7 @@ Full implementation with PQC support. Two crypto constructions: XWingPQ (default
 
 ### Server (`server/protocol/dnscrypt/`)
 
-- UDP+TCP listeners on independent port (default 8443); TCP connections are
+- UDP+TCP listeners on independent port (default 443); TCP connections are
   persistent (RFC 7766 §4 — the draft only specifies framing in §5.4.4; the
   old single-transaction-per-connection behaviour was a misreading) — one
   connection serves the handshake plus every subsequent query

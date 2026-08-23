@@ -24,8 +24,9 @@ func generateExampleConfig() (string, error) {
 	cfg.Server.Pprof = config.DefaultPprofPort
 	cfg.Server.LogLevel = log.DefaultLevel
 
-	// The example advertises every protocol — the default config no longer
-	// pre-sets secure ports (explicit-only), so set them all here.
+	// The example advertises every protocol using RFC standard ports with
+	// shared-port multiplexing: TCP 443 (DoH+HTTPoverTLCP+DNSCrypt),
+	// TCP 853 (DoT+DoT/TLCP), UDP 443 (DoH3), UDP 853 (DoQ+DTLS+DTLCP).
 	cfg.Server.Protocol.TLS = config.DefaultTLSPort
 	cfg.Server.Protocol.QUIC = config.DefaultQUICPort
 	cfg.Server.Protocol.HTTPS = config.HTTPSEndpoint{Port: config.DefaultHTTPSPort, Endpoint: config.DefaultQueryPath}

@@ -1055,7 +1055,7 @@ Client ⇄ DTLS 记录 [DNS消息] ⇄ Server  (UDP 数据报)
 
 ### 我们的实现
 
-- 端口 **8853**（非标准，避免与 DoT 853 冲突）
+- 端口 **853**（RFC 8094 §7，与 DoQ 共享 UDP 853）
 - `DefaultDTLSIdleTimeout = 30s`
 - ✓ 空闲超时正确处理：timeout → return（关闭连接，发送 fatal alert）
 - ✓ DTLS 失败时自动 fallback 到 DoT（RFC 8094 §3.3 PMTU 场景）
@@ -1726,7 +1726,7 @@ BinaryStamp = [protocol:1][props:8][addr_len:1][addr:N][hashes...][path...]
 
 ### 关键常量
 
-- 默认端口: **8443**（§5.2 SHOULD 443 — 与 dnscrypt-proxy 社区一致）
+- 默认端口: **443**（§5.2 SHOULD 443 — 与 dnscrypt-proxy 社区一致，与 DoH 共享 TCP 443）
 - Client Magic: 8 字节；Classical=X25519 PK 前 8B, PQ=SHA-256(X-Wing PK)[:8]
 - UDP 查询最小: **512** 字节（§5.4.1 MAY，与 dnscrypt-proxy 对齐）
 - 证书轮换: **8h** ticker（§8 MUST ≤24h —— 8h < 24h 有效期形成重叠窗口）
@@ -1789,7 +1789,7 @@ BinaryStamp = [protocol:1][props:8][addr_len:1][addr:N][hashes...][path...]
 
 ### 我们的实现
 
-- `DefaultDNSCryptPort = "8443"` ✓
+- `DefaultDNSCryptPort = "443"` ✓
 - XWingPQ + XChacha20Poly1305 两种构造 ✓
 - 8h 轮换 / 24h 证书有效期 ✓
 - PQ Ticket 会话恢复 ✓
@@ -1859,11 +1859,11 @@ Client ⇄ 数据透传 ⇄ Target
 
 ### 关键常量
 
-| 端口     | 值   | 说明                   |
-| -------- | ---- | ---------------------- |
-| TLCP DoT | 9853 | 自定义（非 IANA 注册） |
-| TLCP DoH | 9443 | 自定义                 |
-| DTLCP    | 9853 | 自定义                 |
+| 端口     | 值   | 说明                                   |
+| -------- | ---- | -------------------------------------- |
+| TLCP DoT | 853 | 自定义（与 DoT 共享 TCP 853） |
+| TLCP DoH | 443 | 自定义（与 DoH 共享 TCP 443） |
+| DTLCP    | 853 | 自定义（与 DoQ 共享 UDP 853） |
 
 ### 帧格式
 
@@ -1892,6 +1892,5 @@ Client ⇄ 数据透传 ⇄ Target
 
 | 偏离                                 | RFC           | 影响              | 原因                                          |
 | ------------------------------------ | ------------- | ----------------- | --------------------------------------------- |
-| DTLS 端口 8853 非 853                | RFC 8094      | 低 — 生态广泛使用 | 避免与 DoT(853) 冲突                          |
 | DNSCrypt 查询缺少 ResolverMagic 前缀 | DNSCrypt §5.2 | 低 — 服务端用 ClientMagic 识别，查询中冗余 | 与 dnscrypt-proxy 一致；响应仍包含 ResolverMagic |
 | 递归上游查询 EDNS 载荷 4096 超 R5 推荐 1400 | RFC 9715 | 中 — 可能招致分片 | DNSSEC 签名引用/证明常超 1232，4096 是递归解析的实际需要；客户端侧仍用 1232 |

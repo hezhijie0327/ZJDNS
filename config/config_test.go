@@ -228,8 +228,8 @@ func TestDDRRecords_AllProtocolsEnabled(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
-	// Enable every encrypted protocol; HTTPS + HTTP3 share port 443,
-	// TLS + QUIC share port 853, TLCP + DTLCP share port 9853.
+	// Enable every encrypted protocol; HTTPS + HTTP3 + HTTPoverTLCP + DNSCrypt
+	// share port 443, TLS + QUIC + TLCP + DTLCP share port 853.
 	cfg := `{
 		"server": {
 			"protocol": {
@@ -237,10 +237,10 @@ func TestDDRRecords_AllProtocolsEnabled(t *testing.T) {
 				"quic": "853",
 				"https": {"port": "443", "endpoint": "/dns-query"},
 				"http3": {"port": "443", "endpoint": "/dns-query"},
-				"dtls": "8853",
-				"tlcp": "9853",
-				"http_tlcp": {"port": "9443", "endpoint": "/dns-query"},
-				"dtlcp": "9853"
+				"dtls": "853",
+				"tlcp": "853",
+				"http_tlcp": {"port": "443", "endpoint": "/dns-query"},
+				"dtlcp": "853"
 			},
 			"certificate": {"domain": "dns.example.com"},
 			"features": {"ddr": {"ipv4": "127.0.0.1", "ipv6": "::1"}}
@@ -267,18 +267,12 @@ func TestDDRRecords_AllProtocolsEnabled(t *testing.T) {
 		t.Fatal("no SVCB records for _dns.resolver.arpa")
 	}
 
-	// Expected: 5 records aggregated by port.
-	// Port 443: HTTPS(h2) + HTTP3(h3) → alpn=h2,h3 + dohpath
-	// Port 9443: HTTP_TLCP(h2) → alpn=h2 + dohpath
-	// Port 853: TLS(dot) + QUIC(doq) → alpn=doq,dot
-	// Port 8853: DTLS(dot) → alpn=dot
-	// Port 9853: TLCP(dot) + DTLCP(dot) → alpn=dot
+	// Expected: 2 records aggregated by port (all protocols share 443/853).
+	// Port 443: HTTPS(h2) + HTTP3(h3) + HTTPTLCP(h2) + DNSCrypt → alpn=h2,h3 + dohpath
+	// Port 853: TLS(dot) + QUIC(doq) + TLCP(dot) + DTLS(dot) + DTLCP(dot) → alpn=doq,dot
 	want := []string{
 		`1 dns.example.com alpn=h2,h3 port=443 dohpath="/dns-query{?dns}" ipv4hint=127.0.0.1 ipv6hint=::1`,
-		`2 dns.example.com alpn=h2 port=9443 dohpath="/dns-query{?dns}" ipv4hint=127.0.0.1 ipv6hint=::1`,
-		`3 dns.example.com alpn=doq,dot port=853 ipv4hint=127.0.0.1 ipv6hint=::1`,
-		`4 dns.example.com alpn=dot port=8853 ipv4hint=127.0.0.1 ipv6hint=::1`,
-		`5 dns.example.com alpn=dot port=9853 ipv4hint=127.0.0.1 ipv6hint=::1`,
+		`2 dns.example.com alpn=doq,dot port=853 ipv4hint=127.0.0.1 ipv6hint=::1`,
 	}
 	if len(svcbRecords) != len(want) {
 		t.Fatalf("got %d SVCB records, want %d:\n%v", len(svcbRecords), len(want), svcbRecords)
