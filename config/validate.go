@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -376,6 +377,74 @@ func validatePorts(cfg *ServerConfig) error {
 
 	tcpSeen := map[string]string{}
 	udpSeen := map[string]string{}
+	// Certain protocol groups may share the same port via record-layer
+	// or first-datagram demux.  Each allowed group lists the fields that
+	// may coexist on the same port.
+	type sharedGroup struct {
+		port      string
+		fields    []string
+		transport string
+	}
+	var sharedGroups []sharedGroup
+	// TCP 443: HTTPS + HTTPoverTLCP (record-layer demux).
+	if proto.HTTPS.Port != "" && proto.HTTPS.Port == proto.HTTPTLCP.Port {
+		sharedGroups = append(sharedGroups, sharedGroup{
+			port:      proto.HTTPS.Port,
+			fields:    []string{"server.protocol.https.port", "server.protocol.http_tlcp.port"},
+			transport: "tcp",
+		})
+	}
+	// TCP 853: TLS(DoT) + TLCP(DoT) (record-layer demux).
+	if proto.TLS != "" && proto.TLS == proto.TLCP {
+		sharedGroups = append(sharedGroups, sharedGroup{
+			port:      proto.TLS,
+			fields:    []string{"server.protocol.tls", "server.protocol.tlcp"},
+			transport: "tcp",
+		})
+	}
+	// UDP 853: QUIC(DoQ) + DTLS + DTLCP (first-datagram demux).
+	// Any subset of these protocols may share the same port.
+	if proto.QUIC != "" && proto.QUIC == proto.DTLS && proto.DTLS == proto.DTLCP {
+		// All three on the same port — covers all 2-protocol subsets.
+		sharedGroups = append(sharedGroups, sharedGroup{
+			port:      proto.QUIC,
+			fields:    []string{"server.protocol.quic", "server.protocol.dtls", "server.protocol.dtlcp"},
+			transport: "udp",
+		})
+	} else {
+		// Partial pairs when not all three share the same port.
+		if proto.QUIC != "" && proto.QUIC == proto.DTLS {
+			sharedGroups = append(sharedGroups, sharedGroup{
+				port:      proto.QUIC,
+				fields:    []string{"server.protocol.quic", "server.protocol.dtls"},
+				transport: "udp",
+			})
+		}
+		if proto.QUIC != "" && proto.QUIC == proto.DTLCP {
+			sharedGroups = append(sharedGroups, sharedGroup{
+				port:      proto.QUIC,
+				fields:    []string{"server.protocol.quic", "server.protocol.dtlcp"},
+				transport: "udp",
+			})
+		}
+		if proto.DTLS != "" && proto.DTLS == proto.DTLCP {
+			sharedGroups = append(sharedGroups, sharedGroup{
+				port:      proto.DTLS,
+				fields:    []string{"server.protocol.dtls", "server.protocol.dtlcp"},
+				transport: "udp",
+			})
+		}
+	}
+	// sharedGroupFields returns the allowed field set for e's port if it
+	// belongs to a known shared-port group (or "").
+	sharedGroupFields := func(e portEntry) []string {
+		for _, g := range sharedGroups {
+			if e.value == g.port && e.transport == g.transport {
+				return g.fields
+			}
+		}
+		return nil
+	}
 	for _, e := range entries {
 		if e.value == "" {
 			continue
@@ -387,6 +456,23 @@ func validatePorts(cfg *ServerConfig) error {
 			seen = tcpSeen
 		}
 		if first, ok := seen[e.value]; ok {
+			// Allow known shared-port group members to coexist.
+			if allowed := sharedGroupFields(e); allowed != nil {
+				allInGroup := true
+				for port, field := range seen {
+					if port != e.value {
+						continue
+					}
+					found := slices.Contains(allowed, field)
+					if !found {
+						allInGroup = false
+						break
+					}
+				}
+				if allInGroup {
+					continue
+				}
+			}
 			return fmt.Errorf("port conflict: %s=%s and %s=%s both use %s port %s",
 				e.field, e.value, first, e.value, e.transport, e.value)
 		}

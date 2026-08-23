@@ -10,6 +10,7 @@ docs/debug/
 ├── loopback/               # ZJDNS ↔ ZJDNS protocol loopback tests
 │   ├── server.json         # server: all protocols + self-signed TLS + DNSCrypt + TLCP/DTLCP
 │   ├── server-dnssec.json  # server: dnssec_enforce=true, recursive mode
+│   ├── server-shared.json  # server: shared ports (TCP 443/853 + UDP 853 multiplexing)
 │   ├── recursive-mqtype.json          # server: recursive mode + mqtype [1,28] (RFC 10029 merge)
 │   ├── client-udp.json     # client: UDP → server
 │   ├── client-tcp.json     # client: TCP → server
@@ -25,7 +26,14 @@ docs/debug/
 │   ├── client-dnscrypt.json            # client: DNSCrypt (PQ preferred) → server
 │   ├── client-dnscrypt-classic.json    # client: DNSCrypt (classical only) → server
 │   ├── client-dnscrypt-ephemeral.json  # client: DNSCrypt + ephemeral_keys + PQ → server
-│   └── client-dnscrypt-ephemeral-classical.json  # client: DNSCrypt + ephemeral_keys (classical only) → server
+│   ├── client-dnscrypt-ephemeral-classical.json  # client: DNSCrypt + ephemeral_keys (classical only) → server
+│   ├── client-shared-tls.json          # client: TLS → shared port 20853 (TLS+TLCP)
+│   ├── client-shared-quic.json         # client: QUIC → shared port 20853 (QUIC+DTLS+DTLCP)
+│   ├── client-shared-https.json        # client: HTTPS → shared port 20443 (HTTPS+HTTPoverTLCP)
+│   ├── client-shared-dtls.json         # client: DTLS → shared port 20853 (QUIC+DTLS+DTLCP)
+│   ├── client-shared-tlcp.json         # client: TLCP → shared port 20853 (TLS+TLCP)
+│   ├── client-shared-dtlcp.json        # client: DTLCP → shared port 20853 (QUIC+DTLS+DTLCP)
+│   └── client-shared-http-tlcp.json    # client: HTTPoverTLCP → shared port 20443 (HTTPS+HTTPoverTLCP)
 ├── routedns/               # ZJDNS ↔ RouteDNS tests
 │   └── dtls-client.toml    # RouteDNS DTLS client → ZJDNS DTLS server
 │                            #   Prerequisite: generate cert with the openssl
@@ -151,6 +159,17 @@ client) — point `client-mqtype.json` at it via `sed 's/10533/13733/'`.
 | `client-dnscrypt-ephemeral-classical.json` | 22544 | DNSCrypt + ephemeral_keys (classical only) | 12443 |
 | `recursive-mqtype.json` | 13733 | recursive + mqtype [1,28] | — (self) |
 
+#### Shared Port Clients (server-shared.json)
+
+| Client Config | Client Port | Upstream | Shared Server Port |
+| `client-shared-tls.json` | 21753 | DoT | 20853 (TLS+TLCP) |
+| `client-shared-quic.json` | 21953 | DoQ | 20853 (QUIC+DTLS+DTLCP) |
+| `client-shared-https.json` | 21853 | DoH | 20443 (HTTPS+HTTPoverTLCP) |
+| `client-shared-dtls.json` | 21954 | DTLS | 20853 (QUIC+DTLS+DTLCP) |
+| `client-shared-tlcp.json` | 21553 | TLCP DoT | 20853 (TLS+TLCP) |
+| `client-shared-dtlcp.json` | 21653 | DTLCP | 20853 (QUIC+DTLS+DTLCP) |
+| `client-shared-http-tlcp.json` | 21554 | HTTPoverTLCP | 20443 (HTTPS+HTTPoverTLCP) |
+
 > [!NOTE]
 > Forwarding client configs set `tcp` to the same port as `udp`. Without it,
 > the default TCP port 53 (privileged) makes non-root startup fail with
@@ -159,7 +178,7 @@ client) — point `client-mqtype.json` at it via `sed 's/10533/13733/'`.
 ### Quick Tests
 
 **Test methodology**: The server listens on both UDP and TCP for 10533 — `dig`
-works with either.  Forwarding clients (`client-*.json`) also listen on both
+works with either. Forwarding clients (`client-*.json`) also listen on both
 UDP and TCP (same port) and forward queries over the configured upstream
 protocol (TLS/QUIC/HTTPS/etc.).
 
@@ -222,6 +241,93 @@ dig +tcp +ednsopt=20:001c @127.0.0.1 -p 13733 www.cloudflare.com A +short
 
 > client-mqtype.json 端口 10453；recursive-mqtype.json 端口 13733
 > （server.json 的 10533 与 server-dnssec.json 的 12733 均不冲突）。
+
+### Shared Port Tests (端口共用验证)
+
+`server-shared.json` 将多个协议合并到同一端口（首包解复用）：
+
+| Shared Port | Protocols                | Demux          |
+| ----------- | ------------------------ | -------------- |
+| TCP 20443   | HTTPS + HTTPoverTLCP     | TLS ALPN       |
+| TCP 20853   | TLS(DoT) + TLCP(DoT)     | TLS ALPN       |
+| UDP 20853   | QUIC(DoQ) + DTLS + DTLCP | first-datagram |
+
+```bash
+# 1. 启动共享端口 server
+/tmp/zjdns -config docs/debug/loopback/server-shared.json &
+sleep 3
+
+# 2. 逐个验证各协议通过共享端口正常工作
+# TLS (DoT) — shared TCP 20853
+/tmp/zjdns -config docs/debug/loopback/client-shared-tls.json &
+sleep 2
+dig @127.0.0.1 -p 21753 www.baidu.com A +short
+pkill -f "client-shared-tls"
+
+# QUIC (DoQ) — shared udp 20853
+/tmp/zjdns -config docs/debug/loopback/client-shared-quic.json &
+sleep 2
+dig @127.0.0.1 -p 21953 www.baidu.com A +short
+pkill -f "client-shared-quic"
+
+# HTTPS — shared tcp 20443
+/tmp/zjdns -config docs/debug/loopback/client-shared-https.json &
+sleep 2
+dig @127.0.0.1 -p 21853 www.baidu.com A +short
+pkill -f "client-shared-https"
+
+# DTLS — shared udp 20853
+/tmp/zjdns -config docs/debug/loopback/client-shared-dtls.json &
+sleep 2
+dig @127.0.0.1 -p 21954 www.baidu.com A +short +time=5
+pkill -f "client-shared-dtls"
+
+# TLCP (DoT) — shared tcp 20853
+/tmp/zjdns -config docs/debug/loopback/client-shared-tlcp.json &
+sleep 2
+dig @127.0.0.1 -p 21553 www.baidu.com A +short
+pkill -f "client-shared-tlcp"
+
+# DTLCP — shared udp 20853
+/tmp/zjdns -config docs/debug/loopback/client-shared-dtlcp.json &
+sleep 2
+dig @127.0.0.1 -p 21653 www.baidu.com A +short +time=5
+pkill -f "client-shared-dtlcp"
+
+# HTTPoverTLCP — shared tcp 20443
+/tmp/zjdns -config docs/debug/loopback/client-shared-http-tlcp.json &
+sleep 2
+dig @127.0.0.1 -p 21554 www.baidu.com A +short
+pkill -f "client-shared-http-tlcp"
+
+# 3. 清理
+pkill -f "server-shared"
+```
+
+> 所有 client-shared-\* 指向同一组共享端口（20853/20443），
+> 验证不同协议的首包解复用能正确路由到对应的协议处理器。
+
+### Shared Port pprof Verification (零分配验证)
+
+共享 UDP 端口的 dispatch 路径经 pprof 实测验证为零堆分配（`addrKey` 替代
+`src.String()`、`packetBufPool` 替代 `make([]byte, n)`）：
+
+```bash
+# 1. 启动带 pprof 的共享端口 server
+/tmp/zjdns -config <(jq '.server.pprof="6060"' docs/debug/loopback/server-shared.json) &
+sleep 3
+
+# 2. 采集基线 allocs
+curl -s http://127.0.0.1:6060/debug/pprof/allocs -o /tmp/allocs-before.pb.gz
+
+# 3. 启动 client 并发送批量查询（QUIC/DTLS/DTLCP 各 100+）
+#    （使用上方 Shared Port Tests 的 client 配置）
+
+# 4. 采集查询后 allocs 并对比
+curl -s http://127.0.0.1:6060/debug/pprof/allocs -o /tmp/allocs-after.pb.gz
+go tool pprof -top -base /tmp/allocs-before.pb.gz /tmp/allocs-after.pb.gz
+# 期望：sharedudp.go / dtlcp.go dispatch 路径零新增分配
+```
 
 ### Connection Pool Tests (连接复用验证)
 
@@ -307,14 +413,14 @@ go tool pprof -top /tmp/g.prof
 
 #### 判定标准
 
-| 指标 | 通过标准 | 检查命令 |
-|------|----------|----------|
-| 协议连通 | 14/14 dig 冒烟成功 | 脚本输出 smoke 列 |
-| 压测 | ok>0 且 fail=0 | 脚本输出 ok/fail 列 |
-| goroutine | 压测后与前次采样一致（±协议固有结构） | `go tool pprof -top g-*.prof` |
-| 内存收敛 | 同端两轮压测 inuse_space 精确一致（warm-up 后零增长） | 前后两次 `-inuse_space` 对比 |
-| 无 panic | 全部日志 `PANIC` 计数 = 0 | `grep -c PANIC /tmp/zjdns-pprof/*.log` |
-| 池复用 | 每协议 "dialed" = 1、"falling back" = 0 | 见「Connection Pool Tests」统计口径 |
+| 指标      | 通过标准                                              | 检查命令                               |
+| --------- | ----------------------------------------------------- | -------------------------------------- |
+| 协议连通  | 14/14 dig 冒烟成功                                    | 脚本输出 smoke 列                      |
+| 压测      | ok>0 且 fail=0                                        | 脚本输出 ok/fail 列                    |
+| goroutine | 压测后与前次采样一致（±协议固有结构）                 | `go tool pprof -top g-*.prof`          |
+| 内存收敛  | 同端两轮压测 inuse_space 精确一致（warm-up 后零增长） | 前后两次 `-inuse_space` 对比           |
+| 无 panic  | 全部日志 `PANIC` 计数 = 0                             | `grep -c PANIC /tmp/zjdns-pprof/*.log` |
+| 池复用    | 每协议 "dialed" = 1、"falling back" = 0               | 见「Connection Pool Tests」统计口径    |
 
 > [!IMPORTANT]
 > **内存收敛是泄漏判定的核心**：第一轮压测的内存增长是 warm-up（zstd
@@ -324,11 +430,11 @@ go tool pprof -top /tmp/g.prof
 
 #### 已发现问题（参考）
 
-| 日期 | 问题 | 修复 |
-|------|------|------|
-| 2026-08 | 递归模式 UDP 池按权威 NS 地址无界建键、死连接钉住（H1） | `ReapDead` 周期回收 + 空键删除（pool/udp.go） |
-| 2026-08 | 代理 DoQ/DoH3 泄漏 SOCKS5 relay：2 fd + 1 goroutine/连接（H3） | quic.Conn Context.Done 钩子关闭 pconn（tls/quic.go） |
-| 2026-08 | 快照保存持 LRU 锁跨磁盘写，周期保存停顿全部缓存（H5） | 锁内收集、锁外序列化；后由 spillfile 追加写取代（淘汰时落盘，无周期全量保存） |
+| 日期    | 问题                                                           | 修复                                                                          |
+| ------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| 2026-08 | 递归模式 UDP 池按权威 NS 地址无界建键、死连接钉住（H1）        | `ReapDead` 周期回收 + 空键删除（pool/udp.go）                                 |
+| 2026-08 | 代理 DoQ/DoH3 泄漏 SOCKS5 relay：2 fd + 1 goroutine/连接（H3） | quic.Conn Context.Done 钩子关闭 pconn（tls/quic.go）                          |
+| 2026-08 | 快照保存持 LRU 锁跨磁盘写，周期保存停顿全部缓存（H5）          | 锁内收集、锁外序列化；后由 spillfile 追加写取代（淘汰时落盘，无周期全量保存） |
 
 ### RFC Feature Tests
 
@@ -564,7 +670,7 @@ MSYS_NO_PATHCONV=1 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256
 
 ### Test
 
-ZJDNS must use the same certificate as RouteDNS.  The default `server.json`
+ZJDNS must use the same certificate as RouteDNS. The default `server.json`
 uses `self_signed: true` (ephemeral cert) — RouteDNS can't verify that.
 Create a config with `cert_file`/`key_file` pointing to the generated cert:
 
@@ -597,18 +703,18 @@ dig @127.0.0.1 -p 12053 www.baidu.com A +short
 
 ## DNSCrypt Features (v3.7.12)
 
-| Feature | RFC | Config | Default |
-|---------|-----|--------|---------|
-| Deterministic response padding | §5.4.5 | built-in | SHA-256(sharedKey, clientNonce) |
-| Server TC truncation | §5.4.6 | built-in | truncate + TC, never silent |
-| TCP 4096 response cap | §5.4.7 | built-in | enforced |
-| Cert TC + classical preserve | §5.5/§11.3 | built-in | PQ omitted → TC=true |
-| EWMA adaptive query sizing | §5.4.2 | built-in | SimpleEWMA(2/31), shrink < ½ budget ≥512, TC doubles + resets |
-| Client TC doubling | §5.4.2 | built-in | O(log n) escalation, ≤4096, 7 次后 TCP |
-| Shared key cache | §8 | built-in | 2048-entry LRU |
-| PQ downgrade protection | §11.9 | `pqdnscrypt: true` | refuses classical fallback |
-| Ephemeral keys | dnscrypt-proxy | `ephemeral_keys: true` | per-query X25519 key pair |
-| Weak key rejection | §13.7 | built-in | all-zero X25519 point rejected |
+| Feature                        | RFC            | Config                 | Default                                                       |
+| ------------------------------ | -------------- | ---------------------- | ------------------------------------------------------------- |
+| Deterministic response padding | §5.4.5         | built-in               | SHA-256(sharedKey, clientNonce)                               |
+| Server TC truncation           | §5.4.6         | built-in               | truncate + TC, never silent                                   |
+| TCP 4096 response cap          | §5.4.7         | built-in               | enforced                                                      |
+| Cert TC + classical preserve   | §5.5/§11.3     | built-in               | PQ omitted → TC=true                                          |
+| EWMA adaptive query sizing     | §5.4.2         | built-in               | SimpleEWMA(2/31), shrink < ½ budget ≥512, TC doubles + resets |
+| Client TC doubling             | §5.4.2         | built-in               | O(log n) escalation, ≤4096, 7 次后 TCP                        |
+| Shared key cache               | §8             | built-in               | 2048-entry LRU                                                |
+| PQ downgrade protection        | §11.9          | `pqdnscrypt: true`     | refuses classical fallback                                    |
+| Ephemeral keys                 | dnscrypt-proxy | `ephemeral_keys: true` | per-query X25519 key pair                                     |
+| Weak key rejection             | §13.7          | built-in               | all-zero X25519 point rejected                                |
 
 The server always serves both classical (XChacha20Poly1305) and post-quantum
 (X-Wing KEM) certificates simultaneously. The proxy chooses which to use.
@@ -817,8 +923,8 @@ Port 15353 (non-privileged), pure recursive, cache enabled with latency probing.
 
 ### 其他配置键速查（config.example.json 有示例但无专文）
 
-| 键 | 位置 | 说明 |
-|----|------|------|
+| 键                                        | 位置                   | 说明                                 |
+| ----------------------------------------- | ---------------------- | ------------------------------------ |
 | `features.dns64.prefer_ipv4`（默认 true） | `config/ecs.go:95,136` | ECS 查询偏好 IPv4（缺失时默认 true） |
 
 ### Test Domains

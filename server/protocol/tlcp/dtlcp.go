@@ -98,12 +98,16 @@ func (d *demuxPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 // copyPacket copies a queued datagram into p, surfacing io.ErrShortBuffer
 // when p is too small instead of silently truncating (a truncated record
 // would be indistinguishable from network corruption and churn the
-// connection; M-3-5).
+// connection; M-3-5).  The pooled datagram buffer is always returned to
+// packetBufPool after the copy (or on error) to avoid leaks.
 func (d *demuxPacketConn) copyPacket(p []byte, pkt demuxPacket) (int, net.Addr, error) {
 	if len(p) < len(pkt.data) {
+		packetBufPool.Put(&pkt.data)
 		return 0, pkt.addr, io.ErrShortBuffer
 	}
-	return copy(p, pkt.data), pkt.addr, nil
+	n := copy(p, pkt.data)
+	packetBufPool.Put(&pkt.data)
+	return n, pkt.addr, nil
 }
 
 func (d *demuxPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
@@ -242,7 +246,11 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 			// for all clients and block Close()/Shutdown (H5).
 			s.serverGroup.Go(func() error {
 				defer zdnsutil.HandlePanic("DTLCP client connection")
-				s.serveDTLCPClient(l, dc, src)
+				s.serveDTLCPClient(l.cfg, dc, src, func() {
+					l.mu.Lock()
+					delete(l.conns, src.String())
+					l.mu.Unlock()
+				})
 				return nil
 			})
 		} else {
@@ -251,23 +259,25 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 
 		// Queue the datagram.  A full queue means the client is flooding —
 		// drop it (UDP semantics; DTLCP retransmits handshake flights).
-		cp := make([]byte, n)
-		copy(cp, buf[:n])
+		pb := packetBufPool.Get().(*[]byte)
+		copy(*pb, buf[:n])
 		select {
-		case dc.ch <- demuxPacket{data: cp, addr: src}:
+		case dc.ch <- demuxPacket{data: *pb, addr: src}:
 		default:
+			packetBufPool.Put(pb)
 		}
 	}
 }
 
 // serveDTLCPClient completes the DTLCP handshake and serves queries on one
-// client connection.
-func (s *Server) serveDTLCPClient(l *dtlcpListener, dc *demuxPacketConn, src *net.UDPAddr) {
+// client connection.  The cleanup function is called on exit to remove the
+// client from the dispatch map (varies between standalone and shared mode).
+func (s *Server) serveDTLCPClient(cfg *dtlcp.Config, dc *demuxPacketConn, src *net.UDPAddr, cleanup func()) {
 	defer func() {
 		_ = dc.Close()
-		l.mu.Lock()
-		delete(l.conns, src.String())
-		l.mu.Unlock()
+		if cleanup != nil {
+			cleanup()
+		}
 	}()
 
 	// Bound the handshake: a client that sends one datagram then goes
@@ -275,7 +285,7 @@ func (s *Server) serveDTLCPClient(l *dtlcpListener, dc *demuxPacketConn, src *ne
 	handshakeCtx, cancel := context.WithTimeout(s.ctx, config.DefaultDTLSIdleTimeout)
 	defer cancel()
 
-	conn := dtlcp.Server(dc, src, l.cfg)
+	conn := dtlcp.Server(dc, src, cfg)
 	if err := conn.HandshakeContext(handshakeCtx); err != nil {
 		log.Debugf("TLCP: DTLCP handshake error from %s: %v", src, err)
 		return

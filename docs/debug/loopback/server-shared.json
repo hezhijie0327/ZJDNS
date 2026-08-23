@@ -1,0 +1,28 @@
+{
+  "server": {
+    "log_level": "debug",
+    "protocol": {
+      "udp": "20533",
+      "tcp": "20533",
+      "tls": "20853",
+      "tlcp": "20853",
+      "quic": "20853",
+      "dtls": "20853",
+      "dtlcp": "20853",
+      "https": { "port": "20443", "endpoint": "/dns-query" },
+      "http_tlcp": { "port": "20443", "endpoint": "/dns-query" }
+    },
+    "certificate": {
+      "domain": "zjdns-test.local",
+      "tls": { "self_signed": true },
+      "tlcp": { "self_signed": true }
+    },
+    "features": {
+      "cache": {}
+    }
+  },
+  "upstream": [
+    { "address": "223.5.5.5:53", "protocol": "udp" },
+    { "address": "223.6.6.6:53", "protocol": "udp" }
+  ]
+}

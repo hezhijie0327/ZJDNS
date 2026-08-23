@@ -315,6 +315,28 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 // certificate, invalid port) is a configuration error, not something to
 // silently skip (M-low).
 func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Handler) error {
+	// Detect shared ports early so protocol servers can coordinate:
+	//   - TCP 443: HTTPS + HTTPoverTLCP (record-layer demux)
+	//   - TCP 853: TLS(DoT) + TLCP(DoT) (record-layer demux)
+	//   - UDP 853: any combination of QUIC(DoQ), DTLS, DTLCP (first-datagram demux)
+	wantShared := cfg.Server.Protocol.HTTPS.Port != "" &&
+		cfg.Server.Protocol.HTTPS.Port == cfg.Server.Protocol.HTTPTLCP.Port &&
+		cfg.Server.Certificate.TLS.IsEnabled() &&
+		cfg.Server.Certificate.TLCP.IsEnabled()
+	wantSharedDOT := cfg.Server.Protocol.TLS != "" &&
+		cfg.Server.Protocol.TLS == cfg.Server.Protocol.TLCP &&
+		cfg.Server.Certificate.TLS.IsEnabled() &&
+		cfg.Server.Certificate.TLCP.IsEnabled()
+	// UDP port sharing: detect per-protocol-pair sharing.
+	certsReady := cfg.Server.Certificate.TLS.IsEnabled() && cfg.Server.Certificate.TLCP.IsEnabled()
+	dtlsDTLCPShare := cfg.Server.Protocol.DTLS != "" &&
+		cfg.Server.Protocol.DTLS == cfg.Server.Protocol.DTLCP && certsReady
+	quicDTLSShare := cfg.Server.Protocol.QUIC != "" &&
+		cfg.Server.Protocol.QUIC == cfg.Server.Protocol.DTLS && certsReady
+	quicDTLCPShare := cfg.Server.Protocol.QUIC != "" &&
+		cfg.Server.Protocol.QUIC == cfg.Server.Protocol.DTLCP && certsReady
+	wantSharedUDP := dtlsDTLCPShare || quicDTLSShare || quicDTLCPShare
+
 	if cfg.Server.Certificate.TLS.IsEnabled() {
 		tlsCfg := tls.Config{
 			TLSPort:       cfg.Server.Protocol.TLS,
@@ -332,11 +354,50 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 		if cfg.Server.Features.KTLS != nil {
 			tlsCfg.KTLS = &tls.KTLSSettings{KernelTX: cfg.Server.Features.KTLS.KernelTX, KernelRX: cfg.Server.Features.KTLS.KernelRX}
 		}
+		if wantShared {
+			tlsCfg.SkipHTTPS = true
+		}
+		if wantSharedDOT {
+			tlsCfg.SkipDOT = true
+		}
+		if dtlsDTLCPShare || quicDTLSShare {
+			tlsCfg.SkipDTLS = true
+		}
+		if quicDTLSShare || quicDTLCPShare {
+			tlsCfg.SkipDOQ = true
+		}
 		tlsSrv, err := tls.New(h, &tlsCfg)
 		if err != nil {
 			return fmt.Errorf("TLS server init: %w", err)
 		}
 		s.tls = tlsSrv
+	}
+
+	// Build the shared-port config now that the TLS server exists.
+	var sharedCfg *servertlcp.SharedPortsConfig
+	if (wantShared || wantSharedDOT || wantSharedUDP) && s.tls != nil {
+		sharedCfg = &servertlcp.SharedPortsConfig{}
+		if wantShared {
+			sharedCfg.Port = cfg.Server.Protocol.HTTPS.Port
+			sharedCfg.TLSCfg = s.tls.ETLSConfigForDOH()
+			sharedCfg.DOHHandler = s.tls.DOHHandler()
+		}
+		if wantSharedDOT {
+			sharedCfg.DOTPort = cfg.Server.Protocol.TLS
+			sharedCfg.DOTHandler = s.tls.HandleDOTFromListener
+		}
+		if wantSharedUDP {
+			sharedCfg.DTLSPort = cfg.Server.Protocol.DTLS
+			if sharedCfg.DTLSPort == "" {
+				sharedCfg.DTLSPort = cfg.Server.Protocol.DTLCP
+			}
+		}
+		if dtlsDTLCPShare || quicDTLSShare {
+			sharedCfg.DTLSHandler = s.tls.HandleDTLSFromPacketListener
+		}
+		if quicDTLSShare || quicDTLCPShare {
+			sharedCfg.DOQHandler = s.tls.HandleDOQFromPacketConn
+		}
 	}
 
 	if cfg.Server.Protocol.DNSCrypt != "" {
@@ -349,8 +410,14 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 		s.dnscryptServer = dnscryptSrv
 	}
 
-	if cfg.Server.Certificate.TLCP.IsEnabled() && (cfg.Server.Protocol.TLCP != "" || cfg.Server.Protocol.HTTPTLCP.Port != "" || cfg.Server.Protocol.DTLCP != "") {
-		tlcpSrv, err := servertlcp.New(&cfg.Server.Certificate.TLCP, cfg.Server.Protocol.TLCP, cfg.Server.Protocol.HTTPTLCP.Port, cfg.Server.Protocol.HTTPTLCP.Endpoint, cfg.Server.Protocol.DTLCP)
+	if cfg.Server.Certificate.TLCP.IsEnabled() && (cfg.Server.Protocol.TLCP != "" || cfg.Server.Protocol.HTTPTLCP.Port != "" || cfg.Server.Protocol.DTLCP != "" || wantSharedUDP) {
+		var tlcpSrv *servertlcp.Server
+		var err error
+		if sharedCfg != nil {
+			tlcpSrv, err = servertlcp.New(&cfg.Server.Certificate.TLCP, cfg.Server.Protocol.TLCP, cfg.Server.Protocol.HTTPTLCP.Port, cfg.Server.Protocol.HTTPTLCP.Endpoint, cfg.Server.Protocol.DTLCP, sharedCfg)
+		} else {
+			tlcpSrv, err = servertlcp.New(&cfg.Server.Certificate.TLCP, cfg.Server.Protocol.TLCP, cfg.Server.Protocol.HTTPTLCP.Port, cfg.Server.Protocol.HTTPTLCP.Endpoint, cfg.Server.Protocol.DTLCP)
+		}
 		if err != nil {
 			return fmt.Errorf("TLCP server init: %w", err)
 		}

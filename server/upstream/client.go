@@ -391,7 +391,13 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 			return resp, nil
 		}
 		log.Debugf("UPSTREAM: DTLS query failed for %s, falling back to TLS: %v", server.Address, err)
-		return c.tlsClient.ExecuteTLS(ctx, msg, server)
+		// Use Background+timeout, not ctx: the DTLS attempt consumed the
+		// caller's deadline, and WithTimeout(ctx, ...) inherits the
+		// already-expired parent deadline (min(parent, timeout) = past).
+		// The cross-protocol fallback gets its own full budget.
+		tlsCtx, tlsCancel := context.WithTimeout(context.Background(), c.timeout)
+		defer tlsCancel()
+		return c.tlsClient.ExecuteTLS(tlsCtx, msg, server)
 	case config.ProtoTLCP:
 		return c.tlcpClient.ExecuteTLCP(ctx, msg, server)
 	case config.ProtoHTTPTLCP:
@@ -404,7 +410,11 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 			return resp, nil
 		}
 		log.Debugf("UPSTREAM: DTLCP query failed for %s, falling back to TLCP: %v", server.Address, err)
-		return c.tlcpClient.ExecuteTLCP(ctx, msg, server)
+		// Use Background+timeout — same reason as DTLS→TLS: the DTLCP
+		// attempt exhausted the caller's deadline.
+		tlcpCtx, tlcpCancel := context.WithTimeout(context.Background(), c.timeout)
+		defer tlcpCancel()
+		return c.tlcpClient.ExecuteTLCP(tlcpCtx, msg, server)
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}

@@ -294,6 +294,30 @@ Reuses SM2 certificate pair from TLCP. Wire format = DTLS (RFC 8094): 2-byte big
 - **Deadlock fix**: `dtlcpListener.Close()` collects connections under the lock, unlocks, THEN closes — `dtlcpConnWrapper.Close()` also acquires the same mutex.
 - **Goroutine tracking**: TLCP server now has `serverGroup` (errgroup) tracking lifecycle goroutines (DoT accept, DTLCP accept, DoH serve). Shutdown waits for all via `serverGroup.Wait()`.
 
+## Shared Port Multiplexing
+
+Multiple protocols share a single TCP or UDP port via record-layer demultiplexing (`internal/demux/`).
+
+### TCP (TLS+TLCP on same port)
+
+Protocol detection reads the 5-byte TLS record header: major version `0x03` → TLS, `0x01` → TLCP. A `bufferedConn` replays the consumed header to the selected protocol server. Per-connection overhead: 1 syscall + 1 `bufferedConn` allocation + 1 channel hop. After the handshake, all subsequent queries flow directly on the TLS/TLCP connection — zero extra overhead.
+
+### UDP (QUIC+DTLS+DTLCP on same port)
+
+Protocol detection inspects the first datagram from each client address: first byte ≥ 0xC0 → QUIC (long header), version ≥ 0x1000 → DTLS, otherwise → DTLCP. The detection result is cached per client address (`peerProto` map).
+
+**Zero per-packet allocation dispatch** (`server/protocol/tlcp/sharedudp.go`):
+
+| Mechanism | Purpose |
+|-----------|---------|
+| `addrKey{[16]byte, uint16}` | Allocation-free map key (fixed-size arrays are comparable, unlike `net.UDPAddr.IP` slice) |
+| `packetBufPool` (`sync.Pool`) | Pooled datagram buffers passed through dispatch channels; consumers copy out and return |
+| Single-copy pipeline | Dispatch loop → pool buffer → channel → consumer `ReadFrom` copies to caller buffer → `packetBufPool.Put` |
+
+All per-client maps (`dtlsPacketListener.clients`, `quicPacketConn`, `sharedDTLSClient.conns`, `peerProto`) use `addrKey` instead of `src.String()`, eliminating heap-allocated string keys.
+
+pprof-verified: 300 queries (QUIC+DTLS+DTLCP) across the shared UDP dispatch produce zero new allocations after startup warmup.
+
 ## Zone Rules (`zone/`)
 
 - **Zone evaluator**: in-memory maps (exact/wildcard) behind an atomic.Pointer snapshot; rules come from config at startup.

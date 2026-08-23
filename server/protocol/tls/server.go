@@ -15,7 +15,11 @@ import (
 	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 
+	"github.com/pion/dtls/v3"
+	dtlsnet "github.com/pion/dtls/v3/pkg/net"
+	"github.com/pion/dtls/v3/pkg/protocol"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	eHTTP "gitlab.com/go-extension/http"
@@ -44,6 +48,10 @@ type Config struct {
 	KeyFile       string
 	Domain        string
 	KTLS          *KTLSSettings
+	SkipHTTPS     bool // skip standalone HTTPS listener (shared port handled by TLCP demux)
+	SkipDOT       bool // skip standalone DoT listener (shared TCP port with TLCP DoT)
+	SkipDTLS      bool // skip standalone DTLS listener (shared UDP port with DTLCP)
+	SkipDOQ       bool // skip standalone DoQ listener (shared UDP port with DTLCP)
 }
 
 // Server manages TLS-based secure DNS protocol listeners and their lifecycle.
@@ -53,6 +61,7 @@ type Server struct {
 	tlsConfig     *eTLS.Config   // TCP-based TLS (DoT, DoH) with KTLS
 	baseTLSConfig *eTLS.Config   // base config for per-listener GetConfigForClient clones
 	quicTLSConfig *stdtls.Config // QUIC-based protocols (DoQ, DoH3)
+	dohHandler    eHTTP.Handler  // shared-port DOH handler (wraps ServeHTTP for eHTTP)
 	ctx           context.Context
 	cancel        context.CancelCauseFunc
 	serverGroup   *errgroup.Group
@@ -188,6 +197,13 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 		dotConns:      make(map[net.Conn]struct{}),
 	}
 
+	// Pre-build the eHTTP handler so the TLCP server can reuse it for
+	// shared-port HTTPS+HTTPoverTLCP demux (server.go constructs the
+	// demux and passes this handler to the TLS side).
+	s.dohHandler = eHTTP.HandlerFunc(func(w eHTTP.ResponseWriter, r *eHTTP.Request) {
+		s.ServeHTTP(&dohResponseWriter{w}, eHTTP.FromRequest(r))
+	})
+
 	s.displayCertificateInfo(&eCert)
 
 	return s, nil
@@ -207,7 +223,7 @@ func (s *Server) Start() error {
 
 	g, ctx := errgroup.WithContext(s.ctx)
 
-	if s.cfg.HTTPSPort != "" {
+	if s.cfg.HTTPSPort != "" && !s.cfg.SkipHTTPS {
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("DoH server")
 			if err := s.startDOHServer(s.cfg.HTTPSPort); err != nil {
@@ -229,7 +245,7 @@ func (s *Server) Start() error {
 		})
 	}
 
-	if s.cfg.TLSPort != "" {
+	if s.cfg.TLSPort != "" && !s.cfg.SkipDOT {
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("DoT server")
 			if err := s.startDOTServer(); err != nil {
@@ -240,7 +256,7 @@ func (s *Server) Start() error {
 		})
 	}
 
-	if s.cfg.QUICPort != "" {
+	if s.cfg.QUICPort != "" && !s.cfg.SkipDOQ {
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("DoQ server")
 			if err := s.startDOQServer(); err != nil {
@@ -251,7 +267,7 @@ func (s *Server) Start() error {
 		})
 	}
 
-	if s.cfg.DTLSPort != "" {
+	if s.cfg.DTLSPort != "" && !s.cfg.SkipDTLS {
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("DTLS server")
 			if err := s.startDTLSServer(); err != nil {
@@ -435,6 +451,103 @@ func (s *Server) Shutdown() error {
 	}
 
 	log.Infof("TLS: Secure DNS server shut down")
+	return nil
+}
+
+// DOHHandler returns the eHTTP.Handler used for DOH requests.
+// This is consumed by the TLCP server's shared-port demux to serve
+// HTTPS connections on the same TCP port as HTTPoverTLCP.
+func (s *Server) DOHHandler() eHTTP.Handler {
+	return s.dohHandler
+}
+
+// ETLSConfigForDOH returns a cloned eTLS.Config suitable for a shared-port
+// DOH demux: NextProtos is set to ["h2", "http/1.1"] and per-connection
+// handshake logging is wired via GetConfigForClient.
+func (s *Server) ETLSConfigForDOH() *eTLS.Config {
+	cfg := s.baseTLSConfig.Clone()
+	cfg.NextProtos = []string{"h2", "http/1.1"}
+	cfg.GetConfigForClient = s.getConfigForClient(cfg.NextProtos)
+	return cfg
+}
+
+// HandleDOTFromListener serves DoT connections from an external listener.
+// Used by the TLCP server for shared TCP port (TLS DoT + TLCP DoT on 853).
+// The caller provides a listener whose connections are already wrapped with
+// eTLS (e.g. via eTLS.NewListener wrapping a demux queue).
+func (s *Server) HandleDOTFromListener(listener net.Listener) error {
+	s.handleDOTConnections(listener)
+	return nil
+}
+
+// HandleDOQFromPacketConn serves DoQ connections from an external PacketConn.
+// Used by the TLCP server for shared UDP port (QUIC DoQ + DTLS + DTLCP on 853).
+// The caller provides a net.PacketConn fed by the dispatch loop.
+func (s *Server) HandleDOQFromPacketConn(pc net.PacketConn) error {
+	addrCache := lrumap.New[string, time.Time](config.DefaultQUICAddrCacheSize)
+
+	transport := &quic.Transport{
+		Conn:                pc,
+		VerifySourceAddress: makeAddrValidator(addrCache),
+	}
+	s.listenerMu.Lock()
+	s.doqTransports = append(s.doqTransports, transport)
+	s.listenerMu.Unlock()
+
+	quicTLSConfig := s.QUICTLSConfig().Clone()
+	quicTLSConfig.NextProtos = config.NextProtoDOQ
+
+	quicConfig := &quic.Config{
+		MaxIdleTimeout:        config.DefaultQUICServerIdleTimeout,
+		MaxIncomingStreams:    config.DefaultMaxIncomingStreams,
+		MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
+		Allow0RTT:             true,
+		EnableDatagrams:       true,
+		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
+	}
+
+	listener, err := transport.ListenEarly(quicTLSConfig, quicConfig)
+	if err != nil {
+		return err
+	}
+
+	s.listenerMu.Lock()
+	s.doqListeners = append(s.doqListeners, listener)
+	s.listenerMu.Unlock()
+
+	s.handleDOQConnections(listener)
+	return nil
+}
+
+// HandleDTLSFromPacketListener serves DTLS connections from an external
+// PacketListener.  Used by the TLCP server for shared UDP port (DTLS +
+// DTLCP on 853).  The caller provides a dtlsnet.PacketListener whose
+// per-client PacketConns deliver demuxed DTLS datagrams.
+func (s *Server) HandleDTLSFromPacketListener(pl dtlsnet.PacketListener) error {
+	listener, err := dtls.NewListenerWithOptions(pl,
+		dtls.WithMinVersion(protocol.Version1_3),
+		dtls.WithMaxVersion(protocol.Version1_3),
+		dtls.WithCertificates(s.stdCert),
+		dtls.WithSessionStore(lrumap.NewDTLSSessionStore(config.DefaultDTLSSessionCacheSize)),
+		dtls.WithVerifyConnection(func(state *dtls.State) error {
+			zdnsutil.LogHandshake(&zdnsutil.HandshakeInfo{
+				Role:       "TLS",
+				Direction:  "DTLS handshake from",
+				RemoteAddr: "client",
+				Cipher:     dtls.CipherSuiteName(state.CipherSuiteID),
+			})
+			return nil
+		}),
+	)
+	if err != nil {
+		return err
+	}
+
+	s.listenerMu.Lock()
+	s.dtlsListeners = append(s.dtlsListeners, listener)
+	s.listenerMu.Unlock()
+
+	s.handleDTLSConnections(listener)
 	return nil
 }
 
