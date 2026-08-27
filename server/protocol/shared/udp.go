@@ -354,7 +354,8 @@ func (c *quicPacketConn) LocalAddr() net.Addr                { return c.shared.L
 func (c *quicPacketConn) SetDeadline(_ time.Time) error      { return nil }
 func (c *quicPacketConn) SetReadDeadline(_ time.Time) error  { return nil }
 func (c *quicPacketConn) SetWriteDeadline(_ time.Time) error { return nil }
-func (c *quicPacketConn) SetReadBuffer(bytes int) error  { return c.shared.SetReadBuffer(bytes) }
+func (c *quicPacketConn) SetReadBuffer(bytes int) error      { return c.shared.SetReadBuffer(bytes) }
+
 func (c *quicPacketConn) SetWriteBuffer(bytes int) error { return c.shared.SetWriteBuffer(bytes) }
 
 func (c *quicPacketConn) dispatch(src *net.UDPAddr, pb *[]byte, n int) {
@@ -604,6 +605,10 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 			}
 
 		case demux.ProtoDTLCP:
+			if g.ServeDTLCP == nil {
+				PacketBufPool.Put(pb)
+				continue
+			}
 			dtlcpState.mu.Lock()
 			dc, ok := dtlcpState.conns[key]
 			if !ok {

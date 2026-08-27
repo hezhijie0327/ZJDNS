@@ -3,13 +3,13 @@ module zjdns
 go 1.27.0
 
 require (
-	codeberg.org/miekg/dns v0.6.100
+	codeberg.org/miekg/dns v0.6.105
 	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033
-	github.com/cloudflare/circl v1.6.6-0.20260806151822-33d33c75d9a0
+	github.com/cloudflare/circl v1.6.6-0.20260824140020-352600b0a4b2
 	github.com/emmansun/gmsm v0.44.1
 	github.com/klauspost/compress v1.19.3-0.20260817121505-73508b25f222
-	github.com/pion/dtls/v3 v3.1.3-0.20260821100011-355c1ff25b40
-	github.com/quic-go/quic-go v0.61.1-0.20260820060746-cf0c4ffd0ce6
+	github.com/pion/dtls/v3 v3.1.3-0.20260825070116-dccb7be0a632
+	github.com/quic-go/quic-go v0.61.1-0.20260825154848-e11a2c76db97
 	gitlab.com/go-extension/http v0.0.0-20260817192224-f5762b77a66a
 	gitlab.com/go-extension/tls v0.0.0-20260817191915-d8b98b0d31de
 	golang.org/x/crypto v0.55.0
@@ -20,7 +20,7 @@ require (
 
 require (
 	github.com/RyuaNerin/go-krypto v1.3.0 // indirect
-	github.com/andybalholm/brotli v1.2.2 // indirect
+	github.com/andybalholm/brotli v1.2.3 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488 // indirect
 	github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d // indirect
