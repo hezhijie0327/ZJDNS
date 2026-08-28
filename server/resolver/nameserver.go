@@ -161,6 +161,18 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			default:
 			}
 
+			// Global in-flight cap: last-line guard against query
+			// amplification (delegation loops with unreachable authorities).
+			// Over the cap the level fails fast — dropping this query is
+			// cheaper than letting another unreachable-authority timeout
+			// join the storm.
+			if r.inFlightQueries.Add(1) > config.DefaultMaxRecursiveInflightQueries {
+				r.inFlightQueries.Add(-1)
+				log.Debugf("RECURSION: in-flight query cap (%d) reached — skipping %s for %s", config.DefaultMaxRecursiveInflightQueries, nsAddr, question.Name)
+				return nil
+			}
+			defer r.inFlightQueries.Add(-1)
+
 			msg := pool.DefaultMessage.Get()
 			defer pool.DefaultMessage.Put(msg)
 			if len(baseMsg.Question) > 0 {
@@ -701,37 +713,16 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 
 // resolveNSAddrType resolves a single NS address type (A or AAAA) and appends
 // resolved addresses to nsAddrs under addrMu. For A queries, AAAA glue from
-// the Additional section is also collected.
+// the Additional section is also collected.  Concurrent walks for the same
+// (name, qtype) are deduplicated by resolveNSAddrFlight — the NS-address
+// cache alone cannot dedup when the addresses never resolve (unreachable
+// authorities), which previously amplified one lookup into ~290k queries.
 func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype uint16, depth int, forceTCP bool, nsAddrs *[]string, addrMu *sync.Mutex) (answer []dns.RR) {
-	// No singleflight dedup per NS name: each resolution walks independently
-	// (the NS-address cache deduplicates across queries once populated).  The
-	// addrGroup promotion previously re-ran full walks without an overall
-	// deadline and amplified bottlenecks into goroutine explosions.
-	qr := r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP)
-	if qr.Err != nil {
-		return answer
+	res := r.resolveNSAddrFlight(ctx, nsName, qtype, depth, forceTCP)
+	if len(res.addrs) > 0 {
+		addrMu.Lock()
+		*nsAddrs = append(*nsAddrs, res.addrs...)
+		addrMu.Unlock()
 	}
-	addrMu.Lock()
-	defer addrMu.Unlock()
-	for _, rrec := range qr.Answer {
-		switch a := rrec.(type) {
-		case *dns.A:
-			if qtype == dns.TypeA {
-				*nsAddrs = append(*nsAddrs, net.JoinHostPort(a.A.String(), config.DefaultUDPPort))
-			}
-		case *dns.AAAA:
-			if qtype == dns.TypeAAAA {
-				*nsAddrs = append(*nsAddrs, net.JoinHostPort(a.AAAA.String(), config.DefaultUDPPort))
-			}
-		}
-	}
-	// For A queries, also collect AAAA glue from Additional.
-	if qtype == dns.TypeA {
-		for _, rrec := range qr.Additional {
-			if aaaa, ok := rrec.(*dns.AAAA); ok && strings.EqualFold(aaaa.Header().Name, nsName) {
-				*nsAddrs = append(*nsAddrs, net.JoinHostPort(aaaa.AAAA.String(), config.DefaultUDPPort))
-			}
-		}
-	}
-	return qr.Answer
+	return res.answer
 }

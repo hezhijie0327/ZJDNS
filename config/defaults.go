@@ -263,6 +263,14 @@ const (
 	DefaultMaxConcurrentStreams    = 64    // QUIC concurrent in-flight stream limit
 	DefaultCacheRefreshConcurrency = 64    // background cache refresh goroutine cap
 
+	// DefaultMaxRecursiveInflightQueries caps the recursive fan-out queries in
+	// flight across ALL concurrent walks.  When exceeded, new fan-out queries
+	// are dropped (the level fails fast instead of queueing).  Healthy load
+	// sits far below the cap — it is a last-line guard against query
+	// amplification (delegation loops with unreachable authorities), layered
+	// under the per-(name,qtype) NS-address singleflight.
+	DefaultMaxRecursiveInflightQueries = 8192
+
 	// DefaultServerGoroutineLimit is the unified server-side concurrency
 	// cap: the TLS/TLCP serverGroup, the plain-TCP/DoH LimitListener, the
 	// DNSCrypt workerCap, and the QUIC connection semaphore (half of this)

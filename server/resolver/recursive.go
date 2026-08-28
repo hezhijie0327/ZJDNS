@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -85,6 +86,22 @@ type Recursive struct {
 	// multi-hundred-MB transient heap spikes under load.
 	dnskeyFlightOnce sync.Once
 	dnskeyFlight     *pending.ResultGroup[string, []*dns.DNSKEY]
+
+	// nsAddrFlight deduplicates concurrent NS-address walks per (name, qtype).
+	// When a delegation's NS addresses never resolve (unreachable
+	// authoritative servers), every level and every concurrent client query
+	// previously respawned the full walk for the same NS names — one lookup
+	// amplified into ~290k UDP queries (kernel.org → nsXX.constellix.{com,net}
+	// storm, 2026-08).  One leader walks; followers share the result, bounded
+	// by their own context.
+	nsAddrFlightOnce sync.Once
+	nsAddrFlight     *pending.ResultGroup[string, nsAddrFlightResult]
+
+	// inFlightQueries counts recursive fan-out queries currently in flight
+	// across all walks.  queryNameserversConcurrent drops new queries above
+	// config.DefaultMaxRecursiveInflightQueries — the last-line amplifier
+	// guard under the NS-address singleflight.
+	inFlightQueries atomic.Int64
 }
 
 // CNAME handles CNAME record chasing during DNS resolution, following the
