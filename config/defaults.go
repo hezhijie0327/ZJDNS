@@ -120,6 +120,18 @@ const (
 
 	DefaultRecursiveResolveTimeout = 30 * time.Second // full recursive resolution
 
+	// DefaultUDPRetransmitInterval is the silence window before a pooled UDP
+	// query retransmits the same datagram (same ID — the response still
+	// matches the in-flight key).  A single lost packet previously made the
+	// server wait out the whole context deadline (3s per recursive level);
+	// one retransmit converts the loss into a ~1s penalty (RFC 1035 §4.2.1:
+	// a resolver SHOULD retransmit after a timeout).
+	DefaultUDPRetransmitInterval = 1 * time.Second
+
+	// DefaultUDPRetransmitCount bounds retransmissions per pooled UDP query
+	// (total attempts = count + 1).  After the last retransmit the query
+	// waits out the remaining deadline for any late response.
+	DefaultUDPRetransmitCount = 2
 )
 
 // =============================================================================

@@ -216,16 +216,50 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 		return nil, errors.Join(ErrWriteFailed, err)
 	}
 
-	select {
-	case resp := <-resultCh:
-		if resp == nil {
-			return nil, ErrConnClosed
+	// Retransmit the datagram when the silence window expires without a
+	// response — a single lost packet otherwise stalls the query until the
+	// full context deadline (RFC 1035 §4.2.1).  The retransmit reuses the
+	// same tracking ID, so the (possibly duplicate) response still matches
+	// the registered in-flight key.
+	retransmitTimer := time.NewTimer(config.DefaultUDPRetransmitInterval)
+	defer retransmitTimer.Stop()
+	retransmits := 0
+	for {
+		select {
+		case resp := <-resultCh:
+			if resp == nil {
+				return nil, ErrConnClosed
+			}
+			return resp, nil
+		case <-ctx.Done():
+			// Only cancel this query, not the connection; the deferred cleanup
+			// unlinks the match key and drains a late response.
+			return nil, ctx.Err()
+		case <-retransmitTimer.C:
+			if retransmits >= config.DefaultUDPRetransmitCount {
+				// Retransmit budget exhausted — wait out the deadline for a
+				// late response (a retry storm on a dead server is worse than
+				// the wait).
+				select {
+				case resp := <-resultCh:
+					if resp == nil {
+						return nil, ErrConnClosed
+					}
+					return resp, nil
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			retransmits++
+			c.writeMu.Lock()
+			_, err = c.conn.Write(payload)
+			c.writeMu.Unlock()
+			if err != nil {
+				c.close()
+				return nil, errors.Join(ErrWriteFailed, err)
+			}
+			retransmitTimer.Reset(config.DefaultUDPRetransmitInterval)
 		}
-		return resp, nil
-	case <-ctx.Done():
-		// Only cancel this query, not the connection; the deferred cleanup
-		// unlinks the match key and drains a late response.
-		return nil, ctx.Err()
 	}
 }
 

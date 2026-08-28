@@ -22,6 +22,24 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
+// pendingChainUpdate is a deferred DNSSEC chain update for a zone cut whose
+// referral carried no DS records: the authenticated no-DS proof needs a
+// network query to the parent, so the update keeps running in the background
+// while the walk proceeds to the child level — the proof overlaps the
+// next-level fan-out instead of serializing before it.  Joined (and the
+// delegation stored) right after the next query returns, before the chain is
+// read again.  The referral response stays owned by the pending update — Put
+// only after the join.
+type pendingChainUpdate struct {
+	done     chan struct{}
+	response *dns.Msg // referral response still read by the background update
+	zone     string
+	parent   string
+	nsNames  []*dns.NS
+	addrs    []string
+	verdict  defense.Verdict
+}
+
 // Recursive performs iterative DNS resolution by walking the root, TLD, and
 // authoritative nameserver hierarchy. When DNSSEC validation is enabled, it
 // builds a cryptographic chain of trust at each delegation step.
@@ -115,9 +133,6 @@ func findChainStep(answer []dns.RR, question Question) (nextCNAME *dns.CNAME, ha
 	return nextCNAME, hasTargetType
 }
 
-// dnssecChain tracks the cryptographic trust chain state during recursive
-// resolution. At each delegation level, verified parent DNSKEYs and child DS
-// records are used to authenticate the child zone's DNSKEYs.
 // resolve walks the root→TLD→authoritative hierarchy for a single question.
 func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.ECSOption, depth int, forceTCP bool) QueryResult {
 	if depth > config.DefaultMaxRecursionDepth {
@@ -195,11 +210,35 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Rcode: rcode, Validated: cryptoValidated, ECS: ecsResponse, Server: config.ProtoRecursive, Poisoned: poisonSeen, DNSSECEDE: chain.lastEDECode, Truncated: truncated}
 	}
 
+	// pendingChain is a DNSSEC chain update deferred from the previous
+	// delegation (no-DS proof running in the background); keyPrefetchDone
+	// signals this level's DNSKEY prefetch goroutine.  They never run
+	// together: the prefetch only fires once the prior update has been joined.
+	var pendingChain *pendingChainUpdate
+	var keyPrefetchDone chan struct{}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return QueryResult{Cacheable: true, Poisoned: poisonSeen, Err: ctx.Err()}
 		default:
+		}
+
+		// DNSKEY prefetch: the first signed-zone query at a level otherwise
+		// serializes a DNSKEY fetch after the data response arrives
+		// (isDNSSECValid → ensureZoneDNSKEYs) — one extra RTT per cold zone.
+		// Fire the fetch now so it overlaps this level's fan-out query; the
+		// singleflight inside ensureZoneDNSKEYs dedupes concurrent walks.
+		// Skipped while a chain update is still pending: it owns chain and
+		// determines whether this zone is signed at all.
+		if pendingChain == nil && r.resolver.validator.Crypto != nil &&
+			len(chain.zoneDNSKEYs) == 0 && len(chain.childDS) > 0 && !chain.dsPresentButUnverified {
+			keyPrefetchDone = make(chan struct{})
+			go func() {
+				defer zdnsutil.HandlePanic("DNSKEY prefetch")
+				defer close(keyPrefetchDone)
+				r.ensureZoneDNSKEYs(ctx, nameservers, currentDomain, chain)
+			}()
 		}
 
 		var queryQuestion Question
@@ -219,6 +258,25 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		}
 
 		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, ecs, authoritativeForceTCP, currentDomain, r.resolver.validator.Poisonguard)
+
+		// Join the level's DNSKEY prefetch before anything touches chain —
+		// from here on the main goroutine owns chain again.  The wait is
+		// normally zero: the fetch overlapped the fan-out query above.
+		if keyPrefetchDone != nil {
+			<-keyPrefetchDone
+			keyPrefetchDone = nil
+		}
+		// Join a chain update deferred from the previous delegation (no-DS
+		// proof) and store its delegation now — the proof overlapped this
+		// level's query instead of serializing before the walk continued.
+		if pendingChain != nil {
+			<-pendingChain.done
+			if len(pendingChain.addrs) > 0 {
+				r.storeDelegation(pendingChain.zone, pendingChain.parent, pendingChain.nsNames, pendingChain.addrs, chain, pendingChain.verdict)
+			}
+			pool.DefaultMessage.Put(pendingChain.response)
+			pendingChain = nil
+		}
 
 		// ── Single TCP fallback decision point ──────────────────────
 		// If any response at this delegation level was flagged as
@@ -347,24 +405,72 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		// are independent queries against the same (parent) servers —
 		// run them concurrently instead of serially (DNSKEY fetch and
 		// NS-name resolution each do their own walk).
+		//
+		// Exception: a referral WITHOUT DS records under enforcement needs an
+		// authenticated no-DS proof — a network query to the parent.  That
+		// proof is deferred to the background: the walk joins it right after
+		// the next level's query returns, so it overlaps the child fan-out
+		// instead of serializing when NS addresses resolve instantly from
+		// glue/cache.  The DS-present path stays synchronous: it is CPU-only
+		// (parent keys were fetched entering this zone) and its childDS feeds
+		// the next level's DNSKEY prefetch.
+		referralHasDS := len(dnssec.FindDS(response.Ns)) > 0 || len(dnssec.FindDS(response.Answer)) > 0
 		var nsResult resolvedNSAddrs
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer zdnsutil.HandlePanic("DNSSEC chain update")
-			defer wg.Done()
-			r.updateDNSSECChain(ctx, response, parentDomain, bestMatch, nameservers, chain)
-		}()
-		go func() {
-			defer zdnsutil.HandlePanic("Resolve NS addresses")
-			defer wg.Done()
-			nsResult = r.resolveNextNameservers(ctx, bestNSRecords, response, qname, parentDomain, depth, forceTCP)
-		}()
-		wg.Wait()
+		if !referralHasDS && r.resolver.DNSSECEnforce && r.resolver.validator.Crypto != nil {
+			nsDone := make(chan struct{})
+			go func() {
+				defer zdnsutil.HandlePanic("Resolve NS addresses")
+				defer close(nsDone)
+				nsResult = r.resolveNextNameservers(ctx, bestNSRecords, response, qname, parentDomain, depth, forceTCP)
+			}()
+			chainDone := make(chan struct{})
+			go func() {
+				defer zdnsutil.HandlePanic("DNSSEC chain update")
+				defer close(chainDone)
+				r.updateDNSSECChain(ctx, response, parentDomain, bestMatch, nameservers, chain)
+			}()
+			<-nsDone
+			pendingChain = &pendingChainUpdate{
+				done:     chainDone,
+				response: response, // still read by the background update — Put after the join
+				zone:     currentDomain,
+				parent:   parentDomain,
+				nsNames:  bestNSRecords,
+				addrs:    nsResult.addrs,
+				verdict:  verdict,
+			}
+		} else {
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() {
+				defer zdnsutil.HandlePanic("DNSSEC chain update")
+				defer wg.Done()
+				r.updateDNSSECChain(ctx, response, parentDomain, bestMatch, nameservers, chain)
+			}()
+			go func() {
+				defer zdnsutil.HandlePanic("Resolve NS addresses")
+				defer wg.Done()
+				nsResult = r.resolveNextNameservers(ctx, bestNSRecords, response, qname, parentDomain, depth, forceTCP)
+			}()
+			wg.Wait()
+		}
 
 		if len(nsResult.addrs) > 0 {
 			log.Debugf("RECURSION: zone=%s, %d NS names -> %d addresses (source=%s): %v",
 				currentDomain, len(bestNSRecords), len(nsResult.addrs), nsResult.source, nsResult.addrs)
+		}
+
+		if pendingChain != nil {
+			// The background chain update still reads response — ownership
+			// moves to pendingChain (Put after the join).  The empty-address
+			// failure is reported by the next iteration's query attempt after
+			// the join, so the walk fails instead of stalling here.
+			r.cacheGlueRecords(nsResult.glue)
+			nameservers = nsResult.addrs
+			if dnsutil.Labels(dnsutil.Fqdn(currentDomain)) == 1 {
+				tldServers = nameservers
+			}
+			continue
 		}
 
 		if len(nsResult.addrs) == 0 {
