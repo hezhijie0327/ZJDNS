@@ -39,9 +39,22 @@ Run locally: `./zjdns --config config.example.json`.
 ## Commit & Pull Request Guidelines
 
 - Conventional Commits: `fix:`, `perf:`, `feat:`, `chore:`, `refactor:`, `docs:`; descriptive body explaining the why; append `Co-authored-by:` trailers when applicable.
-- When Codex assists with a change, include the trailer `Co-authored-by: Codex <noreply@openai.com>` as the last line of the commit message body.
 - Commit incrementally — one logical change per commit, after lint and tests pass.
 - PRs: link the issue, summarize the change and verification (tests/benchmarks), and include config/log/pprof evidence for bug fixes.
+
+### Co-Author Format
+
+- Always add co-author information. If closing an issue in commit text, verify against `main` first: `gh issue view <issue-id>`.
+- Only ONE co-author line is allowed. If multiple agents contributed, aggregate into ONE entry.
+
+Format: `Co-authored-by: <AgentName> <Email>`
+
+Valid examples (choose EXACTLY ONE):
+
+```
+Co-authored-by: Codex <codex@openai.com>
+Co-authored-by: QoderAI <qoder_ai@qoder.com>
+```
 
 ## Additional Guidance
 
