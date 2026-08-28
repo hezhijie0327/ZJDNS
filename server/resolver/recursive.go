@@ -177,6 +177,12 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 	// tldServers saves the TLD nameservers for the hijack probe.
 	var tldServers []string
 
+	// poisonProbed records that this walk already ran the TLD hijack probe;
+	// a positive verdict is persisted in forceTCP, so probing once per walk
+	// is sufficient (re-probing the same TLD servers for the same qname at
+	// every full-QNAME level only paid their straggler latency again).
+	var poisonProbed bool
+
 	log.Debugf("RECURSION: depth=%d, querying %s (type=%s, tcp=%t, zone=%s, ns=%v)", depth, question.Name, dns.TypeToString[question.Qtype], forceTCP, currentDomain, nameservers)
 
 	// Initialize DNSSEC trust chain with root trust anchors (when available).
@@ -266,15 +272,21 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		// the servers we are about to query.  A legitimate
 		// delegation server never returns A/AAAA for a
 		// subdomain — if it does, the GFW is injecting at this
-		// level; switch to TCP before querying.
-		authoritativeForceTCP := forceTCP
-		if !authoritativeForceTCP && qnameMinimise &&
+		// level; switch to TCP before querying and keep TCP for
+		// the rest of the walk.  The probe runs at most once per
+		// walk — at the first level exposing the full QNAME
+		// (delegation-cache starts probe at the authoritative
+		// level instead).
+		if !forceTCP && qnameMinimise && !poisonProbed &&
 			strings.EqualFold(queryQuestion.Name, qname) &&
 			len(tldServers) > 0 {
-			authoritativeForceTCP = r.probeTLDForPoison(ctx, tldServers, qname)
+			poisonProbed = true
+			if r.probeTLDForPoison(ctx, tldServers, qname) {
+				forceTCP = true
+			}
 		}
 
-		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, ecs, authoritativeForceTCP, currentDomain, r.resolver.validator.Poisonguard)
+		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
 
 		// Join the level's DNSKEY prefetch before anything touches chain —
 		// from here on the main goroutine owns chain again.  The wait is
@@ -383,7 +395,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		}
 		if cont {
 			if apexCut {
-				if nextNS, nextZone, ok := r.advanceApexZoneCut(ctx, queryQuestion.Name, nameservers, currentDomain, ecs, chain, depth, authoritativeForceTCP, qname); ok {
+				if nextNS, nextZone, ok := r.advanceApexZoneCut(ctx, queryQuestion.Name, nameservers, currentDomain, ecs, chain, depth, forceTCP, qname); ok {
 					if dnsutil.Labels(dnsutil.Fqdn(nextZone)) == 1 {
 						tldServers = nextNS
 					}
