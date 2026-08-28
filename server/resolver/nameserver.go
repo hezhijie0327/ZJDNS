@@ -268,7 +268,14 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 						pool.DefaultMessage.Put(result.Response)
 						return nil
 					}
-					if r.poisonguard {
+					if r.poisonguard && protocol == config.ProtoUDP {
+						// UDP-only heuristic: GFW injection is spoofed UDP
+						// datagrams; a response that arrived over TCP passed
+						// the handshake + sequence checks and cannot be
+						// injected this way (that is why detection forces
+						// TCP).  Judging TCP responses only produced false
+						// positives (e.g. the .cn registry authoritatively
+						// answers A for cnnic.cn).
 						v := detector.Validate(currentDomain, normalizedQname, result.Response)
 						if v == defense.VerdictPoisoned {
 							log.Debugf("RECURSION: rejecting poisoned response from %s", nsAddr)
@@ -295,7 +302,8 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 					// stored via CAS so the first one wins, and the wait
 					// loop below serves it immediately or after the
 					// optional deferral window.
-					if r.poisonguard {
+					if r.poisonguard && protocol == config.ProtoUDP {
+						// UDP-only heuristic — see the NOERROR branch.
 						v := detector.Validate(currentDomain, normalizedQname, result.Response)
 						if v == defense.VerdictPoisoned {
 							log.Debugf("RECURSION: rejecting poisoned response from %s", nsAddr)
@@ -693,7 +701,8 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 	}
 
 	// Reject hijacked responses in FORMERR retry path as well.
-	if r.poisonguard {
+	// UDP-only heuristic — see the NOERROR branch in queryNameserversConcurrent.
+	if r.poisonguard && server.Protocol == config.ProtoUDP {
 		v := detector.Validate(currentDomain, normalizedQname, retryResult.Response)
 		if v == defense.VerdictPoisoned {
 			log.Debugf("RECURSION: rejecting poisoned FORMERR retry from %s", nsAddr)
