@@ -570,7 +570,7 @@ func (s *Server) HandleHTTP3FromPacketConn(pc net.PacketConn) error {
 // DTLCP on 853).  The caller provides a dtlsnet.PacketListener whose
 // per-client PacketConns deliver demuxed DTLS datagrams.
 func (s *Server) HandleDTLSFromPacketListener(pl dtlsnet.PacketListener) error {
-	listener, err := dtls.NewListenerWithOptions(pl,
+	listener, err := dtls.NewListener(pl,
 		dtls.WithMinVersion(protocol.Version1_3),
 		dtls.WithMaxVersion(protocol.Version1_3),
 		dtls.WithCertificates(s.stdCert),
@@ -580,7 +580,7 @@ func (s *Server) HandleDTLSFromPacketListener(pl dtlsnet.PacketListener) error {
 				Role:       "TLS",
 				Direction:  "DTLS handshake from",
 				RemoteAddr: "client",
-				Cipher:     dtls.CipherSuiteName(state.CipherSuiteID),
+				Cipher:     state.CipherSuiteID.String(),
 			})
 			return nil
 		}),

@@ -173,7 +173,7 @@ func (c *Client) dialDTLSConn(ctx context.Context, addr string, server *config.U
 			Role:       "UPSTREAM",
 			Direction:  "DTLS negotiated for",
 			RemoteAddr: serverAddr,
-			Cipher:     dtls.CipherSuiteName(state.CipherSuiteID),
+			Cipher:     state.CipherSuiteID.String(),
 		})
 		return nil
 	}))
@@ -189,7 +189,7 @@ func (c *Client) dialDTLSConn(ctx context.Context, addr string, server *config.U
 			_ = pconn.Close()
 			return nil, fmt.Errorf("dtls: resolve %s: %w", serverAddr, rErr)
 		}
-		conn, pErr = dtls.ClientWithOptions(pconn, udpAddr, dtlsOpts...)
+		conn, pErr = dtls.Client(pconn, udpAddr, dtlsOpts...)
 		if pErr != nil {
 			_ = pconn.Close()
 			return nil, fmt.Errorf("dtls: client %s: %w", serverAddr, pErr)
@@ -199,7 +199,7 @@ func (c *Client) dialDTLSConn(ctx context.Context, addr string, server *config.U
 		if rErr != nil {
 			return nil, fmt.Errorf("dtls: resolve %s: %w", serverAddr, rErr)
 		}
-		conn, rErr = dtls.DialWithOptions("udp", udpAddr, dtlsOpts...)
+		conn, rErr = dtls.Dial("udp", udpAddr, dtlsOpts...)
 		if rErr != nil {
 			return nil, fmt.Errorf("dtls: dial %s: %w", serverAddr, rErr)
 		}

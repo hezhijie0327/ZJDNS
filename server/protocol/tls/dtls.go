@@ -31,21 +31,22 @@ func (s *Server) startDTLSServer() error {
 			return err
 		}
 
-		listener, err := dtls.ListenWithOptions("udp", udpAddr,
+		listener, err := dtls.Listen("udp", udpAddr,
 			// DTLS 1.3 only.  A dual-stack server [1.2,1.3] still deadlocks
 			// against a dual-stack client (i.e. our own upstream client) in
-			// pion v3.1.3-0.20260821014627: the server's DTLS 1.3 Flight 0
+			// pion v3.1.3-0.20260829132121: the server's DTLS 1.3 Flight 0
 			// cannot complete its HelloRetryRequest exchange with a client
-			// that is still in version negotiation (negotiateVersionClient
-			// only accepts ServerHello/HelloVerifyRequest) — server spins
-			// re-sending, client waits, handshake times out. The 1.3-only
-			// server path (prepareHandshakeStart13, no version negotiation)
-			// completes the 1.3 handshake with dual-stack clients fine, so
-			// we stay 1.3-only. Verified against pion's TestDTLSDualStack*,
-			// ZJDNS E2E (see DEBUG.md) and probe clients: 1.3-only server +
-			// {dual-stack, pure-1.3} clients OK; pure-1.2 clients (RouteDNS)
-			// cannot connect, as before. Revisit when pion fixes the
-			// dual-stack server HRR path.
+			// that is still in version negotiation — server spins re-sending,
+			// client waits, handshake times out. The 1.3-only server path
+			// (prepareHandshakeStart13, no version negotiation) completes the
+			// 1.3 handshake with dual-stack clients fine, so we stay
+			// 1.3-only. Re-verified 2026-08-29 with ZJDNS loopback E2E:
+			// dual server works with {pure-1.2, pure-1.3} clients (1.2
+			// negotiation was fixed upstream since v3.1.3-0.20260821014627)
+			// but still deadlocks with dual-stack clients — and our upstream
+			// client is dual-stack per RFC 9147 §4.2.2, so a dual-stack
+			// server would break ZJDNS-to-ZJDNS DTLS. Revisit when pion
+			// fixes the dual-stack server HRR path.
 			dtls.WithMinVersion(protocol.Version1_3),
 			dtls.WithMaxVersion(protocol.Version1_3),
 			dtls.WithCertificates(s.stdCert),
@@ -55,7 +56,7 @@ func (s *Server) startDTLSServer() error {
 					Role:       "TLS",
 					Direction:  "DTLS handshake from",
 					RemoteAddr: "client",
-					Cipher:     dtls.CipherSuiteName(state.CipherSuiteID),
+					Cipher:     state.CipherSuiteID.String(),
 				})
 				return nil
 			}),
