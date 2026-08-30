@@ -237,8 +237,10 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 	// delegation (no-DS proof running in the background); keyPrefetchDone
 	// signals this level's DNSKEY prefetch goroutine.  They never run
 	// together: the prefetch only fires once the prior update has been joined.
+	// probeDone carries the overlapped TLD hijack-probe verdict (see below).
 	var pendingChain *pendingChainUpdate
 	var keyPrefetchDone chan struct{}
+	var probeDone chan bool
 
 	for {
 		select {
@@ -279,18 +281,25 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		// the servers we are about to query.  A legitimate
 		// delegation server never returns A/AAAA for a
 		// subdomain — if it does, the GFW is injecting at this
-		// level; switch to TCP before querying and keep TCP for
-		// the rest of the walk.  The probe runs at most once per
-		// walk — at the first level exposing the full QNAME
-		// (delegation-cache starts probe at the authoritative
-		// level instead).
+		// level.  The probe runs at most once per walk — at the
+		// first level exposing the full QNAME (delegation-cache
+		// starts probe at the authoritative level instead).
+		// The probe overlaps this level's data query instead of
+		// serializing before it: the verdict is joined right after
+		// the query returns, and a positive verdict discards the
+		// (possibly injected) UDP answer and restarts the walk over
+		// TCP — the probe hits the same servers as the data query,
+		// so an injection that corrupts the answer also corrupts the
+		// probe and is detected.
 		if !forceTCP && qnameMinimise && !poisonProbed &&
 			strings.EqualFold(queryQuestion.Name, qname) &&
 			len(tldServers) > 0 {
 			poisonProbed = true
-			if r.probeTLDForPoison(ctx, tldServers, qname) {
-				forceTCP = true
-			}
+			probeDone = make(chan bool, 1)
+			go func() {
+				defer zdnsutil.HandlePanic("TLD poison probe")
+				probeDone <- r.probeTLDForPoison(ctx, tldServers, qname)
+			}()
 		}
 
 		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
@@ -312,6 +321,23 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			}
 			pool.DefaultMessage.Put(pendingChain.response)
 			pendingChain = nil
+		}
+
+		// Join the overlapped hijack probe before anything reads the
+		// response: a positive verdict means this level is injecting,
+		// so the UDP answer is dropped and the walk restarts over TCP
+		// (same recovery as the per-response VerdictPoisoned path below).
+		if probeDone != nil {
+			if <-probeDone {
+				log.Debugf("RECURSION: poisonguard probe detected injection for %s (zone=%s) — restarting over TCP", question.Name, currentDomain)
+				if response != nil {
+					pool.DefaultMessage.Put(response)
+				}
+				qr := r.resolve(ctx, question, ecs, depth, true)
+				qr.Poisoned = true
+				return qr
+			}
+			probeDone = nil
 		}
 
 		// ── Single TCP fallback decision point ──────────────────────
