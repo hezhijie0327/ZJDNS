@@ -11,6 +11,7 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/lrumap"
 	"zjdns/server/defense"
 	"zjdns/server/resolver/dnssec"
@@ -257,6 +258,16 @@ func (r *Resolver) UpstreamServers() []*config.UpstreamServer {
 func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOption) *QueryResult {
 	servers := r.upstream.list()
 	qr := r.queryUpstream(ctx, question, ecs, servers)
+	// Upstreams echo the case of the question they received into record
+	// owners and rdata names — with CapsGuard that is our 0x20-randomized
+	// case, which must never leak to clients (draft-vixie-dnsext-dns0x20-00
+	// §5.4).  Fold every section here, at the single funnel all client-facing
+	// results pass through (forward, recursive, MQTYPE and DNS64 secondary
+	// lookups alike), so the miss path serves the same canonical lowercase
+	// form the cache serves on hits.
+	zdnsutil.FoldCase(qr.Answer)
+	zdnsutil.FoldCase(qr.Authority)
+	zdnsutil.FoldCase(qr.Additional)
 	return &qr
 }
 

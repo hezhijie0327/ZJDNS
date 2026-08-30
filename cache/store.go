@@ -637,10 +637,11 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 	// The upstream may echo a CapsGuard-randomized question case into record
 	// owners via compression pointers (draft-vixie-dnsext-dns0x20-00 §5.4) —
 	// canonicalize owners so that random case never reaches the cache or
-	// subsequent responses.  additional was already deep-cloned above.
-	canonicalizeOwners(answer)
-	canonicalizeOwners(authority)
-	canonicalizeOwners(additional)
+	// subsequent responses (records folded by the resolver fold to a no-op
+	// here).  additional was already deep-cloned above.
+	zdnsutil.FoldCase(answer)
+	zdnsutil.FoldCase(authority)
+	zdnsutil.FoldCase(additional)
 
 	// NOTE: the stored wire keeps the RAW records (DNSSEC proofs included —
 	// upstream queries always carry DO=1 per RFC 6840 §5.9, and the cache key
@@ -728,86 +729,6 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 }
 
 // ── Set-path helpers ──────────────────────────────────────────────────────
-
-// canonicalizeOwners lowercases every record owner name and the embedded
-// rdata names in place.  An upstream may echo a CapsGuard-randomized
-// question case into record owners and rdata names via compression pointers
-// (draft-vixie-dnsext-dns0x20-00 §5.4); that random case must not leak into
-// the cache and subsequent responses.  Lowercasing rdata names also lets the
-// packed wire compress them against the canonical question — a mixed-case
-// target would miss the case-sensitive compression map and stay fully
-// encoded, showing a different case than the owner on cache hits.
-//
-// The rdata name fields cover every RR type of the miekg fork: they mirror
-// the compare methods generated into zcompare.go, the same source of truth
-// as the wire format — a new RR type gets its compare method generated from
-// the same table, so the coverage cannot drift from the wire format.
-func canonicalizeOwners(rrs []dns.RR) {
-	for i, rr := range rrs {
-		if rr == nil {
-			continue
-		}
-		rrs[i] = canonicalizeRR(rr)
-	}
-}
-
-// canonicalizeRR folds the owner and every embedded rdata name of an RR to
-// lowercase, type-agnostically: in the presentation form (RFC 4343 §3) a
-// whitespace-separated token ending in '.' and not quoted is a domain name,
-// so folding it cannot touch data (TXT/URI/CAA values are always quoted).
-// The record is rebuilt via the zone parser — the same self-describing
-// grammar — so any RR type, including future ones, is covered without a
-// per-type field table (draft-vixie-dnsext-dns0x20-00 §5.4: the randomized
-// case must not leak into the cache; mixed-case rdata names also miss the
-// case-sensitive compression map and stay fully encoded, showing a
-// different case than the owner on cache hits).  Returns the input
-// unchanged when there is nothing to fold.
-func canonicalizeRR(rr dns.RR) dns.RR {
-	s := rr.String()
-	fields := strings.Fields(s)
-	folded := false
-	for i, tok := range fields {
-		if strings.HasSuffix(tok, ".") && !strings.HasPrefix(tok, "\"") && !strings.HasSuffix(tok, "\"") {
-			if low := asciiFold(tok); low != tok {
-				fields[i] = low
-				folded = true
-			}
-		}
-	}
-	if !folded {
-		return rr
-	}
-	zp := dns.NewZoneParser(strings.NewReader(strings.Join(fields, " ")), ".", "")
-	parsed, ok := zp.Next()
-	if !ok || zp.Err() != nil {
-		return rr // defensive — serve the original
-	}
-	return parsed
-}
-
-// asciiFold lowercases only ASCII letters — RFC 4343 §3 folds exactly the
-// 0x20 bit of A-Z; non-ASCII bytes are case-sensitive in DNS and must stay
-// untouched.  Returns the input unchanged (no allocation) when there is
-// nothing to fold.
-func asciiFold(name string) string {
-	needsFold := false
-	for i := 0; i < len(name); i++ {
-		if name[i] >= 'A' && name[i] <= 'Z' {
-			needsFold = true
-			break
-		}
-	}
-	if !needsFold {
-		return name
-	}
-	b := []byte(name)
-	for i, c := range b {
-		if c >= 'A' && c <= 'Z' {
-			b[i] = c + 0x20
-		}
-	}
-	return string(b)
-}
 
 // minTTL returns the smallest positive TTL across all RR sections, falling
 // back to DefaultTTL when no TTLs are found.  The result is capped at

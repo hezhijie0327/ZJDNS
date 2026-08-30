@@ -1684,7 +1684,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 - 出站：`server/defense/capsguard.go` `RandomizeCase` + `server/upstream/client.go` `ExecuteQuery` 随机化/回显校验/一次无 0x20 重试（按上游 `capsguard` 开关，全协议，转发+递归）✓
 - 入站：缓存命中响应 patch question 段回显客户端原始大小写（`server/handler/response.go` `patchQuestionCase`）✓
-- 实测（2026-08-21，递归 + 转发双路径）：root / .com TLD / 百度权威（110.242.68.x）/ bilibili 权威（1.12.14.x）/ 腾讯私有 DNS 设备（162.14.44.44, dnse2.com）**全部逐字节回显任意 case 变体**，含 CNAME 链权威——0 mismatch、0 重试；`canonicalizeOwners` 防 §5.4 压缩指针缓存污染 ✓
+- 实测（2026-08-21，递归 + 转发双路径）：root / .com TLD / 百度权威（110.242.68.x）/ bilibili 权威（1.12.14.x）/ 腾讯私有 DNS 设备（162.14.44.44, dnse2.com）**全部逐字节回显任意 case 变体**，含 CNAME 链权威——0 mismatch、0 重试；`internal/dnsutil.FoldCase` 在 `resolver.Query` 出口折叠上游回显的记录大小写（防 §5.4 压缩指针污染，覆盖实时 miss 路径与缓存）✓
 
 ---
 

@@ -149,11 +149,14 @@ Mismatches are Warn-logged on a sampled basis (every
 `config.DefaultCapsGuardWarnEvery`-th) because the path is attacker-
 triggerable.
 
-The randomized bytes never outlive the outbound message: cached responses are
-rebuilt from the canonical qname, and the server side patches cached-response
-wires back to the client's original case at serve time (`server/handler/
-response.go` `patchQuestionCase`) — so no random case can leak into the cache
-or subsequent responses (§5.4).
+The randomized bytes never outlive the outbound message: every client-facing
+result is folded to canonical lowercase at the resolver exit
+(`server/resolver/resolver.go` `Query` → `internal/dnsutil.FoldCase`, covering
+forward, recursive, MQTYPE and DNS64 secondary lookups alike), cached
+responses are rebuilt from the canonical qname, and the server side patches
+cached-response wires back to the client's original case at serve time
+(`server/handler/response.go` `patchQuestionCase`) — so no random case can
+leak to clients, into the cache, or into subsequent responses (§5.4).
 
 ### HopGuard
 
