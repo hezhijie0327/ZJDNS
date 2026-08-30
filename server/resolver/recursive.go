@@ -253,9 +253,16 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		// Fire the fetch now so it overlaps this level's fan-out query; the
 		// singleflight inside ensureZoneDNSKEYs dedupes concurrent walks.
 		// Skipped while a chain update is still pending: it owns chain and
-		// determines whether this zone is signed at all.
+		// determines whether this zone is signed at all.  The root-start case
+		// has no childDS yet (no delegation has been seen), but the root zone
+		// is always signed and its keys are needed to verify the first
+		// delegation — without this branch the walk paid one serial root
+		// DNSKEY RTT inside updateDNSSECChain.  Non-root starts keep the
+		// childDS requirement: a delegation-cache start on an unsigned zone
+		// carries empty DS and would otherwise fire a wasted DNSKEY query.
 		if pendingChain == nil && r.resolver.validator.Crypto != nil &&
-			len(chain.zoneDNSKEYs) == 0 && len(chain.childDS) > 0 && !chain.dsPresentButUnverified {
+			len(chain.zoneDNSKEYs) == 0 && !chain.dsPresentButUnverified &&
+			(len(chain.childDS) > 0 || currentDomain == config.DNSRootZone) {
 			keyPrefetchDone = make(chan struct{})
 			go func() {
 				defer zdnsutil.HandlePanic("DNSKEY prefetch")
