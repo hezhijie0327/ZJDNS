@@ -31,7 +31,7 @@ func (s *Server) startDTLSServer() error {
 			return err
 		}
 
-		listener, err := dtls.Listen("udp", udpAddr,
+		listener, err := dtls.ListenAddr("udp", udpAddr,
 			// DTLS 1.3 only.  A dual-stack server [1.2,1.3] still deadlocks
 			// against a dual-stack client (i.e. our own upstream client) in
 			// pion v3.1.3-0.20260829132121: the server's DTLS 1.3 Flight 0
