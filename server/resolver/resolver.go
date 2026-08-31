@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"strings"
+	"time"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -83,6 +84,10 @@ type Resolver struct {
 	validator     *Validator
 	DNSSECEnforce bool
 	cache         cache.Store // DNS response cache for NS A/AAAA lookups
+
+	// fallbackTimeout is the delayed-adoption gate for fallback upstreams
+	// (zero applies config.DefaultFallbackTimeout — tests override it).
+	fallbackTimeout time.Duration
 
 	recursiveProxyURL string // proxy for recursive mode (from protocol=recursive upstream)
 }
@@ -169,13 +174,14 @@ func New(cfg *Config) (*Resolver, error) {
 		return nil, errors.New("resolver: Cache is required")
 	}
 	r := &Resolver{
-		queryClient:   cfg.QueryClient,
-		edns:          cfg.EDNS,
-		crd:           cfg.CIDRMatcher,
-		buildMsg:      cfg.BuildMsg,
-		DNSSECEnforce: cfg.DNSSECEnforce,
-		upstream:      &upstreamSet{},
-		cache:         cfg.Cache,
+		queryClient:     cfg.QueryClient,
+		edns:            cfg.EDNS,
+		crd:             cfg.CIDRMatcher,
+		buildMsg:        cfg.BuildMsg,
+		DNSSECEnforce:   cfg.DNSSECEnforce,
+		upstream:        &upstreamSet{},
+		cache:           cfg.Cache,
+		fallbackTimeout: config.DefaultFallbackTimeout,
 	}
 	delegationMax := cfg.DelegationMaxEntries
 	if delegationMax <= 0 {

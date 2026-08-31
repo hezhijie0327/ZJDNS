@@ -225,7 +225,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(qctx *handler.QueryContext, qname 
 			// timer-path goroutine below only runs when the refresh outlasts
 			// the serve-expired window — a fast refresh would otherwise leave
 			// the entry permanently stale (H11).
-			if qr.Cacheable && dnssecCacheable(qr.Validated, qr.DNSSECEDE) {
+			if qr.Cacheable && resolver.DNSSECCacheable(qr.Validated, qr.DNSSECEDE) {
 				m.store.Set(qname, qtype, qclass, ecsOpt,
 					qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
 			}
@@ -282,7 +282,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(qctx *handler.QueryContext, qname 
 				}
 				select {
 				case <-done:
-					if qr != nil && qr.Err == nil && qr.Cacheable && dnssecCacheable(qr.Validated, qr.DNSSECEDE) {
+					if qr != nil && qr.Err == nil && qr.Cacheable && resolver.DNSSECCacheable(qr.Validated, qr.DNSSECEDE) {
 						m.store.Set(qname, qtype, qclass, ecsOpt,
 							qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
 					}
@@ -322,7 +322,7 @@ func (m *CacheLookup) refreshCacheEntry(qname string, qtype, qclass uint16, ecsO
 		log.Debugf("CACHE: refresh skipped for %s (type=%d) — response not cacheable", qname, qtype)
 		return nil
 	}
-	if !dnssecCacheable(qr.Validated, qr.DNSSECEDE) {
+	if !resolver.DNSSECCacheable(qr.Validated, qr.DNSSECEDE) {
 		log.Debugf("CACHE: refresh skipped for %s (type=%d) — bogus validation result", qname, qtype)
 		return nil
 	}

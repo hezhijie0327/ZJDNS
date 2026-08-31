@@ -256,6 +256,21 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 			return fmt.Errorf("upstream server %d: %w", i, err)
 		}
 	}
+
+	// Fallback upstreams are only meaningful alongside at least one primary:
+	// an all-fallback list has nothing to fall back FROM, and every response
+	// would carry the uncacheable fallback EDE.
+	hasFallback, hasPrimary := false, false
+	for i := range cfg.Upstream {
+		if cfg.Upstream[i].Fallback {
+			hasFallback = true
+		} else {
+			hasPrimary = true
+		}
+	}
+	if hasFallback && !hasPrimary {
+		return errors.New("upstream: fallback servers require at least one non-fallback upstream")
+	}
 	return nil
 }
 

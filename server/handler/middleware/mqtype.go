@@ -244,8 +244,8 @@ func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY) {
 
 		// Cache the additional response so future requests (including
 		// CacheLookup for the same QTYPE) hit the warm cache.  Bogus
-		// validation results are never cached (see dnssecCacheable).
-		if qr.Cacheable && dnssecCacheable(qr.Validated, qr.DNSSECEDE) {
+		// validation results are never cached (see resolver.DNSSECCacheable).
+		if qr.Cacheable && resolver.DNSSECCacheable(qr.Validated, qr.DNSSECEDE) {
 			m.store.Set(qname, qt, qclass, ecsOpt, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
 		}
 	}

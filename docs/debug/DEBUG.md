@@ -58,7 +58,9 @@ docs/debug/
     ├── alidns-http3.json    # AliDNS via HTTP3
     ├── alidns-quic.json     # AliDNS via QUIC
     ├── quad9-dnscrypt.json  # Quad9 via DNSCrypt
-    └── dnspod-http-tlcp.json  # DNSpod via HTTP over TLCP (国密)
+    ├── dnspod-http-tlcp.json  # DNSpod via HTTP over TLCP (国密)
+    └── fallback.json        # recursive primary + 8.8.8.8 fallback (delayed adoption,
+                             #   EDE 65280, background cache fill) + pprof for leak checks
 ```
 
 RouteDNS, DNSCrypt-proxy, and AdGuard DNS Proxy are external tools tested

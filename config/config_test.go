@@ -224,6 +224,35 @@ func TestValidateUpstreamServers_EmptyAddress(t *testing.T) {
 	}
 }
 
+func TestValidateUpstreamServers_AllFallbackRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	cfg := `{"server":{"protocol":{"udp":"53535"},"certificate":{"domain":"test.example.com"}},"upstream":[{"address":"8.8.8.8:53","fallback":true}]}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Error("expected error for an all-fallback upstream list")
+	}
+}
+
+func TestValidateUpstreamServers_FallbackWithPrimaryAccepted(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	cfg := `{"server":{"protocol":{"udp":"53535"},"certificate":{"domain":"test.example.com"}},"upstream":[{"address":"8.8.8.8:53"},{"address":"1.1.1.1:53","fallback":true}]}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("fallback with a primary rejected: %v", err)
+	}
+	if !c.Upstream[1].Fallback {
+		t.Error("fallback flag not parsed")
+	}
+}
+
 func TestDDRRecords_AllProtocolsEnabled(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")

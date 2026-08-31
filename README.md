@@ -128,6 +128,7 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 | `skip_tls_verify` | bool | 跳过 TLS 证书验证 |
 | `privacy_profile` | string | `"strict"`（默认，[RFC 8310](docs/rfc/rfc8310.txt) §6）/ `"opportunistic"`（§5） |
 | `skip_cache` | bool | 禁止缓存该上游响应 |
+| `fallback` | bool | 兜底上游：与主上游并发查询，但主上游在 1 秒内无结果时才采纳其响应；结果附 EDE 65280 且全链不缓存，采纳后主上游继续后台填充缓存（需至少一个非 `fallback` 上游） |
 | `match` | []string | 规则集标签分流 |
 | `proxy` | string | SOCKS5 代理：`socks5://[user:pass@]host:port` |
 | `public_key` | string | DNSCrypt 公钥（hex） |

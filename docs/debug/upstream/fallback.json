@@ -1,0 +1,12 @@
+{
+  "server": {
+    "log_level": "debug:UPSTREAM,RESULT",
+    "protocol": { "udp": "11533", "tcp": "11533" },
+    "pprof": "16060",
+    "features": { "cache": {} }
+  },
+  "upstream": [
+    { "protocol": "recursive" },
+    { "address": "8.8.8.8:53", "protocol": "udp", "fallback": true }
+  ]
+}

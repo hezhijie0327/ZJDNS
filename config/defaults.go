@@ -118,6 +118,13 @@ const (
 	// NOERROR race at the cost of that fixed delay on censored domains.
 	DefaultNXDOMAINDeferralWindow = 0 * time.Second
 
+	// DefaultFallbackTimeout is the adoption gate for fallback upstreams
+	// (UpstreamServer.Fallback): every upstream races from t=0, but a
+	// fallback result is only served when no primary has answered within
+	// this window.  After adoption the primaries keep running in the
+	// background and the first usable result fills the cache.
+	DefaultFallbackTimeout = 1 * time.Second
+
 	DefaultRecursiveResolveTimeout = 30 * time.Second // full recursive resolution
 
 	// DefaultUDPRetransmitInterval is the silence window before a pooled UDP

@@ -54,9 +54,9 @@ func TestDNSSECCacheable(t *testing.T) {
 		{false, 12, false, "unvalidated + NSEC-missing → DO NOT cache"},
 	}
 	for _, c := range cases {
-		got := dnssecCacheable(c.validated, c.ede)
+		got := resolver.DNSSECCacheable(c.validated, c.ede)
 		if got != c.want {
-			t.Errorf("%s: dnssecCacheable(%v,%d)=%v, want %v", c.desc, c.validated, c.ede, got, c.want)
+			t.Errorf("%s: resolver.DNSSECCacheable(%v,%d)=%v, want %v", c.desc, c.validated, c.ede, got, c.want)
 		}
 	}
 }

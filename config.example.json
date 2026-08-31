@@ -154,6 +154,11 @@
     },
     {
       "address": "sdns://AgMAAAAAAAAABzkuOS45LjkgKhX11qy258CQGt5Ou8dDsszUiQMrRuFkLwaTaDABJYoSZG5zOS5xdWFkOS5uZXQ6NDQzCi9kbnMtcXVlcnk"
+    },
+    {
+      "address": "https://1.1.1.1/dns-query",
+      "protocol": "https",
+      "fallback": true
     }
   ],
   "zone": [

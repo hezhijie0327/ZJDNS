@@ -154,21 +154,28 @@ type LimitSettings struct {
 // UpstreamServer defines a single upstream DNS server with address, protocol,
 // and optional matching.
 type UpstreamServer struct {
-	Address        string   `json:"address,omitzero"`
-	Protocol       string   `json:"protocol,omitzero"`
-	ServerName     string   `json:"server_name,omitzero"`
-	SkipTLSVerify  bool     `json:"skip_tls_verify,omitzero"`
-	PrivacyProfile string   `json:"privacy_profile,omitzero"` // "strict" (RFC 8310 §6) or "opportunistic" (§5)
-	SkipCache      bool     `json:"skip_cache,omitzero"`
-	Match          []string `json:"match,omitzero"`
-	Proxy          string   `json:"proxy,omitzero"`
-	PublicKey      string   `json:"public_key,omitzero"`
-	PQDNSCrypt     *bool    `json:"pqdnscrypt,omitzero"`     // prefer PQ DNSCrypt certs (default true)
-	EphemeralKeys  *bool    `json:"ephemeral_keys,omitzero"` // per-query X25519 keys for forward secrecy (default true)
-	Poisonguard    bool     `json:"poisonguard,omitzero"`
-	Spoofguard     bool     `json:"spoofguard,omitzero"`
-	Splitguard     bool     `json:"splitguard,omitzero"`
-	HopGuard       bool     `json:"hopguard,omitzero"`
+	Address        string `json:"address,omitzero"`
+	Protocol       string `json:"protocol,omitzero"`
+	ServerName     string `json:"server_name,omitzero"`
+	SkipTLSVerify  bool   `json:"skip_tls_verify,omitzero"`
+	PrivacyProfile string `json:"privacy_profile,omitzero"` // "strict" (RFC 8310 §6) or "opportunistic" (§5)
+	SkipCache      bool   `json:"skip_cache,omitzero"`
+	// Fallback marks the server as a fallback upstream: it races every
+	// primary at t=0 but its result is only adopted when no primary has
+	// answered within DefaultFallbackTimeout.  Fallback results are never
+	// cached and carry the ZJDNS-private fallback EDE (edns.EDEZJDNSFallback)
+	// so downstream ZJDNS instances refuse to cache them too.  At least one
+	// non-fallback upstream is required when any fallback is configured.
+	Fallback      bool     `json:"fallback,omitzero"`
+	Match         []string `json:"match,omitzero"`
+	Proxy         string   `json:"proxy,omitzero"`
+	PublicKey     string   `json:"public_key,omitzero"`
+	PQDNSCrypt    *bool    `json:"pqdnscrypt,omitzero"`     // prefer PQ DNSCrypt certs (default true)
+	EphemeralKeys *bool    `json:"ephemeral_keys,omitzero"` // per-query X25519 keys for forward secrecy (default true)
+	Poisonguard   bool     `json:"poisonguard,omitzero"`
+	Spoofguard    bool     `json:"spoofguard,omitzero"`
+	Splitguard    bool     `json:"splitguard,omitzero"`
+	HopGuard      bool     `json:"hopguard,omitzero"`
 	// CapsGuard randomizes the case bit of every ASCII letter in the outbound
 	// question (DNS 0x20, draft-vixie-dnsext-dns0x20-00 §5.1) and discards
 	// responses that do not echo the randomized case, retrying once with the

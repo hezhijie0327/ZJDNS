@@ -77,7 +77,25 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 		log.Debugf("UPSTREAM: querying %d servers for %s: %v", len(servers), question.Name, serverAddrs)
 	}
 
-	resultChan := make(chan QueryResult, 1)
+	// Fallback upstreams race from t=0 but are only adopted after the
+	// fallback timeout elapses without a usable primary result.  When
+	// present, the fan-out runs under a detached context (primaryCtx) so
+	// the primaries survive the adoption return and background-fill the
+	// cache with the first late primary result.
+	hasFallback := false
+	for _, s := range servers {
+		if s.Fallback {
+			hasFallback = true
+			break
+		}
+	}
+	// After adoption the wait loop is gone but late primary senders still
+	// deliver — size the buffer so their send never blocks.
+	chanCap := 1
+	if hasFallback {
+		chanCap = len(servers)
+	}
+	resultChan := make(chan QueryResult, chanCap)
 	var nxdomainResult atomic.Pointer[QueryResult]
 	// nxdomainCh wakes the wait loop on the first collected NXDOMAIN so the
 	// deferral window starts from the earliest possible instant.
@@ -85,7 +103,28 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	queryCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(errors.New("query completed"))
 
-	g, groupCtx := errgroup.WithContext(queryCtx)
+	fanoutParent := queryCtx
+	var coord *fallbackCoord
+	if hasFallback {
+		primaryCtx, primaryCancel := context.WithCancelCause(ctx)
+		coord = &fallbackCoord{
+			fallbackReady: make(chan struct{}, 1),
+			cancelPrimary: primaryCancel,
+			question:      question,
+			ecs:           ecs,
+		}
+		// Non-adoption returns (primary win, NXDOMAIN, all-failed) cancel
+		// the detached primaries; after adoption the background fill owns
+		// the cancel (fillCacheFromResult).
+		defer func() {
+			if !coord.adopted.Load() {
+				primaryCancel(errors.New("query completed"))
+			}
+		}()
+		fanoutParent = primaryCtx
+	}
+
+	g, groupCtx := errgroup.WithContext(fanoutParent)
 	// No query cap: SetLimit made the launch loop block once the limit was
 	// reached, delaying first-wins until a queued slot freed (a rate-limited
 	// upstream — common for public resolvers under burst — held its slot for
@@ -137,9 +176,17 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 			activeConnections.Add(1)
 			defer activeConnections.Add(-1)
 
+			// Fallback queries run under the request context so the
+			// adoption return cancels them; primaries run under the fan-out
+			// context (detached after adoption for the background fill).
+			execCtx := groupCtx
+			if server.Fallback {
+				execCtx = queryCtx
+			}
+
 			switch {
 			case server.IsRecursive():
-				if handled := r.handleRecursiveQuery(groupCtx, server, question, ecs, resultChan, cancel, &cidrFilterRefused); handled {
+				if handled := r.handleRecursiveQuery(execCtx, server, question, ecs, resultChan, cancel, &cidrFilterRefused, coord); handled {
 					return nil
 				}
 
@@ -167,11 +214,11 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 				// QTYPE.  Client MQTYPE-Query options are never forwarded —
 				// the server-side MQTYPE middleware merges locally.
 				attachMQType(msg, server.MQType, question.Qtype)
-				queryResult := r.queryClient.ExecuteQuery(groupCtx, msg, server)
+				queryResult := r.queryClient.ExecuteQuery(execCtx, msg, server)
 				pool.DefaultMessage.Put(msg)
 
 				if queryResult.Error == nil && queryResult.Response != nil {
-					if handled := r.processUpstreamResponse(queryResult, server, question, resultChan, &nxdomainResult, nxdomainCh, &activeConnections, cancel, groupCtx, &cidrFilterRefused, &lastUpstreamEDE); handled {
+					if handled := r.processUpstreamResponse(queryResult, server, question, resultChan, &nxdomainResult, nxdomainCh, &activeConnections, cancel, groupCtx, &cidrFilterRefused, &lastUpstreamEDE, coord); handled {
 						return nil
 					}
 				}
@@ -216,6 +263,23 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 			deferralTimer.Stop()
 		}
 	}()
+	// Fallback adoption gate: until the timer fires, fallback results only
+	// accumulate in the stash (the fallbackReady case is a no-op); once it
+	// fires, tryAdopt serves any pending primary first, then the stash.
+	var fallbackTimer *time.Timer
+	var fallbackCh <-chan time.Time
+	var fallbackReadyCh <-chan struct{}
+	fallbackFired := false
+	if coord != nil {
+		fallbackTimeout := r.fallbackTimeout
+		if fallbackTimeout <= 0 {
+			fallbackTimeout = config.DefaultFallbackTimeout
+		}
+		fallbackTimer = time.NewTimer(fallbackTimeout)
+		fallbackCh = fallbackTimer.C
+		fallbackReadyCh = coord.fallbackReady
+		defer fallbackTimer.Stop()
+	}
 waitLoop:
 	for {
 		select {
@@ -230,6 +294,20 @@ waitLoop:
 				continue
 			}
 			break waitLoop
+		case <-fallbackCh:
+			fallbackFired = true
+			if res, done := coord.tryAdopt(resultChan, &nxdomainResult); done {
+				return res
+			}
+			// Timer fired before any fallback result landed — phase 2:
+			// keep racing; the fallbackReady case re-checks on arrival and
+			// primary results keep winning through the cases above.
+		case <-fallbackReadyCh:
+			if fallbackFired {
+				if res, done := coord.tryAdopt(resultChan, &nxdomainResult); done {
+					return res
+				}
+			}
 		case <-nxdomainCh:
 			if deferralTimer == nil {
 				deferralTimer = time.NewTimer(config.DefaultNXDOMAINDeferralWindow)
@@ -282,9 +360,17 @@ waitLoop:
 	}
 
 	// All upstreams finished without a first-win: NXDOMAIN fallback (the
-	// deferral may have been bypassed), then EDE, then failure.
+	// deferral may have been bypassed), then a stashed fallback answer
+	// (it may have landed as the fan-out closed — the closed-channel case
+	// can win the select race against fallbackReady), then EDE, then failure.
 	if nxRes := nxdomainResult.Load(); nxRes != nil && nxRes.Server != "" {
 		return *nxRes
+	}
+	if coord != nil {
+		if fb := coord.fallbackResult.Load(); fb != nil {
+			coord.adopted.Store(true)
+			return *fb
+		}
 	}
 	// Propagate any EDE code captured from upstream SERVFAIL.
 	if opt := lastUpstreamEDE.Load(); opt != nil {
@@ -360,7 +446,7 @@ func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]
 // answers. ZJDNS in forwarding mode queries recursive resolvers (always AA=0), so the
 // check is intentionally skipped — it would incorrectly reject all recursive responses.
 // Returns true if the goroutine should return (result sent or handled).
-func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server *config.UpstreamServer, question Question, resultChan chan<- QueryResult, nxdomainResult *atomic.Pointer[QueryResult], nxdomainCh chan<- struct{}, activeConnections *atomic.Int32, cancel context.CancelCauseFunc, groupCtx context.Context, cidrFilterRefused *atomic.Bool, lastEDE *atomic.Pointer[dns.EDE]) bool {
+func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server *config.UpstreamServer, question Question, resultChan chan<- QueryResult, nxdomainResult *atomic.Pointer[QueryResult], nxdomainCh chan<- struct{}, activeConnections *atomic.Int32, cancel context.CancelCauseFunc, groupCtx context.Context, cidrFilterRefused *atomic.Bool, lastEDE *atomic.Pointer[dns.EDE], coord *fallbackCoord) bool {
 	// RFC 5452 §9.3: reject responses that do not echo the query's question.
 	// The forwarding path already checks the response ID (spoofguard); the
 	// question echo closes the cross-name replay variant (R3-H1).
@@ -376,6 +462,10 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 	}
 
 	upstreamEDE := captureUpstreamEDE(lastEDE, queryResult.Response, server.Address)
+	// A cascaded ZJDNS marks fallback-served responses with its private EDE
+	// — adopt them as ordinary first-wins results but never cache them (the
+	// marker keeps propagating to our own clients).
+	fallbackMarked := edns.IsFallbackEDE(upstreamEDE)
 
 	// RFC 10029: the configured mqtype list warms the cache with the
 	// upstream's merged records and strips them from the client-facing
@@ -409,21 +499,48 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 			rcode = dns.RcodeNameError
 		}
 
+		// Fallback upstreams never win the race directly: their result is
+		// stashed and only adopted after the fallback timeout.  Never
+		// cacheable, always marked with the ZJDNS fallback EDE.
+		if server.Fallback {
+			coord.stash(&QueryResult{
+				Answer:        queryResult.Response.Answer,
+				Authority:     queryResult.Response.Ns,
+				Additional:    queryResult.Response.Extra,
+				Validated:     queryResult.Validated,
+				Authoritative: queryResult.Response.Authoritative,
+				Cacheable:     false,
+				ECS:           ecsResponse,
+				Server:        serverDesc,
+				UpstreamEDE:   fallbackMarkEDE(),
+				Truncated:     queryResult.Response.Truncated,
+				Rcode:         rcode,
+			})
+			pool.DefaultMessage.Put(queryResult.Response)
+			return true
+		}
+
 		// RFC 10029: warm the merged types and strip them from the answer —
 		// the strip uses the completed list, never server.MQType, which
-		// would remove the primary records.
-		if len(server.MQType) > 0 && mqr != nil && !mqInvalid && r.cache != nil && !server.SkipCache {
+		// would remove the primary records.  A fallback-marked response
+		// (65280 from a cascaded ZJDNS) must not warm the cache either.
+		if len(server.MQType) > 0 && mqr != nil && !mqInvalid && r.cache != nil && !server.SkipCache && !fallbackMarked {
 			r.warmFromMQResponse(queryResult.Response, question.Name, question.Qclass, mqr, ecsResponse, queryResult.Validated)
 			queryResult.Response.Answer = stripMQBundled(queryResult.Response.Answer, mqr.Types)
 		}
 
+		res := QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Authoritative: queryResult.Response.Authoritative, Cacheable: !server.SkipCache && !fallbackMarked, ECS: ecsResponse, Server: serverDesc, UpstreamEDE: upstreamEDE, Truncated: queryResult.Response.Truncated, Rcode: rcode}
 		select {
-		case resultChan <- QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Authoritative: queryResult.Response.Authoritative, Cacheable: !server.SkipCache, ECS: ecsResponse, Server: serverDesc, UpstreamEDE: upstreamEDE, Truncated: queryResult.Response.Truncated, Rcode: rcode}:
+		case resultChan <- res:
 			remaining := activeConnections.Load() - 1
 			if remaining > 0 {
 				log.Debugf("UPSTREAM: First win achieved, terminating %d remaining connections", remaining)
 			}
 			cancel(errors.New("successful result"))
+			// A fallback may have been adopted while this result was in
+			// flight — fill the cache directly instead of racing for a
+			// client the wait loop already answered.
+			coord.maybeBackfill(func() { r.fillCacheFromResult(coord, &res) })
 			pool.DefaultMessage.Put(queryResult.Response)
 			return true
 		case <-groupCtx.Done():
@@ -431,24 +548,47 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 			return true
 		}
 	case dns.RcodeNameError:
-		if nxdomainResult.CompareAndSwap(nil, &QueryResult{
+		// Fallback NXDOMAIN is stashed like a fallback NOERROR — adopted
+		// only after the timeout, never cached, and it must not arm the
+		// NXDOMAIN deferral window (that machinery is primary-only).
+		if server.Fallback {
+			coord.stash(&QueryResult{
+				Answer:        queryResult.Response.Answer,
+				Authority:     queryResult.Response.Ns,
+				Additional:    queryResult.Response.Extra,
+				Validated:     false,
+				Authoritative: queryResult.Response.Authoritative,
+				Cacheable:     false,
+				Rcode:         dns.RcodeNameError,
+				ECS:           r.edns.ParseFromDNS(queryResult.Response),
+				Server:        serverDesc,
+				UpstreamEDE:   fallbackMarkEDE(),
+			})
+			pool.DefaultMessage.Put(queryResult.Response)
+			return true
+		}
+		nxRes := QueryResult{
 			Answer:        queryResult.Response.Answer,
 			Authority:     queryResult.Response.Ns,
 			Additional:    queryResult.Response.Extra,
 			Validated:     false,
 			Authoritative: queryResult.Response.Authoritative,
-			Cacheable:     !server.SkipCache,
+			Cacheable:     !server.SkipCache && !fallbackMarked,
 			Rcode:         dns.RcodeNameError,
 			ECS:           r.edns.ParseFromDNS(queryResult.Response),
 			Server:        serverDesc,
 			UpstreamEDE:   upstreamEDE,
-		}) {
+		}
+		if nxdomainResult.CompareAndSwap(nil, &nxRes) {
 			// First NXDOMAIN collected — arm the deferral window in the
 			// wait loop (first-wins; same principle as the recursive walk).
 			select {
 			case nxdomainCh <- struct{}{}:
 			default:
 			}
+			// A fallback may have been adopted between this CAS and now —
+			// fill the negative cache directly (mirrors the NOERROR path).
+			coord.maybeBackfill(func() { r.fillCacheFromResult(coord, &nxRes) })
 		}
 		pool.DefaultMessage.Put(queryResult.Response)
 	default:
@@ -459,8 +599,8 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 
 // handleRecursiveQuery dispatches a single query to the built-in recursive
 // resolver with CIDR filtering. Returns true if a successful result was sent.
-func (r *Resolver) handleRecursiveQuery(groupCtx context.Context, server *config.UpstreamServer, question Question, ecs *edns.ECSOption, resultChan chan<- QueryResult, cancel context.CancelCauseFunc, cidrFilterRefused *atomic.Bool) bool {
-	recursiveCtx, recursiveCancel := context.WithTimeout(groupCtx, config.DefaultRecursiveResolveTimeout)
+func (r *Resolver) handleRecursiveQuery(recursiveParentCtx context.Context, server *config.UpstreamServer, question Question, ecs *edns.ECSOption, resultChan chan<- QueryResult, cancel context.CancelCauseFunc, cidrFilterRefused *atomic.Bool, coord *fallbackCoord) bool {
+	recursiveCtx, recursiveCancel := context.WithTimeout(recursiveParentCtx, config.DefaultRecursiveResolveTimeout)
 	defer recursiveCancel()
 
 	qr := r.cname.resolve(recursiveCtx, question, ecs)
@@ -488,11 +628,20 @@ func (r *Resolver) handleRecursiveQuery(groupCtx context.Context, server *config
 		qr.Answer = filteredAnswer
 	}
 
+	// Recursive fallback upstreams follow the same delayed-adoption rule as
+	// forwarding fallbacks: stash, never cache, mark with the fallback EDE.
+	if server.Fallback {
+		qr.Cacheable = false
+		qr.UpstreamEDE = fallbackMarkEDE()
+		coord.stash(&qr)
+		return true
+	}
+
 	select {
 	case resultChan <- qr:
 		cancel(errors.New("successful result"))
 		return true
-	case <-groupCtx.Done():
+	case <-recursiveCtx.Done():
 		return true
 	}
 }
