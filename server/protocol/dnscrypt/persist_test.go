@@ -253,3 +253,39 @@ func TestWindowsFromStateFiltersExpired(t *testing.T) {
 		t.Fatalf("windowsFromState: want [2], got %+v", filtered)
 	}
 }
+
+// TestRestoredEntriesCarryCertTXT verifies the state-file restore path
+// populates the precomputed handshake artifacts: windowsToKeyEntries used to
+// build bare keyEntry{pair} values whose nil classicalTXT made every cert
+// fetch after a restart serve a malformed (empty-chunk) TXT answer — every
+// pinned client died until the window rotated out.
+func TestRestoredEntriesCarryCertTXT(t *testing.T) {
+	now := dnscryptcrypto.NowUnix32()
+	sk, pk, err := dnscryptcrypto.GenerateRandomKeyPair()
+	if err != nil {
+		t.Fatalf("resolver key: %v", err)
+	}
+	signPk, signSk, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("signing key: %v", err)
+	}
+	rc := &ResolverConfig{
+		PrivateKey: dnscryptcrypto.HexEncodeKey(signSk),
+		PublicKey:  dnscryptcrypto.HexEncodeKey(signPk),
+	}
+	w := windowRecord{
+		Serial: 1, NotBefore: now - 1, NotAfter: now + 1024,
+		ResolverSk: sk[:], ResolverPk: pk[:],
+	}
+	entries, err := windowsToKeyEntries(rc, []windowRecord{w})
+	if err != nil {
+		t.Fatalf("windowsToKeyEntries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	e := entries[0]
+	if len(e.classicalTXT) == 0 || len(e.pqTXT) == 0 || e.pqWireSize == 0 {
+		t.Fatalf("restored entry missing precomputed cert TXT: classical=%d pq=%d wire=%d", len(e.classicalTXT), len(e.pqTXT), e.pqWireSize)
+	}
+}

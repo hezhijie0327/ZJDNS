@@ -119,7 +119,7 @@ func windowsToKeyEntries(rc *ResolverConfig, windows []windowRecord) ([]keyEntry
 		if err != nil {
 			return nil, fmt.Errorf("recreating cert pair (not_before=%d): %w", w.NotBefore, err)
 		}
-		entries = append(entries, keyEntry{pair: pair})
+		entries = append(entries, newKeyEntry(pair))
 		log.Debugf("DNSCRYPT: restored window (not_before=%d, not_after=%d)", w.NotBefore, w.NotAfter)
 	}
 	return entries, nil
