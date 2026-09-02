@@ -7,7 +7,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"zjdns/config"
+	"zjdns/internal/lrumap"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -293,5 +295,35 @@ func TestExecuteQuery_CapsGuard_NoLettersNotRandomized(t *testing.T) {
 	}
 	if got := res.Response.Question[0].Header().Name; got != name {
 		t.Fatalf("response question %q, want %q", got, name)
+	}
+}
+
+// TestCapsDowngradePerAddress verifies the per-upstream 0x20 downgrade:
+// after DefaultCapsGuardDowngradeAfter mismatches the address skips
+// randomisation for the retry window instead of paying the doubled
+// randomised-query + unrandomised-retry on every attempt.
+func TestCapsDowngradePerAddress(t *testing.T) {
+	c := &Client{capsDowngrades: lrumap.New[string, capsDowngradeStat](16)}
+
+	if c.capsDisabled("10.0.0.1:53") {
+		t.Fatal("address disabled before any mismatch")
+	}
+	for range config.DefaultCapsGuardDowngradeAfter {
+		if c.noteCapsMismatch("10.0.0.1:53") && !c.capsDisabled("10.0.0.1:53") {
+			t.Fatal("threshold crossing did not disable the address")
+		}
+	}
+	if !c.capsDisabled("10.0.0.1:53") {
+		t.Fatalf("address not disabled after %d mismatches", config.DefaultCapsGuardDowngradeAfter)
+	}
+	if c.capsDisabled("10.0.0.2:53") {
+		t.Fatal("downgrade leaked to an unrelated address")
+	}
+	// Expiry: a disabled address whose window elapsed must randomise again.
+	st, _ := c.capsDowngrades.Get("10.0.0.1:53")
+	st.disabledUntil = time.Now().Add(-time.Second)
+	c.capsDowngrades.Set("10.0.0.1:53", st)
+	if c.capsDisabled("10.0.0.1:53") {
+		t.Fatal("address still disabled after the retry window elapsed")
 	}
 }

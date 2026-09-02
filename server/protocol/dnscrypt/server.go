@@ -74,6 +74,13 @@ type Server struct {
 	// sharedKeyCache avoids recomputing X25519 per query for classical
 	// DNSCrypt (RFC §8).  Cleared on key rotation.
 	sharedKeyCache *lrumap.Map[[32]byte, [32]byte]
+
+	// replayCache bounds repeated identical encrypted queries per
+	// (client magic, client nonce half, client key prefix): UDP
+	// retransmits are legitimate, a flood repeating one captured datagram
+	// is not — occurrences beyond DefaultDNSCryptReplayAllow inside the
+	// window are dropped.
+	replayCache *lrumap.Map[string, replayEntry]
 }
 
 // New creates a new DNSCrypt Server from the given configuration.
@@ -182,6 +189,7 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, 
 		// unified server-side concurrency cap (defaults.go).
 		workerCap:      make(chan struct{}, config.DefaultServerGoroutineLimit),
 		sharedKeyCache: lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize),
+		replayCache:    lrumap.New[string, replayEntry](config.DefaultDNSCryptReplayCacheSize),
 		store:          store,
 	}
 

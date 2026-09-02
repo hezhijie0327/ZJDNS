@@ -112,15 +112,19 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 	resultChan := make(chan *dns.Msg, 1)
 	g, queryCtx := errgroup.WithContext(queryCtx)
-	// Every nameserver is queried concurrently — no artificial cap.  The
-	// early-return wait loop sits after the launch loop, and a cap (errgroup
-	// SetLimit or a semaphore) starves the first responder: slow servers
-	// hold the limited slots, fast servers queue behind them, and the
-	// level stalls until a slot frees (measured 41ms→382ms→3000ms on a
-	// 15-server batch).  The UDP pool already bounds sockets at 32 global /
-	// 4 per address, so resource growth is bounded without a query cap —
-	// the same all-N-concurrent pattern BIND/Unbound use for root servers.
-	// The win path's cancel() aborts the stragglers once a response wins.
+	// Batched racing: the latency-ranked first DefaultFanoutFirstBatch
+	// authorities launch at t=0 and the rest widen in after
+	// DefaultFanoutWidenDelay without a winner.  Unlike a hard cap
+	// (errgroup SetLimit / semaphore — measured 41ms→382ms→3000ms on a
+	// 15-server batch: slow servers held the slots while fast ones queued
+	// behind the launch loop), widening is timer-driven, so slow batch
+	// members never hold anything the rest queue behind, and the first
+	// responder almost always lands in the batch (authorities answer in
+	// tens of ms).  A burst of unique qnames no longer multiplies
+	// goroutines/context/timers by 13-26 (root) per level per walk; the
+	// widen goroutine runs INSIDE the errgroup so g.Wait() cannot race a
+	// late g.Go against the pooled baseMsg return.  The win path's
+	// cancel() aborts the batch, the pending widen and the stragglers.
 
 	var poisonRejected atomic.Bool
 	// nxdomainMsg holds the first collected NXDOMAIN (secondary result —
@@ -136,8 +140,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	baseMsg.UDPSize = pool.RecursiveUDPBufferSize
 	// RFC 10029: bundle the configured types (minus the primary QTYPE).
 	attachMQType(baseMsg, r.mqtype, question.Qtype)
-	for _, ns := range nameservers {
-		nsAddr := ns
+	launchNS := func(nsAddr string) {
 		protocol := config.ProtoUDP
 		if forceTCP {
 			protocol = config.ProtoTCP
@@ -339,6 +342,35 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			}
 			return nil
 		})
+	}
+
+	// t=0: race the first batch; widen to every remaining authority after
+	// DefaultFanoutWidenDelay without a winner.  The widen worker runs in
+	// the same errgroup — g.Wait() covers its late g.Go launches, so the
+	// pooled baseMsg is never returned while a widened worker still reads
+	// it, and a first-win cancel() aborts the widen before it fires.
+	if len(nameservers) > config.DefaultFanoutFirstBatch {
+		for _, ns := range nameservers[:config.DefaultFanoutFirstBatch] {
+			launchNS(ns)
+		}
+		rest := nameservers[config.DefaultFanoutFirstBatch:]
+		g.Go(func() error {
+			defer zdnsutil.HandlePanic("Fan-out widen")
+			t := time.NewTimer(config.DefaultFanoutWidenDelay)
+			defer t.Stop()
+			select {
+			case <-t.C:
+				for _, ns := range rest {
+					launchNS(ns)
+				}
+			case <-queryCtx.Done():
+			}
+			return nil
+		})
+	} else {
+		for _, ns := range nameservers {
+			launchNS(ns)
+		}
 	}
 
 	// Wait for first successful response, or until all goroutines complete.

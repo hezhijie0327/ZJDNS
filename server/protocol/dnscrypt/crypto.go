@@ -16,6 +16,13 @@ import (
 
 // tcpMaxPaddingBudget is the worst-case TCP padding overhead of PadResponse:
 // up to 256 bytes (§5.4.5, 1+sha256[0]) plus 64-byte alignment.
+// replayEntry counts occurrences of one (client magic, client nonce half,
+// client key prefix) inside the replay window.
+type replayEntry struct {
+	ts    int64 // log.NowUnix() of the first occurrence in the window
+	count int
+}
+
 const tcpMaxPaddingBudget = 256 + 64
 
 func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP bool) (encrypted []byte, err error) {
@@ -208,6 +215,9 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.Encrypte
 				if unpackErr := msg.Unpack(); unpackErr != nil {
 					return nil, nil, fmt.Errorf("unpacking dns message: %w", unpackErr)
 				}
+				if repErr := s.checkReplay(query); repErr != nil {
+					return nil, nil, repErr
+				}
 				return msg, query, nil
 			}
 		}
@@ -242,6 +252,9 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.Encrypte
 				msg.Data = decrypted
 				if unpackErr := msg.Unpack(); unpackErr != nil {
 					return nil, nil, fmt.Errorf("unpacking dns message: %w", unpackErr)
+				}
+				if repErr := s.checkReplay(query); repErr != nil {
+					return nil, nil, repErr
 				}
 				return msg, query, nil
 			}
@@ -329,5 +342,39 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *dnscryptcrypto
 	if err != nil {
 		return nil, nil, fmt.Errorf("unpacking dns message: %w", err)
 	}
+	if repErr := s.checkReplay(query); repErr != nil {
+		return nil, nil, repErr
+	}
 	return msg, query, nil
+}
+
+// checkReplay bounds repeated identical encrypted queries.  DNSCrypt has no
+// built-in replay protection (the reference server omits it) — a captured
+// datagram could otherwise be replayed verbatim forever.  Legitimate UDP
+// retransmits of an unanswered query resend the SAME encrypted bytes, so a
+// small allowance (DefaultDNSCryptReplayAllow) is kept inside the window
+// before occurrences are dropped; the LRU bound caps memory under a flood.
+func (s *Server) checkReplay(q *dnscryptcrypto.EncryptedQuery) error {
+	if s.replayCache == nil {
+		return nil
+	}
+	var kb [dnscryptcrypto.ClientMagicSize + dnscryptcrypto.NonceSize/2 + 8]byte
+	copy(kb[:dnscryptcrypto.ClientMagicSize], q.ClientMagic[:])
+	off := dnscryptcrypto.ClientMagicSize
+	off += copy(kb[off:off+dnscryptcrypto.NonceSize/2], q.Nonce[:dnscryptcrypto.NonceSize/2])
+	copy(kb[off:], q.ClientPk[:8])
+	key := string(kb[:])
+
+	now := log.NowUnix()
+	window := int64(config.DefaultDNSCryptReplayWindow / time.Second)
+	if e, ok := s.replayCache.Get(key); ok && now-e.ts <= window {
+		if e.count >= config.DefaultDNSCryptReplayAllow {
+			return fmt.Errorf("dnscrypt: replayed query dropped (%d occurrences in %s)", e.count, config.DefaultDNSCryptReplayWindow)
+		}
+		e.count++
+		s.replayCache.Set(key, e)
+		return nil
+	}
+	s.replayCache.Set(key, replayEntry{ts: now, count: 1})
+	return nil
 }

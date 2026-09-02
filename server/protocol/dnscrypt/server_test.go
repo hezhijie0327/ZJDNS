@@ -7,6 +7,7 @@ import (
 	"time"
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
+	"zjdns/internal/lrumap"
 
 	"codeberg.org/miekg/dns"
 )
@@ -486,4 +487,30 @@ func TestHandshakeTC_AllFit_NoTC(t *testing.T) {
 		t.Errorf("want ≥2 TXT records (classical+PQ), got %d", len(reply.Answer))
 	}
 	t.Logf("TCP response: %d TXT records, TC=%v", len(reply.Answer), reply.Truncated)
+}
+
+// TestCheckReplayAllowance verifies the replay bound: UDP retransmits of
+// one encrypted query are answered up to DefaultDNSCryptReplayAllow
+// occurrences, further repetitions inside the window are dropped, and a
+// fresh nonce always passes.
+func TestCheckReplayAllowance(t *testing.T) {
+	s := &Server{replayCache: lrumap.New[string, replayEntry](16)}
+	q := &dnscryptcrypto.EncryptedQuery{ClientPk: [dnscryptcrypto.KeySize]byte{1, 2, 3}}
+	copy(q.ClientMagic[:], "12345678")
+	copy(q.Nonce[:dnscryptcrypto.NonceSize/2], "nonce-half!")
+
+	for i := range config.DefaultDNSCryptReplayAllow {
+		if err := s.checkReplay(q); err != nil {
+			t.Fatalf("occurrence %d rejected: %v", i+1, err)
+		}
+	}
+	if err := s.checkReplay(q); err == nil {
+		t.Fatal("replay beyond the allowance was not dropped")
+	}
+
+	q2 := *q
+	copy(q2.Nonce[:dnscryptcrypto.NonceSize/2], "nonce-othe")
+	if err := s.checkReplay(&q2); err != nil {
+		t.Fatalf("fresh nonce rejected: %v", err)
+	}
 }

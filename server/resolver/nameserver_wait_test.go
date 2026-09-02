@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -352,5 +353,47 @@ func TestFilterByFamily_Policies(t *testing.T) {
 	got = filterByFamily(addrs, "bogus")
 	if len(got) != 3 {
 		t.Fatalf("unknown value: got %d addresses, want all 3 (defensive dual)", len(got))
+	}
+}
+
+// TestQueryNameserversConcurrent_WidenBeyondFirstBatch verifies batched
+// fan-out: the latency-ranked first DefaultFanoutFirstBatch authorities all
+// fail instantly, so the answer can only arrive via the widened remainder
+// after DefaultFanoutWidenDelay — the walk must still succeed.
+func TestQueryNameserversConcurrent_WidenBeyondFirstBatch(t *testing.T) {
+	handler := func(ctx context.Context, msg *dns.Msg) *upstream.Result {
+		resp := dnsutil.SetReply(new(dns.Msg), msg)
+		resp.Answer = append(resp.Answer, aRec("widen.test.", "192.0.2.1"))
+		return &upstream.Result{Response: resp}
+	}
+	fail := func(context.Context, *dns.Msg) *upstream.Result {
+		return &upstream.Result{Error: errors.New("unreachable")}
+	}
+	handlers := map[string]nsScriptHandler{}
+	servers := make([]string, 0, config.DefaultFanoutFirstBatch+2)
+	// First-batch positions fail; the widened tail answers.
+	for i := range config.DefaultFanoutFirstBatch + 2 {
+		addr := fmt.Sprintf("10.7.0.%d:53", i+1)
+		servers = append(servers, addr)
+		if i < config.DefaultFanoutFirstBatch {
+			handlers[addr] = fail
+		} else {
+			handlers[addr] = handler
+		}
+	}
+	r := newPrefetchTestRecursive(&fakeNSClient{handlers: handlers})
+
+	start := time.Now()
+	resp, _, err := r.queryNameserversConcurrent(t.Context(), servers,
+		Question{Name: "widen.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false, "test.", defense.Detector{})
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	if len(resp.Answer) == 0 {
+		t.Fatal("no answer from the widened remainder")
+	}
+	// The widen delay must have elapsed (the batch could not answer).
+	if elapsed := time.Since(start); elapsed < config.DefaultFanoutWidenDelay {
+		t.Fatalf("answered in %v — before the widen could fire (batch was all-fail)", elapsed)
 	}
 }

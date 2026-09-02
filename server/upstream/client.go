@@ -61,7 +61,20 @@ type Client struct {
 	// path is attacker-triggerable, so Warn must not fire per query.
 	capsGuardMismatches atomic.Uint64
 
+	// capsDowngrades tracks per-address 0x20 mismatch counts: once an
+	// address exceeds DefaultCapsGuardDowngradeAfter mismatches,
+	// randomisation is skipped for it outright for DefaultCapsGuardRetryAfter
+	// — an on-path echo-forger otherwise doubles our outbound queries per
+	// attempt (randomised query + unrandomised retry, every query).
+	capsDowngrades *lrumap.Map[string, capsDowngradeStat]
+
 	warmWg sync.WaitGroup // tracks in-flight WarmUpConnections goroutines
+}
+
+// capsDowngradeStat tracks one upstream address's 0x20 mismatch history.
+type capsDowngradeStat struct {
+	mismatches    int
+	disabledUntil time.Time
 }
 
 // New creates a Client with default timeouts, transport pools, and session
@@ -115,8 +128,9 @@ func New() *Client {
 	quicPool := pool.NewQUIC(config.DefaultMaxConns, config.DefaultMaxPoolTotalConns)
 
 	c := &Client{
-		timeout:      timeout,
-		proxyDialers: lrumap.New[string, *socks5.Dialer](config.DefaultTransportMax * 2),
+		timeout:        timeout,
+		proxyDialers:   lrumap.New[string, *socks5.Dialer](config.DefaultTransportMax * 2),
+		capsDowngrades: lrumap.New[string, capsDowngradeStat](1024),
 	}
 
 	// OnEvict runs with the map mutex held (lrumap contract) — Dialer.Close
@@ -147,6 +161,34 @@ func New() *Client {
 // spoofing signature or a case-rewriting middlebox — is discarded and the
 // query is retried once with the original case (§6.4 fallback; the retry's
 // security equals the pre-CapsGuard baseline).
+// capsDisabled reports whether 0x20 randomisation is currently skipped for
+// addr (too many echo mismatches within the retry window).
+func (c *Client) capsDisabled(addr string) bool {
+	if c.capsDowngrades == nil {
+		return false
+	}
+	st, ok := c.capsDowngrades.Get(addr)
+	return ok && time.Now().Before(st.disabledUntil)
+}
+
+// noteCapsMismatch records one 0x20 echo mismatch for addr and reports
+// whether this mismatch crossed the downgrade threshold.
+func (c *Client) noteCapsMismatch(addr string) bool {
+	if c.capsDowngrades == nil {
+		return false
+	}
+	st, _ := c.capsDowngrades.Get(addr)
+	st.mismatches++
+	if st.mismatches >= config.DefaultCapsGuardDowngradeAfter {
+		st.mismatches = 0
+		st.disabledUntil = time.Now().Add(config.DefaultCapsGuardRetryAfter)
+		c.capsDowngrades.Set(addr, st)
+		return true
+	}
+	c.capsDowngrades.Set(addr, st)
+	return false
+}
+
 func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) *Result {
 	if msg == nil {
 		return &Result{Error: errors.New("nil query message")}
@@ -176,7 +218,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	randomized := false
 	var randName string
 	qtype := uint16(0)
-	if server.CapsGuard && original != "" {
+	if server.CapsGuard && original != "" && !c.capsDisabled(server.Address) {
 		qtype = dns.RRToType(msg.Question[0])
 		randName = defense.RandomizeCase(original)
 		if randName != original {
@@ -217,6 +259,9 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 		// at Debug for operations, draft-vixie-dnsext-dns0x20-00 §5.3).
 		if n := c.capsGuardMismatches.Add(1); n%config.DefaultCapsGuardWarnEvery == 1 {
 			log.Debugf("SECURITY: upstream %s does not echo 0x20-cased questions (mismatch #%d, e.g. %s) — unrandomized retries serve as fallback", server.Address, n, original)
+		}
+		if c.noteCapsMismatch(server.Address) {
+			log.Debugf("SECURITY: upstream %s exceeded %d 0x20 mismatches — skipping randomisation for %s (no per-query retry doubling)", server.Address, config.DefaultCapsGuardDowngradeAfter, config.DefaultCapsGuardRetryAfter)
 		}
 		zpool.DefaultMessage.Put(result.Response)
 		// msg.Question[0] is this call's private copy — safe to restore.

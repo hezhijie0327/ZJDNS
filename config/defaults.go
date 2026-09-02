@@ -90,6 +90,17 @@ const (
 	// walk waited out the full timeout.  3s fails fast and moves on.
 	DefaultRecursiveQueryTimeout = 3 * time.Second
 
+	// Recursive fan-out batching: the walk races the latency-ranked first
+	// DefaultFanoutFirstBatch authorities immediately and widens to every
+	// remaining one DefaultFanoutWidenDelay later if none answered — the
+	// first responder usually lands inside the first batch, and a burst of
+	// unique qnames no longer multiplies goroutines/context/timers by
+	// 13-26 (root) per level per walk.  Unlike the rejected errgroup
+	// SetLimit cap, widening is timer-driven: slow batch members never
+	// hold slots the rest queue behind.
+	DefaultFanoutFirstBatch = 6
+	DefaultFanoutWidenDelay = 75 * time.Millisecond
+
 	// DefaultPoisonProbeTimeout bounds the TLD hijack probe query.
 	// The probe detects GFW-injected A/AAAA records at the delegation
 	// level before the authoritative query.  A bare UDP probe either
@@ -230,6 +241,15 @@ const (
 	// (draft-vixie-dnsext-dns0x20-00 §5.3 still wants the mismatch
 	// observable for operations).
 	DefaultCapsGuardWarnEvery = 100
+	// DefaultCapsGuardDowngradeAfter / DefaultCapsGuardRetryAfter bound the
+	// per-upstream 0x20 downgrade: an authority (or an on-path attacker
+	// echoing mismatched cases) can force the unrandomized retry on every
+	// query, doubling outbound traffic per attempt.  After this many
+	// mismatches the address skips randomisation outright for the retry
+	// period — no extra query, no per-query timing signature (the echo
+	// check, spoofguard collect and question-matching remain).
+	DefaultCapsGuardDowngradeAfter = 8
+	DefaultCapsGuardRetryAfter     = 10 * time.Minute
 )
 
 // =============================================================================
@@ -446,6 +466,9 @@ const (
 	DefaultDNSCryptCertificateTTL      = 24 * time.Hour // cert validity period (matches ref encrypted-dns-server)
 	DefaultDNSCryptCertificateRenewal  = 8 * time.Hour  // renewal interval — a new window is minted every 8h (matches ref)
 	DefaultDNSCryptSharedKeyCacheSize  = 2048           // max cached shared keys per server
+	DefaultDNSCryptReplayCacheSize     = 8192           // max tracked (client, nonce) replay entries
+	DefaultDNSCryptReplayAllow         = 3              // occurrences per window before dropping (UDP retransmits are legitimate)
+	DefaultDNSCryptReplayWindow        = 10 * time.Second
 	DefaultDNSCryptCertificateCacheTTL = 1 * time.Hour
 	DefaultDNSCryptReadTimeout         = 2 * time.Second
 	DefaultDNSCryptWriteTimeout        = 10 * time.Second // DNSCrypt TCP response write
