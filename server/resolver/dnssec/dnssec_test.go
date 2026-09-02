@@ -1284,3 +1284,43 @@ func TestCompactNODATA_ValidatesAsDenial(t *testing.T) {
 		t.Error("compact NODATA response must carry the NXNAME signal")
 	}
 }
+
+// TestZoneKeysMemoHit verifies the unpacked-key memo: the second ZoneKeys
+// call within the TTL returns the SAME key set without re-Unpacking the raw
+// cache entry (pointer identity proves the memo path), and the memo is
+// invalidated once the TTL elapses.
+func TestZoneKeysMemoHit(t *testing.T) {
+	store := cache.New(config.LimitSettings{}, config.LimitSettings{}, "", "")
+	defer func() { _ = store.Close() }()
+	cv := NewCryptoValidator(store)
+
+	zone := "memo.example."
+	ksk := &dns.DNSKEY{
+		Hdr:       dns.Header{Name: zone, Class: dns.ClassINET, TTL: 300},
+		Flags:     257,
+		Algorithm: dns.ECDSAP256SHA256,
+		PublicKey: "aGVsbG8=",
+	}
+	cv.CacheZoneKeys(zone, []*dns.DNSKEY{ksk})
+
+	first := cv.ZoneKeys(zone)
+	if len(first) != 1 {
+		t.Fatalf("first ZoneKeys = %d keys, want 1", len(first))
+	}
+	second := cv.ZoneKeys(zone)
+	if len(second) != 1 {
+		t.Fatalf("second ZoneKeys = %d keys, want 1", len(second))
+	}
+	// Memo hit: the same *DNSKEY pointer, not a fresh unpack.
+	if first[0] != second[0] {
+		t.Fatal("second ZoneKeys unpacked a fresh key set — memo miss")
+	}
+
+	// Expired memo falls back to the raw cache (still valid → same answer).
+	e, _ := cv.zoneKeyMemo.Get(dnsutil.Canonical(zone))
+	e.expiry = 1 // long past
+	cv.zoneKeyMemo.Set(dnsutil.Canonical(zone), e)
+	if third := cv.ZoneKeys(zone); len(third) != 1 {
+		t.Fatalf("post-expiry ZoneKeys = %d keys, want 1", len(third))
+	}
+}

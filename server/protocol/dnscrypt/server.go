@@ -29,6 +29,13 @@ import (
 // handshake marshals them on demand.
 type keyEntry struct {
 	pair *dnscryptcrypto.CertPair
+
+	// Precomputed handshake artifacts: the certificate is immutable once
+	// minted, but every cert fetch used to re-marshal (~1.3 KB PQ cert),
+	// backslash-escape and re-chunk it per query.
+	classicalTXT []string
+	pqTXT        []string
+	pqWireSize   int
 }
 
 // Server is a DNSCrypt v2 server that listens on UDP and TCP.
@@ -86,6 +93,16 @@ type Server struct {
 // New creates a new DNSCrypt Server from the given configuration.
 // port is the listener port, providerName is auto-derived as "2.dnscrypt-cert.<ddr.domain>".
 // store persists the cert windows across restarts; nil disables persistence.
+// newKeyEntry mints the pair's precomputed TXT chunks and PQ wire size.
+func newKeyEntry(pair *dnscryptcrypto.CertPair) keyEntry {
+	return keyEntry{
+		pair:         pair,
+		classicalTXT: buildCertTXTForCert(pair.Classical),
+		pqTXT:        buildCertTXTForCert(pair.PQ),
+		pqWireSize:   certTXTWireSize(pair.PQ),
+	}
+}
+
 func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, store StateStore) (*Server, error) {
 	// ── Signing identity ───────────────────────────────────────────────────
 	// Explicit keys are required — like TLS requires a certificate.  The
@@ -165,7 +182,7 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, 
 		if err != nil {
 			return nil, fmt.Errorf("creating certificate pair: %w", err)
 		}
-		entries = []keyEntry{{pair: pair}}
+		entries = []keyEntry{newKeyEntry(pair)}
 		log.Debugf("DNSCRYPT: generated initial key pair (serial=%d)", pair.Classical.Serial)
 	}
 
@@ -605,7 +622,7 @@ func (s *Server) deriveAndSign(previous *dnscryptcrypto.CertPair, now uint32) []
 				tsStart += renewalSec
 				continue
 			}
-			entries = append([]keyEntry{{pair: pair}}, entries...)
+			entries = append([]keyEntry{newKeyEntry(pair)}, entries...)
 		}
 		tsStart += renewalSec
 	}
@@ -678,8 +695,8 @@ func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
 	// within the client query size (§10.3 anti-amplification); over TCP it is
 	// always included.  When omitted, set TC so the PQ-capable client retries
 	// over TCP.  The classical cert is always included.
-	classicalTXT := buildCertTXTForCert(newest.pair.Classical)
-	pqTXT := buildCertTXTForCert(newest.pair.PQ)
+	classicalTXT := newest.classicalTXT
+	pqTXT := newest.pqTXT
 
 	pqFits := true
 	if isUDP {
@@ -703,7 +720,7 @@ func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
 		}
 		baseSize := len(tmp.Data)
 		pool.DefaultMessage.Put(tmp)
-		pqFits = baseSize+certTXTWireSize(newest.pair.PQ) <= len(b)
+		pqFits = baseSize+newest.pqWireSize <= len(b)
 	}
 
 	// Build the actual reply.

@@ -6,6 +6,7 @@ import (
 	"time"
 	"zjdns/cache"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -21,6 +22,20 @@ import (
 type CryptoValidator struct {
 	rootKeys []*dns.DNSKEY
 	cache    cache.Store
+
+	// zoneKeyMemo caches the UNPACKED verified DNSKEYs per zone: the raw
+	// cache hit path re-Unpacked + re-filtered the RR set on every call
+	// (per delegation change, per walk).  Keys are shared read-only —
+	// callers must not mutate them (verification only reads
+	// flags/algorithm/key material).
+	zoneKeyMemo *lrumap.Map[string, zoneKeyMemoEntry]
+}
+
+// zoneKeyMemoEntry is one memoised zone-key set with its expiry (cache
+// entry TTL minus elapsed at memoise time).
+type zoneKeyMemoEntry struct {
+	keys   []*dns.DNSKEY
+	expiry int64 // log.NowUnix()
 }
 
 type rrsetKey struct {
@@ -54,7 +69,7 @@ var (
 var sigBufPool = dnspool.New(8192)
 
 func NewCryptoValidator(store cache.Store) *CryptoValidator {
-	return &CryptoValidator{cache: store}
+	return &CryptoValidator{cache: store, zoneKeyMemo: lrumap.New[string, zoneKeyMemoEntry](512)}
 }
 
 // LoadTrustAnchors loads the IANA root trust anchors from file. Only needed

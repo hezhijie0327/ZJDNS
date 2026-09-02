@@ -2,6 +2,7 @@ package dnssec
 
 import (
 	"zjdns/cache"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -176,15 +177,39 @@ func (c *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
 			rrKeys = append(rrKeys, k)
 		}
 	}
+	minT := -1
+	for _, rr := range rrKeys {
+		if t := int(rr.Header().TTL); t > 0 && (minT < 0 || t < minT) {
+			minT = t
+		}
+	}
+	ttl := minT
 	c.cache.Set(zone, dns.TypeDNSKEY, dns.ClassINET, nil, rrKeys, nil, nil, true, 0)
+	// Memoise the unpacked form alongside the raw cache entry so hits skip
+	// the Unpack + filter round trip entirely.
+	if c.zoneKeyMemo != nil && ttl > 0 {
+		c.zoneKeyMemo.Set(zone, zoneKeyMemoEntry{keys: keys, expiry: log.NowUnix() + int64(ttl)})
+	}
 }
 
-// ZoneKeys retrieves cached verified DNSKEYs for a zone.
+// ZoneKeys retrieves cached verified DNSKEYs for a zone.  The unpacked key
+// set is memoised until its cache TTL elapses — the raw-cache path re-Unpacked
+// and re-filtered the RR set on every call (per delegation change, per walk).
+// The returned keys are SHARED read-only: callers must not mutate them.
 func (c *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
 	if c == nil || c.cache == nil {
 		return nil
 	}
 	zone = dnsutil.Canonical(zone)
+
+	if c.zoneKeyMemo != nil {
+		if e, ok := c.zoneKeyMemo.Get(zone); ok {
+			if log.NowUnix() < e.expiry {
+				return e.keys
+			}
+			c.zoneKeyMemo.Delete(zone)
+		}
+	}
 
 	cachedEntry, found, expired := c.cache.Get(zone, dns.TypeDNSKEY, dns.ClassINET, nil)
 	if !found || cachedEntry == nil || expired {
@@ -198,7 +223,14 @@ func (c *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
 	_ = cachedEntry.Unpack()
 
 	records := cache.ProcessRecords(cachedEntry.Answer, 0, false, true)
-	return FindDNSKEYs(records)
+	keys := FindDNSKEYs(records)
+	if c.zoneKeyMemo != nil && len(keys) > 0 {
+		remaining := cachedEntry.TTL - int(log.NowUnix()-cachedEntry.Timestamp)
+		if remaining > 0 {
+			c.zoneKeyMemo.Set(zone, zoneKeyMemoEntry{keys: keys, expiry: log.NowUnix() + int64(remaining)})
+		}
+	}
+	return keys
 }
 
 // RootKeys returns deep copies of the root trust anchor DNSKEYs. Callers must

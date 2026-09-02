@@ -29,14 +29,18 @@ func (s *Server) startDOH3Server(port string) error {
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:        config.DefaultQUICServerIdleTimeout,
-		MaxIncomingStreams:    config.DefaultMaxIncomingStreams,
-		MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
+		MaxIncomingStreams:    config.DefaultHTTP3MaxIncomingStreams,
+		MaxIncomingUniStreams: config.DefaultHTTP3MaxIncomingStreams,
 		Allow0RTT:             true,
 		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
 	}
 
 	s.listenerMu.Lock()
-	s.h3Server = &http3.Server{Handler: s}
+	// IdleTimeout is the HTTP/3-layer idle bound: QUIC-layer trickles
+	// (ACKs, PINGs — which reset the transport MaxIdleTimeout) do NOT
+	// reset it, so a client that keeps the connection transport-alive
+	// while sending no requests is still closed.
+	s.h3Server = &http3.Server{Handler: s, IdleTimeout: config.DefaultQUICServerIdleTimeout}
 	s.listenerMu.Unlock()
 
 	log.Infof("TLS: DoH3 server started on %v", addrs)

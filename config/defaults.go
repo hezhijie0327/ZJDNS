@@ -288,11 +288,18 @@ const (
 	// reap reclaims their slots), so 512 mostly bounds the QUIC side (each
 	// connection is hundreds of KB) rather than the 16 KB-buffer UDP side:
 	// 9 pool instances × 512 × 16 KB ≈ 73 MB transient worst case.
-	DefaultMaxPoolTotalConns       = 512
-	DefaultMaxProbes               = 16    // max concurrent latency probes
-	DefaultMaxIncomingStreams      = 65535 // QUIC max incoming streams (RFC 9250: one stream per query — 256 exhausted a client's stream quota in seconds, then every query waited on MAX_STREAMS behind quic-go's 25ms ACK delay)
-	DefaultMaxConcurrentStreams    = 64    // QUIC concurrent in-flight stream limit
-	DefaultCacheRefreshConcurrency = 64    // background cache refresh goroutine cap
+	DefaultMaxPoolTotalConns  = 512
+	DefaultMaxProbes          = 16    // max concurrent latency probes
+	DefaultMaxIncomingStreams = 65535 // QUIC max incoming streams (RFC 9250: one stream per query — 256 exhausted a client's stream quota in seconds, then every query waited on MAX_STREAMS behind quic-go's 25ms ACK delay)
+	// DefaultHTTP3MaxIncomingStreams bounds DoH3 request streams.  DoH3
+	// multiplexes many requests over one stream-pair (browsers use ~100
+	// concurrent streams per connection), so the DoQ 65535 quota is
+	// unnecessary here — and every accepted stream pins a handler
+	// goroutine a trickle-feeding client can hold open, so the lower cap
+	// bounds the slowloris surface.
+	DefaultHTTP3MaxIncomingStreams = 1024
+	DefaultMaxConcurrentStreams    = 64 // QUIC concurrent in-flight stream limit
+	DefaultCacheRefreshConcurrency = 64 // background cache refresh goroutine cap
 
 	// DefaultMaxRecursiveInflightQueries caps the recursive fan-out queries in
 	// flight across ALL concurrent walks.  When exceeded, new fan-out queries
