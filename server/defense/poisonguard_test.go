@@ -444,3 +444,25 @@ func TestClassifyRoot_RRSIGProofExempt(t *testing.T) {
 		t.Fatalf("root returning A for TLD should be poisoned, got %s", v)
 	}
 }
+
+// TestValidate_ForgedRRSIGDoesNotExempt: a data record (A for a child name)
+// from a TLD server must stay Poisoned even when a fabricated RRSIG rides
+// along — a presence-only signature check is forgeable, and for unsigned
+// zones nothing downstream would cryptographically reject it (2026-09 S1).
+func TestValidate_ForgedRRSIGDoesNotExempt(t *testing.T) {
+	d := newDetector()
+	resp := &dns.Msg{Answer: []dns.RR{
+		&dns.RRSIG{
+			Hdr:         dns.Header{Name: dnsutil.Fqdn("example.com"), Class: dns.ClassINET, TTL: 300},
+			TypeCovered: dns.TypeA,
+			Algorithm:   dns.RSASHA256,
+			KeyTag:      0xdead,
+			SignerName:  dnsutil.Fqdn("example.com"),
+			Signature:   "forged-signature-bytes",
+		},
+		aRec("example.com", "6.6.6.6"),
+	}}
+	if v := d.Validate("com", "example.com", resp); v != VerdictPoisoned {
+		t.Fatalf("forged RRSIG must not exempt a poisoned A record, got %s", v)
+	}
+}
