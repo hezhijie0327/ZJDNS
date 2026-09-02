@@ -125,14 +125,23 @@ func TestDetectUDPProtocol(t *testing.T) {
 		want string
 	}{
 		{
-			name: "QUIC long header",
-			data: []byte{0xC0, 0x00, 0x00, 0x00, 0x01},
+			// RFC 9000 §14: a client's first QUIC packet (Initial) is always
+			// >= 1200 bytes — the size floor is part of the classification.
+			name: "QUIC long header Initial",
+			data: append([]byte{0xC0, 0x00, 0x00, 0x00, 0x01}, make([]byte, 1200)...),
 			want: ProtoQUIC,
 		},
 		{
 			name: "QUIC long header max",
-			data: []byte{0xFF, 0x00, 0x00},
+			data: append([]byte{0xFF, 0x00, 0x00}, make([]byte, 1200)...),
 			want: ProtoQUIC,
+		},
+		{
+			// A short first byte >= 0xC0 is a plain DNS query's random ID
+			// high byte far more often than QUIC — must NOT classify as QUIC.
+			name: "short 0xC0-prefix datagram (plain DNS collision)",
+			data: []byte{0xC0, 0x00, 0x00, 0x00, 0x01},
+			want: "",
 		},
 		{
 			name: "DTLS 1.2 handshake",
@@ -380,5 +389,70 @@ func TestTCPDemuxListener_SilentClientDoesNotStall(t *testing.T) {
 	case <-accCh:
 	case <-time.After(2 * time.Second):
 		t.Fatal("second client stalled behind the silent client (head-of-line blocking)")
+	}
+}
+
+// TestDetectUDPProtocol_PlainDNSNeverMisrouted exhaustively walks every
+// query-ID high byte (0x00–0xFF) with a structurally valid plain DNS query:
+// none may classify as QUIC or DTLS/DTLCP — the cert-fetch misroute lottery
+// (~30% dropped, multi-second client stalls) must be closed for good.
+func TestDetectUDPProtocol_PlainDNSNeverMisrouted(t *testing.T) {
+	// A minimal valid query for "a.b." A IN.
+	for idHigh := range 256 {
+		q := []byte{
+			byte(idHigh), 0x42, // ID
+			0x01, 0x00, // flags: RD
+			0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // counts
+			0x01, 'a',
+			0x01, 'b', 0x00,
+			0x00, 0x01, // QTYPE A
+			0x00, 0x01, // QCLASS IN
+		}
+		if got := DetectUDPProtocol(q); got != "" {
+			t.Fatalf("plain DNS query with ID high byte %#x classified as %q", idHigh, got)
+		}
+	}
+	// Same with a trailing OPT pseudo-record (EDNS) — the normal cert-fetch
+	// shape: root(0x00) + TYPE 41 + class 1232 + TTL 0 + rdlen 0.
+	for idHigh := range 256 {
+		q := []byte{
+			byte(idHigh), 0x42, 0x01, 0x00,
+			0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+			0x01, 'a', 0x01, 'b', 0x00,
+			0x00, 0x01, 0x00, 0x01,
+			0x00,
+			0x00, 0x29, // OPT
+			0x04, 0xD0, // class = 1232
+			0x00, 0x00, 0x00, 0x00, // TTL
+			0x00, 0x00, // rdlen
+		}
+		if got := DetectUDPProtocol(q); got != "" {
+			t.Fatalf("EDNS plain DNS query with ID high byte %#x classified as %q", idHigh, got)
+		}
+	}
+}
+
+// TestLooksLikePlainDNSQuery_RejectsNoise verifies random/encrypted-shaped
+// datagrams do NOT pass the structural plain-DNS check (they must stay
+// classifiable by the QUIC/DTLS rules or the DNSCrypt fallback).
+func TestLooksLikePlainDNSQuery_RejectsNoise(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"valid minimal query", []byte{0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 0x00, 0, 1, 0, 1}, true},
+		{"QR set (response)", []byte{0x12, 0x34, 0x81, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 0x00, 0, 1, 0, 1}, false},
+		{"opcode set", []byte{0x12, 0x34, 0x09, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 0x00, 0, 1, 0, 1}, false},
+		{"RCODE set", []byte{0x12, 0x34, 0x01, 0x03, 0, 1, 0, 0, 0, 0, 0, 0, 0x00, 0, 1, 0, 1}, false},
+		{"two questions", []byte{0x12, 0x34, 0x01, 0x00, 0, 2, 0, 0, 0, 0, 0, 0, 0x00, 0, 1, 0, 1}, false},
+		{"truncated question", []byte{0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 0x03, 'a'}, false},
+		{"garbage", []byte{0xC3, 0x55, 0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := looksLikePlainDNSQuery(tc.data); got != tc.want {
+				t.Fatalf("looksLikePlainDNSQuery(%v) = %t, want %t", tc.data, got, tc.want)
+			}
+		})
 	}
 }

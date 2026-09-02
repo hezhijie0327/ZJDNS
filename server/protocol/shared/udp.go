@@ -35,9 +35,15 @@ type DemuxPacketConn struct {
 	Ch       chan DemuxPacket
 	lastSeen atomic.Int64 // unix seconds of the last dispatched datagram
 	closed   atomic.Bool
-	dlMu     sync.Mutex
-	dlCh     chan struct{}
-	dlTimer  *time.Timer
+	// sendMu serialises the dispatch-loop channel send against Close's
+	// close(Ch): the protocol handler (idle timeout, error path) closes the
+	// conn from ITS goroutine while the dispatch loop is sending — an
+	// unguarded send on the closed channel panicked the whole dispatch
+	// loop and killed the shared port.
+	sendMu  sync.Mutex
+	dlMu    sync.Mutex
+	dlCh    chan struct{}
+	dlTimer *time.Timer
 }
 
 // addrKey is an allocation-free map key for UDP client addresses.
@@ -59,6 +65,9 @@ type dtlsClientConn struct {
 	remote   net.Addr
 	lastSeen atomic.Int64 // unix seconds of the last dispatched datagram
 	closed   atomic.Bool
+	// sendMu guards the dispatch send against the pion-side Close (idle
+	// timeout closes the conn from the DTLS accept goroutine).
+	sendMu sync.Mutex
 }
 
 type dtlsAcceptResult struct {
@@ -180,10 +189,28 @@ func (d *DemuxPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 }
 
 func (d *DemuxPacketConn) Close() error {
+	d.sendMu.Lock()
+	defer d.sendMu.Unlock()
 	if d.closed.CompareAndSwap(false, true) {
 		close(d.Ch)
 	}
 	return nil
+}
+
+// sendPacket enqueues one datagram.  It reports false when the conn is
+// closed or the queue is full — the caller must return the pool buffer.
+func (d *DemuxPacketConn) sendPacket(pkt DemuxPacket) bool {
+	d.sendMu.Lock()
+	defer d.sendMu.Unlock()
+	if d.closed.Load() {
+		return false
+	}
+	select {
+	case d.Ch <- pkt:
+		return true
+	default:
+		return false
+	}
 }
 
 func (d *DemuxPacketConn) LocalAddr() net.Addr  { return d.Shared.LocalAddr() }
@@ -246,6 +273,8 @@ func (c *dtlsClientConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 }
 
 func (c *dtlsClientConn) Close() error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
 	if c.closed.CompareAndSwap(false, true) {
 		close(c.ch)
 	}
@@ -326,11 +355,19 @@ func (l *dtlsPacketListener) dispatch(src *net.UDPAddr, pb *[]byte, n int) {
 	cc.lastSeen.Store(time.Now().Unix())
 	cpBuf := PacketBufPool.Get().(*[]byte)
 	copy(*cpBuf, (*pb)[:n])
+	cc.sendMu.Lock()
+	if cc.closed.Load() {
+		cc.sendMu.Unlock()
+		PacketBufPool.Put(cpBuf)
+		PacketBufPool.Put(pb)
+		return
+	}
 	select {
 	case cc.ch <- packetBuf{data: *cpBuf, src: src, n: n}:
 	default:
 		PacketBufPool.Put(cpBuf)
 	}
+	cc.sendMu.Unlock()
 	PacketBufPool.Put(pb)
 }
 
@@ -681,9 +718,7 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 			}
 
 			dc.lastSeen.Store(time.Now().Unix())
-			select {
-			case dc.Ch <- DemuxPacket{Data: (*pb)[:n], Addr: src}:
-			default:
+			if !dc.sendPacket(DemuxPacket{Data: (*pb)[:n], Addr: src}) {
 				PacketBufPool.Put(pb)
 			}
 
@@ -723,9 +758,7 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 			}
 
 			dc.lastSeen.Store(time.Now().Unix())
-			select {
-			case dc.Ch <- DemuxPacket{Data: (*pb)[:n], Addr: src}:
-			default:
+			if !dc.sendPacket(DemuxPacket{Data: (*pb)[:n], Addr: src}) {
 				PacketBufPool.Put(pb)
 			}
 		}
