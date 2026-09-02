@@ -491,3 +491,37 @@ func TestPendingRequests_EvictedErrorMapping(t *testing.T) {
 	// Cleanup.
 	pr.Done(tokB, &resolver.QueryResult{})
 }
+
+// TestDoJoin_LeaderPanicReleasesKey: a panicking leader must publish an
+// error and free the pending key — the next query for the same key must run
+// as a fresh leader instead of joining a dead entry and eating the 60s
+// follower timeout (2026-09 H1).
+func TestDoJoin_LeaderPanicReleasesKey(t *testing.T) {
+	p := NewPendingRequests()
+
+	calls := 0
+	run := func() *resolver.QueryResult {
+		calls++
+		if calls == 1 {
+			panic("boom")
+		}
+		return &resolver.QueryResult{Rcode: dns.RcodeSuccess}
+	}
+
+	// Leader panics; the containment publishes the error and re-raises.
+	func() {
+		defer func() {
+			_ = recover() // expected — the bridge's HandlePanic would log it
+		}()
+		p.DoJoin("panic.example.com.", dns.TypeA, dns.ClassINET, nil, false, run)
+	}()
+
+	// The same key must be immediately re-leadable with a real result.
+	qr := p.DoJoin("panic.example.com.", dns.TypeA, dns.ClassINET, nil, false, run)
+	if qr == nil || qr.Err != nil {
+		t.Fatalf("post-panic query did not lead cleanly: %+v", qr)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2 (panic + real)", calls)
+	}
+}

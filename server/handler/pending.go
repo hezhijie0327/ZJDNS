@@ -106,6 +106,18 @@ func (p *PendingRequests) DoJoin(qname string, qtype, qclass uint16, ecsOpt *edn
 	if follower {
 		return qr
 	}
+	// Panic containment (mirrors ResultGroup.Do): a panicking leader must
+	// still publish an error result and release the key — otherwise the
+	// callEntry stays open forever, every later query for the key joins as
+	// a follower and eats the full 60s follower timeout, and the constant
+	// joins LRU-refresh the entry so it never even evicts (2026-09 H1).
+	// The panic is re-raised for the bridge's HandlePanic.
+	defer func() {
+		if r := recover(); r != nil {
+			p.Done(tok, &resolver.QueryResult{Err: fmt.Errorf("pending leader panic: %v", r)})
+			panic(r)
+		}
+	}()
 	result := fn()
 	p.Done(tok, result)
 	return result
