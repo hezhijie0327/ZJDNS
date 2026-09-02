@@ -1,4 +1,4 @@
-// Package statsjournal provides an in-memory replacement for the SQLite
+// The statsjournal provides an in-memory replacement for the SQLite
 // query_stats and query_log tables: atomic counters for aggregated query
 // metrics and a per-RCODE top-N domain journal for debugging.
 //

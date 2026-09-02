@@ -3,15 +3,18 @@ package tlcp
 import (
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 
+	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnshttp"
 	"gitee.com/Trisia/gotlcp/tlcp"
 )
@@ -50,7 +53,7 @@ func (s *Server) startDOHServer() error {
 
 		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("TLCP DoH server")
-			if err := dohSrv.Serve(tlcpListener); err != nil && err != http.ErrServerClosed {
+			if err := dohSrv.Serve(tlcpListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Warnf("TLCP: DoH serve error: %v", err)
 			}
 			return nil
@@ -129,7 +132,31 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", dnshttp.MimeType)
+	// RFC 8484 §5.1 (SHOULD): mirror the TLS DoH handler's Cache-Control —
+	// the smallest answer TTL (2026-09 P-L7).
+	w.Header().Set("Cache-Control", dohCacheControl(resp))
 	// NOTE(M12): Write error is intentionally ignored — partial response cannot be
 	// recovered. Client will detect truncation via connection close.
 	_, _ = w.Write(resp.Data) //nolint:gosec // G705: DNS wire format bytes, not HTML
+}
+
+// dohCacheControl computes the Cache-Control max-age from the smallest
+// TTL in the Answer section, per RFC 8484 §5.1 RECOMMENDED (same shape as
+// the TLS DoH handler's helper).
+func dohCacheControl(response *dns.Msg) string {
+	if response == nil {
+		return "max-age=0"
+	}
+	minTTL := -1
+	for _, rr := range response.Answer {
+		if rr != nil {
+			if t := int(rr.Header().TTL); t > 0 && (minTTL < 0 || t < minTTL) {
+				minTTL = t
+			}
+		}
+	}
+	if minTTL <= 0 {
+		return "max-age=0"
+	}
+	return "max-age=" + strconv.Itoa(minTTL)
 }

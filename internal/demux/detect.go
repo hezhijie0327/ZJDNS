@@ -87,13 +87,13 @@ func (c *bufferedConn) Read(b []byte) (int, error) {
 func DetectTCPProtocol(conn net.Conn) (protocol string, detected net.Conn, err error) {
 	header := make([]byte, tcpRecordHeaderLen)
 	if dl, ok := conn.(interface{ SetReadDeadline(time.Time) error }); ok {
-		_ = dl.SetReadDeadline(time.Now().Add(sniffTimeout))
+		_ = dl.SetReadDeadline(time.Now().Add(sniffTimeout)) // _ = error: deadline best-effort; a failed set only lengthens the sniff
 	}
 	if _, err = io.ReadFull(conn, header); err != nil {
 		return "", nil, err
 	}
 	if dl, ok := conn.(interface{ SetReadDeadline(time.Time) error }); ok {
-		_ = dl.SetReadDeadline(time.Time{}) // clear — the protocol server owns deadlines now
+		_ = dl.SetReadDeadline(time.Time{}) // _ = error: best-effort clear — the protocol server owns deadlines now
 	}
 
 	first := header[0]

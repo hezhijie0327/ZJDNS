@@ -250,7 +250,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 						pool.DefaultMessage.Put(queryResult.Response)
 					}
 					msg.Pseudo = removeMQQUERY(msg.Pseudo)
-					retryCtx, retryCancel := context.WithTimeout(context.Background(), config.DefaultMQTypeResolveTimeout)
+					retryCtx, retryCancel := context.WithTimeout(context.WithoutCancel(ctx), config.DefaultMQTypeResolveTimeout)
 					queryResult = r.queryClient.ExecuteQuery(retryCtx, msg, server)
 					retryCancel()
 				}

@@ -1,4 +1,4 @@
-// Package dnscryptstate persists the DNSCrypt provider identity and cert
+// The file store persists the DNSCrypt provider identity and cert
 // windows to a file, replacing the former SQLite dnscrypt_state table.
 package dnscrypt
 

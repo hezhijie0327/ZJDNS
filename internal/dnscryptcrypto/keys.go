@@ -44,13 +44,13 @@ func GenerateRandomKeyPair() (secretKey, publicKey [KeySize]byte, err error) {
 
 // X25519KeyPairFromSeed derives an X25519 key pair from a 32-byte seed.
 // Used for ephemeral per-query keys (dnscrypt-proxy ephemeralKeys mode).
-func X25519KeyPairFromSeed(seed [32]byte) (secretKey, publicKey [KeySize]byte, err error) {
+func X25519KeyPairFromSeed(seed [32]byte) (secretKey, publicKey [KeySize]byte) {
 	var sk, pk x25519.Key
 	copy(sk[:], seed[:])
-	x25519.KeyGen(&pk, &sk)
+	x25519.KeyGen(&pk, &sk) // x25519.KeyGen cannot fail (F16)
 	secretKey = [KeySize]byte(sk)
 	publicKey = [KeySize]byte(pk)
-	return secretKey, publicKey, nil
+	return secretKey, publicKey
 }
 
 // NowUnix32 returns the current Unix time as uint32.  The DNSCrypt protocol

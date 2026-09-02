@@ -235,8 +235,7 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 			// A read-deadline expiry means the peer went idle — close the
 			// connection instead of retrying forever (a timeout was being
 			// classified as temporary and the loop spun).
-			var ne net.Error
-			if errors.As(err, &ne) && ne.Timeout() {
+			if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
 				return
 			}
 			if !zdnsutil.IsTemporaryError(err) {

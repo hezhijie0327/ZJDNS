@@ -127,8 +127,11 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return next.ServeDNS(ctx, qctx)
 		}
 
-		// Build REFUSED response with EDE.
-		if len(qname) > config.MaxDomainLength || !dnsutil.IsName(qname) {
+		// Build REFUSED response with EDE.  A name whose wire length is
+		// invalid (a >63-byte label fails wireNameLength while passing the
+		// presentation-form checks) is an invalid-domain rejection, not an
+		// unsupported-qtype one (H-L10).
+		if len(qname) > config.MaxDomainLength || !dnsutil.IsName(qname) || wireNameLength(qname) < 0 {
 			log.Debugf("QUERY: rejecting invalid domain %q (len=%d) with REFUSED", qname, len(qname))
 		} else {
 			log.Debugf("QUERY: rejecting unsupported query type %s for %s with REFUSED", dns.TypeToString[qtype], qname)

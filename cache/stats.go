@@ -288,13 +288,16 @@ func formatStatsLine(metrics ...statsMetric) string {
 // (srtt = (srtt + rtt) / N) to suppress single-sample jitter; the first
 // probe for an IP or an expired entry is stored directly.
 func (s *Cache) UpdateLatency(ip string, latencyMS int) {
-	s.hasLatencyData.Store(true)
 	if latencyMS < 0 {
 		latencyMS = 0
 	}
 	if net.ParseIP(ip) == nil {
+		// Flag AFTER validation: a non-IP arg previously enabled the
+		// per-hit latency sort with an empty table that can never reorder
+		// anything (D16).
 		return
 	}
+	s.hasLatencyData.Store(true)
 
 	now := log.NowUnix()
 	if old, ok := s.latencies.Get(ip); ok && old.lastProbe > 0 && old.lastProbe >= now-defaultStaleMaxAge {

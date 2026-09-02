@@ -119,6 +119,10 @@ const (
 	// from scratch (classifications are re-derived from the next datagram).
 	peerProtoMax = 1 << 16
 
+	// quicDispatchQueue bounds the per-connection packet queue inside the
+	// QUIC packet conn wrapper (backpressure depth, C-L6).
+	quicDispatchQueue = 256
+
 	// clientIdleTimeout bounds how long a silent per-client conn is kept.
 	clientIdleTimeout = 60 * time.Second
 
@@ -275,7 +279,10 @@ func (c *dtlsClientConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	}
 	if len(p) < pkt.n {
 		PacketBufPool.Put(&pkt.data)
-		return 0, pkt.src, net.ErrClosed
+		// io.ErrShortBuffer (net.Conn contract), NOT net.ErrClosed — a
+		// merely-small caller buffer must not tear the connection down
+		// (P-L3).
+		return 0, pkt.src, io.ErrShortBuffer
 	}
 	n := copy(p, pkt.data[:pkt.n])
 	PacketBufPool.Put(&pkt.data)
@@ -391,7 +398,7 @@ func (l *dtlsPacketListener) dispatch(src *net.UDPAddr, pb *[]byte, n int) {
 
 func newQUICPacketConn(udpConn *net.UDPConn) *quicPacketConn {
 	return &quicPacketConn{
-		ch:     make(chan packetBuf, 256),
+		ch:     make(chan packetBuf, quicDispatchQueue),
 		shared: udpConn,
 		done:   make(chan struct{}),
 	}
@@ -402,6 +409,11 @@ func (c *quicPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	case pkt, ok := <-c.ch:
 		if !ok {
 			return 0, nil, net.ErrClosed
+		}
+		if len(p) < pkt.n {
+			PacketBufPool.Put(&pkt.data)
+			// Silent truncation hides data loss — report it (P-L3).
+			return 0, pkt.src, io.ErrShortBuffer
 		}
 		n := copy(p, pkt.data[:pkt.n])
 		PacketBufPool.Put(&pkt.data)
@@ -516,7 +528,7 @@ func (m *Manager) startUDPGroup(g *UDPGroup) error {
 					if m.host.Ctx().Err() != nil {
 						return nil
 					}
-					log.Warnf("SHARED: DoQ error: %v", err)
+					log.Warnf("TLS: shared-port DoQ error: %v", err)
 				}
 				return nil
 			})
@@ -533,7 +545,7 @@ func (m *Manager) startUDPGroup(g *UDPGroup) error {
 					if m.host.Ctx().Err() != nil {
 						return nil
 					}
-					log.Warnf("SHARED: DoH3 error: %v", err)
+					log.Warnf("TLS: shared-port DoH3 error: %v", err)
 				}
 				return nil
 			})
@@ -548,7 +560,7 @@ func (m *Manager) startUDPGroup(g *UDPGroup) error {
 					if m.host.Ctx().Err() != nil {
 						return nil
 					}
-					log.Warnf("SHARED: DTLS error: %v", err)
+					log.Warnf("TLS: shared-port DTLS error: %v", err)
 				}
 				return nil
 			})
@@ -604,6 +616,11 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 	peerProto := make(map[addrKey]string)
 	var peerMu sync.RWMutex
 
+	// Read bound: 8 KiB (pool.SecureBufferSize).  Go's ReadFromUDP
+	// silently truncates larger datagrams; QUIC initial packets are ≤1280
+	// by design and DNSCrypt frames are capped at 4096, so this bound is
+	// safe for every multiplexed protocol (standalone DoQ/DoH3 listeners,
+	// where quic-go reads the raw socket itself, are unaffected) (P-L4).
 	buf := make([]byte, pool.SecureBufferSize)
 
 	var pktCount uint32

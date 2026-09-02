@@ -41,6 +41,8 @@ func (r *Recursive) resolveNSAddrFlight(ctx context.Context, nsName string, qtyp
 		r.nsAddrFlight = pending.NewResultGroup[string, nsAddrFlightResult]()
 	})
 	key := dnsutil.Canonical(dnsutil.Fqdn(nsName)) + "|" + dns.TypeToString[qtype]
+	// _ = error/leader: a follower whose ctx expired gets the zero value;
+	// the len(res.addrs) checks below treat it as a miss.
 	res, _, _ := r.nsAddrFlight.Do(ctx, key, func(ctx context.Context) (nsAddrFlightResult, error) {
 		out := r.nsAddrWalk(ctx, nsName, qtype, depth, forceTCP)
 		if len(out.addrs) == 0 && len(out.answer) == 0 {

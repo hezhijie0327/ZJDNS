@@ -1,5 +1,5 @@
-// Package stamp implements DNS DNSStamp (sdns://) parsing for all major DNS
-// protocols as defined by the DNSCrypt project's DNS DNSStamp specification.
+// Package stamp implements DNSStamp (sdns://) parsing for all major DNS
+// protocols as defined by the DNSCrypt project's DNSStamp specification.
 package stamp
 
 import (

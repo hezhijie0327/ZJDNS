@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -191,7 +192,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 
 		_, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
-			if err != io.EOF && !zdnsutil.IsTemporaryError(err) {
+			if !errors.Is(err, io.EOF) && !zdnsutil.IsTemporaryError(err) {
 				log.Debugf("TLS: read length error remote=%s: %v",
 					tlsConn.RemoteAddr(), err)
 			}

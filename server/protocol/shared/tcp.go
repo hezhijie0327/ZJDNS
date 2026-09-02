@@ -129,7 +129,7 @@ func (m *Manager) startTCPGroup(g *TCPGroup) error {
 						if m.host.Ctx().Err() != nil {
 							return nil
 						}
-						log.Warnf("SHARED: DoH (TLS) serve error: %v", err)
+						log.Warnf("SERVER: shared-port DoH (TLS) serve error: %v", err)
 					}
 					return nil
 				})
@@ -145,7 +145,7 @@ func (m *Manager) startTCPGroup(g *TCPGroup) error {
 						if m.host.Ctx().Err() != nil {
 							return nil
 						}
-						log.Warnf("SHARED: DoT (TLS) error: %v", err)
+						log.Warnf("SERVER: shared-port DoT (TLS) error: %v", err)
 					}
 					return nil
 				})
@@ -172,8 +172,8 @@ func (m *Manager) startTCPGroup(g *TCPGroup) error {
 				capturedTLCPln := ql
 				m.host.Go(func() error {
 					defer zdnsutil.HandlePanic("Shared DoH (TLCP) server")
-					if err := capturedTLCP.Serve(capturedTLCPln); err != nil && err != http.ErrServerClosed {
-						log.Warnf("SHARED: DoH (TLCP) serve error: %v", err)
+					if err := capturedTLCP.Serve(capturedTLCPln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+						log.Warnf("SERVER: shared-port DoH (TLCP) serve error: %v", err)
 					}
 					return nil
 				})

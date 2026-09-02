@@ -59,15 +59,15 @@ var (
 	ErrMissingNSEC          = errors.New("no valid NSEC/NSEC3 denial-of-existence proof")
 )
 
-// NewCryptoValidator creates a CryptoValidator for DNSSEC validation. The
-// cache store is used to persist verified zone DNSKEYs. Call LoadTrustAnchors
-// to populate root trust anchors when recursive resolution is needed.
 // sigBufPool is the shared buffer pool for RRSIG signature verification.
 // miekg/dns defaults to a Noop pooler (a fresh 8KB buffer per call — 109MB
 // cumulative allocations on a recursive server) unless SignOption.Pooler is
 // provided; the real sync.Pool keeps allocations to pool misses only.
 var sigBufPool = dnspool.New(8192)
 
+// NewCryptoValidator creates a CryptoValidator for DNSSEC validation. The
+// cache store is used to persist verified zone DNSKEYs. Call LoadTrustAnchors
+// to populate root trust anchors when recursive resolution is needed.
 func NewCryptoValidator(store cache.Store) *CryptoValidator {
 	return &CryptoValidator{cache: store, zoneKeyMemo: lrumap.New[string, zoneKeyMemoEntry](512)}
 }
@@ -350,9 +350,6 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 					// order when an RRset carries multiple signatures.
 					unsupportedAlgErr = err
 				}
-			}
-			if groupValidated {
-				break
 			}
 		}
 

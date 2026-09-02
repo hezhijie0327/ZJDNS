@@ -157,8 +157,7 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 			// is classified as temporary by IsTemporaryError, and without
 			// this check the loop re-armed the deadline and spun, holding
 			// an errgroup slot per zombie connection).
-			var ne net.Error
-			if errors.As(err, &ne) && ne.Timeout() {
+			if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
 				return
 			}
 			if !zdnsutil.IsTemporaryError(err) {

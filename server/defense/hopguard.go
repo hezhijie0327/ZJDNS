@@ -48,6 +48,10 @@ const (
 	// make this configurable per-upstream if false rejections occur in practice.
 	hopGuardCacheCapacity = 256 // LRU cache capacity for server states
 	hopGuardMinSamples    = 32  // samples needed before arming
+
+	// hopGuardLearnLogEvery throttles the baseline-learning debug log.
+	hopGuardLearnLogEvery = 8
+
 	// hopGuardRebuildIntervalNanos is the time-based rebuild fallback in
 	// log.NowUnixNano() granularity — precomputed so the per-Feed check does
 	// no Duration conversion.
@@ -161,11 +165,11 @@ func (h *HopGuard) Feed(serverIP string, observed uint8) {
 	// Learning phase: record and check arming.
 	st.histogram[observed]++
 	st.samples++
-	if st.samples%8 == 0 {
+	if st.samples%hopGuardLearnLogEvery == 0 {
 		log.Debugf("UPSTREAM: hopguard learning (%d samples, %d TTLs) for %s",
 			st.samples, len(st.histogram), serverIP)
 	}
-	if st.samples >= hopGuardMinSamples && st.samples%hopGuardMinSamples == 0 {
+	if st.samples%hopGuardMinSamples == 0 { // ≥1 guaranteed — the samples counter starts at 1 (S9)
 		rebuildTrusted(st)
 		if len(st.trusted) > 0 {
 			st.armed = true
@@ -191,13 +195,16 @@ func (h *HopGuard) Confident(serverIP string) bool {
 	return st.armed
 }
 
-// ShouldSampleRejected reports whether a Validate-rejected TTL should be fed
-// into the histogram anyway — uniform 1-in-16 sampling.  Legitimate TTL
-// drift after an anycast reroute / PoP shift (which stays outside the ±2
-// window and is hard-rejected while armed) re-enters the histogram this way
-// and can become trusted at the next rebuild, instead of locking the server
-// into SERVFAIL with no recovery path; attacker-injected TTLs are diluted
-// 16x and still cannot win the mode competition (M2).
+// ShouldSampleRejected counts one Validate-rejected packet and reports
+// whether THIS one should be fed into the histogram anyway — uniform
+// 1-in-16 sampling (the count mutation is part of the contract: the "this
+// one" selection depends on it; S9 renamed nothing but documents the side
+// effect).  Legitimate TTL drift after an anycast reroute / PoP shift
+// (which stays outside the ±2 window and is hard-rejected while armed)
+// re-enters the histogram this way and can become trusted at the next
+// rebuild, instead of locking the server into SERVFAIL with no recovery
+// path; attacker-injected TTLs are diluted 16x and still cannot win the
+// mode competition (M2).
 func (h *HopGuard) ShouldSampleRejected(serverIP string) bool {
 	if h == nil {
 		return false

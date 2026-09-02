@@ -4,7 +4,7 @@ import "codeberg.org/miekg/dns"
 
 // EDEZJDNSFallback marks a response served from a fallback upstream
 // (config.UpstreamServer.Fallback).  65280 sits in the IANA-unassigned
-// range of the RFC 8914 Extended DNS Errors registry (0–29 assigned) —
+// range of the RFC 8914 Extended DNS Errors registry (the 0–24 range is IANA-assigned) —
 // ZJDNS private use, never registered.  Downstream ZJDNS instances
 // seeing this code must not cache the response.
 const EDEZJDNSFallback uint16 = 65280

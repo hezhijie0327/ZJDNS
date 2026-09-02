@@ -31,22 +31,27 @@ const wildcardPrefix = "*."
 // chaosDenialCount samples the destructive-CHAOS denial Warn (C-M2).
 var chaosDenialCount atomic.Uint64
 
+// destructiveChaosNames are the CHAOS control endpoints that mutate server
+// state, precomputed once (the former per-call ToLower+concat rebuilt five
+// constant strings on every zone-matched query, H-L6).
+var destructiveChaosNames = func() map[string]struct{} {
+	base := strings.ToLower(config.DefaultProjectName)
+	names := []string{"cache.clear.", "stats.clear.", "latency.clear.", "querylog.clear.", "dnscrypt.clear."}
+	set := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		set[base+"."+n] = struct{}{}
+	}
+	return set
+}()
+
 // isDestructiveChaosName reports whether the qname is one of the CHAOS
 // control endpoints that mutate server state (cache/latency flush, stats
 // reset, DNSCrypt key reset). Case-insensitive: zone-rule matching is
 // case-insensitive too, so a case-variant query (e.g. "zjdns.cache.clear")
 // would otherwise bypass the loopback gate below.
 func isDestructiveChaosName(qname string) bool {
-	c := strings.ToLower(dnsutil.Canonical(qname))
-	switch c {
-	case strings.ToLower(config.DefaultProjectName) + ".cache.clear.",
-		strings.ToLower(config.DefaultProjectName) + ".stats.clear.",
-		strings.ToLower(config.DefaultProjectName) + ".latency.clear.",
-		strings.ToLower(config.DefaultProjectName) + ".querylog.clear.",
-		strings.ToLower(config.DefaultProjectName) + ".dnscrypt.clear.":
-		return true
-	}
-	return false
+	_, ok := destructiveChaosNames[strings.ToLower(dnsutil.Canonical(qname))]
+	return ok
 }
 
 // rewriteOwnerNames rewrites RR owner names that exactly match from, setting

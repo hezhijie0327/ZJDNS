@@ -579,7 +579,9 @@ func (s *Cache) buildEntry(ts int64, entryTTL int, validated bool, msgWire []byt
 	// (TXT, MX, DNSKEY, ...) paid the full Unpack + clone + map allocs for
 	// a sort that could never change the wire.
 	if s.hasLatencyData.Load() && (qtype == dns.TypeA || qtype == dns.TypeAAAA) {
-		_ = entry.Unpack()
+		if err := entry.Unpack(); err != nil {
+			log.Debugf("CACHE: latency sort unpack failed (name=%s type=%d): %v", qname, qtype, err) // corrupt wire — served unsorted (E9)
+		}
 		if s.sortAnswerByLatency(entry) && len(entry.Answer) > 0 {
 			entry.rebuildResponseWire()
 		}
@@ -683,13 +685,13 @@ func (s *Cache) lookupIPLatencies(ips []string) map[string]int {
 // compression) runs before the synchronous in-memory write.
 func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 	answer, authority, additional []dns.RR, validated bool, rcode uint16,
-) int64 {
+) {
 	// ── Prep work ────────────────────────────────────────────────────────
 	now := log.NowUnix()
 	entryTTL := minTTL(answer, authority, additional)
 	if entryTTL <= 0 {
 		// Zero TTL (incl. RFC 2181 §8 MSB-set values) — nothing to cache.
-		return 0
+		return
 	}
 
 	ecsAddr, ecsPrefix := ecsParams(ecs)
@@ -732,7 +734,7 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 	// Pack the query just to get the wire-format question section length.
 	if err := queryMsg.Pack(); err != nil {
 		log.Debugf("CACHE: skipping cache write for %s (type=%d): query pack failed: %v", qname, qtype, err)
-		return 0
+		return
 	}
 
 	// Sort A/AAAA records by latency before packing — the pre-packed
@@ -762,7 +764,7 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 	if err := msg.Pack(); err != nil {
 		log.Debugf("CACHE: skipping cache write for %s (type=%d): pack failed: %v", qname, qtype, err)
 		pool.DefaultMessage.Put(msg)
-		return 0
+		return
 	}
 
 	// Scan TTL offsets in the packed response, skipping the 12-byte
@@ -811,7 +813,6 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 	// Set is immediately visible to Get — no async layer needed.
 	s.entries.Set(buildCacheKey(qname, qtype, qclass, ecsAddr, ecsPrefix),
 		&cacheEntry{msgWire: msgWire, ts: now, ttl: entryTTL, validated: validated})
-	return 0
 }
 
 // ── Set-path helpers ──────────────────────────────────────────────────────

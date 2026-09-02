@@ -90,10 +90,7 @@ type Server struct {
 	replayCache *lrumap.Map[string, replayEntry]
 }
 
-// New creates a new DNSCrypt Server from the given configuration.
-// port is the listener port, providerName is auto-derived as "2.dnscrypt-cert.<ddr.domain>".
-// store persists the cert windows across restarts; nil disables persistence.
-// newKeyEntry mints the pair's precomputed TXT chunks and PQ wire size.
+// newKeyEntry mints the pair's precomputed TXT chunk (one TXT RR encoding both cert payloads, precomputed because it is served on every certificate fetch).s and PQ wire size.
 func newKeyEntry(pair *dnscryptcrypto.CertPair) keyEntry {
 	return keyEntry{
 		pair:         pair,
@@ -103,6 +100,10 @@ func newKeyEntry(pair *dnscryptcrypto.CertPair) keyEntry {
 	}
 }
 
+// New creates a new DNSCrypt Server from the given configuration.
+// port is the listener port; providerName is auto-derived as
+// "2.dnscrypt-cert.<ddr.domain>" when empty; store persists the cert
+// windows across restarts (nil disables persistence).
 func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, store StateStore) (*Server, error) {
 	// ── Signing identity ───────────────────────────────────────────────────
 	// Explicit keys are required — like TLS requires a certificate.  The
@@ -606,11 +607,7 @@ func (s *Server) deriveAndSign(previous *dnscryptcrypto.CertPair, now uint32) []
 
 	var entries []keyEntry // newest first
 	for tsStart <= now+renewalSec {
-		sk, pk, err := dnscryptcrypto.X25519KeyPairFromSeed(seed)
-		if err != nil {
-			log.Warnf("DNSCRYPT: deriving resolver key from seed: %v", err)
-			break
-		}
+		sk, pk := dnscryptcrypto.X25519KeyPairFromSeed(seed)
 		seed = sk // chain: this window's SK seeds the next
 
 		if now >= tsStart {

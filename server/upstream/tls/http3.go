@@ -83,7 +83,7 @@ func (c *Client) ExecuteHTTP3(ctx context.Context, msg *dns.Msg, server *config.
 
 	var client *http.Client
 	var isCached bool
-	if c.doh3Transports != nil { // Close() nils the map — a racing query must not panic
+	if c.doh3Transports != nil { // Close() never nils the map (in-flight proxied queries read it; it dies with the Client) — the nil check guards test wiring only
 		client, isCached = c.doh3Transports.Get(key)
 	}
 	if !isCached {

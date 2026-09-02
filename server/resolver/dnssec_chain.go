@@ -319,6 +319,8 @@ func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string,
 	r.dnskeyFlightOnce.Do(func() {
 		r.dnskeyFlight = pending.NewResultGroup[string, []*dns.DNSKEY]()
 	})
+	// _ = error/leader: a follower whose ctx expired gets the zero value;
+	// the len(keys) check below treats it as a miss.
 	keys, _, _ := r.dnskeyFlight.Do(ctx, dnsutil.Canonical(dnsutil.Fqdn(zone)), func(ctx context.Context) ([]*dns.DNSKEY, error) {
 		// A concurrent walk may have populated the zone-key cache while we
 		// waited for leadership — re-check before fetching.

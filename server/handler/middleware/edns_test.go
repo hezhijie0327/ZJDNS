@@ -20,7 +20,7 @@ func newEDNSChain(t *testing.T) (*EDNS, handler.QueryHandler) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &EDNS{edns: ednsH, config: &config.ServerConfig{}}
+	m := &EDNS{edns: ednsH}
 	next := handler.QueryHandlerFunc(func(_ context.Context, _ *handler.QueryContext) error { return nil })
 	resp := &Response{edns: ednsH}
 	return m, resp.Wrap(m.Wrap(next))

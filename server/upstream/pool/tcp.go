@@ -251,7 +251,7 @@ func (c *Conn) readLoop() {
 		_ = c.conn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 
 		if _, err := io.ReadFull(c.conn, lengthBuf[:]); err != nil {
-			if err != io.EOF {
+			if !errors.Is(err, io.EOF) {
 				log.Debugf("TCPPOOL: read length error from %s: %v", c.addr, err)
 			}
 			return

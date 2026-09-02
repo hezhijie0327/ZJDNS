@@ -178,6 +178,20 @@ func (c *Client) capsDisabled(addr string) bool {
 	return ok && time.Now().Before(st.disabledUntil)
 }
 
+// noteCapsSuccess resets the consecutive-mismatch counter after a
+// successful 0x20 echo (draft §6.4 — the downgrade tracks current, not
+// lifetime, behaviour) (S8).
+func (c *Client) noteCapsSuccess(addr string) {
+	if c.capsDowngrades == nil {
+		return
+	}
+	if st, ok := c.capsDowngrades.Get(addr); ok && st != nil {
+		st.mu.Lock()
+		st.mismatches = 0
+		st.mu.Unlock()
+	}
+}
+
 // noteCapsMismatch records one 0x20 echo mismatch for addr and reports
 // whether this mismatch crossed the downgrade threshold.  The stat is a
 // pointer keyed in the LRU: the read-modify-write runs under the stat's own
@@ -254,6 +268,16 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	}
 
 	result := c.execute(ctx, msg, server)
+
+	// Draft §6.4 semantics: only CONSECUTIVE mismatches count — a
+	// successful echo resets the per-address counter, so an intermittent
+	// case-rewriting middlebox (1 mismatch per N queries) no longer
+	// accumulates to a periodic 10-minute downgrade window (S8).
+	if randomized && result.Error == nil && result.Response != nil &&
+		len(result.Response.Question) > 0 &&
+		result.Response.Question[0].Header().Name == randName {
+		c.noteCapsSuccess(server.Address)
+	}
 
 	// Echo verification (§5.5): when the QID/type/class all match but the
 	// echoed question differs from the randomized name, the response is not

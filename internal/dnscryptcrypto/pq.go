@@ -10,8 +10,6 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
-// pqProfileExt is the pre-built, immutable PQ profile extension payload.
-// Content is invariant — allocated once to avoid per-certificate heap alloc.
 // TicketPlaintext is the decoded ticket plaintext. It carries every field
 // EncodeTicketPlaintext writes — including esVersion, serial, ts-end, and
 // peHash — so the ticket's profile/version/serial binding is enforced by
@@ -26,6 +24,8 @@ type TicketPlaintext struct {
 	ProfileExtHash [32]byte
 }
 
+// pqProfileExt is the pre-built, immutable PQ profile extension payload.
+// Content is invariant — allocated once to avoid per-certificate heap alloc.
 var pqProfileExt = func() []byte {
 	ext := make([]byte, PQProfileExtSize)
 	copy(ext[0:3], "PQD")

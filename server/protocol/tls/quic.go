@@ -204,7 +204,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	_ = stream.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 	_, err := io.ReadFull(stream, buf[:zdnsutil.DNSFramePrefixLen])
 	if err != nil {
-		if err == io.ErrUnexpectedEOF {
+		if errors.Is(err, io.ErrUnexpectedEOF) {
 			log.Debugf("SERVER: DoQ protocol error: truncated STREAM FIN from %s", conn.RemoteAddr())
 		}
 		return

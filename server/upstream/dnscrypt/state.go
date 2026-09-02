@@ -73,6 +73,10 @@ const ewmaDecay = 2.0 / 31.0
 // initial 512-byte floor.  Lock-free: a CAS loop keeps the per-response hot
 // path free of mutex contention (responses arrive on the read path, which
 // otherwise never touches state.mu).
+// adjustQuerySize shrinks the padded query budget toward the EWMA.  The
+// non-CAS Store may race a concurrent blindAdjust escalation computed
+// against the pre-reset EWMA — self-healing (the next TC re-escalates), one
+// lost padding escalation in a rare interleaving (U18).
 func (s *State) adjustQuerySize(wireLen int) {
 	for {
 		old := math.Float64frombits(s.ewmaQuerySize.Load())

@@ -9,6 +9,7 @@ package dnscryptcrypto
 import (
 	"errors"
 	"fmt"
+	"zjdns/internal/pool"
 )
 
 // Nonce is a convenient alias for nonce values.
@@ -20,8 +21,9 @@ type CryptoConstruction uint16
 const (
 	// MaxDNSUDPPacketSize is the largest UDP datagram worth sending over the
 	// public internet.  Matches dnscrypt-proxy and the common EDNS0 buffer of
-	// 4096 bytes.
-	MaxDNSUDPPacketSize = 4096
+	// 4096 bytes — aliased to the pool tier's bound so a future Flag Day
+	// retune changes both together (2026-09 C-L3).
+	MaxDNSUDPPacketSize = pool.RecursiveUDPBufferSize
 
 	// MinDNSPacketSize is the minimum possible DNS packet size.
 	MinDNSPacketSize = 12 + 5

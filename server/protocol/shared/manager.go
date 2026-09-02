@@ -178,33 +178,33 @@ func (m *Manager) Shutdown() {
 	for _, rt := range tcpRTs {
 		if rt.dohSrv != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
-			_ = rt.dohSrv.Shutdown(ctx)
+			_ = rt.dohSrv.Shutdown(ctx) // _ = error: best-effort shutdown sweep
 			cancel()
 		}
 		if rt.tlcpSrv != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
-			_ = rt.tlcpSrv.Shutdown(ctx)
+			_ = rt.tlcpSrv.Shutdown(ctx) // _ = error: best-effort shutdown sweep
 			cancel()
 		}
 		if rt.tlcpLn != nil {
-			_ = rt.tlcpLn.Close()
+			_ = rt.tlcpLn.Close() // _ = error: best-effort close sweep
 		}
 		if rt.demux != nil {
-			_ = rt.demux.Close()
+			_ = rt.demux.Close() // _ = error: best-effort close sweep (drains queued conns)
 		}
 	}
 	for _, rt := range udpRTs {
 		if rt.quicPC != nil {
-			_ = rt.quicPC.Close()
+			_ = rt.quicPC.Close() // _ = error: best-effort close sweep
 		}
 		if rt.h3PC != nil {
-			_ = rt.h3PC.Close()
+			_ = rt.h3PC.Close() // _ = error: best-effort close sweep
 		}
 		if rt.dtlsPL != nil {
-			_ = rt.dtlsPL.Close()
+			_ = rt.dtlsPL.Close() // _ = error: best-effort close sweep
 		}
 		if rt.conn != nil {
-			_ = rt.conn.Close()
+			_ = rt.conn.Close() // _ = error: best-effort close sweep; unblocks the dispatch loop for its exit sweep
 		}
 	}
 }

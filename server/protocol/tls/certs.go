@@ -11,6 +11,7 @@ import (
 	"net"
 	"time"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 
 	eTLS "gitlab.com/go-extension/tls"
 )
@@ -70,7 +71,7 @@ func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
 		// even if DefaultServerCertValidity ever exceeds
 		// DefaultCACertValidity — an untrusted chain before the advertised
 		// leaf expiry would be worse than an early rotation.
-		NotAfter:    leafNotAfter(now, caNotAfter),
+		NotAfter:    zdnsutil.LeafNotAfter(now, caNotAfter, config.DefaultServerCertValidity),
 		KeyUsage:    x509.KeyUsageDigitalSignature, // ECDSA — KeyEncipherment is RSA-only
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -106,10 +107,3 @@ func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
 
 // leafNotAfter returns the leaf certificate's expiry: the configured server
 // validity clamped to the CA's expiry so the leaf never outlives its signer.
-func leafNotAfter(now, caNotAfter time.Time) time.Time {
-	leaf := now.Add(config.DefaultServerCertValidity)
-	if caNotAfter.Before(leaf) {
-		return caNotAfter
-	}
-	return leaf
-}

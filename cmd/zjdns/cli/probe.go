@@ -445,8 +445,7 @@ func probeIdleTimeout(addr string) error {
 			// A read deadline expiring while the server keeps the connection
 			// alive is NOT a server-side close — keep waiting. Only an
 			// io.EOF/reset indicates the server actually closed.
-			var ne net.Error
-			if errors.As(err, &ne) && ne.Timeout() {
+			if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
 				fmt.Printf("  server still alive after %.1fs — waiting for close...\n", time.Since(start).Seconds())
 				continue
 			}

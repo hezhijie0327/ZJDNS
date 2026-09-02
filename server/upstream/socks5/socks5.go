@@ -498,7 +498,12 @@ func readAddress(conn net.Conn, atyp byte) (*net.UDPAddr, error) {
 			}
 		}
 		ips, err := net.DefaultResolver.LookupIP(lookupCtx, "ip", host)
-		if err != nil || len(ips) == 0 {
+		if len(ips) == 0 {
+			// No resolution error but no addresses either — err is nil here;
+			// %w(nil) renders "%!w(<nil>)" (U17).
+			return nil, fmt.Errorf("socks5: resolve relay host %q: no addresses", host)
+		}
+		if err != nil {
 			return nil, fmt.Errorf("socks5: resolve relay host %q: %w", host, err)
 		}
 		return &net.UDPAddr{IP: ips[0], Port: port}, nil

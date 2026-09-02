@@ -22,7 +22,7 @@ import (
 // Three outcomes:
 //   - Fresh hit: builds the response and short-circuits.
 //   - Expired but can serve stale: serves stale, triggers background refresh.
-//   - Miss or expired-and-cannot-serve: sets CacheEntry and delegates to next.
+//   - Miss or expired-and-cannot-serve: delegates to next.
 type CacheLookup struct {
 	store            cache.Store
 	closed           func() bool
@@ -72,9 +72,13 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			// refreshGroup nil (test-only wiring): tryStartRefresh would mark
 			// the pending gate with no goroutine to ever release it, blocking
 			// all future refreshes for the key — skip prefetch entirely.
+			// Gate order matters: the in-flight check (tryStartRefresh) runs
+			// BEFORE ShouldStart — the cooldown's timestamp is a side effect,
+			// and burning it on a refresh that never starts throttles the key
+			// for nothing (H-L9).
 			if m.refreshGroup != nil && m.closed != nil && !m.closed() && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) &&
-				m.prefetchCooldown != nil && m.prefetchCooldown.ShouldStart(qname, qtype, log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds()) &&
-				m.tryStartRefresh(qname, qtype, qclass, ecsOpt) {
+				m.tryStartRefresh(qname, qtype, qclass, ecsOpt) &&
+				m.prefetchCooldown != nil && m.prefetchCooldown.ShouldStart(qname, qtype, log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds()) {
 				if !m.refreshGroup.TryGo(func() error {
 					defer zdnsutil.HandlePanic("Cache refresh: prefetch fresh-hit")
 					defer m.finishRefresh(qname, qtype, qclass, ecsOpt)

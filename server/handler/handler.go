@@ -173,6 +173,13 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 		rec.Result = "error"
 		rec.Protocol = protocol
 		rec.Rcode = dns.RcodeServerFailure
+		// Full identification, matching every other error record (H-L8):
+		// journal rows for this class previously had empty qnames.
+		if qd := req.Question[0]; qd != nil {
+			rec.Qname = strings.ToLower(qd.Header().Name)
+			rec.Qtype = dns.RRToType(qd)
+		}
+		rec.ResponseTime = ElapsedMS(qctx.StartTime)
 		h.cache.RecordRequest(rec)
 		cache.ReleaseRequestRecord(rec)
 		return msg

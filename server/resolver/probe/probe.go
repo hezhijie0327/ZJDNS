@@ -20,7 +20,7 @@ import (
 // CacheSetter is the interface for updating latency measurements in the
 // cache after probing.
 type CacheSetter interface {
-	Set(qname string, qtype, qclass uint16, ecs *edns.ECSOption, answer, authority, additional []dns.RR, validated bool, rcode uint16) int64
+	Set(qname string, qtype, qclass uint16, ecs *edns.ECSOption, answer, authority, additional []dns.RR, validated bool, rcode uint16)
 	UpdateLatency(ip string, latencyMS int)
 	LatencyLastProbe(ip string) (int64, bool)
 }
@@ -135,7 +135,7 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 	p.bgGroup(func() error {
 		defer p.pending.Done(key)
 		defer zdnsutil.HandlePanic("latency probe")
-		if err := p.probeAndReorder(p.bgCtx, qname, answer, ecsResponse); err != nil {
+		if err := p.probeAndReorder(p.bgCtx, qname, answer); err != nil {
 			log.Debugf("LATENCY: background probe failed for %s: %v", qname, err)
 		}
 		return nil
@@ -144,7 +144,7 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 
 // --- Prober unexported methods ---
 
-func (p *Prober) probeAndReorder(ctx context.Context, qname string, answer []dns.RR, ecsResponse *edns.ECSOption) error {
+func (p *Prober) probeAndReorder(ctx context.Context, qname string, answer []dns.RR) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}

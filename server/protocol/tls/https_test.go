@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 )
@@ -37,14 +38,14 @@ func TestLeafNotAfterClampedToCA(t *testing.T) {
 	caNotAfter := now.Add(10 * 24 * time.Hour) // CA expires sooner than the leaf's default
 
 	// Leaf validity longer than the CA's remaining life: clamped to the CA.
-	if got := leafNotAfter(now, caNotAfter); !got.Equal(caNotAfter) {
+	if got := zdnsutil.LeafNotAfter(now, caNotAfter, config.DefaultServerCertValidity); !got.Equal(caNotAfter) {
 		t.Errorf("leafNotAfter = %v, want clamped to CA %v", got, caNotAfter)
 	}
 
 	// Normal case: CA outlives the leaf — leaf keeps its own validity.
 	caLong := now.Add(365 * 24 * time.Hour)
 	want := now.Add(config.DefaultServerCertValidity)
-	if got := leafNotAfter(now, caLong); !got.Equal(want) {
+	if got := zdnsutil.LeafNotAfter(now, caLong, config.DefaultServerCertValidity); !got.Equal(want) {
 		t.Errorf("leafNotAfter = %v, want %v", got, want)
 	}
 }

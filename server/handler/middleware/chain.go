@@ -150,8 +150,7 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	// the full request unpack (plain UDP/TCP listeners deliver question-only
 	// messages), populating Pseudo before MQTYPE.pre's findMQQUERY.
 	h = (&EDNS{
-		edns:   deps.EDNS,
-		config: deps.Config,
+		edns: deps.EDNS,
 	}).Wrap(h)
 
 	// Response finalization: always runs, applies EDNS + restores domain.

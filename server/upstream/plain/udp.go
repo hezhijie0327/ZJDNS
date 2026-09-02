@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
-	"sync"
 	"time"
 	"zjdns/config"
-	"zjdns/internal/ipttl"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/internal/resolv"
@@ -52,12 +50,14 @@ type spoofguardState struct {
 // 4096 = standard DNS UDP max payload (RFC 6891 §6.2.5); responses larger
 // than 4096 bytes set TC=1 and are truncated, so 4096 is the correct upper
 // bound for a single UDP datagram.
-var spoofguardBufPool = sync.Pool{
-	New: func() any {
-		b := make([]byte, pool.RecursiveUDPBufferSize)
-		return &b
-	},
-}
+// Copy-buffer shrink cadence for spoofguardState.copyBuf (C-L6): after
+// copyBufShrinkAfter copies, an oversized buffer (copyBufShrinkFactor× the
+// working set, above copyBufShrinkMinCap) is reallocated down.
+const (
+	copyBufShrinkAfter  = 256
+	copyBufShrinkFactor = 4
+	copyBufShrinkMinCap = 512
+)
 
 // Sentinel errors for the spoofguard/hopguard collect paths — the per-query
 // errors.New sites were ~700M allocations on a loaded server; callers only
@@ -98,9 +98,6 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 				return resp, nil
 			}
 			// Pooled collect failed — fall through to pooled single.
-		} else if server.HopGuard {
-			// No pool — hopguard needs the exclusive-socket TTL capture.
-			return c.executeUDPMultiRead(ctx, msg, server, proxyDialer)
 		}
 	}
 
@@ -510,194 +507,7 @@ func sameRRData(x, y dns.RR) bool {
 	}
 }
 
-// executeUDPMultiRead performs the spoofguard multi-read detection loop.
 // When proxyDialer is nil, uses raw UDP; otherwise routes through SOCKS5.
-func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer, proxyDialer *socks5.Dialer) (*dns.Msg, error) {
-	// The caller (EDNS middleware or recursive buildMsg) is responsible for
-	// setting EDNS on the query.  We must NOT add a second OPT — the fork
-	// handles EDNS transparently via msg.UDPSize, and a duplicate in Extra
-	// causes FORMERR from some servers.
-	if err := msg.Pack(); err != nil {
-		return nil, err
-	}
-
-	// ── Connection setup ──────────────────────────────────────────
-	var conn net.Conn
-	var pconn net.PacketConn
-	var buf []byte
-	var lastN int // last read length — buffer prefix zeroed on return
-
-	if proxyDialer != nil {
-		var err error
-		pconn, err = dialProxyUDP(ctx, proxyDialer, server.Address, msg.Data)
-		if err != nil {
-			return nil, err
-		}
-		defer func() { _ = pconn.Close() }()
-		bufPtr, ok := socks5.ReadPool.Get().(*[]byte)
-		if !ok {
-			return nil, errors.New("socks5 read pool type error")
-		}
-		buf = *bufPtr
-		// Zero only the used prefix — nothing reads beyond the last read
-		// length (R3-L13 family; the buffer is reused across loop reads).
-		defer func() { clear(buf[:lastN]); socks5.ReadPool.Put(bufPtr) }()
-	} else {
-		var err error
-		// ctx-aware dial (U8): an expired query budget must not complete
-		// an unbounded dial if the address ever needs resolution.
-		var d net.Dialer
-		conn, err = resolv.Default.DialContext(ctx, "udp", server.Address, &d)
-		if err != nil {
-			return nil, err
-		}
-		defer func() { _ = conn.Close() }()
-		if _, err := conn.Write(msg.Data); err != nil {
-			return nil, err
-		}
-		bufPtr, ok := spoofguardBufPool.Get().(*[]byte)
-		if !ok {
-			return nil, errors.New("spoofguard buffer pool type error")
-		}
-		buf = *bufPtr
-		// Zero only the used prefix (R3-L13 family).
-		defer func() { clear(buf[:lastN]); spoofguardBufPool.Put(bufPtr) }()
-	}
-
-	// ── HopGuard: enable TTL/HopLimit capture on raw UDP conns ──
-	var tc *ipttl.Capture
-	var hg *defense.HopGuard
-	if server.HopGuard && conn != nil {
-		hg = c.hopGuard
-		udpConn, ok := conn.(*net.UDPConn)
-		if !ok {
-			return nil, errors.New("plain: unexpected connection type for UDP TTL capture")
-		}
-		tc = ipttl.New(udpConn)
-		if tc == nil {
-			if _, warned := c.hopguardWarned.LoadOrStore(server.Address, struct{}{}); !warned {
-				log.Debugf("UPSTREAM: hopguard TTL/HopLimit capture not available on %s", server.Address)
-			}
-		}
-	}
-
-	// ── Multi-read loop ───────────────────────────────────────────
-	maxDeadline := time.Now().Add(c.timeout)
-	if dl, ok := ctx.Deadline(); ok && dl.Before(maxDeadline) {
-		maxDeadline = dl
-	}
-
-	var sg spoofguardState
-
-	for {
-		select {
-		case <-ctx.Done():
-			// Return every pooled candidate — the error path below does the
-			// same; a bare return leaked them to the GC on first-win
-			// cancellation (M2).
-			if sg.last != nil {
-				pool.DefaultMessage.Put(sg.last)
-			}
-			if sg.prev != nil {
-				pool.DefaultMessage.Put(sg.prev)
-			}
-			if sg.nonEDNS != nil {
-				pool.DefaultMessage.Put(sg.nonEDNS)
-			}
-			return nil, ctx.Err()
-		default:
-		}
-		var n int
-		var err error
-		var ttl uint8
-		if tc != nil { //nolint:gocritic // three-branch read dispatch
-			_ = conn.SetReadDeadline(time.Now().Add(config.DefaultSpoofguardPollInterval))
-			n, ttl, err = tc.ReadFrom(buf)
-		} else if pconn != nil {
-			_ = pconn.SetDeadline(time.Now().Add(config.DefaultSpoofguardPollInterval))
-			n, _, err = pconn.ReadFrom(buf)
-		} else {
-			_ = conn.SetDeadline(time.Now().Add(config.DefaultSpoofguardPollInterval))
-			n, err = conn.Read(buf)
-		}
-		lastN = n
-
-		if err != nil && !errors.Is(err, ipttl.ErrNoControlMessage) {
-			// A missing TTL control message (ipttl.ErrNoControlMessage) is
-			// NOT a network failure — the datagram was received, just without
-			// TTL metadata. It skips this error handling and falls through
-			// to packet processing as a TTL-less read (ttl=0 → not
-			// confident), instead of dropping the datagram and failing the
-			// query.
-			netErr, ok := errors.AsType[net.Error](err)
-			if ok && netErr.Timeout() {
-				now := time.Now()
-				if sg.last != nil || sg.nonEDNS != nil {
-					// Return the best candidate after the collect window expires.
-					// After the collect window expires, return the best candidate
-					// even if ambiguous — single-answer EDNS responses are common
-					// for uncensored domains. The window already waited for a second
-					// candidate (potential GFW fake) to compare against.
-					if sg.last != nil && now.Sub(sg.lastRecv) > sg.collectWindow() {
-						return sg.pickBest(), nil
-					}
-					// For non-EDNS-only fallback, use the same window.
-					if sg.last == nil && sg.nonEDNS != nil && now.Sub(sg.lastRecv) > sg.collectWindow() {
-						return sg.pickBest(), nil
-					}
-					if now.After(maxDeadline) {
-						return sg.pickBest(), nil
-					}
-				} else if now.After(maxDeadline) {
-					return nil, errors.New("no UDP response received")
-				}
-				continue
-			}
-			if sg.last != nil {
-				pool.DefaultMessage.Put(sg.last)
-			}
-			if sg.prev != nil {
-				pool.DefaultMessage.Put(sg.prev)
-			}
-			if sg.nonEDNS != nil {
-				pool.DefaultMessage.Put(sg.nonEDNS)
-			}
-			return nil, err
-		}
-
-		// ID/length validation runs BEFORE HopGuard so stray datagrams never
-		// enter the TTL histogram (M1).
-		if n < 12 || uint16(buf[0])<<8|uint16(buf[1]) != msg.ID {
-			continue
-		}
-
-		// HopGuard: validate gates packet acceptance; Feed happens only
-		// after spoofguard accepts the response (below) — the learning
-		// phase otherwise lets a fixed-TTL flood win the mode and arm the
-		// guard on the attacker's TTL (M1).  Rejected TTLs are sampled
-		// 1-in-16 so legitimate drift can recover (M2).
-		if hg != nil && !hg.Validate(server.Address, ttl) {
-			if hg.ShouldSampleRejected(server.Address) {
-				hg.Feed(server.Address, ttl)
-			}
-			continue
-		}
-
-		// TTL confidence signal for spoofguard: when hopguard is armed
-		// and the TTL is trusted, ambiguous EDNS responses can be
-		// fast-accepted without waiting for a second candidate.  A TTL=0
-		// read carries no TTL evidence — never fast-accept on it (M-low).
-		ttlConfident := hg != nil && hg.Confident(server.Address) && ttl != 0
-		if resp := sg.processPacket(buf[:n], n, msg.UDPSize, server.Address, ttlConfident, ttl, server.Spoofguard); resp != nil {
-			// Feed exactly once per accepted response (M-low).
-			if hg != nil {
-				hg.Feed(server.Address, ttl)
-			}
-			return resp, nil
-		}
-	}
-}
-
 // exchangeViaProxyUDP sends a DNS query over UDP through a SOCKS5 proxy
 // using UDP ASSOCIATE (RFC 1928 §6).
 func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr string, proxyDialer *socks5.Dialer) (*dns.Msg, error) {
@@ -790,7 +600,9 @@ func (s *spoofguardState) copyData(raw []byte, n int) []byte {
 	s.copyBuf = s.copyBuf[:n]
 	copy(s.copyBuf, raw[:n])
 	s.copyBufShrinkCount++
-	if s.copyBufShrinkCount >= 256 && cap(s.copyBuf) > 4*n && cap(s.copyBuf) > 512 {
+	// Copy-buffer shrink cadence: after copyBufUses copies, an oversized
+	// buffer (4× the working set, ≥512 B floor) is reallocated down (C-L6).
+	if s.copyBufShrinkCount >= copyBufShrinkAfter && cap(s.copyBuf) > copyBufShrinkFactor*n && cap(s.copyBuf) > copyBufShrinkMinCap {
 		s.copyBuf = make([]byte, n)
 		copy(s.copyBuf, raw[:n])
 		s.copyBufShrinkCount = 0
@@ -1011,6 +823,11 @@ func (s *spoofguardState) pickBestTTL() uint8 {
 	}
 	if s.nonEDNS != nil {
 		return s.nonEDNSTTL
+	}
+	// pickBest prefers the richer prev when last is single-answer — feed
+	// the TTL of the record that will actually be served (U16).
+	if s.prev != nil {
+		return s.prevTTL
 	}
 	return 0
 }

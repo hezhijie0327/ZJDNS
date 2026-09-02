@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand/v2"
 	"net"
@@ -117,7 +118,7 @@ func probeTCP(ctx context.Context, ip net.IP, port int) error {
 	if err != nil {
 		return err
 	}
-	_ = conn.Close()
+	_ = conn.Close() // _ = error: probe socket cleanup
 	return nil
 }
 
@@ -350,6 +351,11 @@ func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool, 
 	if err != nil {
 		return err
 	}
+	// Drain before Close: an unread body resets the HTTP/2/3 stream and
+	// defeats the pooled client's connection reuse — every probe would pay
+	// a fresh transport setup (F17).  HEAD bodies are empty; the drain is
+	// bounded anyway.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	defer func() { _ = resp.Body.Close() }()
 	return nil
 }

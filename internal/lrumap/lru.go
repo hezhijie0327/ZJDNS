@@ -1,4 +1,4 @@
-// Package maps provides generic, concurrent-safe map data structures with
+// Package lrumap provides generic, concurrent-safe map data structures with
 // bounded capacity and LRU eviction.
 //
 // LRU ordering is maintained via an embedded doubly-linked list with sentinel

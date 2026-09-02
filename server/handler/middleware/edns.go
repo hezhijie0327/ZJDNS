@@ -3,7 +3,6 @@ package middleware
 import (
 	"context"
 	"net"
-	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -16,8 +15,7 @@ import (
 // incoming request and validates the DNS Cookie per RFC 7873.  Invalid
 // cookies receive a BADCOOKIE response.
 type EDNS struct {
-	edns   handler.EDNSHandler
-	config *config.ServerConfig
+	edns handler.EDNSHandler
 }
 
 // Wrap implements Wrapper.

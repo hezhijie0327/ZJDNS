@@ -43,8 +43,7 @@ type Result struct {
 	Additional []dns.RR
 	CreatedAt  int64 // LoadRules timestamp for TTL cycling
 
-	cachable bool // internal: true when the winning rule has no match_tags
-	score    int  // internal: winning rule's matchScore (cross-suffix comparison)
+	score int // internal: winning rule's matchScore (cross-suffix comparison)
 }
 
 // dynamicEntry holds a dynamic content function and its record configs.
@@ -373,7 +372,6 @@ func (e *Evaluator) bestMatch(rules []*zoneRule, qname string, wildcard bool, qt
 			Authority:  unpackRRs(r.authority),
 			Additional: unpackRRs(r.additional),
 			CreatedAt:  loadedAt,
-			cachable:   score == 0,
 			score:      score,
 		}
 	}

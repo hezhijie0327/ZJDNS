@@ -1,11 +1,12 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"os"
 	"os/signal"
-	"sort"
+	"slices"
 	"syscall"
 	"time"
 	"zjdns/cache"
@@ -89,7 +90,7 @@ func compactSpill(spill *spillfile.Store, diskCap int) {
 	}
 
 	// Newest-first traversal — the disk cap keeps the newest fresh records.
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Ts > entries[j].Ts })
+	slices.SortFunc(entries, func(a, b spillfile.Entry) int { return cmp.Compare(b.Ts, a.Ts) }) // newest first
 	keepSize := len(entries)
 	if diskCap > 0 {
 		keepSize = min(diskCap, keepSize)

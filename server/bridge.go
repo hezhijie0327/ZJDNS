@@ -267,7 +267,10 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		// carry Data and skip the pack.
 		if len(response.Data) == 0 {
 			if err := packSafe(response); err != nil {
-				log.Debugf("SERVER: UDP pack error for %s: %v", w.RemoteAddr().String(), err)
+				// RemoteAddr().String() allocates — gate it (C-L5).
+				if log.IsDebug() {
+					log.Debugf("SERVER: UDP pack error for %s: %v", w.RemoteAddr().String(), err)
+				}
 				pool.DefaultMessage.Put(response)
 				return
 			}
@@ -299,72 +302,19 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		// UDP socket is unconnected (ListenUDP, not DialUDP).
 		// w.Write() would fail with "destination address required".
 		if _, err := response.WriteTo(w); err != nil {
-			log.Debugf("SERVER: UDP write error for %s: %v", w.RemoteAddr().String(), err)
+			if log.IsDebug() { // RemoteAddr().String() allocates — gate it (C-L5)
+				log.Debugf("SERVER: UDP write error for %s: %v", w.RemoteAddr().String(), err)
+			}
 		}
 		pool.DefaultMessage.Put(response)
 	}
 }
 
-// truncateWire performs RFC 2181 §9 truncation directly on a packed message:
-// sets the TC bit, zeroes the RR counts and drops every RR section, keeping
-// only the header + question section and — when present — the trailing OPT
-// record (RFC 6891 §6.2.5).  Unlike dnsutil.Truncate + re-Pack, no
-// Unpack/Pack round-trip happens: the truncated wire is produced in place
-// with zero allocations (the typical pre-packed cache wire has no OPT).
-// EDE options are kept inside the preserved OPT — the truncation frees the
-// entire answer section, so RFC 8914 §3's space trade-off does not apply.
+// truncateWire shrinks a packed response to header + question (+ trailing
+// OPT) with TC set — see dnsutil.TruncateWire for the semantics (OPT
+// preserved per RFC 6891 §6.2.5 so EDE inside it survives).
 func truncateWire(wire []byte) []byte {
-	if len(wire) < dns.MsgHeaderSize {
-		return wire
-	}
-	// Question section: starts after the DNS header.
-	pos := dns.MsgHeaderSize
-	questions := int(binary.BigEndian.Uint16(wire[4:6]))
-	for range questions {
-		off, ok := zdnsutil.SkipWireName(wire, pos)
-		if !ok {
-			// Malformed question — keep only the header.
-			return wire[:dns.MsgHeaderSize]
-		}
-		pos = off + 4 // QTYPE(2) + QCLASS(2)
-	}
-	questionEnd := pos
-
-	// Scan the RR sections for a trailing OPT (type 41) to preserve.
-	var opt []byte
-	for pos+10 <= len(wire) {
-		off, ok := zdnsutil.SkipWireName(wire, pos)
-		if !ok || off+10 > len(wire) {
-			break
-		}
-		rrEnd := off + 10 + int(binary.BigEndian.Uint16(wire[off+8:]))
-		if rrEnd > len(wire) {
-			break
-		}
-		if binary.BigEndian.Uint16(wire[off:]) == dns.TypeOPT {
-			opt = wire[pos:rrEnd] // include the owner name (root label)
-		}
-		pos = rrEnd
-	}
-
-	// Rebuild: header + question (+ OPT).  TC bit = flags byte 2, bit 0x02.
-	truncated := wire[:questionEnd]
-	if len(truncated) < dns.MsgHeaderSize {
-		// Defensive: questionEnd is derived from QDCOUNT and can never be
-		// below 12, but a malformed wire must not panic the request path.
-		// (wire length ≥ MsgHeaderSize guaranteed by the guard above.)
-		return wire[:dns.MsgHeaderSize] //nolint:gosec // G602: guarded above
-	}
-	truncated[2] |= 0x02
-	truncated[6], truncated[7] = 0, 0 // ANCOUNT
-	truncated[8], truncated[9] = 0, 0 // NSCOUNT
-	if opt != nil {
-		truncated = append(truncated, opt...)
-		binary.BigEndian.PutUint16(truncated[10:12], 1) // ARCOUNT
-	} else {
-		truncated[10], truncated[11] = 0, 0 // ARCOUNT
-	}
-	return truncated
+	return zdnsutil.TruncateWire(wire)
 }
 
 // packSafe calls msg.Pack() and recovers from any panic, returning it as an

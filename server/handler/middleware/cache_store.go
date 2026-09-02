@@ -116,6 +116,18 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 		// leak the first to the GC.
 		msg.Rcode = dns.RcodeServerFailure
 		qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorOther, ExtraText: "ECS response mismatch"}
+		// This SERVFAIL short-circuits below the standard record block —
+		// record it here or the security-relevant outcome never reaches
+		// query_stats/query_log (H-L11).
+		rec := cache.AcquireRequestRecord()
+		rec.Qname = qname
+		rec.Qtype = qtype
+		rec.Qclass = qclass
+		rec.Protocol = qctx.Protocol
+		rec.Result = "error"
+		rec.Rcode = dns.RcodeServerFailure
+		m.store.RecordRequest(rec)
+		cache.ReleaseRequestRecord(rec)
 		return msg
 	}
 	if responseECS == nil && ecsOpt != nil {

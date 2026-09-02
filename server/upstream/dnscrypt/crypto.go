@@ -23,10 +23,7 @@ func prepareQuery(state *State, q *dnscryptcrypto.EncryptedQuery, packet []byte)
 			// for interoperability.  (CodeQL false positive: go/weak-sensitive-data-hashing)
 			q.Nonce = newNonce()
 			seed := sha512.Sum512_256(append(q.Nonce[:dnscryptcrypto.NonceSize/2], state.secretKey[:]...))
-			epSk, epPk, epErr := dnscryptcrypto.X25519KeyPairFromSeed(seed)
-			if epErr != nil {
-				return nil, dnscryptcrypto.Nonce{}, [dnscryptcrypto.SharedKeySize]byte{}, fmt.Errorf("ephemeral key: %w", epErr)
-			}
+			epSk, epPk := dnscryptcrypto.X25519KeyPairFromSeed(seed)
 			q.ClientPk = epPk
 			epSharedKey, epErr := dnscryptcrypto.ComputeSharedKey(dnscryptcrypto.XChacha20Poly1305, &epSk, &state.resolverPK)
 			if epErr != nil {

@@ -109,10 +109,7 @@ func TestKeyRotation(t *testing.T) {
 
 	// Seed chain: the newest window's PK derives from the previous SK.
 	seed := srv.keys[1].pair.Classical.ResolverSk
-	_, wantPk, err := dnscryptcrypto.X25519KeyPairFromSeed(seed)
-	if err != nil {
-		t.Fatalf("X25519KeyPairFromSeed: %v", err)
-	}
+	_, wantPk := dnscryptcrypto.X25519KeyPairFromSeed(seed)
 	if !bytes.Equal(srv.keys[0].pair.Classical.ResolverPk[:], wantPk[:]) {
 		t.Error("seed chain: new window PK does not derive from previous SK")
 	}
@@ -345,10 +342,7 @@ func TestSeedChain(t *testing.T) {
 	// windows are ordered newest-first (NotBefore strictly decreasing).
 	for i := 0; i+1 < len(srv.keys); i++ {
 		seed := srv.keys[i+1].pair.Classical.ResolverSk
-		_, wantPk, err := dnscryptcrypto.X25519KeyPairFromSeed(seed)
-		if err != nil {
-			t.Fatalf("X25519KeyPairFromSeed: %v", err)
-		}
+		_, wantPk := dnscryptcrypto.X25519KeyPairFromSeed(seed)
 		if !bytes.Equal(srv.keys[i].pair.Classical.ResolverPk[:], wantPk[:]) {
 			t.Errorf("window %d PK not derived from window %d SK (chain broken)", i, i+1)
 		}

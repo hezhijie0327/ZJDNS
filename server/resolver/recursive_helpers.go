@@ -180,7 +180,7 @@ func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMa
 
 // validateNODATAWithNSEC verifies NSEC/NSEC3 denial-of-existence records
 // for NODATA/NXDOMAIN responses against the zone's verified DNSKEYs (RFC 4035).
-func (r *Recursive) validateNODATAWithNSEC(response *dns.Msg, ctx context.Context, nameservers []string, currentDomain string, chain *dnssecChain, validated bool) bool {
+func (r *Recursive) validateNODATAWithNSEC(ctx context.Context, response *dns.Msg, nameservers []string, currentDomain string, chain *dnssecChain, validated bool) bool {
 	if len(response.Answer) > 0 {
 		return validated
 	}

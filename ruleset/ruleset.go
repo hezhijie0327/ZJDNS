@@ -78,11 +78,13 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 func addRule(table *ruleTable, tag, typ, value string) bool {
 	switch typ {
 	case "ip":
-		if _, _, err := net.ParseCIDR(value); err != nil {
+		// Single parse (D13): the former double ParseCIDR discarded the
+		// second result's error without a comment and paid the parse twice.
+		_, n, err := net.ParseCIDR(value)
+		if err != nil {
 			log.Warnf("RULESET: skipping invalid CIDR rule %s=%s: %v", tag, value, err)
 			return false
 		}
-		_, n, _ := net.ParseCIDR(value)
 		table.ipTrie.insert(n, tag)
 		return true
 	case "domain":

@@ -12,6 +12,8 @@ import (
 	"gitee.com/Trisia/gotlcp/tlcp"
 	"github.com/emmansun/gmsm/sm2"
 	"github.com/emmansun/gmsm/smx509"
+
+	zdnsutil "zjdns/internal/dnsutil"
 )
 
 // generateSelfSignedSMCerts creates a self-signed SM2 CA and two server
@@ -71,7 +73,7 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 			NotBefore:    time.Now(),
 			// The leaf must never outlive its signer — clamp to the CA's
 			// expiry (mirrors tls/certs.go leafNotAfter).
-			NotAfter:    leafNotAfter(time.Now(), caNotAfter),
+			NotAfter:    zdnsutil.LeafNotAfter(time.Now(), caNotAfter, config.DefaultServerCertValidity),
 			KeyUsage:    smx509.KeyUsageDigitalSignature,
 			ExtKeyUsage: []smx509.ExtKeyUsage{smx509.ExtKeyUsageServerAuth},
 		}
@@ -126,10 +128,3 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 // leafNotAfter returns the leaf certificate's expiry: the configured server
 // validity clamped to the CA's expiry so the leaf never outlives its signer
 // (strict RFC 5280 validators reject a chain whose leaf outlives its CA).
-func leafNotAfter(now, caNotAfter time.Time) time.Time {
-	leaf := now.Add(config.DefaultServerCertValidity)
-	if caNotAfter.Before(leaf) {
-		return caNotAfter
-	}
-	return leaf
-}

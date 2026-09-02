@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	downloadTimeout    = 30 * time.Second // matches config.the local downloadTimeout
+	downloadTimeout    = 30 * time.Second // matches config.DefaultDownloadTimeout — keep in sync if either changes.
 	otherWritePermMask = 0o022            // group/other write — root data files must be owner-writable only
 )
 

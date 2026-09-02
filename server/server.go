@@ -383,7 +383,6 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 			(dnsCryptReady && cfg.Server.Protocol.DTLS == cfg.Server.Protocol.DNSCrypt))
 	http3PortShared := (cfg.Server.Protocol.HTTP3.Port != "") &&
 		(dnsCryptReady && cfg.Server.Protocol.HTTP3.Port == cfg.Server.Protocol.DNSCrypt)
-	_ = http3PortShared // used below in SkipHTTP3
 
 	if cfg.Server.Certificate.TLS.IsEnabled() {
 		tlsCfg := tls.Config{

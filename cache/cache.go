@@ -43,7 +43,7 @@ type StoreReader interface {
 // populate cache entries or record metrics should depend on this interface.
 type StoreWriter interface {
 	Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
-		answer, authority, additional []dns.RR, validated bool, rcode uint16) int64
+		answer, authority, additional []dns.RR, validated bool, rcode uint16)
 	RecordRequest(r *RequestRecord)
 	UpdateLatency(ip string, latencyMS int)
 }

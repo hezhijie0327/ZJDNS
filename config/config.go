@@ -124,7 +124,6 @@ type DDRSettings struct {
 	InfoURL string `json:"infourl,omitzero"`
 }
 
-// CacheSettings configures DNS response cache size and stale serving.
 // CacheSettings configures the cache subsystem's three stores (entries,
 // latency, delegation), each with its own limit and persistence.
 type CacheSettings struct {

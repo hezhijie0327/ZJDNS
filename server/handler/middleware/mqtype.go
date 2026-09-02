@@ -95,14 +95,13 @@ func (m *MQTYPE) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		}
 		qtResults := make(chan qtResult, len(qtTypes))
 		for _, qt := range qtTypes {
-			qt2 := qt
 			go func() { //nolint:gosec // G118: QTx must detach from the request lifecycle (RFC 10029 §4) — a near-deadline request ctx must not abort the fresh QTx budget
 				defer zdnsutil.HandlePanic("MQTYPE QTx prefetch")
-				qtCtx, qtCancel := context.WithTimeout(context.Background(), config.DefaultMQTypeResolveTimeout)
+				qtCtx, qtCancel := context.WithTimeout(context.WithoutCancel(ctx), config.DefaultMQTypeResolveTimeout)
 				defer qtCancel()
 				qtResults <- qtResult{
-					qt: qt2,
-					qr: m.resolve(qtCtx, qd.Header().Name, qt2, qd.Header().Class, qctx.ECSOpt, qctx.ClientRequestedDNSSEC),
+					qt: qt,
+					qr: m.resolve(qtCtx, qd.Header().Name, qt, qd.Header().Class, qctx.ECSOpt, qctx.ClientRequestedDNSSEC),
 				}
 			}()
 		}
@@ -353,10 +352,26 @@ func mergeRRs(dst, src []dns.RR) []dns.RR {
 	if len(src) == 0 {
 		return dst
 	}
-	for _, rr := range src {
+	// Precompute each src RR's folded rdata once — the former nested
+	// equalRR call formatted both RRs (two rr.String() allocations) for
+	// every (existing, candidate) pair (H-L4).
+	keys := make([]string, len(src))
+	for i, rr := range src {
+		if rr != nil {
+			keys[i] = foldRRData(rr)
+		}
+	}
+	for i, rr := range src {
+		if rr == nil {
+			continue
+		}
 		dup := false
 		for _, existing := range dst {
-			if existing == rr || equalRR(existing, rr) {
+			if existing == rr || (existing != nil &&
+				dns.RRToType(existing) == dns.RRToType(rr) &&
+				existing.Header().Class == rr.Header().Class &&
+				dns.EqualName(existing.Header().Name, rr.Header().Name) &&
+				foldRRData(existing) == keys[i]) {
 				dup = true
 				break
 			}
@@ -366,21 +381,6 @@ func mergeRRs(dst, src []dns.RR) []dns.RR {
 		}
 	}
 	return dst
-}
-
-// equalRR compares two RRs for RFC 10029 §3.4 dedup: same type and class,
-// case-insensitively equal owner and rdata names (RFC 4343 §3), TTL ignored.
-// A CNAME merged from the A chain and the AAAA chain differs only in target
-// case — each authority echoes the case of its own query, CapsGuard
-// randomizes per query — and in TTL, and must collapse to one record.
-func equalRR(a, b dns.RR) bool {
-	if a == nil || b == nil || dns.RRToType(a) != dns.RRToType(b) || a.Header().Class != b.Header().Class {
-		return false
-	}
-	if !dns.EqualName(a.Header().Name, b.Header().Name) {
-		return false
-	}
-	return foldRRData(a) == foldRRData(b)
 }
 
 // foldRRData returns the RR's rdata presentation form (TTL excluded) with

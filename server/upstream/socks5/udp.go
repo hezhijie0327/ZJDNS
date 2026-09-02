@@ -155,7 +155,7 @@ func (d *Dialer) establishUDPRelay(ctx context.Context) error {
 	// Non-standard implementations (v2ray/xray) bind the UDP relay on the
 	// same port as the TCP proxy.  Handle BND.ADDR=0.0.0.0 and BND.PORT=0
 	// by falling back to the proxy's own address.
-	proxyHost, proxyPortStr, _ := net.SplitHostPort(d.proxyAddr)
+	proxyHost, proxyPortStr, _ := net.SplitHostPort(d.proxyAddr) // _ = error: d.proxyAddr is built by JoinHostPort
 	if relay.IP == nil || relay.IP.IsUnspecified() {
 		if ip := net.ParseIP(proxyHost); ip != nil {
 			relay.IP = ip

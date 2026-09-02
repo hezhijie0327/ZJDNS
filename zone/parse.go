@@ -104,7 +104,7 @@ func (e *Evaluator) loadFile(table *zoneTable, parent *config.ZoneRule) (int, er
 			}
 			curWildcard = isWildcard
 			curRcode = parent.Rcode
-			curTags, _ = parseMatchTags(parent.Match)
+			curTags, _ = parseMatchTags(parent.Match) // _ = error: an invalid file-level tag degrades to untagged; inline rules hard-fail in loadInline
 			curRecords = nil
 			curAuth = nil
 			curAddl = nil

@@ -430,10 +430,6 @@ const (
 	// (RFC 8310 §6). This is the default for encrypted upstreams.
 	PrivacyProfileStrict = "strict"
 
-	// unauthenticated TLS (SkipTLSVerify), providing protection against
-	// passive eavesdropping but not active MITM (RFC 8310 §5).
-	PrivacyProfileOpportunistic = "opportunistic"
-
 	DefaultLatencyProbeTimeout      = 100 * time.Millisecond
 	DefaultNSProbeTimeout           = 5 * time.Second // timeout for NS/root latency probing
 	DefaultLatencyProbeMinInterval  = 60              // min interval between probes for the same IP (seconds)

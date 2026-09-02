@@ -193,7 +193,7 @@ func (c *RawConn) readLoop() {
 			release()
 			continue // not a response for any of our exchanges — drop
 		}
-		// Lookup AND delivery under RLock: close() closes resultChs under the
+		// Lookup AND delivery under RLock: close() delivers nil into resultChs under the write lock (channels are never closed here) under the
 		// write lock, so a send can never race a closed channel (same
 		// discipline as the UDP pool).
 		c.mu.RLock()

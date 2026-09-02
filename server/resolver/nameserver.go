@@ -220,7 +220,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 				msg.Pseudo = removeMQQUERY(msg.Pseudo)
 				// Independent retry context: a fresh budget guarantees the
 				// fallback runs even if the first attempt consumed queryCtx.
-				retryCtx, retryCancel := context.WithTimeout(context.Background(), config.DefaultMQTypeResolveTimeout)
+				retryCtx, retryCancel := context.WithTimeout(context.WithoutCancel(queryCtx), config.DefaultMQTypeResolveTimeout)
 				result = r.resolver.queryClient.ExecuteQuery(retryCtx, msg, server)
 				retryCancel()
 			}

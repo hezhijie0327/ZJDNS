@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"zjdns/internal/log"
 
@@ -139,7 +138,7 @@ func addDDRRecords(cfg *ServerConfig) {
 		for a := range r.alpns {
 			alpnList = append(alpnList, a)
 		}
-		sort.Strings(alpnList)
+		slices.Sort(alpnList)
 		records = append(records, flatRecord{
 			port:    r.port,
 			alpns:   strings.Join(alpnList, ","),
