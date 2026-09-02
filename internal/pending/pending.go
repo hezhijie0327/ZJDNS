@@ -179,7 +179,7 @@ func NewResultGroup[K comparable, V any]() *ResultGroup[K, V] {
 // ctx.Err immediately — it NEVER runs fn itself.  Running the shared work
 // from a timed-out follower (the old promotion path) multiplied the work
 // under load: every follower re-ran the full fn with a deadline-stripped
-// context, so any slow leader (slow SQLite pool, slow network) turned one
+// context, so any slow leader (slow spill-tier reads, slow network) turned one
 // in-flight key into hundreds of duplicate runs with no overall deadline —
 // a goroutine explosion that also permanently leaked the dnscrypt cert
 // fetch (conn.Read with no socket deadline).  The follower's caller has

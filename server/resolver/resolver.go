@@ -127,10 +127,7 @@ type Config struct {
 	// unbounded).
 	DelegationSpillPath  string
 	DelegationSpillLimit int
-	// FallbackTimeout is the delayed-adoption gate for fallback upstreams
-	// (<= 0 applies config.DefaultFallbackTimeout).
-	FallbackTimeout time.Duration
-	Ctx             context.Context // lifecycle context propagated to Recursive for probes
+	Ctx                  context.Context // lifecycle context propagated to Recursive for probes
 }
 
 // ErrCIDRFilterRefused is returned when all A/AAAA records are filtered by
@@ -184,10 +181,7 @@ func New(cfg *Config) (*Resolver, error) {
 		DNSSECEnforce:   cfg.DNSSECEnforce,
 		upstream:        &upstreamSet{},
 		cache:           cfg.Cache,
-		fallbackTimeout: cfg.FallbackTimeout,
-	}
-	if r.fallbackTimeout <= 0 {
-		r.fallbackTimeout = config.DefaultFallbackTimeout
+		fallbackTimeout: config.DefaultFallbackTimeout,
 	}
 	delegationMax := cfg.DelegationMaxEntries
 	if delegationMax <= 0 {

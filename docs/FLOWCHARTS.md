@@ -436,7 +436,7 @@ graph TD
 | 2 | **SpoofGuard** | 转发+递归 | DNS 报文层 | UDP 多读循环（自适应窗口：单包 150ms / 多包 500ms，同内容重复即确认），fast signal 即收、EDNS 候选决胜、裸单答案重查确认 |
 | 3 | **SplitGuard** | 转发+递归 | TCP 流层 | TCP 分段发送（随机 [1,4] 字节），破坏 DPI 首包特征识别 |
 | 4 | **Poisonguard** | 递归专属 | DNS 内容层 | 每跳 zone-authority 交叉验证，检测越权 A/AAAA 注入 |
-| 5 | **CapsGuard** | 转发+递归（按上游） | 事务 ID 层 | 出站问题名 ASCII 字母大小写随机化（每字母 +1 bit 熵），应答须逐字节回显；不匹配 → 丢弃 + 无 0x20 重试一次（draft-vixie-dnsext-dns0x20 §5.5/§6.4） |
+| 5 | **CapsGuard** | 转发+递归（按上游） | 事务 ID 层 | 出站问题名 ASCII 字母大小写随机化（每字母 +1 bit 熵），应答须逐字节回显；不匹配 → 丢弃 + 无 0x20 重试一次；同一上游累计 8 次失配 → 10 分钟内跳过随机化（避免逐查询双倍出站）（draft-vixie-dnsext-dns0x20 §5.5/§6.4） |
 
 ### 防御机制详解
 
@@ -446,7 +446,11 @@ graph TD
 （`server/defense/capsguard.go` `RandomizeCase`），应答必须逐字节回显问题名
 （RFC 4343 §3 大小写不敏感仅限 ASCII）。回显不匹配视为伪造或坏中间盒：
 丢弃响应、以原始大小写重试一次（安全性 = 未启用 CapsGuard 的基线），不
-匹配 Warn 日志按 `config.DefaultCapsGuardWarnEvery` 采样。入站侧
+匹配 Warn 日志按 `config.DefaultCapsGuardWarnEvery` 采样。同一上游地址累计
+`DefaultCapsGuardDowngradeAfter`（8）次失配后，该地址在
+`DefaultCapsGuardRetryAfter`（10 分钟）内直接跳过随机化——回显伪造者否则
+能让每次查询都付出双倍出站流量；回显校验、spoofguard collect、question
+匹配仍然全部生效。入站侧
 （`server/handler/response.go` `patchQuestionCase`）在缓存命中响应中把
 存储的 canonical 问题名原地恢复为客户端原始大小写（0x20 翻转不改变 wire
 长度，TTL 偏移不受影响）。

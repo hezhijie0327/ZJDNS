@@ -87,7 +87,7 @@ func (r *Recursive) getRootServers() []string {
 	}
 
 	// Root addresses change at most monthly, but the uncached path runs 26
-	// SQLite lookups (13 names × A/AAAA). Serve the memoized set within the
+	// spill-tier lookups (13 names × A/AAAA). Serve the memoized set within the
 	// root cache TTL; the refresh path below re-probes on expiry.
 	now := log.NowUnix()
 	r.rootCacheMu.Lock()
@@ -98,10 +98,10 @@ func (r *Recursive) getRootServers() []string {
 	}
 	// Cold or expired: install a PROVISIONAL set right now so concurrent
 	// walks return immediately.  The previous code only memoized AFTER the
-	// 26 SQLite lookups below — under load every walk raced the still-cold
+	// 26 spill-tier lookups below — under load every walk raced the still-cold
 	// cache and re-ran the full read path (lookupNSAddrsFromCache →
 	// GetTypes/LatencyLastProbe per root name), piling thousands of
-	// goroutines onto the exhausted SQLite pool and wedging the process
+	// goroutines onto the exhausted spill tier and wedging the process
 	// (observed: 2,469 LatencyLastProbe + 946 GetTypes waiters mid-batch).
 	// Serving the raw hints (or the previous set on expiry) is safe — the
 	// fill below atomically replaces it with the latency-sorted version.

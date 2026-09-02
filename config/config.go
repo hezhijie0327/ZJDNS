@@ -94,17 +94,12 @@ type FeatureFlags struct {
 	// "dual" (default, empty) keeps both, "ipv4" drops IPv6 addresses,
 	// "ipv6" drops IPv4 addresses.  Explicit operator choice — no runtime
 	// reachability probing.
-	AddressFamily string `json:"address_family,omitzero"`
-	// FallbackTimeout bounds how long the delayed-adoption gate holds a
-	// stashed fallback answer back while primaries may still answer
-	// (milliseconds, <= 0 applies DefaultFallbackTimeout).  Lower it when
-	// the primaries answer fast or fail fast.
-	FallbackTimeout int                `json:"fallback_timeout,omitzero"`
-	DDR             DDRSettings        `json:"ddr,omitzero"`
-	ECS             ECSConfig          `json:"ecs_subnet,omitzero"`
-	Cache           CacheSettings      `json:"cache,omitzero"`
-	LatencyProbe    []LatencyProbeStep `json:"latency_probe,omitzero"`
-	DNS64           *DNS64Config       `json:"dns64,omitzero"`
+	AddressFamily string             `json:"address_family,omitzero"`
+	DDR           DDRSettings        `json:"ddr,omitzero"`
+	ECS           ECSConfig          `json:"ecs_subnet,omitzero"`
+	Cache         CacheSettings      `json:"cache,omitzero"`
+	LatencyProbe  []LatencyProbeStep `json:"latency_probe,omitzero"`
+	DNS64         *DNS64Config       `json:"dns64,omitzero"`
 }
 
 // KTLSSettings configures kernel TLS offload for DoT/DoH server listeners.

@@ -74,7 +74,7 @@ type Recursive struct {
 
 	// rootCache memoizes getRootServers' result: the root set changes at
 	// most monthly, but the uncached path issues 13 names × 2 types = 26
-	// SQLite lookups per recursive query.
+	// spill-tier lookups per recursive query.
 	rootCacheMu   sync.Mutex
 	rootCache     []string
 	rootCacheTime int64 // log.NowUnix() of the cache fill
@@ -615,10 +615,10 @@ func (r *Recursive) probeTLDForPoison(ctx context.Context, tldServers []string, 
 
 func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOption) QueryResult {
 	// No singleflight dedup: every query walks independently.  The delegation
-	// cache (SQLite) and the NS-address cache still deduplicate across queries
+	// cache (in-memory LRU + spill) and the NS-address cache still deduplicate across queries
 	// once a walk completes; in-flight coalescing via pending.ResultGroup was
 	// removed because its follower-promotion ran duplicate full walks without
-	// an overall deadline, amplifying any bottleneck (SQLite pool, network)
+	// an overall deadline, amplifying any bottleneck (spill-tier disk reads, network)
 	// into a goroutine explosion under load (2026-08 production incidents).
 	return c.resolveInner(ctx, question, ecs)
 }

@@ -123,7 +123,7 @@ the flags of its `protocol: "recursive"` upstream).
 | **Spoofguard**  | UDP upstream           | Multi-read loop (adaptive window: 150ms single packet, 500ms multi-packet; identical repeats confirm immediately): fast-accept `AN>=2`/`NS>0`/`AD=1`; EDNS responses are candidates (richness tie-break); bare single-answer A/AAAA → collect, re-query-confirm (≤3 rounds) |
 | **Poisonguard** | Recursive              | Zone-authority cross-validation on resolved answers                                                                                                                                                                                                                         |
 | **Splitguard**  | TCP upstream           | Random [1,4]-byte payload segmentation (no time jitter)                                                                                                                                                                                                                     |
-| **CapsGuard**   | All upstream protocols | Randomize the case bit of every ASCII letter in the outbound question (one bit of transaction entropy per letter, DNS 0x20); discard responses that do not echo the randomized case and retry once unrandomized                                                             |
+| **CapsGuard**   | All upstream protocols | Randomize the case bit of every ASCII letter in the outbound question (one bit of transaction entropy per letter, DNS 0x20); discard responses that do not echo the randomized case and retry once unrandomized; after 8 mismatches an upstream skips randomisation outright for 10 minutes (no per-query retry doubling) |
 
 **Implementation locations:**
 
@@ -306,11 +306,17 @@ Multiple protocols share a single TCP or UDP port via record-layer demultiplexin
 
 ### TCP (TLS+TLCP on same port)
 
-Protocol detection reads the 5-byte TLS record header: major version `0x03` → TLS, `0x01` → TLCP. A `bufferedConn` replays the consumed header to the selected protocol server. Per-connection overhead: 1 syscall + 1 `bufferedConn` allocation + 1 channel hop. After the handshake, all subsequent queries flow directly on the TLS/TLCP connection — zero extra overhead.
+Protocol detection reads the 5-byte TLS record header: major version `0x03` → TLS, `0x01` → TLCP. A `bufferedConn` replays the consumed header to the selected protocol server. The sniff runs in a per-connection goroutine bounded by a 10s read deadline — a client that completes the TCP handshake but never sends its header (scanners, health checks) must not head-of-line-block the accept loop. Per-connection overhead: 1 syscall + 1 `bufferedConn` allocation + 1 channel hop. After the handshake, all subsequent queries flow directly on the TLS/TLCP connection — zero extra overhead.
 
 ### UDP (QUIC+DTLS+DTLCP on same port)
 
-Protocol detection inspects the first datagram from each client address: first byte ≥ 0xC0 → QUIC (long header), version ≥ 0x1000 → DTLS, otherwise → DTLCP. The detection result is cached per client address (`peerProto` map).
+Protocol detection is structural and deliberately conservative (a wrong positive steals a datagram from the DNSCrypt fallback, whose plaintext cert fetches look random in their first bytes):
+
+1. **Plain-DNS query shape first** (`looksLikePlainDNSQuery`): header flags/counts (QR=0, opcode=0, QDCOUNT=1, ANCOUNT=NSCOUNT=0, ARCOUNT≤1) + one in-bounds question + optional well-formed OPT → falls through to the DNSCrypt fallback before any byte heuristic runs.
+2. **QUIC**: first byte ≥ 0xC0 (long header) AND length ≥ 1200 — a client's first QUIC packet is always an Initial (RFC 9000 §14); the size floor excludes random-ID collisions with plain DNS (~25% of cert fetches were formerly dropped here).
+3. **DTLS**: first byte 0x14–0x18 AND record version exactly 0xFEFF/0xFEFD/0xFEFC; **DTLCP**: version exactly 0x0101 (the former `version ≥ 0x1000` heuristic matched almost any garbage).
+
+The detection result is cached per client address (`peerProto` map, capped at 65536 entries and rebuilt on overflow). Per-client state is reaped: DNSCrypt/DTLCP `DemuxPacketConn`s, DTLS clients and DTLCP conns idle for more than 60s are closed and forgotten by an amortised reaper inline in the dispatch loop; the channel send and `Close()` are serialised by a per-conn mutex (handler-side closes must never race a dispatch send — an unguarded send on a closed channel panicked the whole dispatch loop).
 
 **Zero per-packet allocation dispatch** (`server/protocol/tlcp/sharedudp.go`):
 
@@ -341,7 +347,11 @@ The middleware chain (see AGENTS.md for the full 10-layer pipeline) hosts the
 recent RFC features:
 
 - **RFC 10029 MQTYPE**: per-upstream `mqtype` config (numeric QTYPE list).
-  Client side: outbound queries attach MQQUERY{config − primary}; merged
+  Client side: outbound queries attach MQQUERY{config − primary}; an upstream
+  that fails/refuses the optioned query (observed: CN resolvers SERVFAILing
+  the unknown EDNS option) is retried once optionless on BOTH the recursive
+  and forwarding paths; the server-side merge prefetches QTx resolutions
+  concurrently with the primary; merged
   records warm the cache and are stripped from the client-facing answer;
   unsupported authorities fall back to standalone queries (§3.5).
   Server side: `middleware/mqtype.go` (between EDNS and CacheStore) merges

@@ -272,12 +272,12 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 > **Note:** Names like `ResponseMiddleware`, `CacheStoreMiddleware`, etc. are descriptive labels for the pipeline. The actual Go types are simply `Response`, `CacheStore`, `MQTYPE`, `Validation`, `Zone`, `Any`, `EDNS`, `CacheLookup`, `DNS64`, and `Resolution`.
 
 ### RFC 10029 MQTYPE (`upstream[*].mqtype`, numeric QTYPE list)
-- Client: outbound queries attach `MQQUERY{config − primary}`; merged records (with RRSIGs) warm the cache; bundled types stripped from the client response **across the whole CNAME chain** (owner-independent, `stripMQBundled`); unsupported authority → §3.5 fallback standalone queries (existing concurrent walks)
-- Server: `middleware/mqtype.go` merges per §3.4 (RCODE/AA/AD match, RR dedup, size budget that never self-triggers TC, empty-list support signal); 8 FORMERR cases §3.3
+- Client: outbound queries attach `MQQUERY{config − primary}`; merged records (with RRSIGs) warm the cache; bundled types stripped from the client response **across the whole CNAME chain** (owner-independent, `stripMQBundled`); an upstream that fails/refuses the optioned query (observed: CN resolvers SERVFAILing the unknown EDNS option) is retried once optionless on BOTH the recursive and forwarding paths (§3.5)
+- Server: `middleware/mqtype.go` merges per §3.4 (RCODE/AA/AD match, RR dedup, size budget that never self-triggers TC, empty-list support signal; QTx resolutions prefetched concurrently with the primary); 8 FORMERR cases §3.3
 - Never: zonecut DS+NS (RFC A.3 failure), NS-walk serialization
 
 ### Query Routing (`server/resolver`)
-- Upstream servers queried concurrently via `errgroup`; first NOERROR wins
+- Upstream servers raced via `errgroup` with first NOERROR wins — fallback upstreams' results are gated behind `DefaultFallbackTimeout` (500ms, or immediately when every primary has exited without a result); the recursive walk races the latency-ranked first 6 authorities and widens to all after 75ms without a winner
 - NXDOMAIN stored as secondary fallback within each query group
 - Recursion is explicit-only: `protocol: "recursive"` in upstream — an empty
   upstream list resolves to SERVFAIL ("no upstream servers"), never implicit
@@ -298,7 +298,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | **Spoofguard** | UDP upstream | Multi-read loop: reject `AR=0+NOERROR` without EDNS (bare A/AAAA, GFW signature); accept `AN>=2`/`NS>0`/`AD=1`; collect ambiguous (≤500ms) → pick richest |
 | **Poisonguard** | Recursive | Zone-authority cross-validation on resolved answers |
 | **Splitguard** | TCP upstream | Random [1,4] payload segmentation (no time jitter) |
-| **Capsguard** | All upstream (per-upstream `capsguard`) | `defense.RandomizeCase` flips the case bit of each ASCII letter in the outbound question (draft-vixie-dnsext-dns0x20 §5.1); `ExecuteQuery` discards responses that don't echo the randomized case and retries once unrandomized (§6.4). Upstream-echoed record case is folded to lowercase at the resolver exit (`resolver.Query` → `dnsutil.FoldCase`, §5.4); cache-hit responses patch the stored wire back to the client's case (`handler/response.go` `patchQuestionCase`) |
+| **Capsguard** | All upstream (per-upstream `capsguard`) | `defense.RandomizeCase` flips the case bit of each ASCII letter in the outbound question (draft-vixie-dnsext-dns0x20 §5.1); `ExecuteQuery` discards responses that don't echo the randomized case and retries once unrandomized (§6.4); after `DefaultCapsGuardDowngradeAfter` (8) mismatches an address skips randomisation outright for `DefaultCapsGuardRetryAfter` (10min) — no doubled query, no per-query timing signature. Upstream-echoed record case is folded to lowercase at the resolver exit (`resolver.Query` → `dnsutil.FoldCase`, §5.4); cache-hit responses patch the stored wire back to the client's case (`handler/response.go` `patchQuestionCase`) |
 
 ## Key Types
 

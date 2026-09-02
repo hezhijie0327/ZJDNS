@@ -271,12 +271,6 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 	if hasFallback && !hasPrimary {
 		return errors.New("upstream: fallback servers require at least one non-fallback upstream")
 	}
-	if hasFallback {
-		// Normalize the adoption gate: <= 0 keeps the default (500 ms).
-		if cfg.Server.Features.FallbackTimeout <= 0 {
-			cfg.Server.Features.FallbackTimeout = int(DefaultFallbackTimeout / time.Millisecond)
-		}
-	}
 	return nil
 }
 

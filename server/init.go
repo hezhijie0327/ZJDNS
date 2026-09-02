@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"time"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -44,7 +43,6 @@ func initResolver(
 		DelegationMaxEntries: cfg.Server.Features.Cache.Delegation.Limit.Mem,
 		DelegationSpillPath:  cfg.Server.Features.DelegationStateFile(),
 		DelegationSpillLimit: cfg.Server.Features.Cache.Delegation.Limit.Disk,
-		FallbackTimeout:      time.Duration(cfg.Server.Features.FallbackTimeout) * time.Millisecond,
 		Ctx:                  backgroundCtx,
 	})
 	if err != nil {
