@@ -572,17 +572,14 @@ func (r *Recursive) probeTLDForPoison(ctx context.Context, tldServers []string, 
 	tldServers = filterByFamily(tldServers, r.addressFamily)
 	n := min(len(tldServers), config.DefaultPoisonProbeServers)
 	verdicts := make(chan bool, n)
-	var wg sync.WaitGroup
 	for i := range n {
 		server := &config.UpstreamServer{
 			Address:  tldServers[i],
 			Protocol: config.ProtoUDP,
 			Proxy:    r.resolver.recursiveProxyURL,
 		}
-		wg.Add(1)
 		go func() {
 			defer zdnsutil.HandlePanic("TLD poison probe")
-			defer wg.Done()
 			msg := pool.DefaultMessage.Get()
 			defer pool.DefaultMessage.Put(msg)
 			dnsutil.SetQuestion(msg, dnsutil.Fqdn(qname), dns.TypeA)
@@ -604,7 +601,10 @@ func (r *Recursive) probeTLDForPoison(ctx context.Context, tldServers []string, 
 			verdicts <- false
 		}()
 	}
-	wg.Wait()
+	// Drain as verdicts arrive (buffered — every probe sends exactly one).
+	// A single poisoned verdict is conclusive: return immediately, letting
+	// the deferred probeCancel abort the remaining probes instead of
+	// waiting out their timeouts alongside the concurrent data query.
 	for range n {
 		if <-verdicts {
 			return true

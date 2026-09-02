@@ -272,9 +272,7 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) [
 			refreshEntry()
 		}
 		if probe.TryProbeNSAddrs(r.cache, addrs) {
-			if probe.TryProbeNSAddrs(r.cache, addrs) {
-				go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
-			}
+			go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
 		}
 	}
 

@@ -533,20 +533,64 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			// AAAA via RFC 10029; a supporting authority merges AAAA into
 			// the A response, the warm cache (resolve()) lets the AAAA
 			// walk's cache-first lookup short-circuit.
-			var nsAddrs []string
-			var ansARecords []dns.RR
-			var ansAAAARecords []dns.RR
-			var addrMu sync.Mutex
+			//
+			// Each family contributes AS SOON AS ITS WALK RETURNS — the
+			// ≥2-names early exit and the shared address list must not wait
+			// for a straggling AAAA walk whose A sibling already answered
+			// (a blackholed AAAA path previously pinned the whole batch to
+			// its 3s budget).  resolveCancel() aborts the pending sibling
+			// once enough names have addresses.
+			//
+			// nameAddressed counts the NS name toward nsNamesDone exactly
+			// once — on the first family that yields addresses (guarded by
+			// allMu, shared with the cache-hit path above).
+			var nameAddressed bool
+			contribute := func(qtype uint16, addrs []string, records []dns.RR) {
+				// Cache the family's records so future queries hit warm
+				// cache; the async latency probe below reorders them later
+				// for latency-optimized cache hits.
+				if r.cache != nil && len(records) > 0 {
+					r.cache.Set(nsName, qtype, dns.ClassINET, nil, records, nil, nil, false, 0)
+					nsRecordsMu.Lock()
+					if aRecordsMap == nil {
+						aRecordsMap = make(map[string][]dns.RR)
+						aaaaRecordsMap = make(map[string][]dns.RR)
+					}
+					if qtype == dns.TypeA {
+						aRecordsMap[nsName] = append(aRecordsMap[nsName], records...)
+					} else {
+						aaaaRecordsMap[nsName] = append(aaaaRecordsMap[nsName], records...)
+					}
+					nsRecordsMu.Unlock()
+				}
+				if len(addrs) == 0 {
+					return
+				}
+				allMu.Lock()
+				allAddresses = append(allAddresses, addrs...)
+				if !nameAddressed {
+					nameAddressed = true
+					nsNamesDone++
+				}
+				enough := nsNamesDone >= 2
+				allMu.Unlock()
+				if enough {
+					resolveCancel()
+				}
+			}
+
 			var wg sync.WaitGroup
 			wg.Add(2)
-
 			go func() {
 				defer zdnsutil.HandlePanic("Resolve NS A")
 				defer wg.Done()
 				if queryCtx.Err() != nil {
 					return
 				}
-				ansARecords = r.resolveNSAddrType(queryCtx, nsName, dns.TypeA, depth+1, forceTCP, &nsAddrs, &addrMu)
+				var addrs []string
+				var mu sync.Mutex
+				records := r.resolveNSAddrType(queryCtx, nsName, dns.TypeA, depth+1, forceTCP, &addrs, &mu)
+				contribute(dns.TypeA, addrs, records)
 			}()
 
 			go func() {
@@ -555,62 +599,13 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 				if queryCtx.Err() != nil {
 					return
 				}
-				ansAAAARecords = r.resolveNSAddrType(queryCtx, nsName, dns.TypeAAAA, depth+1, forceTCP, &nsAddrs, &addrMu)
+				var addrs []string
+				var mu sync.Mutex
+				records := r.resolveNSAddrType(queryCtx, nsName, dns.TypeAAAA, depth+1, forceTCP, &addrs, &mu)
+				contribute(dns.TypeAAAA, addrs, records)
 			}()
 
 			wg.Wait()
-
-			// A concurrently started AAAA walk may have added addresses the
-			// merged A response also carries — deduplicate before use.
-			seenAddrs := make(map[string]struct{}, len(nsAddrs))
-			uniqAddrs := nsAddrs[:0]
-			for _, addr := range nsAddrs {
-				if _, ok := seenAddrs[addr]; ok {
-					continue
-				}
-				seenAddrs[addr] = struct{}{}
-				uniqAddrs = append(uniqAddrs, addr)
-			}
-			nsAddrs = uniqAddrs
-
-			if len(nsAddrs) == 0 {
-				return nil
-			}
-
-			// Cache A/AAAA records so future queries hit warm cache.
-			// The async latency probe below reorders them later for
-			// latency-optimized cache hits.
-			if r.cache != nil && len(ansARecords) > 0 {
-				r.cache.Set(nsName, dns.TypeA, dns.ClassINET, nil, ansARecords, nil, nil, false, 0)
-			}
-			if r.cache != nil && len(ansAAAARecords) > 0 {
-				r.cache.Set(nsName, dns.TypeAAAA, dns.ClassINET, nil, ansAAAARecords, nil, nil, false, 0)
-			}
-
-			// Accumulate records for async latency probe.
-			if r.cache != nil && (len(ansARecords) > 0 || len(ansAAAARecords) > 0) {
-				nsRecordsMu.Lock()
-				if aRecordsMap == nil {
-					aRecordsMap = make(map[string][]dns.RR)
-					aaaaRecordsMap = make(map[string][]dns.RR)
-				}
-				if len(ansARecords) > 0 {
-					aRecordsMap[nsName] = append(aRecordsMap[nsName], ansARecords...)
-				}
-				if len(ansAAAARecords) > 0 {
-					aaaaRecordsMap[nsName] = append(aaaaRecordsMap[nsName], ansAAAARecords...)
-				}
-				nsRecordsMu.Unlock()
-			}
-
-			allMu.Lock()
-			allAddresses = append(allAddresses, nsAddrs...)
-			nsNamesDone++
-			enough := nsNamesDone >= 2
-			allMu.Unlock()
-			if enough {
-				resolveCancel()
-			}
 			return nil
 		})
 	}
