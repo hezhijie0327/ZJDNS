@@ -190,6 +190,16 @@ func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 						_ = pconn.Close()
 						return nil, err
 					}
+					// quic-go never closes a caller-provided PacketConn —
+					// the SOCKS5 UDP relay (2 fds + monitor goroutine) leaks
+					// on every connection teardown otherwise (2026-09 U4,
+					// same hook as ExecuteQUIC).
+					done := conn.Context().Done()
+					go func() {
+						defer zdnsutil.HandlePanic("QUIC proxy relay release")
+						<-done
+						_ = pconn.Close()
+					}()
 					return conn, nil
 				}
 				// Dial an IP literal from the resolution cache (SNI already

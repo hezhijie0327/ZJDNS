@@ -284,7 +284,18 @@ func (c *Client) WarmUpQUIC(ctx context.Context, server *config.UpstreamServer) 
 					// quic-go does not take ownership of a caller-provided
 					// PacketConn on a failed dial — do not leak the UDP socket.
 					_ = pconn.Close()
+					return conn, err
 				}
+				// quic-go never closes a caller-provided PacketConn —
+				// the SOCKS5 UDP relay (2 fds + monitor goroutine) leaks
+				// on every connection teardown otherwise (2026-09 U4,
+				// same hook as ExecuteQUIC).
+				done := conn.Context().Done()
+				go func() {
+					defer zdnsutil.HandlePanic("QUIC proxy relay release")
+					<-done
+					_ = pconn.Close()
+				}()
 				return conn, err
 			}
 			return quic.DialAddrEarly(timeoutCtx, server.Address, dialTLS, c.getQUICConfig(configKey, dialTLS.InsecureSkipVerify))
