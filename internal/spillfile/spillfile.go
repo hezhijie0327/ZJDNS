@@ -25,12 +25,16 @@ package spillfile
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"container/heap"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"math"
 	"os"
+	"slices"
 	"sort"
 	"sync"
 )
@@ -82,20 +86,6 @@ type WarmEntry struct {
 // arrives (top-K newest selection in O(n log max) instead of a full sort).
 type warmHeap []Entry
 
-// Warm selects the newest max records across both regions (keep filters
-// stale/unwanted ones), reads their wires, and returns them ordered
-// coldest-first — callers inserting front-to-back into an LRU end with the
-// hottest entry at the front.  The second return is the number of live
-// (non-deleted, non-superseded, keep-passing) records.
-//
-// One sequential pass over the sorted-region blocks (pooled buffers) plus
-// the tail map replaces the former startup sequence of Entries() (full
-// file read + per-record key copy) + sort.Slice (O(n log n) over all
-// records) + per-key Get (a ~64 KB block read per warmed entry) +
-// EntryCount() (a second full file scan for a log line).
-//
-// Stale records are skipped, not tombstoned — dead weight stays on disk
-// until the next Compact, which the caller already schedules.
 // Store is a sorted-region + tail-region key-value store.
 type Store struct {
 	f    *os.File
@@ -119,7 +109,10 @@ const Version = 2
 // Corruption guards — record lengths come from the file, so a corrupt or
 // tampered spill file must not drive an unbounded allocation (M3).
 const (
-	maxKeyLen  = 1 << 16 // 64 KiB — uint16 key length field bound
+	// maxKeyLen is the exact uint16 domain — a key of len 65536 would wrap
+	// the length field to 0 and write a record the scanner treats as
+	// corrupt, truncating the file tail on the next open (2026-09 F2).
+	maxKeyLen  = math.MaxUint16
 	maxWireLen = 1 << 24 // 16 MiB — DNS responses are far smaller
 
 	// headerLen = magic(4) + version(1) + sortedEnd(8) + blockCount(4).
@@ -242,7 +235,8 @@ func Open(path string) (*Store, error) {
 	return st, nil
 }
 
-// Create truncates path and returns an empty store (used by tests and Clear).
+// Create truncates path and returns an empty store. Tests use it to build
+// fixtures; production paths open via Open.
 func Create(path string) (*Store, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o644) //nolint:gosec // G304: path from trusted config
 	if err != nil {
@@ -495,10 +489,15 @@ func (s *Store) Delete(key string) {
 // the sparse index (~10 steps for 2000 blocks), reads the target block in one
 // pread and parses it sequentially.
 func (s *Store) Get(key string) (ts int64, ttl int, validated bool, wire []byte, ok bool) {
-	// Tail region: O(1) map lookup.
+	// The whole read runs under s.mu: Compact (also under s.mu) closes and
+	// reassigns s.f — a ReadAt released from the lock raced that swap and
+	// could read through the closed handle or at generation-stale offsets
+	// (2026-09 F1).  pread is thread-safe and page-cache-fast, and the bulk
+	// operations (Entries/Warm/Compact) already hold this mutex across IO.
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Tail region: O(1) map lookup.
 	if te, found := s.tailMap[key]; found {
-		s.mu.Unlock()
 		if te.deleted {
 			return 0, 0, false, nil, false
 		}
@@ -511,11 +510,9 @@ func (s *Store) Get(key string) (ts int64, ttl int, validated bool, wire []byte,
 	// Sorted region: binary-search the sparse index, then parse the block.
 	idx := sort.Search(len(s.sparse), func(i int) bool { return s.sparse[i].firstKey > key })
 	if idx == 0 {
-		s.mu.Unlock()
 		return 0, 0, false, nil, false
 	}
 	blk := s.sparse[idx-1]
-	s.mu.Unlock()
 
 	buf := acquireBlockBuf(int(blk.blockEnd - blk.blockStart))
 	block := buf[:blk.blockEnd-blk.blockStart]
@@ -546,6 +543,9 @@ func lookupInBlock(buf []byte, key string) (ts int64, ttl int, validated bool, w
 			return 0, 0, false, nil, false
 		}
 		wireLen := int(binary.BigEndian.Uint32(buf[pos+15+keyLen : pos+19+keyLen]))
+		if wireLen > maxWireLen { // 32-bit int overflow hardening (F15)
+			return 0, 0, false, nil, false
+		}
 		recLen := recordHeaderLen + keyLen + wireLen
 		if pos+recLen > len(buf) {
 			return 0, 0, false, nil, false
@@ -580,6 +580,9 @@ func scanBlock(blockStart int64, buf []byte, fn func(key string, ts int64, ttl i
 			return false
 		}
 		wireLen := int(binary.BigEndian.Uint32(buf[pos+15+keyLen : pos+19+keyLen]))
+		if wireLen > maxWireLen { // 32-bit int overflow hardening (F15)
+			return false
+		}
 		recLen := recordHeaderLen + keyLen + wireLen
 		if pos+recLen > len(buf) {
 			return false
@@ -600,18 +603,17 @@ func scanBlock(blockStart int64, buf []byte, fn func(key string, ts int64, ttl i
 // given timestamp — used by callers to avoid re-appending unchanged entries
 // during a full-memory flush.
 func (s *Store) Indexed(key string, ts int64) bool {
+	// Under s.mu for the same Compact-race reason as Get (2026-09 F1).
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if te, found := s.tailMap[key]; found {
-		s.mu.Unlock()
 		return !te.deleted && te.ts == ts
 	}
 	idx := sort.Search(len(s.sparse), func(i int) bool { return s.sparse[i].firstKey > key })
 	if idx == 0 {
-		s.mu.Unlock()
 		return false
 	}
 	blk := s.sparse[idx-1]
-	s.mu.Unlock()
 
 	buf := acquireBlockBuf(int(blk.blockEnd - blk.blockStart))
 	block := buf[:blk.blockEnd-blk.blockStart]
@@ -652,6 +654,20 @@ func (s *Store) Entries() []Entry {
 	return out
 }
 
+// Warm selects the newest max records across both regions (keep filters
+// stale/unwanted ones), reads their wires, and returns them ordered
+// coldest-first — callers inserting front-to-back into an LRU end with the
+// hottest entry at the front.  The second return is the number of live
+// (non-deleted, non-superseded, keep-passing) records.
+//
+// One sequential pass over the sorted-region blocks (pooled buffers) plus
+// the tail map replaces the former startup sequence of Entries() (full
+// file read + per-record key copy) + sort.Slice (O(n log n) over all
+// records) + per-key Get (a ~64 KB block read per warmed entry) +
+// EntryCount() (a second full file scan for a log line).
+//
+// Stale records are skipped, not tombstoned — dead weight stays on disk
+// until the next Compact, which the caller already schedules.
 func (s *Store) Warm(topN int, keep func(ts int64, ttl int) bool) (entries []WarmEntry, live int) {
 	if topN < 0 {
 		topN = 0
@@ -701,7 +717,7 @@ func (s *Store) Warm(topN int, keep func(ts int64, ttl int) bool) (entries []War
 	}
 
 	// Coldest-first order for LRU insertion.
-	sort.Slice(h, func(i, j int) bool { return h[i].Ts < h[j].Ts })
+	slices.SortFunc(h, func(a, b Entry) int { return cmp.Compare(a.Ts, b.Ts) })
 	out := make([]WarmEntry, 0, len(h))
 	for _, e := range h {
 		wire := make([]byte, e.WireLen)
@@ -765,11 +781,7 @@ func (s *Store) Compact(keep func(key string, ts int64, ttl int) bool) error {
 			byKey[m.key] = m
 		}
 	}
-	keys := make([]string, 0, len(byKey))
-	for k := range byKey {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(byKey))
 
 	// Pass 3: write the new file, key-sorted in blocks.
 	tmp := s.path + ".tmp"

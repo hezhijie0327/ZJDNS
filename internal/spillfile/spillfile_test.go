@@ -749,3 +749,54 @@ func BenchmarkOpen(b *testing.B) {
 		}
 	}
 }
+
+// TestGetDuringCompact: Get/Indexed previously dropped s.mu before their
+// ReadAt while Compact (holding s.mu) closed and reassigned s.f — the race
+// detector flags the unsynchronised s.f read, and the IO itself can hit the
+// closed handle (2026-09 F1).  Run reads against a compacting store under
+// the race detector.
+func TestGetDuringCompact(t *testing.T) {
+	st, err := Create(tmpPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	for i := range 200 {
+		if err := st.Put(fmt.Sprintf("k%d", i), int64(i), 300, true, fmt.Appendf(nil, "w%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var readers sync.WaitGroup
+	for g := range 4 {
+		readers.Add(1)
+		go func(g int) {
+			defer readers.Done()
+			for i := range 2000 {
+				key := fmt.Sprintf("k%d", i%200)
+				if _, _, _, _, ok := st.Get(key); !ok {
+					t.Errorf("Get(%s) miss during Compact", key)
+					return
+				}
+				st.Indexed(key, int64(i%200))
+			}
+		}(g)
+	}
+	compactDone := make(chan error, 1)
+	go func() {
+		var err error
+		for i := range 8 {
+			_ = i
+			if e := st.Compact(func(key string, ts int64, ttl int) bool { return true }); e != nil {
+				err = e
+				break
+			}
+		}
+		compactDone <- err
+	}()
+	readers.Wait()
+	if err := <-compactDone; err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+}
