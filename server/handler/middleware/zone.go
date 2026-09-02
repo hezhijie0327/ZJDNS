@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"strings"
+	"sync/atomic"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/internal/log"
@@ -26,6 +27,9 @@ type Zone struct {
 
 // wildcardPrefix is the zone-rule wildcard marker (matches zone package).
 const wildcardPrefix = "*."
+
+// chaosDenialCount samples the destructive-CHAOS denial Warn (C-M2).
+var chaosDenialCount atomic.Uint64
 
 // isDestructiveChaosName reports whether the qname is one of the CHAOS
 // control endpoints that mutate server state (cache/latency flush, stats
@@ -83,7 +87,12 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// the cache and reset keys — any client that can reach a listener
 		// could otherwise trigger them remotely. Loopback-only.
 		if isDestructiveChaosName(qname) && (qctx.ClientIP == nil || !qctx.ClientIP.IsLoopback()) {
-			log.Warnf("SECURITY: denying destructive CHAOS query %s from non-loopback client %s", qname, qctx.ClientIP)
+			// Sampled: any remote client can spam these names, each carrying
+			// attacker-chosen context — a per-packet Warn is a log-flood
+			// vector (2026-09 C-M2).
+			if n := chaosDenialCount.Add(1); n%config.DefaultChaosDenialWarnEvery == 1 {
+				log.Warnf("SECURITY: denying destructive CHAOS query %s from non-loopback client %s [%dth denial]", qname, qctx.ClientIP, n)
+			}
 			response := handler.BuildResponseMsg(qctx.Req)
 			response.Rcode = dns.RcodeRefused
 			qctx.Res = response

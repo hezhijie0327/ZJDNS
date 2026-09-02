@@ -34,14 +34,27 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		}
 
 		qr := qctx.ResolutionResult
-		if qr.Err != nil {
-			return err
-		}
 
 		qd := qctx.Req.Question[0]
 		qtype := dns.RRToType(qd)
-		if qtype != dns.TypeAAAA || len(qr.Answer) > 0 {
+		if qtype != dns.TypeAAAA {
 			return err
+		}
+		// RFC 6147 §5.1.5: synthesis is needed when the AAAA response
+		// carries no AAAA record — including CNAME/DNAME chains without a
+		// terminating AAAA (the common CDN/ALIAS shape).  The former
+		// len(Answer)>0 gate skipped exactly those, leaving IPv6-only
+		// clients with NODATA (2026-09 H-M3).  A real AAAA answer needs no
+		// synthesis; §5.1.2's "treat other rcodes as empty answer" is left
+		// alone — SERVFAIL/timeout synthesis from a failed lookup would
+		// mask genuine outages.
+		if qr.Err != nil {
+			return err
+		}
+		for _, rr := range qr.Answer {
+			if _, ok := rr.(*dns.AAAA); ok {
+				return err
+			}
 		}
 
 		// Canonicalize: cache.Get requires a canonical qname (Set stores the
@@ -62,18 +75,16 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			// Skip expired entries: synthesizing from a stale A answer would
 			// serve it with the full stored TTL and no stale-answer EDE
 			// (M-cache).
-			if entry, found, isExpired := m.store.Get(qname, dns.TypeA, qclass, ecsOpt); found && !isExpired {
-				if entry.Unpack() == nil && len(entry.Answer) > 0 {
-					cache.ReleaseTTLOffsets(entry.TTLOffsets)
+			if entry, found, isExpired := m.store.Get(qname, dns.TypeA, qclass, ecsOpt); found {
+				if !isExpired && entry.Unpack() == nil && len(entry.Answer) > 0 {
 					aqr = &resolver.QueryResult{
 						Answer: entry.Answer, Authority: entry.Authority, Additional: entry.Additional,
 						Validated: entry.Validated,
 					}
-				} else {
-					// Unpack failed or empty answers — the entry is dropped;
-					// still return the pool-owned TTL-offset slice (M-pool).
-					cache.ReleaseTTLOffsets(entry.TTLOffsets)
 				}
+				// Every found path — usable, empty, unpack failure or expired
+				// — releases the pool-owned TTL-offset slice (H-L1).
+				cache.ReleaseTTLOffsets(entry.TTLOffsets)
 			}
 		}
 		if aqr == nil {
@@ -92,6 +103,10 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			qr.Answer, qr.Authority, qr.Additional = m.synthesizer.Synthesize(
 				qr.Authority, aqr.Answer, aqr.Authority, aqr.Additional,
 			)
+			// The served content now derives from the A lookup — the AAAA
+			// response's AD assertion must not carry over to synthesized
+			// records (RFC 6147: synthesized data is not validated as-is).
+			qr.Validated = qr.Validated && aqr.Validated
 			log.Debugf("DNS64: synthesized %d AAAA records for %s", len(qr.Answer), qname)
 		} else {
 			reason := "no A answers"

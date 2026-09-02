@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync/atomic"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -24,6 +25,9 @@ type CacheStore struct {
 	prober   handler.LatencyProber
 	resolver handler.Resolver
 }
+
+// ecsMismatchCount samples the ECS-mismatch Warn (C-M1) — atomic, hot path.
+var ecsMismatchCount atomic.Uint64
 
 // Wrap implements Wrapper.
 func (m *CacheStore) Wrap(next handler.QueryHandler) handler.QueryHandler {
@@ -101,9 +105,13 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	// family/prefix/address means the response is not for the queried subnet
 	// (spoofed or misrouted); serving it would poison the client's cache.
 	if ecsOpt != nil && responseECS != nil && !edns.VerifyECSResponse(ecsOpt, responseECS) {
-		// Rare security-relevant event (spoofed or misrouted response) —
-		// Warn with the qname for correlation; not per-query spam.
-		log.Warnf("EDNS: ECS mismatch for %s — returning SERVFAIL (spoofed or misrouted response)", qname)
+		// Security-relevant event (spoofed or misrouted response) — sampled
+		// Warn, not per-query: an upstream that consistently rewrites ECS
+		// (or a spoofer) hits this branch at full query rate and would
+		// flood the log otherwise (2026-09 C-M1).
+		if n := ecsMismatchCount.Add(1); n%config.DefaultECSMismatchWarnEvery == 1 {
+			log.Warnf("EDNS: ECS mismatch for %s — returning SERVFAIL (spoofed or misrouted response) [%dth]", qname, n)
+		}
 		// Reuse the pooled msg built above — allocating a second one would
 		// leak the first to the GC.
 		msg.Rcode = dns.RcodeServerFailure

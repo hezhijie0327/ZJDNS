@@ -52,6 +52,20 @@ type Handler struct {
 	ctx               context.Context
 }
 
+// HandlerDeps carries the Handler's collaborators as named fields — the
+// former 8 positional parameters (with ctx last) were easy to transpose at
+// the wiring site (2026-09 E1).
+type HandlerDeps struct {
+	Chain            QueryHandler
+	EDNS             *edns.Handler
+	CacheStore       cache.Store
+	Prober           LatencyProber
+	Resolver         Resolver
+	RefreshGroup     *errgroup.Group
+	PrefetchCooldown *PrefetchCooldown
+	Ctx              context.Context
+}
+
 // qctxPool reuses QueryContext structs — one is allocated per query.  The
 // full-field literal in ServeDNS overwrites every pooled field, so stale
 // values can never leak into a new query.  Safe to reuse on return: all
@@ -61,16 +75,16 @@ var qctxPool = sync.Pool{New: func() any { return new(QueryContext) }}
 
 // NewHandler creates a Handler from the assembled middleware chain and
 // essential dependencies.
-func NewHandler(chain QueryHandler, ednsH *edns.Handler, cacheStore cache.Store, prober LatencyProber, dnsResolver Resolver, refreshGroup *errgroup.Group, pfCooldown *PrefetchCooldown, ctx context.Context) *Handler {
+func NewHandler(deps *HandlerDeps) *Handler {
 	return &Handler{
-		chain:             chain,
-		edns:              ednsH,
-		cache:             cacheStore,
-		prober:            prober,
-		resolver:          dnsResolver,
-		cacheRefreshGroup: refreshGroup,
-		prefetchCooldown:  pfCooldown,
-		ctx:               ctx,
+		chain:             deps.Chain,
+		edns:              deps.EDNS,
+		cache:             deps.CacheStore,
+		prober:            deps.Prober,
+		resolver:          deps.Resolver,
+		cacheRefreshGroup: deps.RefreshGroup,
+		prefetchCooldown:  deps.PrefetchCooldown,
+		ctx:               deps.Ctx,
 	}
 }
 

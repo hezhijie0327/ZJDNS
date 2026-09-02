@@ -308,10 +308,16 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 
 	chain := middleware.AssembleChain(deps)
 
-	h := handler.NewHandler(
-		chain, ednsH, cacheStore, prober, dnsResolver,
-		cacheRefreshGroup, prefetchCooldown, ctx,
-	)
+	h := handler.NewHandler(&handler.HandlerDeps{
+		Chain:            chain,
+		EDNS:             ednsH,
+		CacheStore:       cacheStore,
+		Prober:           prober,
+		Resolver:         dnsResolver,
+		RefreshGroup:     cacheRefreshGroup,
+		PrefetchCooldown: prefetchCooldown,
+		Ctx:              ctx,
+	})
 	isClosed = h.IsClosed
 
 	return h

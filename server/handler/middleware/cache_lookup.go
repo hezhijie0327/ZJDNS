@@ -125,7 +125,10 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			}
 
 			// Default: try a quick foreground refresh, fall back to stale.
-			refreshed := m.closed != nil && !m.closed() && m.tryStartRefresh(qname, qtype, qclass, ecsOpt)
+			// refreshGroup guard mirrors the prefetch and preferStale paths:
+			// with no goroutine to run finishRefresh, an acquired gate would
+			// block all future refreshes for the key (2026-09 H-M1).
+			refreshed := m.refreshGroup != nil && m.closed != nil && !m.closed() && m.tryStartRefresh(qname, qtype, qclass, ecsOpt)
 			if !refreshed {
 				rec := cache.AcquireRequestRecord()
 				rec.Qname = qname
@@ -313,8 +316,12 @@ func buildCacheResponse(qctx *handler.QueryContext, entry *cache.Entry, isExpire
 // refreshCacheEntry performs a full resolution cycle and updates the cache.
 // Used for background prefetch and stale-entry refresh.
 func (m *CacheLookup) refreshCacheEntry(qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption) error {
+	refreshCtx := m.refreshCtx
+	if refreshCtx == nil { // nil only in tests — mirrors serveExpiredWithRefresh
+		refreshCtx = context.Background()
+	}
 	question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
-	qr := m.resolver.Query(m.refreshCtx, question, ecsOpt)
+	qr := m.resolver.Query(refreshCtx, question, ecsOpt)
 	if qr.Err != nil {
 		log.Debugf("CACHE: refresh failed for %s (type=%d): %v", qname, qtype, qr.Err)
 		return qr.Err

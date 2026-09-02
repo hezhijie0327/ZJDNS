@@ -241,6 +241,15 @@ const (
 	// (draft-vixie-dnsext-dns0x20-00 §5.3 still wants the mismatch
 	// observable for operations).
 	DefaultCapsGuardWarnEvery = 100
+
+	// DefaultECSMismatchWarnEvery samples the ECS response-mismatch Warn —
+	// a consistently mismatching upstream triggers it at full query rate
+	// (2026-09 C-M1).
+	DefaultECSMismatchWarnEvery = 100
+
+	// DefaultChaosDenialWarnEvery samples the destructive-CHAOS denial
+	// Warn — remotely triggerable at packet rate (2026-09 C-M2).
+	DefaultChaosDenialWarnEvery = 100
 	// DefaultCapsGuardDowngradeAfter / DefaultCapsGuardRetryAfter bound the
 	// per-upstream 0x20 downgrade: an authority (or an on-path attacker
 	// echoing mismatched cases) can force the unrandomized retry on every
