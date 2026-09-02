@@ -148,7 +148,7 @@ func (r *Recursive) getZoneCutSigner(response *dns.Msg, currentDomain string) st
 	return best
 }
 
-func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, nameservers []string, question Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain) (bool, error) {
+func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, nameservers []string, question Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain, depth int) (bool, error) {
 	crypto := r.resolver.validator.Crypto
 
 	childZone := r.getZoneCutSigner(response, currentDomain)
@@ -219,14 +219,15 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 			rrset[i] = ds
 		}
 
+		parentKeyTags := dnssec.KeyTags(parentKeys)
 		for _, rrsig := range dsRRSIGs {
-			for _, key := range parentKeys {
-				if key.KeyTag() != rrsig.KeyTag {
+			for i, key := range parentKeys {
+				if parentKeyTags[i] != rrsig.KeyTag {
 					continue
 				}
 				if err := crypto.VerifyRRset(rrset, rrsig, key); err == nil {
 					verifiedDS = dsRecords
-					log.Debugf("SECURITY: zone cut — verified DS for %s (key_tag=%d)", childZone, key.KeyTag())
+					log.Debugf("SECURITY: zone cut — verified DS for %s (key_tag=%d)", childZone, parentKeyTags[i])
 					break
 				}
 			}
@@ -245,7 +246,7 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 	// Querying it from the parent's servers returns a referral (no answer);
 	// querying the child is also required so an attacker-controlled parent
 	// cannot substitute its own keys.
-	childServers := r.resolveChildNameservers(ctx, nameservers, childZone, currentDomain, question.Name, ecs, forceTCP, dsResp)
+	childServers := r.resolveChildNameservers(ctx, nameservers, childZone, currentDomain, question.Name, ecs, forceTCP, dsResp, depth)
 	if len(childServers) == 0 {
 		return false, fmt.Errorf("could not resolve nameservers for child zone %s", childZone)
 	}
@@ -302,7 +303,7 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 // When mergedResp is non-nil and carries NS records, they are extracted
 // directly.  Otherwise a separate NS query is issued.  The caller owns
 // mergedResp and its pool lifetime — it is never Put here.
-func (r *Recursive) resolveChildNameservers(ctx context.Context, nameservers []string, childZone, currentDomain, qname string, ecs *edns.ECSOption, forceTCP bool, mergedResp *dns.Msg) []string {
+func (r *Recursive) resolveChildNameservers(ctx context.Context, nameservers []string, childZone, currentDomain, qname string, ecs *edns.ECSOption, forceTCP bool, mergedResp *dns.Msg, depth int) []string {
 	nsRecords := extractChildNS(childZone, mergedResp)
 	if nsRecords == nil {
 		// Fallback: no NS in the merged response — issue a standalone NS query.
@@ -320,7 +321,12 @@ func (r *Recursive) resolveChildNameservers(ctx context.Context, nameservers []s
 		return nil
 	}
 
-	return r.resolveNSAddressesConcurrent(ctx, nsRecords, qname, 0, forceTCP)
+	// Thread the caller's depth instead of resetting to 0: the zone-cut
+	// path re-enters resolve → processAnswerWithDNSSEC → resolveZoneCut,
+	// and a hardcoded 0 let self-referentially-signed delegation chains
+	// nest past DefaultMaxRecursionDepth within the resolve window
+	// (2026-09 R3).
+	return r.resolveNSAddressesConcurrent(ctx, nsRecords, qname, depth, forceTCP)
 }
 
 // extractChildNS returns the NS records for childZone found in resp's

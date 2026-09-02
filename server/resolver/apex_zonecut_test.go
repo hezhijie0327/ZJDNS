@@ -421,7 +421,7 @@ func TestResolveZoneCut_RacedDS(t *testing.T) {
 
 	_, err := rr.resolveZoneCut(context.Background(), msg, []string{addr},
 		Question{Name: "www." + childZone, Qtype: dns.TypeA},
-		parentZone, nil, false, chain)
+		parentZone, nil, false, chain, 0)
 
 	// The raced DS must be accepted — the cut proceeds to child NS
 	// resolution (which fails in the mock) instead of failing early with

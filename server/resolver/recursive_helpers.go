@@ -225,7 +225,7 @@ func (r *Recursive) shouldRetryMinimisedQname(queryName, qname string, qnameMini
 // zone cut detection, and enforces bogus delegation policies. Returns a
 // terminal result when the answer is ready, or nil to continue the
 // delegation loop for NODATA/NXDOMAIN responses.
-func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.Msg, nameservers []string, question Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain, validated *bool, ecsResponse *edns.ECSOption) *QueryResult {
+func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.Msg, nameservers []string, question Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain, validated *bool, ecsResponse *edns.ECSOption, depth int) *QueryResult {
 	if len(response.Answer) == 0 {
 		return nil
 	}
@@ -239,7 +239,7 @@ func (r *Recursive) processAnswerWithDNSSEC(ctx context.Context, response *dns.M
 		// via RRSIG signer mismatch. Clear them so failed zone
 		// cut resolution is treated as insecure, not bogus.
 
-		if cutValidated, cutErr := r.resolveZoneCut(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain); cutErr == nil {
+		if cutValidated, cutErr := r.resolveZoneCut(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain, depth); cutErr == nil {
 			*validated = cutValidated
 			if err := r.recordDNSSECFailure(chain, *validated,
 				"bogus zone cut delegation for "+question.Name); err != nil {

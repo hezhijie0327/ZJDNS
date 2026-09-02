@@ -401,7 +401,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			continue
 		}
 
-		if termRes := r.processAnswerWithDNSSEC(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain, &validated, ecsResponse); termRes != nil {
+		if termRes := r.processAnswerWithDNSSEC(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain, &validated, ecsResponse, depth); termRes != nil {
 			return *termRes
 		}
 

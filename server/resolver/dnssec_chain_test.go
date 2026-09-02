@@ -582,7 +582,7 @@ func TestResolveZoneCut_InvalidSigner(t *testing.T) {
 
 	_, err := rr.resolveZoneCut(context.Background(), msg, nil,
 		Question{Name: dnsutil.Fqdn("www." + zone), Qtype: dns.TypeA},
-		zone+".", nil, false, chain)
+		zone+".", nil, false, chain, 0)
 
 	if err == nil {
 		t.Error("resolveZoneCut should return error when no zone cut signer found")
@@ -689,7 +689,7 @@ func TestResolveZoneCut_NoParentKeys(t *testing.T) {
 
 	_, err := rr.resolveZoneCut(context.Background(), msg, nil,
 		Question{Name: dnsutil.Fqdn("www." + childZone), Qtype: dns.TypeA},
-		parentZone+".", nil, false, chain)
+		parentZone+".", nil, false, chain, 0)
 
 	if err == nil {
 		t.Error("resolveZoneCut should fail with no parent DNSKEYs available")

@@ -227,14 +227,15 @@ func (c *CryptoValidator) SelfVerifyDNSKEY(dnskeys []*dns.DNSKEY, dnskeyRRSIGs [
 	// The zone key self-signs the DNSKEY RRset. Try verifying with each key;
 	// SEP is a convention, not a requirement (RFC 4034 §2.1.1).
 	var verified bool
+	kskTags := KeyTags(dnskeys)
 	for _, rrsig := range dnskeyRRSIGs {
-		for _, ksk := range dnskeys {
-			if ksk.KeyTag() != rrsig.KeyTag {
+		for i, ksk := range dnskeys {
+			if kskTags[i] != rrsig.KeyTag {
 				continue
 			}
 			if err := c.VerifyRRset(rrset, rrsig, ksk); err == nil {
 				verified = true
-				log.Debugf("SECURITY: self-verified zone DNSKEY (key_tag=%d)", ksk.KeyTag())
+				log.Debugf("SECURITY: self-verified zone DNSKEY (key_tag=%d)", kskTags[i])
 				break
 			}
 		}
@@ -406,6 +407,17 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 // 2^31, taking wraparound into account).
 func serialLess(a, b uint32) bool {
 	return (a < b && b-a < 1<<31) || (a > b && a-b > 1<<31)
+}
+
+// KeyTags precomputes the RFC 4034 App. B key tag of each key once —
+// KeyTag() re-derives the digest on every call, so a sig×key matching
+// loop paid len(sigs)×len(keys) digest computations (2026-09 R5).
+func KeyTags(keys []*dns.DNSKEY) []uint16 {
+	tags := make([]uint16, len(keys))
+	for i, k := range keys {
+		tags[i] = k.KeyTag()
+	}
+	return tags
 }
 
 func groupRRset(rrs []dns.RR) map[rrsetKey][]dns.RR {

@@ -49,9 +49,10 @@ func (c *CryptoValidator) verifyNSECRecord(nsec *dns.NSEC, rrsigs []*dns.RRSIG, 
 		return false
 	}
 	rrset := []dns.RR{nsec}
+	keyTags := KeyTags(verifiedDNSKEYs)
 	for _, sig := range rrsigs {
-		for _, key := range verifiedDNSKEYs {
-			if key.KeyTag() != sig.KeyTag {
+		for i, key := range verifiedDNSKEYs {
+			if keyTags[i] != sig.KeyTag {
 				continue
 			}
 			if err := c.VerifyRRset(rrset, sig, key); err != nil {
@@ -167,9 +168,10 @@ func (c *CryptoValidator) verifyNSEC3RRSIG(nsec3 *dns.NSEC3, rrsigs []*dns.RRSIG
 		return false
 	}
 	rrset := []dns.RR{nsec3}
+	keyTags := KeyTags(verifiedDNSKEYs)
 	for _, sig := range rrsigs {
-		for _, key := range verifiedDNSKEYs {
-			if key.KeyTag() != sig.KeyTag {
+		for i, key := range verifiedDNSKEYs {
+			if keyTags[i] != sig.KeyTag {
 				continue
 			}
 			if err := c.VerifyRRset(rrset, sig, key); err != nil {
