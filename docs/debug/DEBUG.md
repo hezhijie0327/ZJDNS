@@ -10,7 +10,7 @@ docs/debug/
 ├── loopback/               # ZJDNS ↔ ZJDNS protocol loopback tests
 │   ├── server.json         # server: all protocols + self-signed TLS + DNSCrypt + TLCP/DTLCP
 │   ├── server-dnssec.json  # server: dnssec_enforce=true, recursive mode
-│   ├── server-shared.json  # server: shared ports (TCP 443/853 + UDP 853 multiplexing)
+│   ├── server-shared.json  # server: shared ports (TCP 20443: HTTPS+HTTPoverTLCP+DNSCrypt, TCP 20853: DoT+TLCP-DoT, UDP 20443: HTTP3+DNSCrypt, UDP 20853: DoQ+DTLS+DTLCP)
 │   ├── recursive-mqtype.json          # server: recursive mode + mqtype [1,28] (RFC 10029 merge)
 │   ├── client-udp.json     # client: UDP → server
 │   ├── client-tcp.json     # client: TCP → server
@@ -248,11 +248,12 @@ dig +tcp +ednsopt=20:001c @127.0.0.1 -p 13733 www.cloudflare.com A +short
 
 `server-shared.json` 将多个协议合并到同一端口（首包解复用）：
 
-| Shared Port | Protocols                | Demux          |
-| ----------- | ------------------------ | -------------- |
-| TCP 20443   | HTTPS + HTTPoverTLCP     | TLS ALPN       |
-| TCP 20853   | TLS(DoT) + TLCP(DoT)     | TLS ALPN       |
-| UDP 20853   | QUIC(DoQ) + DTLS + DTLCP | first-datagram |
+| Shared Port | Protocols                                | Demux          |
+| ----------- | ---------------------------------------- | -------------- |
+| TCP 20443   | HTTPS + HTTPoverTLCP + DNSCrypt(TCP)     | first-bytes    |
+| TCP 20853   | TLS(DoT) + TLCP(DoT)                     | first-bytes    |
+| UDP 20443   | HTTP3(DoH3) + DNSCrypt(UDP)              | first-datagram |
+| UDP 20853   | QUIC(DoQ) + DTLS + DTLCP                 | first-datagram |
 
 ```bash
 # 1. 启动共享端口 server
@@ -312,7 +313,7 @@ pkill -f "server-shared"
 ### Shared Port pprof Verification (零分配验证)
 
 共享 UDP 端口的 dispatch 路径经 pprof 实测验证为零堆分配（`addrKey` 替代
-`src.String()`、`packetBufPool` 替代 `make([]byte, n)`）：
+`src.String()`、`PacketBufPool` 替代 `make([]byte, n)`）：
 
 ```bash
 # 1. 启动带 pprof 的共享端口 server
@@ -328,7 +329,7 @@ curl -s http://127.0.0.1:6060/debug/pprof/allocs -o /tmp/allocs-before.pb.gz
 # 4. 采集查询后 allocs 并对比
 curl -s http://127.0.0.1:6060/debug/pprof/allocs -o /tmp/allocs-after.pb.gz
 go tool pprof -top -base /tmp/allocs-before.pb.gz /tmp/allocs-after.pb.gz
-# 期望：sharedudp.go / dtlcp.go dispatch 路径零新增分配
+# 期望：shared/udp.go / dtlcp.go dispatch 路径零新增分配
 ```
 
 ### Connection Pool Tests (连接复用验证)
@@ -526,9 +527,10 @@ sleep 2
 
 dig @127.0.0.1 -p 10533 www.google.com A +short
 
-# EDNS-gate + richness: the query carries EDNS, non-EDNS responses are
-# dropped, and the richest EDNS response wins.
-# Expected log: "UPSTREAM: UDP spoofguard rejected non-EDNS response" → "UPSTREAM: UDP spoofguard EDNS candidate"
+# EDNS-gate + richness: the query carries EDNS, non-EDNS single-answer
+# responses are collected as a low-priority fallback (re-query confirmed),
+# and the richest EDNS response wins.
+# Expected log: "UPSTREAM: UDP spoofguard non-EDNS fallback #N" (collecting, waiting for EDNS) → "UPSTREAM: UDP spoofguard EDNS candidate"
 
 pkill -f "spoofguard"
 ```
@@ -551,7 +553,7 @@ sleep 2
 dig @127.0.0.1 -p 10533 www.google.com A +short
 
 # Same detection logic over SOCKS5 UDP ASSOCIATE
-# Expected: "UPSTREAM: UDP spoofguard rejected non-EDNS response" → "UPSTREAM: UDP spoofguard fast return"
+# Expected: "UPSTREAM: UDP spoofguard non-EDNS fallback #N" (collecting, waiting for EDNS) → "UPSTREAM: UDP spoofguard fast return"
 
 pkill -f "spoofguard-socks5"
 pkill -f "socks5"

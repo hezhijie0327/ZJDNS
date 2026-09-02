@@ -75,7 +75,7 @@ All outbound protocols multiplex over pooled connections
 
 **Unified bounds** (per pool instance):
 
-- per-key `maxConns=4`, per-conn `maxPipe=16`, **global `maxTotal=32`**
+- per-key `maxConns=8`, per-conn `maxPipe=16`, **global `maxTotal=512`**
   (`DefaultMaxPoolTotalConns`)
 - Global-cap enforcement: `dialAndAdd` evicts via `evictOne` — dead conns
   first, then idle-LRU, then any-LRU (`lastUsed` timestamp, zero-alloc
@@ -238,7 +238,7 @@ Full implementation with PQC support. Two crypto constructions: XWingPQ (default
 - `keys []keyEntry` holds current + previous certs for rotation overlap
 - `updateKeys()` mints fresh resolver keys every 8h (cert TTL is 24h — the 8h interval creates the current+previous overlap window), signed with fixed Ed25519 identity; ticket keys are derived once from the signing key and **never rotate** (rotating would invalidate client-cached tickets)
 - `decrypt()` tries keys newest-first; `decryptPQResumed()` validates tickets against all active certs
-- Persistence: identity + cert windows stored in the `dnscrypt_state` state file (`server/protocol/dnscrypt/persist_file.go`) — a restart resumes the exact same windows (client-cached certs stay valid); config key change drops the persisted state and mints fresh windows
+- Persistence: identity + cert windows stored in the `certificate.dnscrypt.state_file` state file (`server/protocol/dnscrypt/persist_file.go`) — a restart resumes the exact same windows (client-cached certs stay valid); config key change drops the persisted state and mints fresh windows
 - CHAOS `zjdns.dnscrypt.clear` (loopback-only) regenerates all windows immediately (ResetKeys)
 - Config generator: `GenerateDNSCryptConfig()` in `generate.go` → called from `cmd/zjdns/cli/generate.go`
 
@@ -318,13 +318,13 @@ Protocol detection is structural and deliberately conservative (a wrong positive
 
 The detection result is cached per client address (`peerProto` map, capped at 65536 entries and rebuilt on overflow). Per-client state is reaped: DNSCrypt/DTLCP `DemuxPacketConn`s, DTLS clients and DTLCP conns idle for more than 60s are closed and forgotten by an amortised reaper inline in the dispatch loop; the channel send and `Close()` are serialised by a per-conn mutex (handler-side closes must never race a dispatch send — an unguarded send on a closed channel panicked the whole dispatch loop).
 
-**Zero per-packet allocation dispatch** (`server/protocol/tlcp/sharedudp.go`):
+**Zero per-packet allocation dispatch** (`server/protocol/shared/udp.go`):
 
 | Mechanism                     | Purpose                                                                                                   |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------- |
 | `addrKey{[16]byte, uint16}`   | Allocation-free map key (fixed-size arrays are comparable, unlike `net.UDPAddr.IP` slice)                 |
-| `packetBufPool` (`sync.Pool`) | Pooled datagram buffers passed through dispatch channels; consumers copy out and return                   |
-| Single-copy pipeline          | Dispatch loop → pool buffer → channel → consumer `ReadFrom` copies to caller buffer → `packetBufPool.Put` |
+| `PacketBufPool` (`sync.Pool`) | Pooled datagram buffers passed through dispatch channels; consumers copy out and return                   |
+| Single-copy pipeline          | Dispatch loop → pool buffer → channel → consumer `ReadFrom` copies to caller buffer → `PacketBufPool.Put` |
 
 All per-client maps (`dtlsPacketListener.clients`, `quicPacketConn`, `sharedDTLSClient.conns`, `peerProto`) use `addrKey` instead of `src.String()`, eliminating heap-allocated string keys.
 

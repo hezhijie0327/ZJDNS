@@ -158,6 +158,7 @@
     {
       "address": "https://1.1.1.1/dns-query",
       "protocol": "https",
+      "server_name": "one.one.one.one",
       "fallback": true
     }
   ],

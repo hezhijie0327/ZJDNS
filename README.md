@@ -73,7 +73,7 @@ dig @127.0.0.1 -p 443 2.dnscrypt-cert.example.com TXT
 
 ### 安全
 - **DNSSEC**：完整密码学信任链（DNSKEY→DS→RRSIG），NSEC/NSEC3 否定回答（[RFC 5155](docs/rfc/rfc5155.txt)），REVOKE 位检查（[RFC 5011](docs/rfc/rfc5011.txt)）
-- **DNS 防污染**：hopguard（IP TTL 指纹）、spoofguard（UDP 多读）、poisonguard（越权检测）、splitguard（TCP 分段）
+- **DNS 防污染**：hopguard（IP TTL 指纹）、spoofguard（UDP 多读）、poisonguard（越权检测）、splitguard（TCP 分段）、capsguard（DNS 0x20 大小写随机化）
 - **DNS Cookie**：SipHash-2-4（[RFC 9018](docs/rfc/rfc9018.txt)），密钥 24h 轮换，保留历史密钥兼容慢客户端
 - **EDNS Padding**：[RFC 8467](docs/rfc/rfc8467.txt)，请求 128/响应 468 块大小，随机填充
 - **ANY 最小响应**：[RFC 8482](docs/rfc/rfc8482.txt)，QTYPE=ANY 返回 `HINFO "RFC8482"` 而非完整区域
@@ -138,6 +138,7 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 | `spoofguard` | bool | UDP 多读防欺骗 |
 | `splitguard` | bool | TCP 分段防 RST |
 | `hopguard` | bool | IP TTL 指纹防欺骗 |
+| `capsguard` | bool | DNS 0x20 问题名大小写随机化（应答须逐字节回显） |
 | `mqtype` | []uint16 | [RFC 10029](docs/rfc/rfc10029.txt) 捆绑 QTYPE 列表（数字，如 `[1, 28]` = A + AAAA）——查询时附加 MQQUERY 捆绑解析，合并记录 warm 缓存并从客户端响应剥离；空 = 关闭 |
 
 ### 防污染配置示例
@@ -222,7 +223,7 @@ golangci-lint run && golangci-lint fmt                 # Lint
 | 文档 | 内容 |
 |------|------|
 | [AUDIT-METHODOLOGY.md](docs/AUDIT-METHODOLOGY.md) | 审计框架 |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计、DB Schema、设计决策 |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计、设计决策 |
 | [BENCHMARK.md](docs/benchmark/BENCHMARK.md) | Benchmark 指南 |
 | [DEBUG.md](docs/debug/DEBUG.md) | 调试配置、E2E 测试 |
 | [GUIDELINE.md](docs/rfc/GUIDELINE.md) | RFC 精华指南（RFC 的关键常量/协议流程/合规状态） |

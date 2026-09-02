@@ -976,7 +976,7 @@ Client ⇄ [2字节长度][DNS消息] ⇄ Server  (TLS 加密通道内)
 | --------------- | ------------- | ----------------------- |
 | Client Cookie   | **8** 字节    | 客户端生成（随机数）    |
 | Server Cookie   | **8–32** 字节 | 服务端 SipHash-2-4 生成 |
-| Secret 轮换间隔 | **30 分钟**   | 定期更换防止长期泄露    |
+| Secret 轮换间隔 | **24 小时**   | RFC 9018 未规定间隔；实现取 RFC 7873 §7.1 默认生命周期 1 天（`DefaultCookieSecretRotationInterval`） |
 | Cookie 有效期   | **1 小时**    | 超过后客户端需更新      |
 | 续期阈值        | **30 分钟**   | 提前提示客户端续期      |
 | 未来容忍        | **5 分钟**    | 容忍时钟偏差            |
@@ -1542,7 +1542,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 ### 我们的实现
 
 - ✓ `config/resinfo.go`：随 DDR 一起发布（`ddr.infourl` 可选）——DDR 开启时注入 `resolver.arpa`（+ DDR 域名）的 RESINFO zone 规则，本地应答
-- 键: `qnamemin`（✓ 9156 已实现）、`exterr=3,6,7,9,15,16,17,18,21,22,23,24,30`、可选 `infourl`（`ddr.infourl` 配置）
+- 键: `qnamemin`（✓ 9156 已实现）、`exterr=0,1,3,4,6,7,8,10,12,15,22,23,30`（实际发出的 EDE 码）、可选 `infourl`（`ddr.infourl` 配置）
 
 ---
 

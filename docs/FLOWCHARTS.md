@@ -12,6 +12,7 @@
 - [MQTYPE (RFC 10029)](#mqtype-rfc-10029)
 - [缓存查询流程](#缓存查询流程)
 - [递归解析流程](#递归解析流程)
+- [Fallback 上游延迟采纳](#fallback-上游延迟采纳)
 - [DNSSEC 验证链](#dnssec-验证链)
 - [EDNS 处理流程](#edns-处理流程)
 - [DNS 污染检测（防御机制）](#dns-污染检测防御机制)
@@ -23,6 +24,7 @@
 - [延迟探测](#延迟探测)
 - [连接池与协议协商](#连接池与协议协商)
 - [SOCKS5 代理路径](#socks5-代理路径)
+- [共享端口协议复用（demux）](#共享端口协议复用demux)
 - [协议对照：标准加密 ↔ 国密](#协议对照标准加密-国密)
 - [DNSCrypt 密钥管理](#dnscrypt-密钥管理)
 - [DNSCrypt 加密流程](#dnscrypt-加密流程)
@@ -174,6 +176,22 @@ graph TD
 > 非元类型、去重、≤4 个 §4 QTx cap）。forward 与 `protocol: recursive` 均适用。
 > 不实现：zonecut DS+NS 合并（RFC A.3 记录的失败场景）、NS walk 串行化短路。
 
+**出站失败无选项重试（§3.5，forward.go / nameserver.go 双路径）**：
+
+```mermaid
+graph TD
+    OUT["出站查询附加 MQQUERY<br/>Tx = 配置列表 − 主 QTYPE"] --> EXEC["ExecuteQuery<br/>转发 / 递归走查"]
+    EXEC --> CHK{"失败或拒绝?<br/>错误 / 非成功 RCODE<br/>（context.Canceled 除外）"}
+    CHK -->|否| PROC["正常处理响应"]
+    CHK -->|"是（如 CN 公共解析对<br/>未知 EDNS 选项 SERVFAIL）"| STRIP["剥离 MQQUERY 选项"]
+    STRIP --> RETRY["无选项重试一次<br/>独立超时 DefaultMQTypeResolveTimeout"]
+    RETRY --> PROC2["以重试结果继续"]
+    classDef proc fill:#fef3c7,stroke:#f59e0b,color:#78350f
+    classDef ok fill:#d1fae5,stroke:#10b981,color:#064e3b
+    class OUT,EXEC,CHK,STRIP,RETRY proc
+    class PROC,PROC2 ok
+```
+
 ### 缓存命中直发（pre-packed）
 
 ```mermaid
@@ -233,7 +251,7 @@ graph TD
 ```mermaid
 graph TD
     Q[Query] --> ECS[ECS 候选<br/>固定顺序：最具体→最不具体<br/>≤5 候选 · 首命中即返回]
-    ECS --> SQL[lrumap lookup<br/>key = qname qtype qclass<br/>ecs_addr ecs_prefix dnssec]
+    ECS --> SQL[lrumap lookup<br/>key = qname qtype qclass<br/>ecs_addr ecs_prefix]
     SQL -->|not found| MISS[Cache Miss<br/>→ Resolution]
     SQL -->|found| WIRE[提取 pre-packed wire<br/>读 offset 表 · 边界校验]
     WIRE --> ZSTD{"> 256B?<br/>zstd 压缩"}
@@ -302,6 +320,49 @@ graph TD
 
 > CNAME 链超过 16 hops 时返回已收集的部分链并告警（非 SERVFAIL）。委派缓存命中只替换
 > 起始 NS 集，后续每跳仍过完整 Poisonguard 探测。
+
+### 权威并发扇出（first-6 + 75ms 扩宽）
+
+```mermaid
+graph TD
+    HOP["权威 NS 走查<br/>queryNameserversConcurrent"] --> SORT["NS 地址按延迟排序"]
+    SORT --> FIRST["t=0 并发首发<br/>延迟最优前 6 个<br/>DefaultFanoutFirstBatch"]
+    FIRST --> WIN{"75ms 内有胜者?<br/>DefaultFanoutWidenDelay"}
+    WIN -->|"是 · first-win"| DONE["取消其余 worker<br/>widen 定时器一并取消"]
+    WIN -->|否| WIDEN["扩宽到全部剩余权威<br/>widen worker 在 errgroup 内"]
+    WIDEN --> ALL["全体并发 · 首个成功胜出"]
+    ALL --> DONE
+    classDef proc fill:#fef3c7,stroke:#f59e0b,color:#78350f
+    classDef ok fill:#d1fae5,stroke:#10b981,color:#064e3b
+    class HOP,SORT,FIRST,WIN,WIDEN,ALL proc
+    class DONE ok
+```
+
+## Fallback 上游延迟采纳
+
+```mermaid
+graph TD
+    Q["queryUpstream（配置了 fallback 上游）"] --> LAUNCH["t=0 同时启动<br/>主上游 + fallback 上游"]
+    LAUNCH --> WAIT{"select 等待循环<br/>主结果始终优先"}
+    WAIT -->|"主上游结果先到"| SERVEP["直接服务主结果<br/>NXDOMAIN 为次选暂存"]
+    WAIT -->|"fallback 结果先到<br/>（采纳门未开前仅暂存）"| STASH["stash 首个 NOERROR/NXDOMAIN<br/>SERVFAIL 照常丢弃"]
+    WAIT -->|"500ms 到时 DefaultFallbackTimeout<br/>或主上游全部退出仍无结果"| ADOPT["采纳门开启 · tryAdopt<br/>先排空主结果再取 stash"]
+    STASH --> ADOPT
+    ADOPT --> MARK["附加 EDE 65280<br/>EDEZJDNSFallback<br/>下游 ZJDNS 拒绝缓存"]
+    MARK --> SERVE["服务 fallback 结果"]
+    SERVE -.->|"主上游结果迟到<br/>adopted 已置位"| FILL["后台回填 cache.Set<br/>filled CAS 唯一写者<br/>完成后 cancelPrimary"]
+    classDef proc fill:#fef3c7,stroke:#f59e0b,color:#78350f
+    classDef ok fill:#d1fae5,stroke:#10b981,color:#064e3b
+    classDef fb fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    class Q,LAUNCH,WAIT,SERVEP proc
+    class STASH,ADOPT,MARK,SERVE fb
+    class FILL ok
+```
+
+> fallback 结果的采纳门（`server/resolver/forward_fallback.go`）：500ms
+> `DefaultFallbackTimeout` 内主结果始终胜出；主上游全部退出仍无结果时提前开门
+> （`primariesDoneCh`）。被采纳的响应携带 EDE 65280，下游 ZJDNS 实例拒绝缓存；
+> 迟到的主结果经 `maybeBackfill` 镜像 CacheStore 门条件后台写入缓存。
 
 ## DNSSEC 验证链
 
@@ -588,7 +649,7 @@ graph TD
     class Q,EXTRACT,SIG,CLASSIFY,ROOT,CR,ISROOT,ISTLD,TLD,CT,SAME,SUBDEL proc
 ```
 
-> TLD probe：完整 qname（RD=0, UDP）发给 TLD server（2s 超时），返回 A/AAAA 即判中毒。
+> TLD probe：完整 qname（RD=0, UDP）发给 TLD server（1s 超时），返回 A/AAAA 即判中毒。
 > 委派缓存命中非 TLD zone 时跳过 probe（无 tldServers）；命中 TLD zone 时 probe 仍执行。
 > proofs = RRSIG/NSEC/NSEC3。
 
@@ -840,7 +901,7 @@ graph LR
 > （长度前缀帧复用，不解析 DNS，nonce 前缀路由）、DoQ 走 **QUIC 连接池**、
 > DoH/DoH3/HTTP-TLCP 走 HTTP transport 缓存。
 >
-> **统一三层上限**（每池实例）：per-key 4 连接 × per-conn 16 在途 × **全局 128
+> **统一三层上限**（每池实例）：per-key 8 连接 × per-conn 16 在途 × **全局 512
 > live 连接**（`DefaultMaxPoolTotalConns`）。超限时 `dialAndAdd` 触发
 > `evictOne` 驱逐：死连接 → 空闲 LRU → 任意 LRU（`lastUsed` 时间戳，close
 > 在锁外）。空闲回收 UDP 30s / TCP 60s。服务端并发上限统一派生自
@@ -873,6 +934,46 @@ graph LR
 > poisonguard 完全支持（内容/TCP 层机制与传输无关；poisonguard 经
 > `recursiveProxyURL` 走递归代理链）；hopguard 降级（SOCKS5 relay 不带 IP
 > TTL 元数据，警告 + 无 TTL 模式，由 spoofguard 兜底内容防护）。
+
+## 共享端口协议复用（demux）
+
+```mermaid
+graph TD
+    subgraph TCPSHARE["共享 TCP 端口（如 20853 DoT+TLCP-DoT / 20443 DoH+TLCP-DoH+DNSCrypt）"]
+        TC["TCP 接入"] --> SNIFF["internal/demux DetectTCPProtocol<br/>读 5 字节记录头 · 10s 读超时<br/>bufferedConn 回放已读字节"]
+        SNIFF -->|"版本字节 0x03"| TLS["TLS 服务器<br/>DoT / DoH"]
+        SNIFF -->|"版本字节 0x01"| TLCP["TLCP 服务器<br/>TLCP-DoT / TLCP-DoH"]
+        SNIFF -->|"其他首字节"| DCT["DNSCrypt TCP"]
+    end
+    subgraph UDPSHARE["共享 UDP 端口（如 20853 DoQ+DTLS+DTLCP / 20443 DoH3+DNSCrypt）"]
+        DG["UDP 首个数据报"] --> PLAIN{"明文 DNS 查询形状?<br/>QR=0 · QD=1 · AN=NS=0"}
+        PLAIN -->|"是（明文证书获取等）"| FALL["DNSCrypt 回退"]
+        PLAIN -->|否| QUIC{"首字节 >= 0xC0<br/>且长度 >= 1200?"}
+        QUIC -->|"是"| Q["QUIC<br/>DoQ / DoH3"]
+        QUIC -->|否| DTLS{"首字节 0x14-0x18<br/>版本 0xFEFF/0xFEFD/0xFEFC?"}
+        DTLS -->|"是"| D["DTLS"]
+        DTLS -->|否| DTLCP{"版本 0x0101?"}
+        DTLCP -->|"是"| DL["DTLCP"]
+        DTLCP -->|否| FALL
+    end
+    TLS --> DISPATCH
+    TLCP --> DISPATCH
+    DCT --> DISPATCH
+    Q --> DISPATCH
+    D --> DISPATCH
+    DL --> DISPATCH
+    FALL --> DISPATCH["server/protocol/shared 分发<br/>UDP: addrKey 零分配键 · PacketBufPool 池化缓冲<br/>peerProto 按客户端缓存（≤65536）<br/>60s 空闲回收"]
+    classDef io fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef proc fill:#fef3c7,stroke:#f59e0b,color:#78350f
+    classDef proto fill:#d1fae5,stroke:#10b981,color:#064e3b
+    class TC,DG io
+    class SNIFF,PLAIN,QUIC,DTLS,DTLCP,DISPATCH proc
+    class TLS,TLCP,DCT,Q,D,DL,FALL proto
+```
+
+> 检测刻意保守（错误阳性会从 DNSCrypt 回退偷走数据报——其明文证书获取首字节近乎随机）：
+> 明文 DNS 查询形状最先判定并落到底层回退；QUIC Initial 恒 ≥1200 字节（RFC 9000 §14），
+> 长度下限排除与明文 DNS 的随机 ID 碰撞。检测结果按客户端地址缓存（`peerProto`）。
 
 ## 协议对照：标准加密 ↔ 国密
 
@@ -991,6 +1092,27 @@ graph TD
 > 翻转首字节，避开 QUIC 首字节范围）。ticket 由 `ticketKey` 用 XChaCha20-Poly1305 密封，
 > 明文 86B：resume-secret(32) + es-version(2) + client-magic(8) + serial(4) + ts-end(4) +
 > expiry(4) + profile-ext-hash(32)。
+
+### DNSCrypt 重放防护（服务端）
+
+```mermaid
+graph TD
+    RECV["DNSCrypt UDP 查询到达"] --> RKEY["replayCache 查计数<br/>键 = client-magic + client-nonce/2<br/>+ client-pk 前缀"]
+    RKEY --> RCNT{"10s 窗口内<br/>出现次数 <= 3?"}
+    RCNT -->|"是（UDP 重传合法）"| DEC["进入正常解密流程"]
+    RCNT -->|"否（同一密文重放）"| DROP["静默丢弃"]
+    classDef io fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef ok fill:#d1fae5,stroke:#10b981,color:#064e3b
+    classDef reject fill:#fee2e2,stroke:#ef4444,color:#991b1b
+    class RECV,RKEY io
+    class DEC ok
+    class DROP reject
+```
+
+> 重放缓存（`server/protocol/dnscrypt/server.go`）：LRU 上限
+> `DefaultDNSCryptReplayCacheSize`（8192）条，窗口
+> `DefaultDNSCryptReplayWindow`（10s），超出 `DefaultDNSCryptReplayAllow`（3）
+> 次的重复密文直接丢弃——UDP 重传合法，同一数据报洪泛不合法。
 
 ## 同步统计记录
 

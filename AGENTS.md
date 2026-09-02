@@ -132,11 +132,11 @@ go test -bench=. -short -benchtime=500ms ./...                 # stable numbers
 go test -bench=BenchmarkServerProcessQuery -benchtime=3s ./cmd/zjdns  # integration QPS
 ```
 
-**116 benchmarks** across 28 test files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
+**117 benchmarks** across 28 test files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
 
 ```bash
 # Update baseline
-go test -bench=. -short -benchtime=500ms ./... \
+go test -bench=. -short -benchmem -benchtime=500ms ./... \
   | grep '^Benchmark' | sort > docs/benchmark/benchmark-baseline.txt
 ```
 
@@ -222,7 +222,7 @@ zjdns/
 └── server/
     ├── handler/        ← query pipeline adapter + QueryContext
     │   └── middleware/ ← 10 composable middleware + AssembleChain
-    ├── defense/        ← DNS anti-pollution (Detector, hopguard/poisonguard/spoofguard/splitguard)
+    ├── defense/        ← DNS anti-pollution (Detector, capsguard/hopguard/poisonguard — spoofguard lives in upstream/plain, splitguard in upstream)
     ├── protocol/       ← {plain,tls,tlcp,dnscrypt} server listeners
     ├── upstream/       ← {plain,tls,tlcp,dnscrypt} outbound client + pool + SOCKS5
     └── resolver/       ← recursive walk + forward + dnssec/ + probe/
@@ -295,7 +295,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | Mechanism | Layer | Algorithm |
 |-----------|-------|-----------|
 | **Hopguard** | UDP upstream | IP TTL fingerprint: auto-learn baseline, reject responses with TTL outside ±2 range |
-| **Spoofguard** | UDP upstream | Multi-read loop: reject `AR=0+NOERROR` without EDNS (bare A/AAAA, GFW signature); accept `AN>=2`/`NS>0`/`AD=1`; collect ambiguous (≤500ms) → pick richest |
+| **Spoofguard** | UDP upstream | Multi-read loop (adaptive window: 150ms single packet, 500ms multi-packet; identical repeats confirm immediately): fast-accept `AN>=2`/`NS>0`/`AD=1`; EDNS responses are candidates (richness tie-break); bare single-answer A/AAAA → collect, re-query-confirm (≤3 rounds) |
 | **Poisonguard** | Recursive | Zone-authority cross-validation on resolved answers |
 | **Splitguard** | TCP upstream | Random [1,4] payload segmentation (no time jitter) |
 | **Capsguard** | All upstream (per-upstream `capsguard`) | `defense.RandomizeCase` flips the case bit of each ASCII letter in the outbound question (draft-vixie-dnsext-dns0x20 §5.1); `ExecuteQuery` discards responses that don't echo the randomized case and retries once unrandomized (§6.4); after `DefaultCapsGuardDowngradeAfter` (8) mismatches an address skips randomisation outright for `DefaultCapsGuardRetryAfter` (10min) — no doubled query, no per-query timing signature. Upstream-echoed record case is folded to lowercase at the resolver exit (`resolver.Query` → `dnsutil.FoldCase`, §5.4); cache-hit responses patch the stored wire back to the client's case (`handler/response.go` `patchQuestionCase`) |
@@ -306,7 +306,7 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 |------|---------|-------|
 | `ServerConfig` | `config` | Top-level config; owns `ECSConfig`, `ProtocolSettings`, `CertificateSettings` |
 | `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `SkipCache`, `Match`, `Proxy`, defense flags, `MQType` (RFC 10029 bundle list) |
-| `ProtocolSettings` | `config` | Per-protocol port/endpoint: `UDP`, `TCP`, `TLS`, `QUIC`, `HTTPS`, `HTTP3`, `TLCP`, `DTLS`, `DTLCP`, `DNSCrypt` |
+| `ProtocolSettings` | `config` | Per-protocol port/endpoint: `UDP`, `TCP`, `TLS`, `QUIC`, `HTTPS`, `HTTP3`, `TLCP`, `HTTPTLCP`, `DTLS`, `DTLCP`, `DNSCrypt` |
 | `Store` | `cache` | Interface: Get/Set/RecordRequest/FlushDB/Stats/Close |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
@@ -352,7 +352,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECUR
 | [docs/benchmark/benchmark-baseline.txt](docs/benchmark/benchmark-baseline.txt) | `go test -bench` 基线（`-benchmem`，AGENTS.md 命令刷新） |
 | [docs/benchmark/loadtest-baseline.txt](docs/benchmark/loadtest-baseline.txt) | benchclient 全协议 QPS/延迟基线数据（12 协议，每轮更新） |
 | [docs/poc/README.md](docs/poc/README.md) | 防御机制概念验证程序（hopguard/spoofguard/splitguard/poisonguard/capsguard） |
-| [docs/rfc/](docs/rfc/) | Mirrored RFCs and drafts (117 txt files) |
+| [docs/rfc/](docs/rfc/) | Mirrored RFCs and drafts (119 txt files) |
 | [docs/rfc/GUIDELINE.md](docs/rfc/GUIDELINE.md) | RFC 精华指南 — 每个 RFC 的关键常量、协议流程、合规状态 |
 
 ## Commit & Pull Request Guidelines
