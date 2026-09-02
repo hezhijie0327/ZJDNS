@@ -52,8 +52,7 @@ Format: `Co-authored-by: <AgentName> <Email>`
 Valid examples (choose EXACTLY ONE):
 
 ```
-Co-authored-by: Codex <codex@openai.com>
-Co-authored-by: QoderAI <qoder_ai@qoder.com>
+Co-authored-by: ZCode <noreply@z.ai>
 ```
 
 ## Additional Guidance
