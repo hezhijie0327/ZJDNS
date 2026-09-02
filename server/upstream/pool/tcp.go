@@ -420,6 +420,7 @@ func (p *ConnPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc f
 					liveConns = append(liveConns, conns[j])
 				}
 			}
+			p.total -= len(conns) - len(liveConns) // dead-filter accounting (U1)
 			p.conns[key] = liveConns
 			p.mu.Unlock()
 			// TOCTOU: readLoop may close c after Unlock.  Benign — Exchange
@@ -431,6 +432,7 @@ func (p *ConnPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc f
 			leastLoaded = c
 		}
 	}
+	p.total -= len(conns) - len(liveConns) // dead-filter accounting (U1)
 	p.conns[key] = liveConns
 
 	if len(liveConns)+p.dialing[key] < p.maxConns {
@@ -502,6 +504,7 @@ func (p *ConnPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFun
 			return nil, ErrMaxConnsReached
 		}
 		p.conns[key] = append(p.conns[key], c)
+		p.total++ // replaceDead decremented for the dead one — net-zero swap (U2)
 		n := len(p.conns[key])
 		p.mu.Unlock()
 		old.close()

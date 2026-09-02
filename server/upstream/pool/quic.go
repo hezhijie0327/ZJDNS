@@ -103,6 +103,7 @@ func (p *QUIC) Acquire(ctx context.Context, key string, dialFunc func(context.Co
 			live = append(live, pc)
 		}
 	}
+	p.total -= len(p.conns[key]) - len(live) // dead-filter accounting (U1)
 	p.conns[key] = live
 
 	if len(live) > 0 {
@@ -299,17 +300,38 @@ func (p *QUIC) Put(key string, conn *quic.Conn) {
 	// pool slot until the next Acquire filters it out.
 	if conn.Context().Err() != nil {
 		p.mu.Unlock()
-		_ = conn.CloseWithError(0, "connection already closed")
+		_ = conn.CloseWithError(doq.QUICCodeNoError, "connection already closed")
 		return
 	}
 
 	if len(p.conns[key]) >= p.maxConns {
 		p.mu.Unlock()
-		_ = conn.CloseWithError(0, "pool full")
+		_ = conn.CloseWithError(doq.QUICCodeNoError, "pool full")
 		return
 	}
-	p.conns[key] = append(p.conns[key], &QUICConn{Conn: conn, addr: key})
+	pc := &QUICConn{Conn: conn, addr: key}
+	pc.lastUsed.Store(log.NowUnix())
+	p.conns[key] = append(p.conns[key], pc)
+	p.total++
+	// Same global-cap eviction as the Acquire dial path — Put-inserted
+	// connections previously bypassed the cap entirely and drifted the
+	// accounting (every Remove→Put cycle double-decremented p.total),
+	// while the zero lastUsed made fresh connections evict first (U3).
+	var evicted []*QUICConn
+	for p.total > p.maxTotal {
+		victim, removed := p.evictOne(pc)
+		if !removed {
+			break // nothing evictable — the new connection stays
+		}
+		if victim != nil {
+			evicted = append(evicted, victim)
+		}
+	}
 	p.mu.Unlock()
+	for _, v := range evicted {
+		v.close()
+		log.Debugf("UPSTREAM: evicted QUIC %s for capacity after Put (total=%d/%d)", v.addr, p.total, p.maxTotal)
+	}
 }
 
 // Remove closes and removes a QUIC connection from the pool.  The close runs

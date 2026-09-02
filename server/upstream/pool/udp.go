@@ -533,6 +533,7 @@ func (p *UDPPool) Acquire(ctx context.Context, key, dialAddr string, wantTTL boo
 					liveConns = append(liveConns, conns[j])
 				}
 			}
+			p.total -= len(conns) - len(liveConns) // dead-filter accounting (U1)
 			p.conns[key] = liveConns
 			p.mu.Unlock()
 			return c, nil
@@ -542,6 +543,7 @@ func (p *UDPPool) Acquire(ctx context.Context, key, dialAddr string, wantTTL boo
 			leastLoaded = c
 		}
 	}
+	p.total -= len(conns) - len(liveConns) // dead-filter accounting (U1)
 	if len(liveConns) == 0 {
 		delete(p.conns, key)
 	} else {
@@ -622,6 +624,7 @@ func (p *UDPPool) dialAndAdd(ctx context.Context, key, dialAddr string, wantTTL 
 			return nil, ErrMaxConnsReached
 		}
 		p.conns[key] = append(p.conns[key], c)
+		p.total++ // replaceDead decremented for the dead one — net-zero swap (U2)
 		p.mu.Unlock()
 		old.close()
 		return c, nil
