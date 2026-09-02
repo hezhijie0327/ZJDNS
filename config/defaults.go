@@ -122,8 +122,12 @@ const (
 	// (UpstreamServer.Fallback): every upstream races from t=0, but a
 	// fallback result is only served when no primary has answered within
 	// this window.  After adoption the primaries keep running in the
-	// background and the first usable result fills the cache.
-	DefaultFallbackTimeout = 1 * time.Second
+	// background and the first usable result fills the cache.  500ms
+	// mirrors DefaultServeExpiredClientTimeout's order of magnitude:
+	// healthy recursive primaries answer well inside it (cold-walk p90
+	// ≈ 400ms on a 186-domain corpus), while slow/blocked primaries hand
+	// over to the fallback at half the former 1s latency.
+	DefaultFallbackTimeout = 500 * time.Millisecond
 
 	DefaultRecursiveResolveTimeout = 30 * time.Second // full recursive resolution
 

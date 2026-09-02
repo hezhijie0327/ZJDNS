@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"sync"
 	"testing"
@@ -19,6 +20,10 @@ type invocationCounter struct {
 	mu     sync.Mutex
 	counts map[string]int
 }
+
+// errFastFailPrimary is the sentinel error used by the fast-fail test's
+// dead primary.
+var errFastFailPrimary = errors.New("primary fast fail")
 
 func (c *invocationCounter) bump(addr string) {
 	c.mu.Lock()
@@ -392,5 +397,43 @@ func TestQueryUpstream_FallbackAlwaysQueried(t *testing.T) {
 	}
 	if counter.get("10.0.0.2:53") != 1 {
 		t.Fatalf("fallback queried %d times, want 1 (eager launch)", counter.get("10.0.0.2:53"))
+	}
+}
+
+// TestQueryUpstream_FastFailPrimaryEarlyAdoption verifies the early-adoption
+// path: a primary that fails immediately (dead upstream) plus a fast fallback
+// must NOT idle out the full fallback timeout — once every primary has exited,
+// the stashed fallback answer is adopted on arrival.
+func TestQueryUpstream_FastFailPrimaryEarlyAdoption(t *testing.T) {
+	for range 10 {
+		client := &fakeNSClient{handlers: map[string]nsScriptHandler{
+			// Primary errors out instantly (dead upstream).
+			"10.0.0.1:53": func(context.Context, *dns.Msg) *upstream.Result {
+				return &upstream.Result{Error: errFastFailPrimary}
+			},
+			// Fallback answers at 15ms — far inside the 1s gate below.
+			"10.0.0.2:53": nsReplyAAfter(15*time.Millisecond, "192.0.2.2"),
+		}}
+		r, _ := newFallbackTestResolver(t, client)
+		r.fallbackTimeout = time.Second
+		r.ConfigureServers([]config.UpstreamServer{
+			{Address: "10.0.0.1:53", Protocol: config.ProtoUDP},
+			{Address: "10.0.0.2:53", Protocol: config.ProtoUDP, Fallback: true},
+		})
+
+		start := time.Now()
+		qr := r.Query(t.Context(), Question{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil)
+		elapsed := time.Since(start)
+		if qr.Err != nil {
+			t.Fatalf("unexpected error: %v", qr.Err)
+		}
+		if !resultHasFallbackEDE(qr) {
+			t.Fatal("fallback answer was not adopted")
+		}
+		// Without early adoption this waits out the 1s gate; the fast path
+		// must return shortly after the fallback answer lands.
+		if elapsed > 500*time.Millisecond {
+			t.Fatalf("adoption took %v — primary fast-fail did not bypass the fallback gate", elapsed)
+		}
 	}
 }

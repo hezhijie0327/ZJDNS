@@ -133,6 +133,19 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 
 	var activeConnections atomic.Int32
 	var cidrFilterRefused atomic.Bool
+	// activePrimaries counts not-yet-exited primary (non-fallback) workers.
+	// When it reaches zero no primary result can arrive anymore, so the
+	// fallback adoption gate has nothing left to protect: primariesDone
+	// wakes the wait loop to adopt the stash immediately instead of idling
+	// out the rest of the fallback timeout (a dead primary plus a 30 ms
+	// fallback previously still cost the client the full gate).
+	activePrimaries := make(chan struct{})
+	var nPrimaries atomic.Int32
+	finishPrimary := func() {
+		if nPrimaries.Add(-1) == 0 {
+			close(activePrimaries)
+		}
+	}
 
 	// One base query per connection class (plain vs secure), built once
 	// before the fan-out: the EDNS options (ECS, padding) are identical for
@@ -164,9 +177,15 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	for i := range servers {
 		srv := servers[(startIdx+i)%len(servers)]
 		server := srv
+		if !server.Fallback {
+			nPrimaries.Add(1)
+		}
 
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("UPSTREAM query")
+			if !server.Fallback {
+				defer finishPrimary()
+			}
 			select {
 			case <-groupCtx.Done():
 				return nil
@@ -269,6 +288,9 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	var fallbackTimer *time.Timer
 	var fallbackCh <-chan time.Time
 	var fallbackReadyCh <-chan struct{}
+	// primariesDoneCh is nil without fallbacks — a nil channel blocks
+	// forever, disabling the early-adoption case.
+	var primariesDoneCh <-chan struct{}
 	fallbackFired := false
 	if coord != nil {
 		fallbackTimeout := r.fallbackTimeout
@@ -278,6 +300,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 		fallbackTimer = time.NewTimer(fallbackTimeout)
 		fallbackCh = fallbackTimer.C
 		fallbackReadyCh = coord.fallbackReady
+		primariesDoneCh = activePrimaries
 		defer fallbackTimer.Stop()
 	}
 waitLoop:
@@ -302,6 +325,15 @@ waitLoop:
 			// Timer fired before any fallback result landed — phase 2:
 			// keep racing; the fallbackReady case re-checks on arrival and
 			// primary results keep winning through the cases above.
+		case <-primariesDoneCh:
+			// Every primary exited without delivering a usable result —
+			// no primary answer can arrive anymore, so the gate has
+			// nothing left to protect.  Same semantics as the timer
+			// firing, just earlier.
+			fallbackFired = true
+			if res, done := coord.tryAdopt(resultChan, &nxdomainResult); done {
+				return res
+			}
 		case <-fallbackReadyCh:
 			if fallbackFired {
 				if res, done := coord.tryAdopt(resultChan, &nxdomainResult); done {
