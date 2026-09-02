@@ -2,9 +2,9 @@
 package plain
 
 import (
-	"sync"
 	"time"
 	"zjdns/config"
+	"zjdns/internal/lrumap"
 	"zjdns/server/defense"
 	"zjdns/server/upstream/pool"
 	socks5 "zjdns/server/upstream/socks5"
@@ -14,21 +14,27 @@ import (
 
 // Client executes DNS queries over plain UDP and TCP transports.
 type Client struct {
-	udpClient      *dns.Client
-	tcpClient      *dns.Client
-	tcpPool        *pool.ConnPool
-	udpPool        *pool.UDPPool
-	getProxy       func(*config.UpstreamServer) *socks5.Dialer
-	timeout        time.Duration
-	hopGuard       *defense.HopGuard // shared LRU cache for TTL fingerprints
-	hopguardWarned sync.Map          // per-address one-shot hopguard warning
+	udpClient *dns.Client
+	tcpClient *dns.Client
+	tcpPool   *pool.ConnPool
+	udpPool   *pool.UDPPool
+	getProxy  func(*config.UpstreamServer) *socks5.Dialer
+	timeout   time.Duration
+	hopGuard  *defense.HopGuard // shared LRU cache for TTL fingerprints
+
+	// hopguardWarned dedups the capture-unavailable notice per address.
+	// Bounded LRU, not sync.Map: in recursive mode the keys are every
+	// authority address the walk ever touches, and proxy + hopguard (the
+	// degraded pairing that triggers the notice) grows that set without
+	// limit (2026-09 S5).
+	hopguardWarned *lrumap.Map[string, struct{}]
 }
 
 // New creates a Client for plain UDP and TCP DNS queries.
 // All parameters must be non-nil; the returned Client dereferences them
 // unconditionally in ExecuteUDP/ExecuteTCP.
 func New(udpClient, tcpClient *dns.Client, tcpPool *pool.ConnPool, getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Duration) *Client {
-	return &Client{
+	c := &Client{
 		udpClient: udpClient,
 		tcpClient: tcpClient,
 		tcpPool:   tcpPool,
@@ -43,6 +49,8 @@ func New(udpClient, tcpClient *dns.Client, tcpPool *pool.ConnPool, getProxy func
 		timeout:  timeout,
 		hopGuard: defense.NewHopGuard(),
 	}
+	c.hopguardWarned = lrumap.New[string, struct{}](config.DefaultHopGuardWarnedMapCapacity)
+	return c
 }
 
 // Close shuts down the TCP and UDP pools, stopping all readLoop goroutines.

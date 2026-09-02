@@ -22,6 +22,22 @@ import (
 
 // ExecuteQUIC performs a DNS-over-QUIC query, using the QUIC connection pool
 // when available.
+// isQUICConnFatal reports whether err means the QUIC connection itself is
+// unusable (as opposed to a per-query timeout/cancellation/stream stall).
+func isQUICConnFatal(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, quic.Err0RTTRejected) {
+		return true
+	}
+	if _, ok := errors.AsType[*quic.StatelessResetError](err); ok {
+		return true
+	}
+	var appErr *quic.ApplicationError
+	return errors.As(err, &appErr)
+}
+
 func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
 	if msg == nil {
 		return nil, errors.New("quic: nil query message")
@@ -121,9 +137,15 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 					// the pool (policy: rejected conns must not be reused).
 					c.quicPool.Remove(fresh)
 				}
-			} else if !errors.Is(err, context.Canceled) {
-				// Caller-side cancellation (resolver first-wins fan-out) is
-				// not a connection failure — the conn stays pooled.
+			} else if isQUICConnFatal(err) || pc.Conn.Context().Err() != nil {
+				// Remove ONLY on transport-fatal errors or a dead conn
+				// context: a deadline expiry or stream-quota congestion is
+				// transient — removing the shared conn on it failed every
+				// other in-flight query multiplexed over the same
+				// connection and started a close/redial churn loop under
+				// upstream saturation (2026-09 U7).  Cancellation and
+				// timeouts leave the conn pooled, like every other pool
+				// consumer.
 				c.quicPool.Remove(pc)
 			}
 			log.Debugf("UPSTREAM: pooled DoQ query to %s failed: %v, retrying with new connection", server.Address, err)

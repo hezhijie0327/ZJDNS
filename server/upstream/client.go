@@ -66,13 +66,15 @@ type Client struct {
 	// randomisation is skipped for it outright for DefaultCapsGuardRetryAfter
 	// — an on-path echo-forger otherwise doubles our outbound queries per
 	// attempt (randomised query + unrandomised retry, every query).
-	capsDowngrades *lrumap.Map[string, capsDowngradeStat]
+	capsDowngrades *lrumap.Map[string, *capsDowngradeStat]
 
 	warmWg sync.WaitGroup // tracks in-flight WarmUpConnections goroutines
 }
 
 // capsDowngradeStat tracks one upstream address's 0x20 mismatch history.
+// Stored by pointer — the counter update runs under mu (U6).
 type capsDowngradeStat struct {
+	mu            sync.Mutex
 	mismatches    int
 	disabledUntil time.Time
 }
@@ -128,9 +130,12 @@ func New() *Client {
 	quicPool := pool.NewQUIC(config.DefaultMaxConns, config.DefaultMaxPoolTotalConns)
 
 	c := &Client{
-		timeout:        timeout,
-		proxyDialers:   lrumap.New[string, *socks5.Dialer](config.DefaultTransportMax * 2),
-		capsDowngrades: lrumap.New[string, capsDowngradeStat](1024),
+		timeout:      timeout,
+		proxyDialers: lrumap.New[string, *socks5.Dialer](config.DefaultTransportMax * 2),
+		// Pointer values + per-stat mutex: lrumap.Get returns a copy, so a
+		// value-typed read-modify-write lost concurrent increments and
+		// delayed the 0x20 downgrade threshold (2026-09 U6).
+		capsDowngrades: lrumap.New[string, *capsDowngradeStat](config.DefaultCapsGuardDowngradeMapCapacity),
 	}
 
 	// OnEvict runs with the map mutex held (lrumap contract) — Dialer.Close
@@ -161,8 +166,10 @@ func New() *Client {
 // spoofing signature or a case-rewriting middlebox — is discarded and the
 // query is retried once with the original case (§6.4 fallback; the retry's
 // security equals the pre-CapsGuard baseline).
-// capsDisabled reports whether 0x20 randomisation is currently skipped for
-// addr (too many echo mismatches within the retry window).
+//
+// The address-level downgrade state is shared: capsDisabled reports
+// whether 0x20 randomisation is currently skipped for addr (too many echo
+// mismatches within the retry window).
 func (c *Client) capsDisabled(addr string) bool {
 	if c.capsDowngrades == nil {
 		return false
@@ -172,20 +179,26 @@ func (c *Client) capsDisabled(addr string) bool {
 }
 
 // noteCapsMismatch records one 0x20 echo mismatch for addr and reports
-// whether this mismatch crossed the downgrade threshold.
+// whether this mismatch crossed the downgrade threshold.  The stat is a
+// pointer keyed in the LRU: the read-modify-write runs under the stat's own
+// mutex, so concurrent mismatches for one address cannot lose increments
+// (lrumap.Get returns a value copy) (U6).
 func (c *Client) noteCapsMismatch(addr string) bool {
 	if c.capsDowngrades == nil {
 		return false
 	}
 	st, _ := c.capsDowngrades.Get(addr)
+	if st == nil {
+		st, _ = c.capsDowngrades.LoadOrStore(addr, new(capsDowngradeStat))
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
 	st.mismatches++
 	if st.mismatches >= config.DefaultCapsGuardDowngradeAfter {
 		st.mismatches = 0
 		st.disabledUntil = time.Now().Add(config.DefaultCapsGuardRetryAfter)
-		c.capsDowngrades.Set(addr, st)
 		return true
 	}
-	c.capsDowngrades.Set(addr, st)
 	return false
 }
 
@@ -317,7 +330,10 @@ func (c *Client) execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 		if !useTCP && result.Error == nil && result.Response != nil && result.Response.Truncated {
 			log.Debugf("UPSTREAM: DNSCrypt UDP response truncated for %s, falling back to TCP", qname)
 			useTCP = true
-		} else if !useTCP && result.Error != nil {
+		} else if !useTCP && result.Error != nil && !errors.Is(result.Error, context.Canceled) {
+			// Same cancellation gate as the plain-UDP branch: a first-win
+			// cancel is not a transport failure, and a doomed TCP attempt
+			// on it only burns a slot (U10).
 			log.Debugf("UPSTREAM: DNSCrypt UDP query failed for %s, falling back to TCP: %v", qname, result.Error)
 			useTCP = true
 		}
@@ -325,6 +341,7 @@ func (c *Client) execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 		if useTCP && protocol == config.ProtoDNSCrypt {
 			// Use a fresh context for the TCP fallback — the UDP
 			// attempt may have exhausted the original deadline.
+			udpErr := result.Error
 			tcpCtx, tcpCancel := context.WithTimeout(ctx, c.timeout)
 			defer tcpCancel()
 			if result.Response != nil {
@@ -332,6 +349,11 @@ func (c *Client) execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 				result.Response = nil
 			}
 			result.Response, result.Error = c.dnscryptClient.Execute(tcpCtx, msg, server, true)
+			if result.Error != nil && udpErr != nil {
+				// Keep the UDP-side root cause for diagnostics — the plain
+				// branch joins both; the DNSCrypt branch overwrote it (U10).
+				result.Error = errors.Join(udpErr, result.Error)
+			}
 			if result.Error == nil {
 				protocol = config.ProtoDNSCryptTCP
 				log.Debugf("UPSTREAM: DNSCrypt TCP fallback succeeded for %s", qname)

@@ -303,7 +303,7 @@ func TestExecuteQuery_CapsGuard_NoLettersNotRandomized(t *testing.T) {
 // randomisation for the retry window instead of paying the doubled
 // randomised-query + unrandomised-retry on every attempt.
 func TestCapsDowngradePerAddress(t *testing.T) {
-	c := &Client{capsDowngrades: lrumap.New[string, capsDowngradeStat](16)}
+	c := &Client{capsDowngrades: lrumap.New[string, *capsDowngradeStat](16)}
 
 	if c.capsDisabled("10.0.0.1:53") {
 		t.Fatal("address disabled before any mismatch")

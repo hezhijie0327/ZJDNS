@@ -242,7 +242,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 			// nil capture is the defined degradation (proxy relays, non-unix
 			// platforms) — Debug, not Warn: the recursive walk touches one
 			// new NS address after another, and a Warn per address floods.
-			if _, warned := c.hopguardWarned.LoadOrStore(server.Address, true); !warned {
+			if _, warned := c.hopguardWarned.LoadOrStore(server.Address, struct{}{}); !warned {
 				log.Debugf("UPSTREAM: hopguard TTL/HopLimit capture not available on %s", server.Address)
 			}
 		}
@@ -336,6 +336,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 						pool.DefaultMessage.Put(previous)
 					}
 					if sg.last != nil {
+						sg.last.ID = originalID // tracking ID must not escape (U5)
 						return sg.last, nil
 					}
 					return nil, errCollectClosed
@@ -543,7 +544,10 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 		defer func() { clear(buf[:lastN]); socks5.ReadPool.Put(bufPtr) }()
 	} else {
 		var err error
-		conn, err = net.Dial("udp", server.Address)
+		// ctx-aware dial (U8): an expired query budget must not complete
+		// an unbounded dial if the address ever needs resolution.
+		var d net.Dialer
+		conn, err = resolv.Default.DialContext(ctx, "udp", server.Address, &d)
 		if err != nil {
 			return nil, err
 		}
@@ -571,7 +575,7 @@ func (c *Client) executeUDPMultiRead(ctx context.Context, msg *dns.Msg, server *
 		}
 		tc = ipttl.New(udpConn)
 		if tc == nil {
-			if _, warned := c.hopguardWarned.LoadOrStore(server.Address, true); !warned {
+			if _, warned := c.hopguardWarned.LoadOrStore(server.Address, struct{}{}); !warned {
 				log.Debugf("UPSTREAM: hopguard TTL/HopLimit capture not available on %s", server.Address)
 			}
 		}
@@ -794,6 +798,20 @@ func (s *spoofguardState) copyData(raw []byte, n int) []byte {
 	return s.copyBuf
 }
 
+// unpackCandidate unpacks raw[:n] into a pooled message, detaching Data
+// before return; nil when the wire does not parse.  The five former inline
+// copies of this block had already drifted once (U5) (U9).
+func (s *spoofguardState) unpackCandidate(raw []byte, n int) *dns.Msg {
+	resp := pool.DefaultMessage.Get()
+	resp.Data = s.copyData(raw, n)
+	if err := resp.Unpack(); err != nil {
+		pool.DefaultMessage.Put(resp)
+		return nil
+	}
+	resp.Data = nil
+	return resp
+}
+
 // processPacket applies EDNS-gate and fast-return checks to a single raw packet.
 // Returns a response to return immediately, or nil to continue the loop.
 func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, addr string, ttlConfident bool, ttl uint8, spoofguardEnabled bool) *dns.Msg {
@@ -809,13 +827,10 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 	rcode := int(raw[3] & 0x0F)
 
 	if ancount >= 2 || nscount > 0 || ad == 1 {
-		resp := pool.DefaultMessage.Get()
-		resp.Data = s.copyData(raw, n)
-		if err := resp.Unpack(); err != nil {
-			pool.DefaultMessage.Put(resp)
+		resp := s.unpackCandidate(raw, n)
+		if resp == nil {
 			return nil
 		}
-		resp.Data = nil
 		if s.prev != nil {
 			pool.DefaultMessage.Put(s.prev)
 			s.prev = nil
@@ -853,24 +868,18 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 	// has already passed HopGuard validation before entering processPacket.
 	if rcode == dns.RcodeSuccess && queryUDPSize > 0 {
 		if !spoofguardEnabled {
-			resp := pool.DefaultMessage.Get()
-			resp.Data = s.copyData(raw, n)
-			if err := resp.Unpack(); err != nil {
-				pool.DefaultMessage.Put(resp)
+			resp := s.unpackCandidate(raw, n)
+			if resp == nil {
 				return nil
 			}
-			resp.Data = nil
 			s.last = resp
 			s.lastTTL = ttl
 			return resp
 		}
-		resp := pool.DefaultMessage.Get()
-		resp.Data = s.copyData(raw, n)
-		if err := resp.Unpack(); err != nil {
-			pool.DefaultMessage.Put(resp)
+		resp := s.unpackCandidate(raw, n)
+		if resp == nil {
 			return nil
 		}
-		resp.Data = nil
 
 		// EDNS presence is determined from resp.UDPSize, not raw ARCOUNT
 		// (which counts ALL additional records).  This fork's Unpack removes
@@ -926,24 +935,18 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 	// HopGuard TTL validation — return it directly without candidate
 	// collection.
 	if !spoofguardEnabled {
-		resp := pool.DefaultMessage.Get()
-		resp.Data = s.copyData(raw, n)
-		if err := resp.Unpack(); err != nil {
-			pool.DefaultMessage.Put(resp)
+		resp := s.unpackCandidate(raw, n)
+		if resp == nil {
 			return nil
 		}
-		resp.Data = nil
 		s.last = resp
 		s.lastTTL = ttl
 		return resp
 	}
-	resp := pool.DefaultMessage.Get()
-	resp.Data = s.copyData(raw, n)
-	if err := resp.Unpack(); err != nil {
-		pool.DefaultMessage.Put(resp)
+	resp := s.unpackCandidate(raw, n)
+	if resp == nil {
 		return nil
 	}
-	resp.Data = nil
 	return s.collectEDNSCandidate(resp, ttlConfident, ttl, addr)
 }
 

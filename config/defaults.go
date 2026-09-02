@@ -249,7 +249,15 @@ const (
 	// period — no extra query, no per-query timing signature (the echo
 	// check, spoofguard collect and question-matching remain).
 	DefaultCapsGuardDowngradeAfter = 8
-	DefaultCapsGuardRetryAfter     = 10 * time.Minute
+
+	// DefaultCapsGuardDowngradeMapCapacity bounds the per-address 0x20
+	// downgrade stat map (2026-09 U6).
+	DefaultCapsGuardDowngradeMapCapacity = 1024
+
+	// DefaultHopGuardWarnedMapCapacity bounds the per-address
+	// capture-unavailable notice map (2026-09 S5).
+	DefaultHopGuardWarnedMapCapacity = 512
+	DefaultCapsGuardRetryAfter       = 10 * time.Minute
 )
 
 // =============================================================================
