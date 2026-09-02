@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"bytes"
 	"net/netip"
 	"testing"
 	"zjdns/internal/log"
@@ -44,108 +43,42 @@ func packLegacyResponse(t *testing.T, qname string, id uint16) []byte {
 	return m.Data
 }
 
-// TestGet_LegacyRawEntry: a bare (uncompressed, unmasked) DNS wire from
-// <= v3.11.10 must be served without panicking — no offset table, original
-// TTLs, empty TTLOffsets.
-func TestGet_LegacyRawEntry(t *testing.T) {
-	mc := testStore()
-	defer func() { _ = mc.Close() }()
+// TestGet_LegacyBLOBRejected: the pre-packed format (0x02 + masked
+// num_offsets) is the ONLY live format — bare raw/zstd wires from old
+// versions (no compatibility kept, per policy) must be treated as corrupt
+// rows: a clean miss, never a panic or a garbled serve.  This covers the
+// ID-collision and zstd-header-misparse cases that motivated the old
+// discriminator logic.
+func TestGet_LegacyBLOBRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		id   uint16
+		zstd bool
+	}{
+		{"raw", 0x1234, false},
+		{"marker collision", 0x0201, false},
+		{"zero id low byte", 0x0200, false},
+		{"zstd", 0x5a5a, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mc := testStore()
+			defer func() { _ = mc.Close() }()
 
-	qname := "legacy-raw.example.com."
-	mc.Set(qname, dns.TypeA, dns.ClassINET, nil,
-		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")}}, nil, nil, false, 0)
+			qname := "legacy-" + tc.name + ".example.com."
+			mc.Set(qname, dns.TypeA, dns.ClassINET, nil,
+				[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")}}, nil, nil, false, 0)
 
-	wire := packLegacyResponse(t, qname, 0x1234)
-	setLegacyWire(t, mc, qname, wire)
+			wire := packLegacyResponse(t, qname, tc.id)
+			if tc.zstd {
+				wire = zdnsutil.Compress(wire)
+			}
+			setLegacyWire(t, mc, qname, wire)
 
-	entry, found, _ := mc.Get(qname, dns.TypeA, dns.ClassINET, nil)
-	if !found {
-		t.Fatal("Get returned not found for legacy raw entry")
-	}
-	if entry.TTLOffsets != nil {
-		t.Errorf("legacy entry TTLOffsets = %v, want nil (no offset table)", entry.TTLOffsets)
-	}
-	if !bytes.Equal(entry.ResponseWire, wire) {
-		t.Errorf("legacy wire mismatch: got %d bytes, want %d", len(entry.ResponseWire), len(wire))
-	}
-}
-
-// TestGet_LegacyRawEntry_MarkerCollision: a legacy raw wire whose ID high
-// byte is exactly 0x02 (the pre-packed marker).  The msgWire[1] (ID low
-// byte) discriminator must route it to the legacy path instead of
-// misparsing the offset table (previously: garbage numOffsets →
-// out-of-bounds panic or corrupted wire).
-func TestGet_LegacyRawEntry_MarkerCollision(t *testing.T) {
-	mc := testStore()
-	defer func() { _ = mc.Close() }()
-
-	qname := "legacy-collision.example.com."
-	mc.Set(qname, dns.TypeA, dns.ClassINET, nil,
-		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")}}, nil, nil, false, 0)
-
-	wire := packLegacyResponse(t, qname, 0x0201) // ID high byte = 0x02, low byte != 0
-	if wire[0] != cacheFormatPrePacked {
-		t.Fatalf("test setup: wire[0] = %#x, want 0x02 for the collision case", wire[0])
-	}
-	setLegacyWire(t, mc, qname, wire)
-
-	entry, found, _ := mc.Get(qname, dns.TypeA, dns.ClassINET, nil)
-	if !found {
-		t.Fatal("Get returned not found for legacy marker-collision entry")
-	}
-	if entry.TTLOffsets != nil {
-		t.Errorf("legacy entry TTLOffsets = %v, want nil", entry.TTLOffsets)
-	}
-	if !bytes.Equal(entry.ResponseWire, wire) {
-		t.Errorf("legacy wire mismatch: got %d bytes, want %d", len(entry.ResponseWire), len(wire))
-	}
-}
-
-// TestGet_LegacyRawEntry_ZeroIDLowByte: the residual collision — legacy raw
-// wire with ID high byte 0x02 AND low byte 0x00 passes the marker
-// discriminator, but the flags bytes read as numOffsets are always >= 0x8000
-// (QR flag set), which the bounds check rejects.  The row must miss — never
-// panic, never serve a corrupted wire.
-func TestGet_LegacyRawEntry_ZeroIDLowByte(t *testing.T) {
-	mc := testStore()
-	defer func() { _ = mc.Close() }()
-
-	qname := "legacy-zero-idlow.example.com."
-	mc.Set(qname, dns.TypeA, dns.ClassINET, nil,
-		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")}}, nil, nil, false, 0)
-
-	wire := packLegacyResponse(t, qname, 0x0200) // ID = 0x0200: high byte 0x02, low byte 0x00
-	setLegacyWire(t, mc, qname, wire)
-
-	entry, found, _ := mc.Get(qname, dns.TypeA, dns.ClassINET, nil)
-	if found || entry != nil {
-		t.Fatal("Get should miss on the zero-ID-low-byte legacy entry (bounds check), not panic or serve garbage")
-	}
-}
-
-// TestGet_LegacyZstdEntry: a zstd-compressed bare wire from v3.11.11 must be
-// decompressed and served — previously the zstd frame header (0x28B52FFD)
-// was read as a pre-packed numOffsets, driving the offset loop out of bounds.
-func TestGet_LegacyZstdEntry(t *testing.T) {
-	mc := testStore()
-	defer func() { _ = mc.Close() }()
-
-	qname := "legacy-zstd.example.com."
-	mc.Set(qname, dns.TypeA, dns.ClassINET, nil,
-		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")}}, nil, nil, false, 0)
-
-	wire := packLegacyResponse(t, qname, 0x5a5a)
-	setLegacyWire(t, mc, qname, zdnsutil.Compress(wire))
-
-	entry, found, _ := mc.Get(qname, dns.TypeA, dns.ClassINET, nil)
-	if !found {
-		t.Fatal("Get returned not found for legacy zstd entry")
-	}
-	if entry.TTLOffsets != nil {
-		t.Errorf("legacy entry TTLOffsets = %v, want nil", entry.TTLOffsets)
-	}
-	if !bytes.Equal(entry.ResponseWire, wire) {
-		t.Errorf("legacy zstd wire mismatch: got %d bytes, want %d", len(entry.ResponseWire), len(wire))
+			entry, found, _ := mc.Get(qname, dns.TypeA, dns.ClassINET, nil)
+			if found || entry != nil {
+				t.Fatal("Get must miss on legacy (non-0x02) BLOBs — no compatibility is kept")
+			}
+		})
 	}
 }
 

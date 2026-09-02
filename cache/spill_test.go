@@ -78,7 +78,9 @@ func TestSpillStaleWindow(t *testing.T) {
 		if err := msg.Pack(); err != nil {
 			t.Fatal(err)
 		}
-		if err := c.SpillStore().Put(key, ts, 300, false, msg.Data); err != nil {
+		// Pre-packed BLOB with an empty TTL offset table ([0x02][0x00 0x00][wire]).
+		blob := append([]byte{cacheFormatPrePacked, 0x00, 0x00}, msg.Data...)
+		if err := c.SpillStore().Put(key, ts, 300, false, blob); err != nil {
 			t.Fatal(err)
 		}
 	}

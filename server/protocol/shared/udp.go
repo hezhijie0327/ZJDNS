@@ -30,13 +30,14 @@ type DemuxPacket struct {
 // loop); WriteTo sends back through the shared socket so the client
 // always sees the listener's source port.
 type DemuxPacketConn struct {
-	Shared  *net.UDPConn
-	Remote  net.Addr
-	Ch      chan DemuxPacket
-	closed  atomic.Bool
-	dlMu    sync.Mutex
-	dlCh    chan struct{}
-	dlTimer *time.Timer
+	Shared   *net.UDPConn
+	Remote   net.Addr
+	Ch       chan DemuxPacket
+	lastSeen atomic.Int64 // unix seconds of the last dispatched datagram
+	closed   atomic.Bool
+	dlMu     sync.Mutex
+	dlCh     chan struct{}
+	dlTimer  *time.Timer
 }
 
 // addrKey is an allocation-free map key for UDP client addresses.
@@ -46,8 +47,6 @@ type addrKey struct {
 	port uint16
 }
 
-// packetBuf is a pooled datagram buffer passed through dispatch channels.
-// The consumer copies data out and returns the buffer to PacketBufPool.
 type packetBuf struct {
 	data []byte
 	src  *net.UDPAddr
@@ -55,10 +54,11 @@ type packetBuf struct {
 }
 
 type dtlsClientConn struct {
-	ch     chan packetBuf
-	shared *net.UDPConn
-	remote net.Addr
-	closed atomic.Bool
+	ch       chan packetBuf
+	shared   *net.UDPConn
+	remote   net.Addr
+	lastSeen atomic.Int64 // unix seconds of the last dispatched datagram
+	closed   atomic.Bool
 }
 
 type dtlsAcceptResult struct {
@@ -98,6 +98,26 @@ type sharedDNSCryptClient struct {
 
 // PacketBufPool manages pooled datagram buffers.  The dispatch loop
 // allocates from the pool; consumers copy data out and return the buffer.
+// Client-state bounds for the shared UDP dispatch loop.  Every unique
+// (source IP, port) gets a classification-map entry and, for
+// connection-oriented UDP protocols, a per-client conn + goroutine —
+// without a bound, NAT port churn or a spoofed-source flood grows them
+// without limit.
+const (
+	// peerProtoMax caps the classification map; on overflow it is rebuilt
+	// from scratch (classifications are re-derived from the next datagram).
+	peerProtoMax = 1 << 16
+
+	// clientIdleTimeout bounds how long a silent per-client conn is kept.
+	clientIdleTimeout = 60 * time.Second
+
+	// reapCheckEveryPackets gates the reap clock reads and map scans to a
+	// fixed amortised cost per datagram.
+	reapCheckEveryPackets = 1024
+)
+
+// packetBuf is a pooled datagram buffer passed through dispatch channels.
+// The consumer copies data out and returns the buffer to PacketBufPool.
 var PacketBufPool = sync.Pool{
 	New: func() any {
 		b := make([]byte, pool.SecureBufferSize)
@@ -303,6 +323,7 @@ func (l *dtlsPacketListener) dispatch(src *net.UDPAddr, pb *[]byte, n int) {
 		l.mu.Unlock()
 	}
 
+	cc.lastSeen.Store(time.Now().Unix())
 	cpBuf := PacketBufPool.Get().(*[]byte)
 	copy(*cpBuf, (*pb)[:n])
 	select {
@@ -528,6 +549,9 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 
 	buf := make([]byte, pool.SecureBufferSize)
 
+	var pktCount uint32
+	var lastReap time.Time
+
 	for {
 		select {
 		case <-m.groupCtx.Done():
@@ -550,6 +574,25 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 
 		pb := PacketBufPool.Get().(*[]byte)
 		copy(*pb, buf[:n])
+
+		// Amortised idle-client reaping: per-client conns whose peer went
+		// silent are closed and forgotten, bounding the maps under NAT
+		// churn and spoofed-source floods.  Runs inline in the dispatch
+		// loop — the ONLY sender to the per-client channels — so closing
+		// under the map lock cannot race a concurrent dispatch.
+		pktCount++
+		if pktCount%reapCheckEveryPackets == 0 {
+			if now := time.Now(); now.Sub(lastReap) >= clientIdleTimeout/2 {
+				lastReap = now
+				cutoff := now.Unix() - int64(clientIdleTimeout/time.Second)
+				reapIdleUDPClients(dtlcpState, dnscryptState, dtlsPL, cutoff)
+				peerMu.Lock()
+				if len(peerProto) >= peerProtoMax {
+					peerProto = make(map[addrKey]string, peerProtoMax)
+				}
+				peerMu.Unlock()
+			}
+		}
 
 		key := makeAddrKey(src)
 
@@ -637,6 +680,7 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 				dtlcpState.mu.Unlock()
 			}
 
+			dc.lastSeen.Store(time.Now().Unix())
 			select {
 			case dc.Ch <- DemuxPacket{Data: (*pb)[:n], Addr: src}:
 			default:
@@ -678,11 +722,54 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 				dnscryptState.mu.Unlock()
 			}
 
+			dc.lastSeen.Store(time.Now().Unix())
 			select {
 			case dc.Ch <- DemuxPacket{Data: (*pb)[:n], Addr: src}:
 			default:
 				PacketBufPool.Put(pb)
 			}
 		}
+	}
+}
+
+// reapIdleUDPClients closes and forgets per-client conns idle since before
+// the cutoff (unix seconds) across the DTLCP, DNSCrypt and DTLS client
+// maps.  Must be called from the dispatch loop — the sole channel sender —
+// so a close can never race an in-flight dispatch send.  Closing the
+// channels unblocks the parked client goroutines (DNSCrypt drain loop,
+// DTLCP handler read, DTLS accept read), which then run their own cleanup
+// callbacks; the double delete is idempotent.
+func reapIdleUDPClients(dtlcpState *sharedDTLSClient, dnscryptState *sharedDNSCryptClient, dtlsPL *dtlsPacketListener, cutoff int64) {
+	// Close() (not a bare close(Ch)) — the CAS guard makes a later
+	// handler-side Close idempotent instead of panicking on double close.
+	if dtlcpState != nil {
+		dtlcpState.mu.Lock()
+		for k, dc := range dtlcpState.conns {
+			if dc.lastSeen.Load() < cutoff {
+				delete(dtlcpState.conns, k)
+				_ = dc.Close()
+			}
+		}
+		dtlcpState.mu.Unlock()
+	}
+	if dnscryptState != nil {
+		dnscryptState.mu.Lock()
+		for k, dc := range dnscryptState.conns {
+			if dc.lastSeen.Load() < cutoff {
+				delete(dnscryptState.conns, k)
+				_ = dc.Close()
+			}
+		}
+		dnscryptState.mu.Unlock()
+	}
+	if dtlsPL != nil {
+		dtlsPL.mu.Lock()
+		for k, cc := range dtlsPL.clients {
+			if cc.lastSeen.Load() < cutoff {
+				delete(dtlsPL.clients, k)
+				_ = cc.Close()
+			}
+		}
+		dtlsPL.mu.Unlock()
 	}
 }

@@ -84,6 +84,12 @@ type Entry struct {
 	// the byte offsets of each TTL field within ResponseWire.
 	ResponseWire []byte
 	TTLOffsets   []uint16
+
+	// HasDNSSEC reports whether ResponseWire carries DNSSEC record types
+	// (RRSIG/NSEC/NSEC3/DNSKEY/DS) — precomputed at Set() time (BLOB header
+	// flag bit) so the DO=0 serve gate skips the per-hit wire scan.  Legacy
+	// (pre-flag) entries compute it once in buildEntry instead.
+	HasDNSSEC bool
 }
 
 // requestRecordPool reuses RequestRecord values on the per-query hot path.

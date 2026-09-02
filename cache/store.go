@@ -81,6 +81,11 @@ const (
 	// wire with TTL offset table (format 0x02).
 	cacheFormatPrePacked = 0x02
 
+	// dnssecFlagMask is the top bit of the 2-byte num_offsets field in the
+	// pre-packed BLOB (bit 7 of msgWire[1]): set when the wire carries
+	// DNSSEC record types.  The remaining 15 bits hold the offset count.
+	dnssecFlagMask = 0x8000
+
 	// maxTTLOffsets caps pooled TTL-offset slices: responses beyond this RR
 	// count allocate fresh instead of growing the pool entry (large
 	// DNSSEC/ANY responses exceed it routinely).
@@ -416,43 +421,29 @@ func (s *Cache) buildEntry(ts int64, entryTTL int, validated bool, msgWire []byt
 		return nil, false, false
 	}
 
-	// Format dispatch: pre-packed (0x02) carries a TTL offset table before
-	// the DNS wire; legacy entries (<= v3.11.11) are a bare zstd-compressed
-	// or raw DNS wire with no marker.  Entries are read without a format
-	// check previously — a legacy raw wire whose ID high byte happens to be
-	// 0x02 was parsed as pre-packed, and the garbage numOffsets drove the
-	// offset-table loop out of bounds (upgrade panic window: entries survive
-	// up to DefaultMaxCacheableTTL + DefaultStaleMaxAge = 10 days).
-	// msgWire[1] discriminates the collision: it is the high byte of
-	// numOffsets (0 for any real entry — responses store fewer than 256
-	// RRs), while byte[1] of a raw DNS response is the low byte of the
-	// query ID.  If a legacy raw wire slips through (ID low byte 0), the
-	// flags bytes are read as numOffsets — always >= 0x8000 because the QR
-	// flag is set — which the bounds check below rejects (> (len-3)/2 for
-	// any legal message size), so no legacy row can ever be misparsed.
-	var (
-		wire    []byte
-		offsets []uint16
-	)
-	if msgWire[0] == cacheFormatPrePacked && msgWire[1] == 0 {
-		numOffsets := int(binary.BigEndian.Uint16(msgWire[1:3]))
-		// Bounds check: a corrupt row must not drive the offset table past
-		// the BLOB end (previously a slice-bounds panic).
-		if numOffsets > (len(msgWire)-3)/2 {
-			log.Warnf("CACHE: entry (name=%s type=%d) offset table out of bounds: %d offsets in %d bytes", qname, qtype, numOffsets, len(msgWire))
-			return nil, false, false
-		}
+	// Single live format: [0x02] [2:num_offsets|hasDNSSEC flag] [2 each:
+	// TTL offset] [wire].  No legacy compatibility is kept — a foreign or
+	// corrupt BLOB is treated as a miss (the marker byte plus the masked
+	// numOffsets bound check below reject raw/misparsed wires).
+	if msgWire[0] != cacheFormatPrePacked || msgWire[1]&0x7F != 0 {
+		return nil, false, false
+	}
+	entryHasDNSSEC := msgWire[1]&0x80 != 0
+	numOffsets := int(binary.BigEndian.Uint16(msgWire[1:3]) &^ dnssecFlagMask)
+	// Bounds check: a corrupt row must not drive the offset table past the
+	// BLOB end (previously a slice-bounds panic).
+	if numOffsets > (len(msgWire)-3)/2 {
+		log.Warnf("CACHE: entry (name=%s type=%d) offset table out of bounds: %d offsets in %d bytes", qname, qtype, numOffsets, len(msgWire))
+		return nil, false, false
+	}
+	var offsets []uint16
+	if numOffsets > 0 {
 		offsets = AcquireTTLOffsets(numOffsets)
 		for i := range numOffsets {
 			offsets[i] = binary.BigEndian.Uint16(msgWire[3+i*2:])
 		}
-		wire = msgWire[3+numOffsets*2:]
-	} else {
-		// Legacy format (<= v3.11.11): zstd-compressed or raw DNS wire
-		// without a marker.  No TTL offset table — TTLs are served at their
-		// stored values, expiring naturally within the migration window.
-		wire = msgWire
 	}
+	wire := msgWire[3+numOffsets*2:]
 
 	// Threshold decompression.
 	var owned []byte
@@ -490,12 +481,16 @@ func (s *Cache) buildEntry(ts int64, entryTTL int, validated bool, msgWire []byt
 		ResponseWire: owned,
 		TTLOffsets:   offsets,
 	}
+	entry.HasDNSSEC = entryHasDNSSEC
 	// When latency data is available, sort A/AAAA records and
 	// rebuild ResponseWire so the pre-packed response serves IPs
 	// in latency order.  This is the only path that mutates
 	// ResponseWire after Set() — latency data may arrive after the
 	// entry was stored.
-	if s.hasLatencyData.Load() {
+	// Latency sorting reorders only A/AAAA answers — every other qtype
+	// (TXT, MX, DNSKEY, ...) paid the full Unpack + clone + map allocs for
+	// a sort that could never change the wire.
+	if s.hasLatencyData.Load() && (qtype == dns.TypeA || qtype == dns.TypeAAAA) {
 		_ = entry.Unpack()
 		if s.sortAnswerByLatency(entry) && len(entry.Answer) > 0 {
 			entry.rebuildResponseWire()
@@ -654,7 +649,7 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 
 	// Sort A/AAAA records by latency before packing — the pre-packed
 	// wire preserves this order and serves it directly without re-sorting.
-	if s.hasLatencyData.Load() && len(answer) > 1 {
+	if s.hasLatencyData.Load() && len(answer) > 1 && (qtype == dns.TypeA || qtype == dns.TypeAAAA) {
 		tmp := &Entry{Answer: answer}
 		s.sortAnswerByLatency(tmp)
 		answer = tmp.Answer
@@ -698,11 +693,20 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 	pool.DefaultMessage.Put(msg)
 
 	// Build the BLOB with exact-size preallocation — a bytes.Buffer would
-	// grow geometrically and copy.  [0x02] [2:num_offsets] [2 each:offset] [wire]
+	// grow geometrically and copy.  [0x02] [2:num_offsets|flag] [2 each:offset] [wire]
+	// The num_offsets field's top bit (bit 7 of msgWire[1]) is the
+	// has-DNSSEC flag, precomputed here so the DO=0 serve gate never
+	// re-scans the wire per hit; the offset count itself is bounded by
+	// (wire size / min RR size) ≈ 5.4k, far below the 2^15 the mask leaves.
+	hasDNSSEC := WireHasDNSSEC(msg.Data)
+	field := uint16(len(ttlOffsets)) //nolint:gosec // G115: offset count bounded by wire size / min RR size (< 2^15)
 	msgWire := make([]byte, 0, 3+2*len(ttlOffsets)+len(wire))
 	msgWire = append(msgWire, cacheFormatPrePacked)
 	var lenBuf [2]byte
-	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(ttlOffsets))) //nolint:gosec // G115: offset count bounded by RR count
+	if hasDNSSEC {
+		field |= dnssecFlagMask
+	}
+	binary.BigEndian.PutUint16(lenBuf[:], field) //nolint:gosec // G115: offset count bounded by RR count
 	msgWire = append(msgWire, lenBuf[:]...)
 	for _, off := range ttlOffsets {
 		binary.BigEndian.PutUint16(lenBuf[:], off)

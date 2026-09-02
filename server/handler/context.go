@@ -34,6 +34,10 @@ type QueryContext struct {
 	CacheHit    bool // true when cache.Get found an entry (fresh or expired)
 	CacheServed bool // true when the response was built from cache (for logging)
 
+	// ResHasDNSSEC mirrors Entry.HasDNSSEC for the pre-packed response —
+	// lets the Response serve gate skip the per-hit wire scan.
+	ResHasDNSSEC bool
+
 	// ── Resolution: populated by Resolution ──
 
 	ResolutionResult *resolver.QueryResult // set after resolver.Query completes

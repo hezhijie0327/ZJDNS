@@ -55,7 +55,7 @@ func (m *Response) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			// wire may contain RRSIG/NSEC/NSEC3/DNSKEY/DS) — otherwise the
 			// unpack+filter path below runs.
 			if !st.shouldAddEDNS && !log.IsDebug() &&
-				!cache.WireHasDNSSEC(qctx.Res.Data) {
+				!qctx.ResHasDNSSEC {
 				binary.BigEndian.PutUint16(qctx.Res.Data[0:2], qctx.Req.ID)
 				// RFC 1035 §4.1.1: RD is copied from the query — the cached
 				// wire carries RD from cache Set() time.

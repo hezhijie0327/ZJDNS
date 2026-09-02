@@ -157,6 +157,9 @@ func TestResponseMiddleware_DNSSECFilterDO0(t *testing.T) {
 	req, packed := prePackedWithNSEC(t)
 	next := handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
 		qctx.Res = packed
+		// Mirrors buildCacheResponse: the pre-packed serve gate trusts the
+		// bridge-computed flag instead of rescanning the wire per hit.
+		qctx.ResHasDNSSEC = true
 		return nil
 	})
 	chain := (&Response{edns: ednsH}).Wrap(next)

@@ -292,6 +292,16 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 		return false, ErrMissingRRSIG
 	}
 
+	// Key tags are memoised once per validation: miekg's KeyTag() computes
+	// the RFC 4034 App. B digest on every call, and the sig×key loop below
+	// re-derived it for every pair (s signatures × k keys per RRset group,
+	// per level, per query — dominating the verify setup cost for
+	// ECDSA/Ed25519 zones).
+	keyTagIdx := make(map[uint16]int, len(verifiedDNSKEYs))
+	for i, key := range verifiedDNSKEYs {
+		keyTagIdx[key.KeyTag()] = i
+	}
+
 	var anyValidated bool
 	for _, group := range groups {
 		if len(group) == 0 {
@@ -310,14 +320,13 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 		var groupValidated bool
 		var unsupportedAlgErr error
 		for _, sig := range sigs {
-			for _, key := range verifiedDNSKEYs {
-				if key.KeyTag() != sig.KeyTag {
-					continue
-				}
+			keyIdx, tagMatch := keyTagIdx[sig.KeyTag]
+			if tagMatch {
+				key := verifiedDNSKEYs[keyIdx]
 				if err := c.VerifyRRset(group, sig, key); err == nil {
 					anyValidated = true
 					groupValidated = true
-					log.Debugf("SECURITY: validated %s/%s with key_tag=%d", header.Name, dns.TypeToString[dns.RRToType(group[0])], key.KeyTag())
+					log.Debugf("SECURITY: validated %s/%s with key_tag=%d", header.Name, dns.TypeToString[dns.RRToType(group[0])], sig.KeyTag)
 					break
 				} else if errors.Is(err, ErrUnsupportedAlgorithm) {
 					// Remember ANY unsupported-algorithm failure — the

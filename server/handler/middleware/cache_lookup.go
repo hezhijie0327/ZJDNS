@@ -302,6 +302,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(qctx *handler.QueryContext, qname 
 // stale-answer EDE (RFC 8914 code 3, Stale Answer) when serving expired data. Shared by
 // CacheLookup and CacheStore.
 func buildCacheResponse(qctx *handler.QueryContext, entry *cache.Entry, isExpired bool) *dns.Msg {
+	qctx.ResHasDNSSEC = entry.HasDNSSEC
 	msg := handler.BuildCacheEntryResponse(qctx.Req, entry, qctx.ClientRequestedDNSSEC, isExpired)
 	if isExpired {
 		qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorStaleAnswer, ExtraText: ""}
