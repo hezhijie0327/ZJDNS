@@ -158,9 +158,10 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 		// drop it (UDP semantics; DTLCP retransmits handshake flights).
 		pb := shared.PacketBufPool.Get().(*[]byte)
 		copy(*pb, buf[:n])
-		select {
-		case dc.Ch <- shared.DemuxPacket{Data: (*pb)[:n], Addr: src}:
-		default:
+		// Guarded send: the client goroutine's deferred dc.Close() can race
+		// this enqueue (handshake failure, idle timeout, Shutdown) — a bare
+		// channel send here panicked the whole accept loop (2026-09 P1).
+		if !dc.Send(shared.DemuxPacket{Data: (*pb)[:n], Addr: src}) {
 			shared.PacketBufPool.Put(pb)
 		}
 	}
@@ -169,7 +170,16 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 // ServeDTLCPClient completes the DTLCP handshake and serves queries on one
 // client connection (exported for shared-port Manager).
 func (s *Server) ServeDTLCPClient(pc net.PacketConn, src *net.UDPAddr, cleanup func()) {
-	s.serveDTLCPClient(s.dtlcpConfig, pc.(*shared.DemuxPacketConn), src, cleanup)
+	dc, ok := pc.(*shared.DemuxPacketConn)
+	if !ok {
+		// Exported API guard: a foreign PacketConn cannot be served (the
+		// dispatch path depends on the demux queue semantics) — close it
+		// instead of panicking the client goroutine (2026-09 X5).
+		log.Warnf("TLCP: ServeDTLCPClient received a non-demux conn %T — closing", pc)
+		_ = pc.Close()
+		return
+	}
+	s.serveDTLCPClient(s.dtlcpConfig, dc, src, cleanup)
 }
 
 // serveDTLCPClient completes the DTLCP handshake and serves queries on one

@@ -2,12 +2,14 @@ package shared
 
 import (
 	"io"
+	"math"
 	"net"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"zjdns/config"
 	"zjdns/internal/demux"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -193,13 +195,25 @@ func (d *DemuxPacketConn) Close() error {
 	defer d.sendMu.Unlock()
 	if d.closed.CompareAndSwap(false, true) {
 		close(d.Ch)
+		// Drain queued datagrams back to the packet pool — up to 32 pooled
+		// buffers per conn were simply GC'd under reap churn (L5).  The
+		// sendMu critical section guarantees no concurrent Send races the
+		// drain (Send returns false once closed is set).
+		for pkt := range d.Ch {
+			full := pkt.Data[:cap(pkt.Data)]
+			PacketBufPool.Put(&full)
+		}
 	}
 	return nil
 }
 
-// sendPacket enqueues one datagram.  It reports false when the conn is
-// closed or the queue is full — the caller must return the pool buffer.
-func (d *DemuxPacketConn) sendPacket(pkt DemuxPacket) bool {
+// Send enqueues one datagram.  It reports false when the conn is closed or
+// the queue is full — the caller must return the pool buffer.  ALL senders
+// must go through this guarded path (sendMu + closed CAS): a bare send on
+// the exported Ch races a concurrent Close with a panic that kills the
+// whole dispatch loop (2026-09 P1 — the standalone DTLCP accept loop
+// bypassed this guard exactly like that).
+func (d *DemuxPacketConn) Send(pkt DemuxPacket) bool {
 	d.sendMu.Lock()
 	defer d.sendMu.Unlock()
 	if d.closed.Load() {
@@ -482,6 +496,15 @@ func (m *Manager) startUDPGroup(g *UDPGroup) error {
 			}
 		}
 
+		if g.ServeDTLCP != nil {
+			rt.dtlcpState = &sharedDTLSClient{
+				conns: make(map[addrKey]*DemuxPacketConn),
+			}
+		}
+
+		// Flood bound for per-client handler goroutines (P3).
+		rt.clientSem = make(chan struct{}, config.DefaultServerGoroutineLimit)
+
 		if g.DOQHandler != nil {
 			rt.quicPC = newQUICPacketConn(udpConn)
 
@@ -576,10 +599,7 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 	quicPC := rt.quicPC
 	h3PC := rt.h3PC
 	dnscryptState := rt.dcState
-
-	dtlcpState := &sharedDTLSClient{
-		conns: make(map[addrKey]*DemuxPacketConn),
-	}
+	dtlcpState := rt.dtlcpState
 
 	peerProto := make(map[addrKey]string)
 	var peerMu sync.RWMutex
@@ -588,6 +608,12 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 
 	var pktCount uint32
 	var lastReap time.Time
+
+	// Exit sweep: closing every per-client conn unblocks the parked client
+	// goroutines (DNSCrypt drain `<-Ch`, DTLCP handshake reads) — without
+	// this they leaked past Shutdown and stalled the server's background
+	// group wait for its full timeout (2026-09 X4).
+	defer reapIdleUDPClients(dtlcpState, dnscryptState, dtlsPL, math.MaxInt64)
 
 	for {
 		select {
@@ -619,15 +645,18 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 		// under the map lock cannot race a concurrent dispatch.
 		pktCount++
 		if pktCount%reapCheckEveryPackets == 0 {
+			// Classification-map bound: checked every gate regardless of the
+			// reap clock — under a spoofed-source flood the map can exceed
+			// peerProtoMax within a single 30s reap window (2026-09 P3).
+			peerMu.Lock()
+			if len(peerProto) >= peerProtoMax {
+				peerProto = make(map[addrKey]string, peerProtoMax)
+			}
+			peerMu.Unlock()
 			if now := time.Now(); now.Sub(lastReap) >= clientIdleTimeout/2 {
 				lastReap = now
 				cutoff := now.Unix() - int64(clientIdleTimeout/time.Second)
 				reapIdleUDPClients(dtlcpState, dnscryptState, dtlsPL, cutoff)
-				peerMu.Lock()
-				if len(peerProto) >= peerProtoMax {
-					peerProto = make(map[addrKey]string, peerProtoMax)
-				}
-				peerMu.Unlock()
 			}
 		}
 
@@ -692,6 +721,13 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 			dtlcpState.mu.Lock()
 			dc, ok := dtlcpState.conns[key]
 			if !ok {
+				if !rt.admit() {
+					// Per-client cap reached — spoofed-source flood bound;
+					// drop like a full queue, the client retransmits (P3).
+					dtlcpState.mu.Unlock()
+					PacketBufPool.Put(pb)
+					continue
+				}
 				dc = &DemuxPacketConn{
 					Shared: udpConn,
 					Remote: src,
@@ -706,6 +742,7 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 				capturedHandler := g.ServeDTLCP
 				m.host.Go(func() error {
 					defer zdnsutil.HandlePanic("Shared DTLCP client")
+					defer rt.release()
 					capturedHandler(capturedDC, capturedSrc, func() {
 						dtlcpState.mu.Lock()
 						delete(dtlcpState.conns, capturedKey)
@@ -718,7 +755,7 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 			}
 
 			dc.lastSeen.Store(time.Now().Unix())
-			if !dc.sendPacket(DemuxPacket{Data: (*pb)[:n], Addr: src}) {
+			if !dc.Send(DemuxPacket{Data: (*pb)[:n], Addr: src}) {
 				PacketBufPool.Put(pb)
 			}
 
@@ -730,6 +767,12 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 			dnscryptState.mu.Lock()
 			dc, ok := dnscryptState.conns[key]
 			if !ok {
+				if !rt.admit() {
+					// Per-client cap reached — spoofed-source flood bound (P3).
+					dnscryptState.mu.Unlock()
+					PacketBufPool.Put(pb)
+					continue
+				}
 				dc = &DemuxPacketConn{
 					Shared: udpConn,
 					Remote: src,
@@ -742,6 +785,7 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 				capturedHandler := g.ServeDNSCrypt
 				m.host.Go(func() error {
 					defer zdnsutil.HandlePanic("Shared DNSCrypt UDP client")
+					defer rt.release()
 					for {
 						pkt, pktOk := <-capturedDC.Ch
 						if !pktOk {
@@ -758,7 +802,7 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 			}
 
 			dc.lastSeen.Store(time.Now().Unix())
-			if !dc.sendPacket(DemuxPacket{Data: (*pb)[:n], Addr: src}) {
+			if !dc.Send(DemuxPacket{Data: (*pb)[:n], Addr: src}) {
 				PacketBufPool.Put(pb)
 			}
 		}

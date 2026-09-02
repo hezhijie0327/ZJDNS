@@ -146,6 +146,9 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 // (shared-key cache) and the middleware chain is never invoked — the query is
 // answered SERVFAIL, the handshake served from the current cert window.
 func (s *Server) handleSaturated(ctx context.Context, b []byte, addr net.Addr, pc net.PacketConn) {
+	if len(b) < dnscryptcrypto.MinDNSPacketSize {
+		return // short-datagram gate, mirrors processUDPPacket (P2)
+	}
 	if !s.hasClientMagic(b[:dnscryptcrypto.ClientMagicSize]) && !bytes.Equal(b[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:]) {
 		// Certificate handshake — cheap, serve it (dropping on anti-
 		// amplification violation: the client retries over TCP).
@@ -186,6 +189,14 @@ func (s *Server) handleSaturated(ctx context.Context, b []byte, addr net.Addr, p
 // pc=DemuxPacketConn).  It handles encrypted queries and certificate
 // handshakes, writing responses via pc.WriteTo.
 func (s *Server) processUDPPacket(ctx context.Context, b []byte, src net.Addr, pc net.PacketConn) {
+	// Length gate FIRST: the shared-port demux routes any datagram that
+	// structurally matches no other protocol here — including 1-byte
+	// datagrams, which sliced straight into b[:ClientMagicSize] panicked
+	// the per-client drain goroutine and blackholed that source address
+	// (2026-09 P2).  Mirrors the standalone path's MinDNSPacketSize drop.
+	if len(b) < dnscryptcrypto.MinDNSPacketSize {
+		return
+	}
 	if !s.hasClientMagic(b[:dnscryptcrypto.ClientMagicSize]) && !bytes.Equal(b[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:]) {
 		reply, err := s.handleHandshake(b, true)
 		if err != nil {
