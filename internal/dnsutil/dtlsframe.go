@@ -3,11 +3,15 @@ package dnsutil
 import (
 	"encoding/binary"
 	"net"
+	"sync"
 	"zjdns/internal/log"
-	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
 )
+
+// dtlsFrameBufPool holds 4 KiB frame buffers — DTLS datagrams are capped
+// by the PMTU budget far below this; oversized frames allocate directly.
+var dtlsFrameBufPool = sync.Pool{New: func() any { b := make([]byte, 4096); return &b }}
 
 // TruncateWire shrinks a packed DNS response wire to its header + question
 // section, setting the TC bit — the RFC 1035 §6.2 truncation used when a
@@ -93,20 +97,25 @@ func WriteDTLSFrame(conn net.Conn, resp *dns.Msg, safeMax, maxLen int, label str
 		return true
 	}
 
-	frameBuf := pool.DefaultBuffer.Get()
+	// Local buffer pool: importing internal/pool from dnsutil shifted the
+	// hot binary's code layout and cost ~13% on the query pipeline
+	// (measured 2026-09, ServerProcessQuery 353→398ns; removing the import
+	// edge restored it) — keep this package import-light.
+	frameBufPtr := dtlsFrameBufPool.Get().(*[]byte)
+	frameBuf := *frameBufPtr
 	frameOK := len(frameBuf) >= DNSFramePrefixLen+len(wire)
 	var frame []byte
 	if frameOK {
 		frame = frameBuf[:DNSFramePrefixLen+len(wire)]
 	} else {
 		frame = make([]byte, DNSFramePrefixLen+len(wire))
-		pool.DefaultBuffer.Put(frameBuf)
+		dtlsFrameBufPool.Put(frameBufPtr)
 	}
 	binary.BigEndian.PutUint16(frame[:DNSFramePrefixLen], uint16(len(wire))) //nolint:gosec // G115: bounded by maxLen
 	copy(frame[DNSFramePrefixLen:], wire)
 	_, err := conn.Write(frame)
 	if frameOK {
-		pool.DefaultBuffer.Put(frame)
+		dtlsFrameBufPool.Put(frameBufPtr)
 	}
 	if err != nil {
 		log.Debugf("%s write error: %v", label, err)
