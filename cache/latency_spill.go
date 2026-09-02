@@ -64,9 +64,11 @@ func (s *Cache) loadLatencySpill(path string, diskCap, latencyMax int) {
 		s.hasLatencyData.Store(true)
 		n++
 	}
+	// Async drain — OnEvict runs under the latencies mutex (2026-09 D2).
+	s.spillLatW = spillfile.NewAsyncWriter(s.spillLat)
 	s.latencies.SetOnEvict(func(key string, e latEntry) {
 		if e.lastProbe > 0 {
-			_ = s.spillLat.Put(key, e.lastProbe, 0, false, marshalLatency(e))
+			s.spillLatW.Enqueue(key, e.lastProbe, 0, false, marshalLatency(e))
 		}
 	})
 	log.Infof("CACHE: latency spill store ready: %d records on disk, %d loaded to memory", onDisk, n)

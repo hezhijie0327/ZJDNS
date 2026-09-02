@@ -8,6 +8,7 @@ import (
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/topk"
+	"zjdns/internal/ttl"
 )
 
 // statsMetric is a single (name, count, percentage) entry for the stats TXT
@@ -54,22 +55,44 @@ func (s *Cache) FlushDB(target string) (int64, error) {
 			s.statsMgr.ResetJournal()
 		}
 	case "cache":
-		s.entries.Clear() // evict callbacks re-spill — wipe the spill file after
+		// Detach the evict callback for the wipe: Clear() fires OnEvict per
+		// entry, which would enqueue one spill write each (a syscall under
+		// the entries mutex) only for the file below to be truncated right
+		// after — and an async queued write could even land after the
+		// truncate, resurrecting wiped entries (2026-09 D5).
+		s.entries.SetOnEvict(nil)
+		s.entries.Clear()
 		if s.spill != nil {
 			if err := s.spill.Clear(); err != nil {
 				log.Warnf("CACHE: spill clear failed: %v", err)
 			}
 		}
+		if s.spillW != nil {
+			s.entries.SetOnEvict(func(key string, ce *cacheEntry) {
+				if ce.ts > 0 && ttl.CanServeExpired(ce.ts, ce.ttl, config.DefaultStaleMaxAge) {
+					s.spillW.Enqueue(key, ce.ts, ce.ttl, ce.validated, ce.msgWire)
+				}
+			})
+		}
 	case "latency":
 		// Clear in place (lrumap is internally locked) — replacing the map
 		// pointer unsynchronized would race the cache-hit hot path and the
-		// latency-probe goroutines (H4).
+		// latency-probe goroutines (H4).  Evict callback detached for the
+		// wipe, same reason as the cache tier (2026-09 D5).
+		s.latencies.SetOnEvict(nil)
 		s.latencies.Clear()
 		s.hasLatencyData.Store(false)
 		if s.spillLat != nil {
 			if err := s.spillLat.Clear(); err != nil {
 				log.Warnf("CACHE: latency spill clear failed: %v", err)
 			}
+		}
+		if s.spillLatW != nil {
+			s.latencies.SetOnEvict(func(key string, e latEntry) {
+				if e.lastProbe > 0 {
+					s.spillLatW.Enqueue(key, e.lastProbe, 0, false, marshalLatency(e))
+				}
+			})
 		}
 	case "delegation", "zone":
 		// Not owned by the cache store — no-op (kept for interface parity).

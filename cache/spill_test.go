@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"path/filepath"
 	"testing"
+	"time"
 	"zjdns/config"
 	"zjdns/internal/log"
 
@@ -32,6 +33,23 @@ func spillCache(t *testing.T, memLimit, diskLimit int) (c *Cache, path string) {
 	return c, path
 }
 
+// waitSpillCount polls until the store reports n records — eviction writes
+// are drained by the async spill writer, so they land asynchronously.
+func waitSpillCount(t *testing.T, store interface {
+	EntryCount() int
+}, n int,
+) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if store.EntryCount() == n {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("spill EntryCount = %d, want %d (async writer did not drain)", store.EntryCount(), n)
+}
+
 func TestSpillEvictPromote(t *testing.T) {
 	c, _ := spillCache(t, 2, 0)
 	if c.SpillStore() == nil {
@@ -50,9 +68,7 @@ func TestSpillEvictPromote(t *testing.T) {
 	if c.EntryCount() != 2 {
 		t.Fatalf("EntryCount = %d, want 2", c.EntryCount())
 	}
-	if got := c.SpillStore().EntryCount(); got != 1 {
-		t.Fatalf("spill EntryCount = %d, want 1", got)
-	}
+	waitSpillCount(t, c.SpillStore(), 1)
 
 	// The spilled entry is served from disk and promoted back to memory.
 	entry, found, expired := c.Get("evict-me.example.com.", dns.TypeA, dns.ClassINET, nil)
@@ -151,9 +167,7 @@ func TestLatencySpill(t *testing.T) {
 
 	c.UpdateLatency("192.0.2.1", 25)
 	c.UpdateLatency("192.0.2.2", 30) // evicts 192.0.2.1 → spill
-	if got := c.LatencySpillStore().EntryCount(); got != 1 {
-		t.Fatalf("latency spill EntryCount = %d, want 1", got)
-	}
+	waitSpillCount(t, c.LatencySpillStore(), 1)
 	if ts, ok := c.LatencyLastProbe("192.0.2.1"); !ok || ts == 0 {
 		t.Fatalf("spilled latency not promoted: ts=%d ok=%t", ts, ok)
 	}

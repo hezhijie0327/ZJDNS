@@ -62,6 +62,11 @@ type Recursive struct {
 	spill    *spillfile.Store
 	spillCap int // spill record cap (≤0 = unbounded)
 
+	// spillW drains delegation eviction writes off the delegations mutex
+	// (2026-09 D2/R1 — OnEvict ran a synchronous WriteAt under the lock
+	// that guards every lookupDelegation on the recursive hot path).
+	spillW *spillfile.AsyncWriter
+
 	spoofguard  bool     // from protocol=recursive upstream
 	splitguard  bool     // from protocol=recursive upstream
 	poisonguard bool     // from protocol=recursive upstream

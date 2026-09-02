@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"zjdns/config"
 	"zjdns/internal/lrumap"
 
@@ -333,6 +334,11 @@ func TestDelegationSpillEvictPromote(t *testing.T) {
 	r.storeDelegation("qq.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0)
 	r.storeDelegation("taobao.com.", "com.", nsRecords, []string{"1.2.3.4:53"}, chain, 0) // evicts baidu.com → spill
 
+	// Eviction writes drain asynchronously — poll for the spill record.
+	deadline := time.Now().Add(2 * time.Second)
+	for r.spill.EntryCount() != 1 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
 	if got := r.spill.EntryCount(); got != 1 {
 		t.Fatalf("spill EntryCount = %d, want 1", got)
 	}

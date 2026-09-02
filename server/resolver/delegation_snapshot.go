@@ -1,8 +1,11 @@
 package resolver
 
 import (
+	"cmp"
+	"context"
 	"encoding/binary"
-	"sort"
+	"slices"
+	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/spillfile"
 	"zjdns/internal/ttl"
@@ -170,10 +173,13 @@ func (r *Recursive) loadDelegationSpill(path string, diskCap, delegationMax int)
 		r.delegations.Set(w.Key, de)
 		n++
 	}
-	// Spill-on-evict registered AFTER the warm-up load.
+	// Spill-on-evict registered AFTER the warm-up load; the write runs on
+	// the async writer (lock-free enqueue; a synchronous Put here froze
+	// every concurrent delegation lookup behind the disk, 2026-09 R1).
+	r.spillW = spillfile.NewAsyncWriter(spill)
 	r.delegations.SetOnEvict(func(zone string, de *delegationEntry) {
 		if de.ts > 0 && !ttl.IsExpired(de.ts, de.ttl) {
-			_ = r.spill.Put(zone, de.ts, de.ttl, false, packDelegationEntry(de))
+			r.spillW.Enqueue(zone, de.ts, de.ttl, false, packDelegationEntry(de))
 		}
 	})
 	log.Infof("RESOLVER: delegation spill store ready: %d records on disk, %d loaded to memory", onDisk, n)
@@ -200,18 +206,38 @@ func (r *Recursive) getDelegationFromSpill(zone string) (*delegationEntry, bool)
 }
 
 // flushDelegationSpill pushes the in-memory delegation cache to the spill
-// store (shutdown hook).
+// store (shutdown hook).  The queued async writes are drained first (so the
+// Indexed check sees them) and the remaining IO runs OUTSIDE the
+// delegations lock — a synchronous Range+Put held the lock that every
+// recursive walk needs for the whole flush (2026-09 R1).
 func (r *Recursive) flushDelegationSpill() {
 	if r.spill == nil {
 		return
 	}
+	if r.spillW != nil {
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
+		r.spillW.Close(drainCtx)
+		drainCancel()
+	}
+	type row struct {
+		zone string
+		de   *delegationEntry
+	}
+	var rows []row
 	r.delegations.Range(func(zone string, de *delegationEntry) bool {
-		if de.ts > 0 && !ttl.IsExpired(de.ts, de.ttl) && !r.spill.Indexed(zone, de.ts) {
-			_ = r.spill.Put(zone, de.ts, de.ttl, false, packDelegationEntry(de))
-		}
+		rows = append(rows, row{zone, de})
 		return true
 	})
-	_ = r.spill.Flush()
+	for _, rw := range rows {
+		if rw.de.ts > 0 && !ttl.IsExpired(rw.de.ts, rw.de.ttl) && !r.spill.Indexed(rw.zone, rw.de.ts) {
+			if err := r.spill.Put(rw.zone, rw.de.ts, rw.de.ttl, false, packDelegationEntry(rw.de)); err != nil {
+				// Persistence failures must be visible — a full disk
+				// otherwise silently degrades the disk tier (R2).
+				log.Warnf("RESOLVER: delegation spill flush %s: %v", rw.zone, err)
+			}
+		}
+	}
+	_ = r.spill.Flush() // _ = error: best-effort fsync, Close reports hard errors
 }
 
 // compactDelegationSpill rewrites the delegation spill store keeping only
@@ -238,7 +264,7 @@ func (r *Recursive) compactDelegationSpill() {
 		return // nothing worth rewriting
 	}
 
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Ts > entries[j].Ts })
+	slices.SortFunc(entries, func(a, b spillfile.Entry) int { return cmp.Compare(b.Ts, a.Ts) }) // newest first
 	keepSize := len(entries)
 	if r.spillCap > 0 {
 		keepSize = min(r.spillCap, keepSize)
