@@ -153,28 +153,21 @@ func (r *Recursive) loadDelegationSpill(path string, diskCap, delegationMax int)
 	r.spill = spill
 	r.spillCap = diskCap
 
-	entries := spill.Entries()
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Ts < entries[j].Ts })
+	// Single-pass warm-up (see Store.Warm): spill ts == store time —
+	// freshness is TTL-based, and corrupt wires are tombstoned so they
+	// stop resurfacing on promotion.
+	warmed, onDisk := spill.Warm(delegationMax, func(ts int64, entryTTL int) bool {
+		return !ttl.IsExpired(ts, entryTTL)
+	})
 	n := 0
-	for _, e := range entries {
-		if n >= delegationMax {
-			break
-		}
-		if ttl.IsExpired(e.Ts, e.Ttl) {
-			spill.Delete(e.Key)
-			continue
-		}
-		_, _, _, wire, ok := spill.Get(e.Key)
+	for _, w := range warmed {
+		de, ok := unpackDelegationEntry(w.Wire)
 		if !ok {
-			continue
-		}
-		de, ok := unpackDelegationEntry(wire)
-		if !ok {
-			spill.Delete(e.Key)
+			spill.Delete(w.Key)
 			continue
 		}
 		// Coldest first so the freshest entry ends up at the LRU front.
-		r.delegations.Set(e.Key, de)
+		r.delegations.Set(w.Key, de)
 		n++
 	}
 	// Spill-on-evict registered AFTER the warm-up load.
@@ -183,7 +176,7 @@ func (r *Recursive) loadDelegationSpill(path string, diskCap, delegationMax int)
 			_ = r.spill.Put(zone, de.ts, de.ttl, false, packDelegationEntry(de))
 		}
 	})
-	log.Infof("RESOLVER: delegation spill store ready: %d records on disk, %d loaded to memory", spill.EntryCount(), n)
+	log.Infof("RESOLVER: delegation spill store ready: %d records on disk, %d loaded to memory", onDisk, n)
 }
 
 // getDelegationFromSpill reads a delegation record by zone and promotes it

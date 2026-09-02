@@ -23,7 +23,9 @@
 package spillfile
 
 import (
+	"bufio"
 	"bytes"
+	"container/heap"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -65,6 +67,35 @@ type Entry struct {
 	WireLen   int32
 }
 
+// WarmEntry is one record selected by Warm with its wire read into memory.
+// Wire is owned by the caller.
+type WarmEntry struct {
+	Key       string
+	Ts        int64
+	Ttl       int
+	Validated bool
+	Wire      []byte
+}
+
+// warmHeap is a min-heap on Ts over at most topN candidates: the root is the
+// coldest of the current top-N set and is evicted whenever a newer record
+// arrives (top-K newest selection in O(n log max) instead of a full sort).
+type warmHeap []Entry
+
+// Warm selects the newest max records across both regions (keep filters
+// stale/unwanted ones), reads their wires, and returns them ordered
+// coldest-first — callers inserting front-to-back into an LRU end with the
+// hottest entry at the front.  The second return is the number of live
+// (non-deleted, non-superseded, keep-passing) records.
+//
+// One sequential pass over the sorted-region blocks (pooled buffers) plus
+// the tail map replaces the former startup sequence of Entries() (full
+// file read + per-record key copy) + sort.Slice (O(n log n) over all
+// records) + per-key Get (a ~64 KB block read per warmed entry) +
+// EntryCount() (a second full file scan for a log line).
+//
+// Stale records are skipped, not tombstoned — dead weight stays on disk
+// until the next Compact, which the caller already schedules.
 // Store is a sorted-region + tail-region key-value store.
 type Store struct {
 	f    *os.File
@@ -105,6 +136,11 @@ const (
 	// maxBlockBufBytes caps pooled block buffers: oversized blocks
 	// (pathological records) allocate fresh instead of growing the pool.
 	maxBlockBufBytes = 256 * 1024
+
+	// scanBufBytes is the sequential-scan read buffer: large enough that
+	// the per-record read syscalls of the unbuffered scan amortise away on
+	// multi-GB spill files.
+	scanBufBytes = 1 << 20
 )
 
 // Tiered block-buffer pools for the spill-hit hot path: the single-tier pool
@@ -179,6 +215,12 @@ func releaseBlockBuf(b []byte) {
 		blockBufLargePool.Put(bp)
 	}
 }
+
+func (h warmHeap) Len() int           { return len(h) }
+func (h warmHeap) Less(i, j int) bool { return h[i].Ts < h[j].Ts }
+func (h warmHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *warmHeap) Push(x any)        { *h = append(*h, x.(Entry)) }
+func (h *warmHeap) Pop() any          { old := *h; n := len(old); e := old[n-1]; *h = old[:n-1]; return e }
 
 // Open opens the spill file at path and rebuilds the in-memory structures by
 // scanning it: the sorted region into the sparse index, the tail region into
@@ -265,6 +307,13 @@ func (s *Store) scan() error {
 	s.tail = fi.Size()
 	s.sparse = make([]sparseEntry, 0, blockCount)
 
+	// br buffers the sequential scan: the former unbuffered reads cost
+	// two read syscalls plus a Seek per record (~20M syscalls on a
+	// 6.7M-record file).  A large sequential buffer amortises them to
+	// ~1 per scanBufBytes; skipping the wire via Discard reads it through
+	// the page cache instead of seeking past it, which the sequential
+	// readahead had pulled in anyway.
+	br := bufio.NewReaderSize(s.f, scanBufBytes)
 	var keyLenBuf [2]byte
 	// recBuf is reused across readRecord calls: the per-record buffers
 	// (keyBuf make + 4 fixed-field buffers + string copies) were ~19M
@@ -276,11 +325,11 @@ func (s *Store) scan() error {
 	var firstKey string
 	records := 0
 	// readRecord reads the key and fixed fields of the record at the current
-	// fd position in two syscalls (keyLen prefix, then key+fields in one
-	// ReadFull), skipping the wire without allocating or reading it.  Returns
+	// scan position (tracked manually — the fd position is meaningless under
+	// the buffered reader), skipping the wire without allocating.  Returns
 	// false on EOF/truncation/corruption — the caller drops the tail there.
 	readRecord := func() (key string, ts int64, ttl int, validated bool, wireLen int, ok bool) {
-		if _, err := io.ReadFull(s.f, keyLenBuf[:]); err != nil {
+		if _, err := io.ReadFull(br, keyLenBuf[:]); err != nil {
 			return "", 0, 0, false, 0, false
 		}
 		keyLen := int(binary.BigEndian.Uint16(keyLenBuf[:]))
@@ -293,7 +342,7 @@ func (s *Store) scan() error {
 		} else {
 			recBuf = recBuf[:need]
 		}
-		if _, err := io.ReadFull(s.f, recBuf); err != nil {
+		if _, err := io.ReadFull(br, recBuf); err != nil {
 			return "", 0, 0, false, 0, false
 		}
 		ts = int64(binary.BigEndian.Uint64(recBuf[keyLen : keyLen+8]))   //nolint:gosec // G115: unix seconds fit int64
@@ -303,14 +352,12 @@ func (s *Store) scan() error {
 		if wireLen > maxWireLen {
 			return "", 0, 0, false, 0, false
 		}
-		// Skip the wire with a seek, not a CopyN-to-Discard: the latter both
-		// allocated an io.LimitReader per record (6.7M objects on a
-		// 6.7M-record file) and read the payload bytes off disk just to
-		// discard them — a full-file read at every Open.  Seek is O(1); the
-		// post-seek bound check preserves CopyN's EOF semantics (a record
-		// claiming bytes past the physical EOF is corrupt).
-		newPos, err := s.f.Seek(int64(wireLen), io.SeekCurrent)
-		if err != nil || newPos > s.tail {
+		// Skip the wire; the bound check preserves the EOF semantics (a
+		// record claiming bytes past the physical EOF is corrupt).
+		if pos+recordHeaderLen+int64(keyLen)+int64(wireLen) > s.tail {
+			return "", 0, 0, false, 0, false
+		}
+		if _, err := br.Discard(wireLen); err != nil {
 			return "", 0, 0, false, 0, false
 		}
 		return string(recBuf[:keyLen]), ts, ttl, validated, wireLen, true
@@ -603,6 +650,67 @@ func (s *Store) Entries() []Entry {
 		})
 	}
 	return out
+}
+
+func (s *Store) Warm(topN int, keep func(ts int64, ttl int) bool) (entries []WarmEntry, live int) {
+	if topN < 0 {
+		topN = 0
+	}
+	h := make(warmHeap, 0, min(topN, 1024))
+	consider := func(e Entry) {
+		if !keep(e.Ts, e.Ttl) {
+			return
+		}
+		live++
+		if topN == 0 {
+			return
+		}
+		if h.Len() < topN {
+			heap.Push(&h, e)
+			return
+		}
+		if e.Ts > h[0].Ts {
+			h[0] = e
+			heap.Fix(&h, 0)
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, te := range s.tailMap {
+		if te.deleted {
+			continue
+		}
+		consider(Entry{Key: k, Ts: te.ts, Ttl: te.ttl, Validated: te.validated, WireOff: te.wireOff, WireLen: te.wireLen})
+	}
+	for _, blk := range s.sparse {
+		buf := acquireBlockBuf(int(blk.blockEnd - blk.blockStart))
+		block := buf[:blk.blockEnd-blk.blockStart]
+		if _, err := s.f.ReadAt(block, blk.blockStart); err != nil {
+			releaseBlockBuf(block)
+			continue
+		}
+		scanBlock(blk.blockStart, block, func(key string, ts int64, ttl int, validated bool, wireOff int64, wireLen int) bool {
+			if _, inTail := s.tailMap[key]; inTail {
+				return true // superseded by a tail entry, or tombstoned
+			}
+			consider(Entry{Key: key, Ts: ts, Ttl: ttl, Validated: validated, WireOff: wireOff, WireLen: int32(wireLen)}) //nolint:gosec // G115: wire length bounded by maxWireLen
+			return true
+		})
+		releaseBlockBuf(block)
+	}
+
+	// Coldest-first order for LRU insertion.
+	sort.Slice(h, func(i, j int) bool { return h[i].Ts < h[j].Ts })
+	out := make([]WarmEntry, 0, len(h))
+	for _, e := range h {
+		wire := make([]byte, e.WireLen)
+		if _, err := s.f.ReadAt(wire, e.WireOff); err != nil {
+			continue // unreadable — drop rather than hand out a zero wire
+		}
+		out = append(out, WarmEntry{Key: e.Key, Ts: e.Ts, Ttl: e.Ttl, Validated: e.Validated, Wire: wire})
+	}
+	return out, live
 }
 
 // Compact rewrites the file keeping exactly the records for which keep

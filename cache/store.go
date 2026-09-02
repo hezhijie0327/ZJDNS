@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"net"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -239,24 +238,15 @@ func (s *Cache) loadSpill(path string, diskCap, maxEntries int) {
 	s.spill = spill
 	s.spillCap = diskCap
 
-	entries := spill.Entries()
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Ts < entries[j].Ts })
-	n := 0
-	for _, e := range entries {
-		if n >= maxEntries {
-			break
-		}
-		if !ttl.CanServeExpired(e.Ts, e.Ttl, config.DefaultStaleMaxAge) {
-			spill.Delete(e.Key) // past the stale window — dead weight
-			continue
-		}
-		ts, entryTTL, validated, wire, ok := spill.Get(e.Key)
-		if !ok {
-			continue
-		}
+	// Single-pass warm-up: top-maxEntries newest records, wires read by
+	// exact offset (see Store.Warm).  Stale records are skipped in-memory —
+	// their disk weight is reclaimed by the periodic compaction.
+	warmed, onDisk := spill.Warm(maxEntries, func(ts int64, entryTTL int) bool {
+		return ttl.CanServeExpired(ts, entryTTL, config.DefaultStaleMaxAge)
+	})
+	for _, w := range warmed {
 		// Coldest first so the hottest entry ends up at the LRU front.
-		s.entries.Set(e.Key, &cacheEntry{msgWire: wire, ts: ts, ttl: entryTTL, validated: validated})
-		n++
+		s.entries.Set(w.Key, &cacheEntry{msgWire: w.Wire, ts: w.Ts, ttl: w.Ttl, validated: w.Validated})
 	}
 	// Spill-on-evict registered AFTER the warm-up load — load-time capacity
 	// evictions must not re-spill the very entries just read back.
@@ -265,7 +255,7 @@ func (s *Cache) loadSpill(path string, diskCap, maxEntries int) {
 			_ = s.spill.Put(key, ce.ts, ce.ttl, ce.validated, ce.msgWire)
 		}
 	})
-	log.Infof("CACHE: spill store ready: %d records on disk, %d loaded to memory", spill.EntryCount(), n)
+	log.Infof("CACHE: spill store ready: %d records on disk, %d loaded to memory", onDisk, len(warmed))
 }
 
 // Close flushes and closes the spill stores (the in-memory LRUs need no

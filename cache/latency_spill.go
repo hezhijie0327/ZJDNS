@@ -2,7 +2,6 @@ package cache
 
 import (
 	"encoding/binary"
-	"sort"
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/spillfile"
@@ -47,30 +46,21 @@ func (s *Cache) loadLatencySpill(path string, diskCap, latencyMax int) {
 	s.spillLat = spill
 	s.spillLatCap = diskCap
 
-	entries := spill.Entries()
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Ts < entries[j].Ts })
-	n := 0
+	// Single-pass warm-up (see Store.Warm): spill ts == lastProbe, so the
+	// keep filter is the stale window itself.
 	now := log.NowUnix()
-	for _, e := range entries {
-		if n >= latencyMax {
-			break
-		}
-		// Spill ts == lastProbe — past the stale window the entry is dead.
-		if e.Ts > 0 && e.Ts < now-config.DefaultStaleMaxAge {
-			spill.Delete(e.Key)
-			continue
-		}
-		_, _, _, wire, ok := spill.Get(e.Key)
+	warmed, onDisk := spill.Warm(latencyMax, func(ts int64, _ int) bool {
+		return ts > 0 && ts >= now-config.DefaultStaleMaxAge
+	})
+	n := 0
+	for _, w := range warmed {
+		lat, ok := unmarshalLatency(w.Wire)
 		if !ok {
-			continue
-		}
-		lat, ok := unmarshalLatency(wire)
-		if !ok {
-			spill.Delete(e.Key)
+			spill.Delete(w.Key)
 			continue
 		}
 		// Coldest first so the freshest entry ends up at the LRU front.
-		s.latencies.Set(e.Key, lat)
+		s.latencies.Set(w.Key, lat)
 		s.hasLatencyData.Store(true)
 		n++
 	}
@@ -79,7 +69,7 @@ func (s *Cache) loadLatencySpill(path string, diskCap, latencyMax int) {
 			_ = s.spillLat.Put(key, e.lastProbe, 0, false, marshalLatency(e))
 		}
 	})
-	log.Infof("CACHE: latency spill store ready: %d records on disk, %d loaded to memory", spill.EntryCount(), n)
+	log.Infof("CACHE: latency spill store ready: %d records on disk, %d loaded to memory", onDisk, n)
 }
 
 // getLatencyFromSpill reads a latency record by key and promotes it to
