@@ -4,8 +4,60 @@ package dnsutil
 import (
 	"fmt"
 	"net"
+	"sync"
 	"zjdns/internal/log"
 )
+
+// bindIPsOnce memoises the host enumeration underlying ResolveBindAddrs.
+// Every protocol listener (~13 call sites) used to re-enumerate ALL
+// interfaces and addresses at startup — repeated syscalls that dominated
+// listener setup on hosts with many interfaces.  Listeners are created once
+// at startup, so a process-lifetime snapshot is sufficient.
+var bindIPsOnce sync.Once
+
+var bindIPs []net.IP
+
+// enumerateBindIPs returns the deduplicated list of non-link-local unicast
+// IPs across all interfaces (computed once per process).
+func enumerateBindIPs() []net.IP {
+	bindIPsOnce.Do(func() {
+		ifaces, err := net.Interfaces()
+		if err != nil {
+			log.Warnf("SERVER: cannot enumerate interfaces: %v", err)
+			return
+		}
+		seen := make(map[string]struct{})
+		for _, iface := range ifaces {
+			ips, err := iface.Addrs()
+			if err != nil {
+				log.Warnf("SERVER: cannot enumerate addresses of interface %s: %v", iface.Name, err)
+				continue
+			}
+			for _, ip := range ips {
+				var ipAddr net.IP
+				switch a := ip.(type) {
+				case *net.IPNet:
+					ipAddr = a.IP
+				case *net.IPAddr:
+					ipAddr = a.IP
+				default:
+					continue
+				}
+				if ipAddr == nil || ipAddr.IsLinkLocalUnicast() {
+					continue
+				}
+				// The same IP can appear on multiple interfaces (lo, veth,
+				// bridge) — binding it twice would fail on the second attempt.
+				if _, dup := seen[ipAddr.String()]; dup {
+					continue
+				}
+				seen[ipAddr.String()] = struct{}{}
+				bindIPs = append(bindIPs, ipAddr)
+			}
+		}
+	})
+	return bindIPs
+}
 
 // ResolveBindAddrs returns the list of addresses to bind for the given network
 // and port. It enumerates all non-link-local unicast IPs and returns each one
@@ -15,46 +67,16 @@ func ResolveBindAddrs(network, port string) ([]string, error) {
 	if port == "" || port == "0" {
 		return nil, fmt.Errorf("bind port must be a fixed port, got %q", port)
 	}
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return nil, fmt.Errorf("enumerate interfaces: %w", err)
-	}
 
 	var addrs []string
 	var skipped []string
-	seen := make(map[string]struct{})
-	for _, iface := range ifaces {
-		ips, err := iface.Addrs()
-		if err != nil {
-			log.Warnf("SERVER: cannot enumerate addresses of interface %s: %v", iface.Name, err)
+	for _, ipAddr := range enumerateBindIPs() {
+		addr := net.JoinHostPort(ipAddr.String(), port)
+		if err := TryBind(network, addr); err != nil {
+			skipped = append(skipped, addr)
 			continue
 		}
-		for _, ip := range ips {
-			var ipAddr net.IP
-			switch a := ip.(type) {
-			case *net.IPNet:
-				ipAddr = a.IP
-			case *net.IPAddr:
-				ipAddr = a.IP
-			default:
-				continue
-			}
-			if ipAddr == nil || ipAddr.IsLinkLocalUnicast() {
-				continue
-			}
-			// The same IP can appear on multiple interfaces (lo, veth,
-			// bridge) — binding it twice would fail on the second attempt.
-			if _, dup := seen[ipAddr.String()]; dup {
-				continue
-			}
-			seen[ipAddr.String()] = struct{}{}
-			addr := net.JoinHostPort(ipAddr.String(), port)
-			if err := TryBind(network, addr); err != nil {
-				skipped = append(skipped, addr)
-				continue
-			}
-			addrs = append(addrs, addr)
-		}
+		addrs = append(addrs, addr)
 	}
 
 	if len(skipped) > 0 {

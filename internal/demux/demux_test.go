@@ -329,3 +329,56 @@ func TestTCPDemuxListener(t *testing.T) {
 		t.Errorf("TLCP route called %d times, want 1", tlcpConns)
 	}
 }
+
+// TestTCPDemuxListener_SilentClientDoesNotStall verifies that a client which
+// completes the TCP handshake but never sends its record header no longer
+// blocks the shared port: the sniff used to run inline in the accept loop,
+// so one silent peer (scanner, health check) head-of-line-blocked every
+// subsequent connection on the port.
+func TestTCPDemuxListener_SilentClientDoesNotStall(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	d := NewTCPDemux(TCPConfig{
+		Inner:  ln,
+		Routes: map[string]func(net.Conn) net.Conn{"tls": func(c net.Conn) net.Conn { return c }},
+	})
+	defer func() { _ = d.Close() }()
+	tlsListener := d.Listener(ProtoTLS)
+
+	// Silent client: handshake only, never sends a byte.
+	silent, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = silent.Close() }()
+
+	// A real TLS client behind the silent one must still be routed to the
+	// virtual listener within a generous bound (well under the 10s sniff
+	// deadline); before the fix this accept never happened at all.
+	accCh := make(chan net.Conn, 1)
+	go func() {
+		c, err := tlsListener.Accept()
+		if err == nil {
+			accCh <- c
+		}
+	}()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	// Minimal TLS ClientHello record header: handshake(0x16), TLS 1.0 version.
+	if _, err := c.Write([]byte{0x16, 0x03, 0x01, 0x00, 0x10}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-accCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second client stalled behind the silent client (head-of-line blocking)")
+	}
+}

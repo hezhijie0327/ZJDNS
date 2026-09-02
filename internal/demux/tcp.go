@@ -3,6 +3,7 @@ package demux
 import (
 	"net"
 	"sync"
+	zdnsutil "zjdns/internal/dnsutil"
 )
 
 // TCPConfig configures a TCP demux listener.
@@ -110,24 +111,39 @@ func (d *TCPDemuxListener) acceptLoop() {
 			return
 		}
 
-		proto, detected, detectErr := DetectTCPProtocol(conn)
-		if detectErr != nil {
-			_ = conn.Close()
-			continue
-		}
+		// Sniff off the accept loop: DetectTCPProtocol blocks on the
+		// client's first bytes, and a silent client (scanner, health
+		// check) used to stall the WHOLE shared port — no further
+		// connection was even accepted while one peer sat silent.  The
+		// per-conn goroutine dies with the bounded sniff (or the push);
+		// the queue is channel-based, so concurrent pushes are safe.
+		go d.handleConn(conn)
+	}
+}
 
-		wrapper, ok := d.routes[proto]
-		if !ok {
-			// Unknown or unconfigured protocol — close.
-			_ = detected.Close()
-			continue
-		}
+// handleConn sniffs one accepted connection and routes it to its protocol
+// queue (or closes it).
+func (d *TCPDemuxListener) handleConn(conn net.Conn) {
+	defer zdnsutil.HandlePanic("TCP demux sniff")
+	proto, detected, detectErr := DetectTCPProtocol(conn)
+	if detectErr != nil {
+		_ = conn.Close()
+		return
+	}
 
-		wrapped := wrapper(detected)
-		q := d.queues[proto]
-		if !q.push(wrapped) {
-			// Queue full or closed — drop the connection.
-			_ = wrapped.Close()
-		}
+	d.mu.Lock()
+	wrapper, ok := d.routes[proto]
+	q := d.queues[proto]
+	d.mu.Unlock()
+	if !ok || q == nil {
+		// Unknown or unconfigured protocol — close.
+		_ = detected.Close()
+		return
+	}
+
+	wrapped := wrapper(detected)
+	if !q.push(wrapped) {
+		// Queue full or closed — drop the connection.
+		_ = wrapped.Close()
 	}
 }

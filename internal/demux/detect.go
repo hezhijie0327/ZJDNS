@@ -7,6 +7,7 @@ package demux
 import (
 	"io"
 	"net"
+	"time"
 )
 
 // bufferedConn wraps a net.Conn and replays a buffered prefix before
@@ -26,6 +27,11 @@ const (
 	ProtoDTLCP    = "dtlcp"
 	ProtoDNSCrypt = "dnscrypt"
 )
+
+// sniffTimeout bounds the record-header read in DetectTCPProtocol.  It only
+// needs to cover a client's first flight (TCP handshake + ClientHello);
+// anything still silent after this is a scanner or a dead peer.
+const sniffTimeout = 10 * time.Second
 
 // tcpRecordHeaderLen is the TLS/TLCP record layer header length:
 //
@@ -65,10 +71,20 @@ func (c *bufferedConn) Read(b []byte) (int, error) {
 //	  0x01 → "tlcp" (TLCP, record version 0x0101)
 //	0x00–0x04 → "dnscrypt" (DNSCrypt 2-byte length prefix; max query ~1260 B)
 //	other     → "" (unknown)
+//
+// The read is bounded by sniffTimeout: a client that completes the TCP
+// handshake but never sends the 5 header bytes (port scanners, health
+// checks, half-open clients) must not pin its connection forever.
 func DetectTCPProtocol(conn net.Conn) (protocol string, detected net.Conn, err error) {
 	header := make([]byte, tcpRecordHeaderLen)
+	if dl, ok := conn.(interface{ SetReadDeadline(time.Time) error }); ok {
+		_ = dl.SetReadDeadline(time.Now().Add(sniffTimeout))
+	}
 	if _, err = io.ReadFull(conn, header); err != nil {
 		return "", nil, err
+	}
+	if dl, ok := conn.(interface{ SetReadDeadline(time.Time) error }); ok {
+		_ = dl.SetReadDeadline(time.Time{}) // clear — the protocol server owns deadlines now
 	}
 
 	first := header[0]
