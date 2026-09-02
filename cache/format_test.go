@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"fmt"
 	"net/netip"
 	"testing"
 	"zjdns/internal/log"
@@ -104,8 +105,7 @@ func TestGet_CorruptOffsetTable(t *testing.T) {
 }
 
 // TestGet_PrePacked_StillWorks guards the normal path: the marker check must
-// not break fresh pre-packed entries (numOffsets high byte is 0 for any
-// realistic RR count).
+// not break fresh pre-packed entries.
 func TestGet_PrePacked_StillWorks(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
@@ -123,5 +123,95 @@ func TestGet_PrePacked_StillWorks(t *testing.T) {
 	}
 	if len(entry.ResponseWire) == 0 {
 		t.Fatal("pre-packed entry ResponseWire is empty")
+	}
+}
+
+// TestSet_DNSSECFlagPersisted: the has-DNSSEC BLOB flag is computed from the
+// packed wire BEFORE the pooled message is returned — computing it after
+// pool.Put read the zeroed struct's nil Data and the flag was never set,
+// disabling the DO=0 serve gate for every cached entry (2026-09 D1).
+func TestSet_DNSSECFlagPersisted(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	qname := "signed.example.com."
+	answer := []dns.RR{
+		&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")},
+		&dns.RRSIG{
+			Hdr:         dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300},
+			TypeCovered: dns.TypeA,
+			Algorithm:   dns.RSASHA256,
+			KeyTag:      1234,
+			SignerName:  qname,
+			Signature:   "c2lnbmF0dXJl", // valid base64 — Pack rejects garbage
+		},
+	}
+	mc.Set(qname, dns.TypeA, dns.ClassINET, nil, answer, nil, nil, false, 0)
+
+	entry, found, _ := mc.Get(qname, dns.TypeA, dns.ClassINET, nil)
+	if !found {
+		t.Fatal("Get returned not found for signed entry")
+	}
+	if !entry.HasDNSSEC {
+		t.Fatal("entry.HasDNSSEC = false — the precomputed flag was lost (computed after pool.Put)")
+	}
+}
+
+// TestSet_ManyRRsRoundTrip: the offset count is a full 15-bit field — answers
+// with more than 255 RRs (large DNSKEY/round-robin sets) must stay readable.
+// The former reader rejected any count with a nonzero high byte, storing such
+// entries permanently unreadable (2026-09 D3).
+func TestSet_ManyRRsRoundTrip(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	qname := "big.example.com."
+	answer := make([]dns.RR, 0, 300)
+	for i := range 300 {
+		answer = append(answer, &dns.A{
+			Hdr:  dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300},
+			Addr: netip.MustParseAddr(fmt.Sprintf("192.0.2.%d", i%254+1)),
+		})
+	}
+	mc.Set(qname, dns.TypeA, dns.ClassINET, nil, answer, nil, nil, false, 0)
+
+	entry, found, _ := mc.Get(qname, dns.TypeA, dns.ClassINET, nil)
+	if !found {
+		t.Fatal("Get returned not found for a 300-RR entry — offset count >255 must be readable")
+	}
+	if len(entry.TTLOffsets) != 300 {
+		t.Fatalf("TTLOffsets = %d, want 300", len(entry.TTLOffsets))
+	}
+}
+
+// TestGet_CorruptOffsetValue: a structurally valid header whose offset VALUE
+// points past the wire must degrade to a miss, never panic the serve path
+// (2026-09 H-M2).
+func TestGet_CorruptOffsetValue(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	qname := "corrupt-off.example.com."
+	mc.Set(qname, dns.TypeA, dns.ClassINET, nil,
+		[]dns.RR{&dns.A{Hdr: dns.Header{Name: qname, Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")}}, nil, nil, false, 0)
+
+	// Overwrite the stored BLOB's first offset with 0xFFFF — inside the
+	// table bound, far beyond the wire.
+	key := buildCacheKey(qname, dns.TypeA, dns.ClassINET, "", 0)
+	ce, ok := mc.entries.Get(key)
+	if !ok {
+		t.Fatal("entry missing after Set")
+	}
+	blob := ce.msgWire
+	blob[3], blob[4] = 0xFF, 0xFF
+
+	entry, found, _ := mc.Get(qname, dns.TypeA, dns.ClassINET, nil)
+	if found || entry != nil {
+		t.Fatal("Get must miss on an out-of-wire TTL offset, not panic or serve")
+	}
+	// Self-healing: the corrupt entry must be gone so subsequent reads do
+	// not re-hit it (D8).
+	if _, still := mc.entries.Get(key); still {
+		t.Fatal("corrupt entry was not deleted from the LRU")
 	}
 }

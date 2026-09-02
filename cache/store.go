@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"encoding/binary"
 	"net"
 	"slices"
@@ -35,6 +36,11 @@ type Cache struct {
 	spill    *spillfile.Store
 	spillCap int // spill file record cap (≤0 = unbounded)
 
+	// spillW drains eviction writes off the entries-mutex: OnEvict runs
+	// under the lrumap lock, where a synchronous WriteAt froze every
+	// concurrent Get/Set for the IO duration (2026-09 D2).
+	spillW *spillfile.AsyncWriter
+
 	// hasLatencyData gates sortAnswerByLatency: when false (no latency data has
 	// ever been written), the per-hit latency lookup is skipped entirely.
 	hasLatencyData atomic.Bool
@@ -49,6 +55,11 @@ type Cache struct {
 	// spillLat is the latency-table spill tier (same role as spill).
 	spillLat    *spillfile.Store
 	spillLatCap int
+
+	// spillLatW drains latency-tier eviction writes (same reason as spillW).
+	spillLatW *spillfile.AsyncWriter
+
+	closeOnce sync.Once
 }
 
 // cacheEntry is one cached DNS response.  msgWire is the pre-packed response
@@ -254,29 +265,37 @@ func (s *Cache) loadSpill(path string, diskCap, maxEntries int) {
 		s.entries.Set(w.Key, &cacheEntry{msgWire: w.Wire, ts: w.Ts, ttl: w.Ttl, validated: w.Validated})
 	}
 	// Spill-on-evict registered AFTER the warm-up load — load-time capacity
-	// evictions must not re-spill the very entries just read back.
+	// evictions must not re-spill the very entries just read back.  The
+	// write itself is queued to the async writer: OnEvict runs under the
+	// entries mutex and a synchronous Put here froze all cache lookups
+	// during the write (and queued behind a Compact for its whole rewrite)
+	// (2026-09 D2).  Queue-full drops are counted and re-derivable.
+	s.spillW = spillfile.NewAsyncWriter(spill)
 	s.entries.SetOnEvict(func(key string, ce *cacheEntry) {
 		if ce.ts > 0 && ttl.CanServeExpired(ce.ts, ce.ttl, config.DefaultStaleMaxAge) {
-			_ = s.spill.Put(key, ce.ts, ce.ttl, ce.validated, ce.msgWire)
+			s.spillW.Enqueue(key, ce.ts, ce.ttl, ce.validated, ce.msgWire)
 		}
 	})
 	log.Infof("CACHE: spill store ready: %d records on disk, %d loaded to memory", onDisk, len(warmed))
 }
 
 // Close flushes and closes the spill stores (the in-memory LRUs need no
-// cleanup).
+// cleanup).  Idempotent — a second Close returns nil instead of
+// os.ErrClosed from the spill stores (2026-09 D15).
 func (s *Cache) Close() error {
 	var err error
-	if s.spill != nil {
-		if e := s.spill.Close(); e != nil && err == nil {
-			err = e
+	s.closeOnce.Do(func() {
+		if s.spill != nil {
+			if e := s.spill.Close(); e != nil && err == nil {
+				err = e
+			}
 		}
-	}
-	if s.spillLat != nil {
-		if e := s.spillLat.Close(); e != nil && err == nil {
-			err = e
+		if s.spillLat != nil {
+			if e := s.spillLat.Close(); e != nil && err == nil {
+				err = e
+			}
 		}
-	}
+	})
 	return err
 }
 
@@ -284,27 +303,61 @@ func (s *Cache) Close() error {
 // already on disk unchanged) and fsyncs — called at shutdown so a restart
 // warms from disk.  No-op without a disk tier.
 func (s *Cache) Flush() {
+	// Drain the async writers first so the Indexed check below sees the
+	// queued eviction writes; bounded by the shutdown timeout — a stalled
+	// disk must not hang shutdown indefinitely (2026-09 D6).
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
+	defer drainCancel()
+	if s.spillW != nil {
+		s.spillW.Close(drainCtx)
+	}
+	if s.spillLatW != nil {
+		s.spillLatW.Close(drainCtx)
+	}
+	// Snapshot the maps under their locks, run the disk IO outside them —
+	// Flush overlaps the drain window where in-flight queries still look
+	// up the cache (holding the lock per entry stalled them all).
 	if s.spill != nil {
+		type row struct {
+			key string
+			ce  *cacheEntry
+		}
+		var rows []row
 		s.entries.Range(func(key string, ce *cacheEntry) bool {
-			if ce.ts > 0 && ttl.CanServeExpired(ce.ts, ce.ttl, config.DefaultStaleMaxAge) && !s.spill.Indexed(key, ce.ts) {
-				_ = s.spill.Put(key, ce.ts, ce.ttl, ce.validated, ce.msgWire)
-			}
+			rows = append(rows, row{key, ce})
 			return true
 		})
+		for _, r := range rows {
+			if r.ce.ts > 0 && ttl.CanServeExpired(r.ce.ts, r.ce.ttl, config.DefaultStaleMaxAge) && !s.spill.Indexed(r.key, r.ce.ts) {
+				if err := s.spill.Put(r.key, r.ce.ts, r.ce.ttl, r.ce.validated, r.ce.msgWire); err != nil {
+					log.Debugf("CACHE: spill flush %s: %v", r.key, err)
+				}
+			}
+		}
 	}
 	if s.spillLat != nil {
+		type row struct {
+			key string
+			e   latEntry
+		}
+		var rows []row
 		s.latencies.Range(func(key string, e latEntry) bool {
-			if e.lastProbe > 0 && !s.spillLat.Indexed(key, e.lastProbe) {
-				_ = s.spillLat.Put(key, e.lastProbe, 0, false, marshalLatency(e))
-			}
+			rows = append(rows, row{key, e})
 			return true
 		})
+		for _, r := range rows {
+			if r.e.lastProbe > 0 && !s.spillLat.Indexed(r.key, r.e.lastProbe) {
+				if err := s.spillLat.Put(r.key, r.e.lastProbe, 0, false, marshalLatency(r.e)); err != nil {
+					log.Debugf("CACHE: latency spill flush %s: %v", r.key, err)
+				}
+			}
+		}
 	}
 	if s.spill != nil {
-		_ = s.spill.Flush()
+		_ = s.spill.Flush() // _ = error: best-effort fsync, Close reports hard errors
 	}
 	if s.spillLat != nil {
-		_ = s.spillLat.Flush()
+		_ = s.spillLat.Flush() // _ = error: best-effort fsync, Close reports hard errors
 	}
 }
 
@@ -351,11 +404,22 @@ func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption) (
 	for _, c := range candidates {
 		key := buildCacheKey(qname, qtype, qclass, c.addr, c.prefix)
 		if ce, ok := s.entries.Get(key); ok {
-			return s.buildEntry(ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qtype)
+			entry, found, expired := s.buildEntry(ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qtype)
+			if !found {
+				// Corrupt BLOB — self-heal instead of warn-per-read: the
+				// next query for this key re-fetches from upstream (D8).
+				s.entries.Delete(key)
+			}
+			return entry, found, expired
 		}
 		if s.spill != nil {
 			if entry, found := s.getFromSpill(key); found {
-				return s.buildEntry(entry.ts, entry.ttl, entry.validated, entry.msgWire, qname, qtype)
+				e, ok2, expired := s.buildEntry(entry.ts, entry.ttl, entry.validated, entry.msgWire, qname, qtype)
+				if !ok2 {
+					s.spill.Delete(key)
+					s.entries.Delete(key)
+				}
+				return e, ok2, expired
 			}
 		}
 	}
@@ -388,11 +452,18 @@ func (s *Cache) GetTypes(qname string, qclass uint16, qtypes [2]uint16) (entries
 		key := buildCacheKey(qname, qt, qclass, "", 0)
 		if ce, ok := s.entries.Get(key); ok {
 			entries[i], found[i], expired[i] = s.buildEntry(ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qt)
+			if !found[i] {
+				s.entries.Delete(key) // corrupt BLOB — self-heal (D8)
+			}
 			continue
 		}
 		if s.spill != nil {
 			if ce, ok := s.getFromSpill(key); ok {
 				entries[i], found[i], expired[i] = s.buildEntry(ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qt)
+				if !found[i] {
+					s.spill.Delete(key)
+					s.entries.Delete(key)
+				}
 			}
 		}
 	}
@@ -423,17 +494,20 @@ func (s *Cache) buildEntry(ts int64, entryTTL int, validated bool, msgWire []byt
 
 	// Single live format: [0x02] [2:num_offsets|hasDNSSEC flag] [2 each:
 	// TTL offset] [wire].  No legacy compatibility is kept — a foreign or
-	// corrupt BLOB is treated as a miss (the marker byte plus the masked
-	// numOffsets bound check below reject raw/misparsed wires).
-	if msgWire[0] != cacheFormatPrePacked || msgWire[1]&0x7F != 0 {
+	// corrupt BLOB is treated as a miss.  The marker byte plus the
+	// structural checks (table fit; every offset addressing a full TTL
+	// field inside the FINAL wire, post-decompression) reject
+	// raw/misparsed wires; unlike the former count-high-byte discriminator
+	// this also accepts the writer's full domain — entries with >255 RRs
+	// used to be stored but permanently unreadable (2026-09 D3).
+	if msgWire[0] != cacheFormatPrePacked {
 		return nil, false, false
 	}
 	entryHasDNSSEC := msgWire[1]&0x80 != 0
 	numOffsets := int(binary.BigEndian.Uint16(msgWire[1:3]) &^ dnssecFlagMask)
-	// Bounds check: a corrupt row must not drive the offset table past the
-	// BLOB end (previously a slice-bounds panic).
-	if numOffsets > (len(msgWire)-3)/2 {
-		log.Warnf("CACHE: entry (name=%s type=%d) offset table out of bounds: %d offsets in %d bytes", qname, qtype, numOffsets, len(msgWire))
+	wireStart := 3 + numOffsets*2
+	if wireStart > len(msgWire) {
+		log.Debugf("CACHE: corrupt entry (name=%s type=%d) — %d offsets do not fit %d bytes", qname, qtype, numOffsets, len(msgWire))
 		return nil, false, false
 	}
 	var offsets []uint16
@@ -443,7 +517,7 @@ func (s *Cache) buildEntry(ts int64, entryTTL int, validated bool, msgWire []byt
 			offsets[i] = binary.BigEndian.Uint16(msgWire[3+i*2:])
 		}
 	}
-	wire := msgWire[3+numOffsets*2:]
+	wire := msgWire[wireStart:]
 
 	// Threshold decompression.
 	var owned []byte
@@ -459,7 +533,10 @@ func (s *Cache) buildEntry(ts int64, entryTTL int, validated bool, msgWire []byt
 			ReleaseTTLOffsets(offsets)
 			clear(*dbuf)
 			decompressBufPool.Put(dbuf)
-			log.Warnf("CACHE: decompress wire for entry (name=%s type=%d): %v", qname, qtype, err)
+			// Debug, not Warn: a corrupt BLOB is dropped by the caller
+			// (self-healing delete), so this fires once per corrupt entry,
+			// not per read (2026-09 C-M3).
+			log.Debugf("CACHE: decompress wire for entry (name=%s type=%d): %v", qname, qtype, err)
 			return nil, false, false
 		}
 		defer func() { clear(*dbuf); decompressBufPool.Put(dbuf) }()
@@ -473,6 +550,17 @@ func (s *Cache) buildEntry(ts int64, entryTTL int, validated bool, msgWire []byt
 		// out the shared slice would let one query corrupt another's TTLs
 		// and race its writes.  Clone per hit (H7/H10).
 		owned = slices.Clone(wire)
+	}
+	// Each offset must address a complete TTL field (4 bytes) inside the
+	// FINAL wire (post-decompression — the table indexes the uncompressed
+	// layout).  A corrupt value degrades to a cache miss, never a
+	// slice-bounds panic on the serve path (2026-09 H-M2).
+	for _, off := range offsets {
+		if int(off)+4 > len(owned) {
+			ReleaseTTLOffsets(offsets)
+			log.Debugf("CACHE: corrupt entry (name=%s type=%d) — TTL offset %d out of wire range (%d)", qname, qtype, off, len(owned))
+			return nil, false, false
+		}
 	}
 	entry := &Entry{
 		Timestamp:    ts,
@@ -683,6 +771,11 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 	// question_wire — the exact offset where the answer section begins.
 	ttlOffsets := scanTTLOffsets(msg.Data, len(queryMsg.Data))
 
+	// hasDNSSEC must be computed BEFORE the Put below — Message.Put zeroes
+	// the struct (*msg = dns.Msg{}), so msg.Data reads as nil afterwards
+	// and the flag would never be set (2026-09 D1).
+	hasDNSSEC := WireHasDNSSEC(msg.Data)
+
 	// Build the pre-packed BLOB:
 	//   [0x02] [2:num_offsets] [2 each:offset] [wire]
 	// The wire portion may be zstd-compressed if above threshold.
@@ -698,7 +791,6 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 	// has-DNSSEC flag, precomputed here so the DO=0 serve gate never
 	// re-scans the wire per hit; the offset count itself is bounded by
 	// (wire size / min RR size) ≈ 5.4k, far below the 2^15 the mask leaves.
-	hasDNSSEC := WireHasDNSSEC(msg.Data)
 	field := uint16(len(ttlOffsets)) //nolint:gosec // G115: offset count bounded by wire size / min RR size (< 2^15)
 	msgWire := make([]byte, 0, 3+2*len(ttlOffsets)+len(wire))
 	msgWire = append(msgWire, cacheFormatPrePacked)
