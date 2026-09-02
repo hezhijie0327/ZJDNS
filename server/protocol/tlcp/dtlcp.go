@@ -294,37 +294,8 @@ func (s *Server) sendDTLCPResponse(conn net.Conn, response *dns.Msg) bool {
 	}
 	defer pool.DefaultMessage.Put(response)
 
-	if err := response.Pack(); err != nil {
-		log.Debugf("TLCP: DTLCP pack error: %v", err)
-		return true
-	}
-
-	// RFC 8094 §5: truncate if the datagram would exceed the assumed PMTU.
-	if safeMax := config.DefaultPMTU - config.DTLSDNSOverhead - zdnsutil.DNSFramePrefixLen; len(response.Data) > safeMax {
-		response.Truncated = true
-		response.Answer = nil
-		response.Ns = nil
-		response.Extra = nil
-		if err := response.Pack(); err != nil {
-			log.Debugf("TLCP: DTLCP repack after truncation: %v", err)
-			return true
-		}
-	}
-
-	respLen := len(response.Data)
-	if respLen > config.MaxDNSMessageSize {
-		log.Debugf("TLCP: DTLCP response too large (%d bytes)", respLen)
-		return true
-	}
-	resp := make([]byte, zdnsutil.DNSFramePrefixLen+respLen)
-	binary.BigEndian.PutUint16(resp[:zdnsutil.DNSFramePrefixLen], uint16(respLen)) //nolint:gosec // G115: DNS response length bounded by MaxDNSMessageSize
-	copy(resp[zdnsutil.DNSFramePrefixLen:], response.Data)
-
-	if _, err := conn.Write(resp); err != nil {
-		log.Debugf("TLCP: DTLCP write error: %v", err)
-		return false
-	}
-	return true
+	safeMax := config.DefaultPMTU - config.DTLSDNSOverhead - zdnsutil.DNSFramePrefixLen
+	return zdnsutil.WriteDTLSFrame(conn, response, safeMax, config.MaxDNSMessageSize, "TLCP: DTLCP")
 }
 
 // Close shuts down the listener: close every client queue (unblocking

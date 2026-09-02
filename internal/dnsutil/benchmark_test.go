@@ -118,3 +118,39 @@ func BenchmarkLogHandshake(b *testing.B) {
 		LogHandshake(info)
 	}
 }
+
+// BenchmarkFoldCaseNoOp: the dominant path — already-lowercase answers must
+// not allocate beyond the presentation serialisation (2026-09 F5 fast path).
+func BenchmarkFoldCaseNoOp(b *testing.B) {
+	rrs := []dns.RR{
+		&dns.A{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("93.184.216.34")},
+		&dns.CNAME{Hdr: dns.Header{Name: "www.example.com.", Class: dns.ClassINET, TTL: 300}, Target: "edge.example.net."},
+	}
+	FoldCase(rrs)
+	if rrs[0].Header().Name != "www.example.com." {
+		b.Fatal("fold mutated an already-canonical owner")
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		FoldCase(rrs)
+	}
+}
+
+// BenchmarkFoldCaseMixed: the rare path — 0x20-echoed case in owners/rdata.
+func BenchmarkFoldCaseMixed(b *testing.B) {
+	mk := func() []dns.RR {
+		return []dns.RR{
+			&dns.A{Hdr: dns.Header{Name: "WwW.ExAmPlE.CoM.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("93.184.216.34")},
+			&dns.CNAME{Hdr: dns.Header{Name: "WwW.ExAmPlE.CoM.", Class: dns.ClassINET, TTL: 300}, Target: "EdGe.ExAmPlE.nEt."},
+		}
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		rrs := mk()
+		FoldCase(rrs)
+		if rrs[0].Header().Name != "www.example.com." {
+			b.Fatal("owner not folded")
+		}
+	}
+}

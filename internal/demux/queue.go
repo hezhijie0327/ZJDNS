@@ -17,12 +17,14 @@ type protocolQueue struct {
 }
 
 // newProtocolQueue creates a protocolQueue with a buffered channel.
-// The buffer size bounds the number of pending (pre-accepted) connections
+// queueDepth bounds the number of pending (pre-accepted) connections
 // before the demux loop blocks — 64 is generous for DNS workloads.
+const queueDepth = 64
+
 func newProtocolQueue(addr net.Addr) *protocolQueue {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	return &protocolQueue{
-		ch:     make(chan net.Conn, 64),
+		ch:     make(chan net.Conn, queueDepth),
 		ctx:    ctx,
 		cancel: cancel,
 		addr:   addr,
@@ -43,10 +45,19 @@ func (q *protocolQueue) Accept() (net.Conn, error) {
 }
 
 // Close shuts down the queue, causing pending and future Accept calls
-// to return net.ErrClosed.
+// to return net.ErrClosed.  Connections already buffered in the queue are
+// closed here — nothing else owns them once both the demux pusher and the
+// protocol Accept loop are gone (F8).
 func (q *protocolQueue) Close() error {
 	q.cancel(net.ErrClosed)
-	return nil
+	for {
+		select {
+		case c := <-q.ch:
+			_ = c.Close() // _ = error: best-effort close of an abandoned conn
+		default:
+			return nil
+		}
+	}
 }
 
 // Addr returns the bind address of the underlying listener.
@@ -60,7 +71,14 @@ func (q *protocolQueue) Addr() net.Addr {
 func (q *protocolQueue) push(c net.Conn) bool {
 	select {
 	case q.ch <- c:
-		return true
+		// Both cases can be ready when Close races the send — re-check so
+		// a conn queued into a dying queue is not reported as delivered.
+		select {
+		case <-q.ctx.Done():
+			return false
+		default:
+			return true
+		}
 	case <-q.ctx.Done():
 		return false
 	default:

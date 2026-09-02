@@ -37,6 +37,36 @@ func readVLP(bin []byte, pos, binLen int) (elements [][]byte, newPos int, err er
 	return elements, pos, nil
 }
 
+// normaliseStampAddr validates the host:port shape of a parsed stamp address
+// and appends defPort when the port is missing (requirePort=false) or
+// rejects a missing port (requirePort=true, relay stamps).  Shared by the
+// plain, DNSCrypt and relay parsers — the three copies had already drifted
+// on the bound operator (F7).
+func (s *DNSStamp) normaliseStampAddr(label string, defPort int, requirePort bool) error {
+	colIndex := strings.LastIndex(s.Address, ":")
+	if bracketIndex := strings.LastIndex(s.Address, "]"); colIndex < bracketIndex {
+		colIndex = -1
+	}
+	if colIndex < 0 {
+		if requirePort {
+			return fmt.Errorf("stamp: %s address must include a port", label)
+		}
+		colIndex = len(s.Address)
+		s.Address = net.JoinHostPort(s.Address, strconv.Itoa(defPort))
+	}
+	if colIndex >= len(s.Address)-1 {
+		return errors.New("stamp: empty port")
+	}
+	ipOnly := s.Address[:colIndex]
+	if err := validatePort(s.Address[colIndex+1:]); err != nil {
+		return err
+	}
+	if net.ParseIP(strings.TrimRight(strings.TrimLeft(ipOnly, "["), "]")) == nil {
+		return fmt.Errorf("stamp: %s address must be an IP address", label)
+	}
+	return nil
+}
+
 func (s *DNSStamp) parsePlainDNS(bin []byte) error {
 	binLen := len(bin)
 	pos := 9 // skip proto(1) + props(8)
@@ -52,28 +82,8 @@ func (s *DNSStamp) parsePlainDNS(bin []byte) error {
 	s.Address = string(bin[pos : pos+length])
 	pos += length
 
-	// Auto-append default DNS port if missing.
-	// colIndex tracks the position of the last colon for port detection.
-	// When no colon is found, colIndex is set to len(Address); the
-	// auto-append-default-port check (colIndex >= len-1) then correctly
-	// passes, treating the address as a bare host with implied default port.
-	colIndex := strings.LastIndex(s.Address, ":")
-	if bracketIndex := strings.LastIndex(s.Address, "]"); colIndex < bracketIndex {
-		colIndex = -1
-	}
-	if colIndex < 0 {
-		colIndex = len(s.Address)
-		s.Address = net.JoinHostPort(s.Address, strconv.Itoa(DefaultDNSPort))
-	}
-	if colIndex >= len(s.Address)-1 {
-		return errors.New("stamp: empty port")
-	}
-	ipOnly := s.Address[:colIndex]
-	if err := validatePort(s.Address[colIndex+1:]); err != nil {
+	if err := s.normaliseStampAddr("plain DNS", DefaultDNSPort, false); err != nil {
 		return err
-	}
-	if net.ParseIP(strings.TrimRight(strings.TrimLeft(ipOnly, "["), "]")) == nil {
-		return errors.New("stamp: plain DNS address must be an IP address")
 	}
 	if pos != binLen {
 		return ErrTrailingGarbage
@@ -104,24 +114,8 @@ func (s *DNSStamp) parseDNSCrypt(bin []byte) error {
 	s.Address = string(bin[pos : pos+length])
 	pos += length
 
-	// Auto-append default port if missing.
-	colIndex := strings.LastIndex(s.Address, ":")
-	if bracketIndex := strings.LastIndex(s.Address, "]"); colIndex < bracketIndex {
-		colIndex = -1
-	}
-	if colIndex < 0 {
-		colIndex = len(s.Address)
-		s.Address = net.JoinHostPort(s.Address, strconv.Itoa(DefaultHTTPSPort))
-	}
-	if colIndex >= len(s.Address)-1 {
-		return errors.New("stamp: empty port")
-	}
-	ipOnly := s.Address[:colIndex]
-	if err := validatePort(s.Address[colIndex+1:]); err != nil {
+	if err := s.normaliseStampAddr("DNSCrypt", DefaultHTTPSPort, false); err != nil {
 		return err
-	}
-	if net.ParseIP(strings.TrimRight(strings.TrimLeft(ipOnly, "["), "]")) == nil {
-		return errors.New("stamp: DNSCrypt address must be an IP address")
 	}
 
 	// Public key — MUST be exactly 32 bytes per §4.2.3.
@@ -248,22 +242,8 @@ func (s *DNSStamp) parseDNSCryptRelay(bin []byte) error {
 	s.Address = string(bin[pos : pos+length])
 	pos += length
 
-	colIndex := strings.LastIndex(s.Address, ":")
-	if bracketIndex := strings.LastIndex(s.Address, "]"); colIndex < bracketIndex {
-		colIndex = -1
-	}
-	if colIndex < 0 {
-		return errors.New("stamp: DNSCrypt relay address must include a port")
-	}
-	if colIndex >= len(s.Address)-1 {
-		return errors.New("stamp: empty port")
-	}
-	ipOnly := s.Address[:colIndex]
-	if err := validatePort(s.Address[colIndex+1:]); err != nil {
+	if err := s.normaliseStampAddr("DNSCrypt relay", 0, true); err != nil {
 		return err
-	}
-	if net.ParseIP(strings.TrimRight(strings.TrimLeft(ipOnly, "["), "]")) == nil {
-		return errors.New("stamp: DNSCrypt relay address must be an IP address")
 	}
 	if pos != binLen {
 		return ErrTrailingGarbage

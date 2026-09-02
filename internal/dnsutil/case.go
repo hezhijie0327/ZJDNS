@@ -50,9 +50,56 @@ func foldCaseRR(rr dns.RR) dns.RR {
 // ending in '.' — the presentation-form shape of a domain name — while
 // copying quoted segments verbatim (TXT/URI/CAA data; their interior may
 // contain whitespace and '.'-terminated words that are not names).
+//
+// Two-pass: the common case (nothing to fold — lowercase owners, no
+// mixed-case rdata names) returns after a pure scan with zero allocations;
+// the Builder only runs when a fold is actually needed.  FoldCase sits on
+// the per-response funnel of every upstream answer, so the scan-only fast
+// path keeps the no-op cost at one presentation serialisation (2026-09 F5).
 func foldPresentationNames(s string) (string, bool) {
+	if !presentationNeedsFold(s) {
+		return s, false
+	}
+	return foldPresentationNamesBuild(s)
+}
+
+// presentationNeedsFold reports whether any unquoted '.'-suffixed token in
+// the presentation form carries an ASCII uppercase letter.
+func presentationNeedsFold(s string) bool {
+	for i := 0; i < len(s); {
+		switch s[i] {
+		case ' ', '\t':
+			i++
+		case '"':
+			i++
+			for i < len(s) {
+				if s[i] == '\\' && i+1 < len(s) {
+					i += 2
+					continue
+				}
+				if s[i] == '"' {
+					i++
+					break
+				}
+				i++
+			}
+		default:
+			start := i
+			for i < len(s) && s[i] != ' ' && s[i] != '\t' && s[i] != '"' {
+				i++
+			}
+			tok := s[start:i]
+			if strings.HasSuffix(tok, ".") && ASCIIFold(tok) != tok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func foldPresentationNamesBuild(s string) (string, bool) {
 	var b strings.Builder
-	changed := false
+	changed := true // caller verified a fold exists
 	for i := 0; i < len(s); {
 		if s[i] == ' ' || s[i] == '\t' {
 			b.WriteByte(s[i])

@@ -540,15 +540,19 @@ func (s *Server) HandleHTTP3FromPacketConn(pc net.PacketConn) error {
 
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:        config.DefaultQUICServerIdleTimeout,
-		MaxIncomingStreams:    config.DefaultMaxIncomingStreams,
-		MaxIncomingUniStreams: config.DefaultMaxIncomingStreams,
+		MaxIncomingStreams:    config.DefaultHTTP3MaxIncomingStreams,
+		MaxIncomingUniStreams: config.DefaultHTTP3MaxIncomingStreams,
 		Allow0RTT:             true,
 		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
 	}
 
 	s.listenerMu.Lock()
 	if s.h3Server == nil {
-		s.h3Server = &http3.Server{Handler: s}
+		// Same stream bounds and HTTP-layer idle timeout as the standalone
+		// path — a shared-port client could otherwise open 64k streams per
+		// connection, exactly what DefaultHTTP3MaxIncomingStreams (7939c64)
+		// was added to prevent (P-M1).
+		s.h3Server = &http3.Server{Handler: s, IdleTimeout: config.DefaultQUICServerIdleTimeout}
 	}
 	s.listenerMu.Unlock()
 

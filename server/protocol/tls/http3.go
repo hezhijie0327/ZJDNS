@@ -78,43 +78,11 @@ func (s *Server) startDOH3Server(port string) error {
 		capturedH3 := listener
 		s.serverGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("DoH3 server")
-			// Manual accept loop instead of h3Server.ServeListener(capturedH3)
-			// so that each QUIC connection is logged and errors are handled
-			// per-connection, preventing a single bad connection from
-			// affecting the entire listener.
-			for {
-				conn, err := capturedH3.Accept(s.ctx)
-				if err != nil {
-					if s.ctx.Err() != nil {
-						return nil
-					}
-					log.Debugf("TLS: DoH3 Accept error: %v", err)
-					time.Sleep(config.DefaultAcceptRetryDelay)
-					continue
-				}
-				if conn == nil {
-					continue
-				}
-
-				// Admission cap: quic.Config only limits streams, not
-				// connections — a single client could otherwise open
-				// unbounded QUIC connections and exhaust goroutines.
-				select {
-				case s.quicConnSem <- struct{}{}:
-				default:
-					log.Debugf("TLS: DoH3 connection limit reached, rejecting %s", conn.RemoteAddr())
-					_ = conn.CloseWithError(doq.QUICCodeExcessiveLoad, "connection limit reached")
-					continue
-				}
-				s.serverGroup.Go(func() error {
-					defer zdnsutil.HandlePanic("DoH3 connection handler")
-					defer func() { <-s.quicConnSem }()
-					if err := s.h3Server.ServeQUICConn(conn); err != nil && !errors.Is(err, http.ErrServerClosed) {
-						log.Debugf("TLS: DoH3 connection error: %v", err)
-					}
-					return nil
-				})
-			}
+			// The accept/admission loop lives in handleHTTP3Connections —
+			// the standalone path previously carried a line-for-line copy
+			// that had already drifted from the shared one (P-M2).
+			s.handleHTTP3Connections(capturedH3)
+			return nil
 		})
 	}
 
@@ -123,7 +91,8 @@ func (s *Server) startDOH3Server(port string) error {
 
 // handleHTTP3Connections runs the accept loop for DoH3 QUIC connections.
 // Shared with HandleHTTP3FromPacketConn (shared-port mode) and
-// startDOH3Server (standalone mode).
+// startDOH3Server (standalone mode) — the single implementation so the
+// stream bounds and admission cap cannot drift between the two paths.
 func (s *Server) handleHTTP3Connections(h3Listener *quic.EarlyListener) {
 	for {
 		conn, err := h3Listener.Accept(s.ctx)

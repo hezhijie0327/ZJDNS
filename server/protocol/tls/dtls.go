@@ -203,42 +203,17 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 
 // sendDTLSResponse packs and writes a DTLS response with 2-byte length prefix.
 // Returns true to continue the connection loop, false to close the connection.
-// The response is always returned to the pool (defer-protected).
+// The response is always returned to the pool (defer-protected).  The frame
+// path (PMTU truncation preserving the trailing OPT per RFC 6891 §6.2.5,
+// pooled frame buffer) is the shared dnsutil.WriteDTLSFrame — the DTLCP
+// twin previously carried a 95 %-identical copy that destroyed the OPT on
+// truncation and allocated per response (P-M4).
 func (s *Server) sendDTLSResponse(conn net.Conn, response *dns.Msg) bool {
 	if response == nil {
 		return true
 	}
 	defer pool.DefaultMessage.Put(response)
 
-	if err := response.Pack(); err != nil {
-		log.Debugf("TLS: DTLS pack error: %v", err)
-		return true
-	}
-
-	// RFC 8094 §5: truncate if the datagram would exceed the assumed PMTU.
-	if safeMax := config.DefaultPMTU - config.DTLSDNSOverhead - zdnsutil.DNSFramePrefixLen; len(response.Data) > safeMax {
-		response.Truncated = true
-		response.Answer = nil
-		response.Ns = nil
-		response.Extra = nil
-		if err := response.Pack(); err != nil {
-			log.Debugf("TLS: DTLS repack after truncation: %v", err)
-			return true
-		}
-	}
-
-	respLen := len(response.Data)
-	if respLen > config.MaxDNSMessageSize {
-		log.Debugf("TLS: DTLS response too large (%d bytes)", respLen)
-		return true
-	}
-	resp := make([]byte, zdnsutil.DNSFramePrefixLen+respLen)
-	binary.BigEndian.PutUint16(resp[:zdnsutil.DNSFramePrefixLen], uint16(respLen)) //nolint:gosec // G115: DNS response length bounded by MaxDNSMessageSize
-	copy(resp[zdnsutil.DNSFramePrefixLen:], response.Data)
-
-	if _, err := conn.Write(resp); err != nil {
-		log.Debugf("TLS: DTLS write error: %v", err)
-		return false
-	}
-	return true
+	safeMax := config.DefaultPMTU - config.DTLSDNSOverhead - zdnsutil.DNSFramePrefixLen
+	return zdnsutil.WriteDTLSFrame(conn, response, safeMax, config.MaxDNSMessageSize, "TLS: DTLS")
 }

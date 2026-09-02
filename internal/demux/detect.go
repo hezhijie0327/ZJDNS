@@ -74,8 +74,12 @@ func (c *bufferedConn) Read(b []byte) (int, error) {
 //	0x14–0x17 → TLS record content type; inspect version byte (header[1]):
 //	  0x03 → "tls"  (TLS 1.0–1.3, record version 0x0301–0x0304)
 //	  0x01 → "tlcp" (TLCP, record version 0x0101)
-//	0x00–0x04 → "dnscrypt" (DNSCrypt 2-byte length prefix; max query ~1260 B)
-//	other     → "" (unknown)
+//	  other version bytes within 0x14–0x17 → "" (unknown)
+//	anything else → "dnscrypt" — DNSCrypt TCP frames begin with a 2-byte
+//	  big-endian length prefix whose high byte is 0x00–0x04 for realistic
+//	  query sizes, but arbitrary first bytes (scanners, garbage) also land
+//	  here: the DNSCrypt handler's own framing check rejects them and
+//	  closes, which keeps the demux table small without a deny-list.
 //
 // The read is bounded by sniffTimeout: a client that completes the TCP
 // handshake but never sends the 5 header bytes (port scanners, health

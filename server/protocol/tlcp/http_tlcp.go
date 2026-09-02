@@ -26,8 +26,9 @@ func (s *Server) startDOHServer() error {
 	for _, addr := range addrs {
 		rawListener, err := net.Listen("tcp", addr)
 		if err != nil {
-			log.Warnf("TLCP: skipping tcp address %s: %v", addr, err)
-			continue
+			// Fail fast, matching tls/https.go and the server's own
+			// startup policy (P-M3).
+			return fmt.Errorf("TLCP DoH listen on %s: %w", addr, err)
 		}
 		keepAliveListener := &tcpKeepAliveListener{Listener: rawListener}
 

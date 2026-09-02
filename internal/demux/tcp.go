@@ -3,6 +3,7 @@ package demux
 import (
 	"net"
 	"sync"
+	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 )
 
@@ -34,6 +35,12 @@ type TCPDemuxListener struct {
 	closed bool
 	done   chan struct{} // closed when the accept loop exits
 }
+
+// sniffSem bounds concurrent sniff goroutines: each accepted connection
+// spawns one and lives up to sniffTimeout when the peer is silent — an
+// unbounded spawn let a connect flood (port scanners) exhaust goroutines
+// and fds while the downstream LimitListeners only gate post-sniff (P-M6).
+var sniffSem = make(chan struct{}, config.DefaultServerGoroutineLimit)
 
 // NewTCPDemux creates and starts a TCP demux listener.  The accept loop
 // runs in a background goroutine and exits when Close() is called or the
@@ -92,6 +99,7 @@ func (d *TCPDemuxListener) Done() <-chan struct{} {
 
 func (d *TCPDemuxListener) acceptLoop() {
 	defer close(d.done)
+	defer zdnsutil.HandlePanic("TCP demux accept")
 
 	for {
 		conn, err := d.inner.Accept()
@@ -117,7 +125,19 @@ func (d *TCPDemuxListener) acceptLoop() {
 		// connection was even accepted while one peer sat silent.  The
 		// per-conn goroutine dies with the bounded sniff (or the push);
 		// the queue is channel-based, so concurrent pushes are safe.
-		go d.handleConn(conn)
+		// Try-acquire the sniff slot first: a flood of silent clients
+		// is dropped at the gate instead of exhausting goroutines/fds
+		// for the full sniffTimeout window (P-M6).
+		select {
+		case sniffSem <- struct{}{}:
+		default:
+			_ = conn.Close()
+			continue
+		}
+		go func() {
+			defer func() { <-sniffSem }()
+			d.handleConn(conn)
+		}()
 	}
 }
 

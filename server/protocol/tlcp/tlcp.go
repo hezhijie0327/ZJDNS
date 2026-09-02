@@ -1,6 +1,7 @@
 package tlcp
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -42,8 +43,12 @@ func (s *Server) startDOTServer() error {
 	for _, addr := range addrs {
 		rawListener, err := net.Listen("tcp", addr)
 		if err != nil {
-			log.Warnf("TLCP: skipping tcp address %s: %v", addr, err)
-			continue
+			// Fail fast, matching tls/tls.go and the server's own policy —
+			// a configured endpoint that cannot bind is a configuration
+			// error, not something to skip silently: the previous Warn+
+			// continue let a TLCP DoT listener come up dead while Start
+			// reported success (P-M3).
+			return fmt.Errorf("TLCP DoT listen on %s: %w", addr, err)
 		}
 
 		tlcpCfg := s.tlcpConfig.Clone()
@@ -116,9 +121,9 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 	// idle timeout (mirrors the TLS package, tls.go:81).
 	_ = conn.SetReadDeadline(time.Now().Add(config.DefaultTLSHandshakeTimeout))
 
+	var lengthBuf [zdnsutil.DNSFramePrefixLen]byte
 	for {
-		msg, err := zdnsutil.ReadTCPMsg(conn)
-		if err != nil {
+		if _, err := io.ReadFull(conn, lengthBuf[:]); err != nil {
 			if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.EOF) {
 				log.Debugf("TLCP: DoT read error from %s: %v", clientIP, err)
 			}
@@ -128,8 +133,45 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 		// First read succeeded — extend to the regular idle timeout.
 		_ = conn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 
-		resp := s.handler.ServeDNS(msg, clientIP, true, config.ProtoTLCP)
-		if resp == msg { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+		msgLength := binary.BigEndian.Uint16(lengthBuf[:])
+		if msgLength == 0 || msgLength > dns.MaxMsgSize {
+			return
+		}
+
+		// Pooled read path (mirrors tls.go): the pooled buffer outlives
+		// ServeDNS because the pre-packed pipeline re-reads req.Data
+		// inside processing (P-M5).
+		var pooledBuf []byte
+		var msgBuf []byte
+		if int(msgLength) <= pool.SecureBufferSize {
+			pooledBuf = pool.DefaultBuffer.Get()
+			msgBuf = pooledBuf[:msgLength]
+		} else {
+			msgBuf = make([]byte, msgLength)
+		}
+		if _, err := io.ReadFull(conn, msgBuf); err != nil {
+			if pooledBuf != nil {
+				pool.DefaultBuffer.Put(pooledBuf)
+			}
+			return
+		}
+
+		req := pool.DefaultMessage.Get()
+		req.Data = msgBuf
+		if err := req.Unpack(); err != nil {
+			pool.DefaultMessage.Put(req)
+			if pooledBuf != nil {
+				pool.DefaultBuffer.Put(pooledBuf)
+			}
+			continue
+		}
+
+		resp := s.handler.ServeDNS(req, clientIP, true, config.ProtoTLCP)
+		pool.DefaultMessage.Put(req)
+		if pooledBuf != nil {
+			pool.DefaultBuffer.Put(pooledBuf)
+		}
+		if resp == req { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
 			resp = nil
 		}
 		if !s.sendDOTResponse(conn, resp, clientIP) {
@@ -147,13 +189,45 @@ func (s *Server) sendDOTResponse(conn net.Conn, resp *dns.Msg, clientIP net.IP) 
 	}
 	defer pool.DefaultMessage.Put(resp)
 
-	// Write deadline matching the other protocol handlers (tls.go:124,
-	// dnscrypt/tcp.go:42, dtlcp.go:368): a peer that stops reading (full
-	// receive window) must not block this connection goroutine forever.
+	// Write deadline matching the other protocol handlers (tls.go,
+	// dnscrypt/tcp.go, dtlcp.go): a peer that stops reading (full receive
+	// window) must not block this connection goroutine forever.
 	if err := conn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout)); err != nil {
 		log.Debugf("TLCP: DoT SetWriteDeadline error to %s: %v", clientIP, err)
 	}
-	if err := zdnsutil.WriteTCPMsg(conn, resp); err != nil {
+
+	// Pre-packed wire (cache-hit direct-send path) skips the Pack entirely;
+	// only synthetic responses pack here.  The 2-byte frame comes out of the
+	// buffer pool instead of a per-response allocation (P-M5).
+	wire := resp.Data
+	if len(wire) == 0 {
+		if err := resp.Pack(); err != nil {
+			log.Debugf("TLCP: DoT response pack error to %s: %v", clientIP, err)
+			return true // drop this response, keep the connection
+		}
+		wire = resp.Data
+	}
+	if len(wire) > dns.MaxMsgSize {
+		log.Debugf("TLCP: dropping DoT response of %d bytes (exceeds 16-bit frame)", len(wire))
+		return true
+	}
+
+	poolBuf := pool.DefaultBuffer.Get()
+	frameOK := len(poolBuf) >= zdnsutil.DNSFramePrefixLen+len(wire)
+	var frame []byte
+	if frameOK {
+		frame = poolBuf[:zdnsutil.DNSFramePrefixLen+len(wire)]
+	} else {
+		frame = make([]byte, zdnsutil.DNSFramePrefixLen+len(wire))
+		pool.DefaultBuffer.Put(poolBuf)
+	}
+	binary.BigEndian.PutUint16(frame[:zdnsutil.DNSFramePrefixLen], uint16(len(wire))) //nolint:gosec // G115: bounded by the MaxMsgSize check above
+	copy(frame[zdnsutil.DNSFramePrefixLen:], wire)
+	_, err := conn.Write(frame)
+	if frameOK {
+		pool.DefaultBuffer.Put(frame)
+	}
+	if err != nil {
 		log.Debugf("TLCP: DoT write error to %s: %v", clientIP, err)
 		return false
 	}
