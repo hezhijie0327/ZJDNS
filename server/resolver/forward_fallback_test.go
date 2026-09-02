@@ -437,3 +437,38 @@ func TestQueryUpstream_FastFailPrimaryEarlyAdoption(t *testing.T) {
 		}
 	}
 }
+
+// TestQueryUpstream_MQTypeServfailRetry verifies the forwarding path's
+// RFC 10029 fallback: an upstream that SERVFAILs MQTYPE-Query queries is
+// retried once without the option (mirroring the recursive walk) — both
+// upstreams failing the optioned query previously surfaced SERVFAIL to the
+// client for otherwise-resolvable names.
+func TestQueryUpstream_MQTypeServfailRetry(t *testing.T) {
+	client := &fakeNSClient{handlers: map[string]nsScriptHandler{
+		"10.0.0.1:53": func(ctx context.Context, msg *dns.Msg) *upstream.Result {
+			if hasMQQUERY(msg.Pseudo) {
+				return nsReply(msg, dns.RcodeServerFailure)
+			}
+			res := nsReply(msg, dns.RcodeSuccess)
+			res.Response.Answer = []dns.RR{&dns.A{
+				Hdr:  dns.Header{Name: msg.Question[0].Header().Name, Class: dns.ClassINET, TTL: 300},
+				Addr: netip.MustParseAddr("192.0.2.9"),
+			}}
+			return res
+		},
+	}}
+	r := newTestResolver(client)
+	r.cache = cache.New(config.LimitSettings{}, config.LimitSettings{}, "", "")
+	t.Cleanup(func() { _ = r.cache.Close() })
+	r.ConfigureServers([]config.UpstreamServer{
+		{Address: "10.0.0.1:53", Protocol: config.ProtoUDP, MQType: []uint16{dns.TypeA, dns.TypeAAAA}},
+	})
+
+	qr := r.Query(t.Context(), Question{Name: "mqtest.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil)
+	if qr.Err != nil {
+		t.Fatalf("unexpected error: %v", qr.Err)
+	}
+	if len(qr.Answer) == 0 {
+		t.Fatal("optionless retry did not run — SERVFAIL propagated")
+	}
+}

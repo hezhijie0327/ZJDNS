@@ -234,6 +234,26 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 				// the server-side MQTYPE middleware merges locally.
 				attachMQType(msg, server.MQType, question.Qtype)
 				queryResult := r.queryClient.ExecuteQuery(execCtx, msg, server)
+				// RFC 10029 fallback, mirroring the recursive walk
+				// (nameserver.go): an upstream that drops, times out or
+				// refuses MQTYPE-Query queries — observed in the wild with
+				// CN public resolvers returning SERVFAIL for the unknown
+				// EDNS option — answers the optionless retry.  "operation
+				// was canceled" is a normal first-success race, not a
+				// failure.  The retry carries its own fresh timeout so an
+				// exhausted execCtx cannot block it.
+				if hasMQQUERY(msg.Pseudo) &&
+					!errors.Is(queryResult.Error, context.Canceled) &&
+					(queryResult.Error != nil || (queryResult.Response != nil &&
+						queryResult.Response.Rcode != dns.RcodeSuccess && queryResult.Response.Rcode != dns.RcodeNameError)) {
+					if queryResult.Response != nil {
+						pool.DefaultMessage.Put(queryResult.Response)
+					}
+					msg.Pseudo = removeMQQUERY(msg.Pseudo)
+					retryCtx, retryCancel := context.WithTimeout(context.Background(), config.DefaultMQTypeResolveTimeout)
+					queryResult = r.queryClient.ExecuteQuery(retryCtx, msg, server)
+					retryCancel()
+				}
 				pool.DefaultMessage.Put(msg)
 
 				if queryResult.Error == nil && queryResult.Response != nil {

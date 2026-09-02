@@ -7,6 +7,7 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
@@ -26,6 +27,12 @@ import (
 // (forwarding included) — each QTx resolves through the server's own
 // upstreams, so the response supports MQTYPE regardless of upstream
 // support.  The option is never passed through.
+// qtResult is one prefetched additional-QTYPE resolution.
+type qtResult struct {
+	qt uint16
+	qr *resolver.QueryResult
+}
+
 type MQTYPE struct {
 	store    cache.Store
 	resolver handler.Resolver
@@ -74,6 +81,32 @@ func (m *MQTYPE) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return nil
 		}
 
+		// RFC 10029 §3.4: resolve the additional QTx types CONCURRENTLY
+		// with the primary — a sequential resolve-then-merge doubled the
+		// end-to-end latency of every MQTYPE query (the AAAA QTx paid its
+		// own full upstream round trip after the primary finished).  Each
+		// QTx is detached from the request lifecycle and bounded by its
+		// own timeout (§4 amplification bound); on a failed primary the
+		// buffered results are simply discarded (bounded by the QTx cap).
+		qd := qctx.Req.Question[0]
+		qtTypes := mqQuery.Types
+		if len(qtTypes) > config.DefaultMQTypeMaxQTx {
+			qtTypes = qtTypes[:config.DefaultMQTypeMaxQTx]
+		}
+		qtResults := make(chan qtResult, len(qtTypes))
+		for _, qt := range qtTypes {
+			qt2 := qt
+			go func() { //nolint:gosec // G118: QTx must detach from the request lifecycle (RFC 10029 §4) — a near-deadline request ctx must not abort the fresh QTx budget
+				defer zdnsutil.HandlePanic("MQTYPE QTx prefetch")
+				qtCtx, qtCancel := context.WithTimeout(context.Background(), config.DefaultMQTypeResolveTimeout)
+				defer qtCancel()
+				qtResults <- qtResult{
+					qt: qt2,
+					qr: m.resolve(qtCtx, qd.Header().Name, qt2, qd.Header().Class, qctx.ECSOpt, qctx.ClientRequestedDNSSEC),
+				}
+			}()
+		}
+
 		err := next.ServeDNS(ctx, qctx)
 		if qctx.Res == nil {
 			return err
@@ -83,7 +116,7 @@ func (m *MQTYPE) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// resolver: each QTx is resolved through its own upstreams
 		// (m.resolver.Query), so the response supports MQTYPE even when
 		// no hop in the chain does.  The option is never passed through.
-		m.merge(qctx, mqQuery)
+		m.merge(qctx, mqQuery, qtResults)
 		return err
 	})
 }
@@ -121,7 +154,7 @@ func (m *MQTYPE) validate(qctx *handler.QueryContext, mq *dns.MQQUERY) error {
 // merge resolves each additional QTYPE (cache first, then singleflight
 // resolution) and combines the RRsets into the primary response per
 // RFC 10029 §3.4: same RCODE/flags, deduplicated RRs, size-capped.
-func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY) {
+func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY, qtResults <-chan qtResult) {
 	msg := qctx.Res
 	if msg.Data != nil {
 		// Cache-hit primary responses are pre-packed: Data carries the full
@@ -187,15 +220,16 @@ func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY) {
 		types = types[:config.DefaultMQTypeMaxQTx]
 	}
 	completed := make([]uint16, 0, len(types))
+	// Drain the prefetched QTx results (started before the primary — see
+	// Wrap); the channel is buffered to the QTx count, so every prefetch
+	// goroutine completes regardless of how far the merge gets.
+	qtMap := make(map[uint16]*resolver.QueryResult, len(types))
+	for range types {
+		r := <-qtResults
+		qtMap[r.qt] = r.qr
+	}
 	for _, qt := range types {
-		// The merge runs after the primary response is built — the request
-		// ctx may already be near its deadline or cancelled (client
-		// disconnect, timeout).  A QTx fallback must be a fresh query:
-		// detach from the request lifecycle, bounded only by its own
-		// timeout (RFC 10029 §4 amplification bound).
-		qtCtx, qtCancel := context.WithTimeout(context.Background(), config.DefaultMQTypeResolveTimeout)
-		qr := m.resolve(qtCtx, qname, qt, qclass, ecsOpt, dnssecOK)
-		qtCancel()
+		qr := qtMap[qt]
 		if qr == nil || qr.Err != nil {
 			log.Debugf("MQTYPE: skipping %s %s — resolution failed", qname, dns.TypeToString[qt])
 			continue
