@@ -34,3 +34,23 @@
 ## 行动计划
 
 Sprint 1(CRITICAL+HIGH,发现即修复)→ Sprint 2(MEDIUM)→ Sprint 3(LOW 批量)→ 质量门禁(build/fix/lint/test 零警告)→ benchmark 回归对比 → docs/debug E2E 全协议验证 → 分批提交 + patch 版本号。
+
+---
+
+## E2E 验证记录(2026-09-03,docs/debug/DEBUG.md 全流程)
+
+| 项目 | 结果 |
+|------|------|
+| loopback 14 协议客户端(udp/tcp/tls/https/http3/quic/dtls/tlcp/http-tlcp/dtlcp/dnscrypt×4) | 14/14 dig 冒烟通过 |
+| MQTYPE 场景 A(forward 本地合并)+ B(recursive 本地合并) | 通过;A 查询后 AAAA warm-cache 命中;直连 +ednsopt=20:001c 返回 A+AAAA 合并,重复 QTYPE → FORMERR |
+| 共享端口(server-shared:TCP 20443/20853 + UDP 20853/20443) | 9/9 客户端变体通过(tls/quic/https/dtls/tlcp/dtlcp/http-tlcp/dnscrypt×2) |
+| DNSSEC 强制 | sigfail → SERVFAIL;sigok → NOERROR;jellyfin DNSKEY 受 Gandi NS 不可达网络限制(EDE 23 正确报错,DEBUG.md 已记录) |
+| RFC 功能 | RESINFO(DDR 启用时返回 qnamemin exterr=0,1,3,4,6,7,8,10,12,15,22,23,30);RFC 8482 ANY → HINFO "RFC8482";RFC 9824 NXNAME(128) → FORMERR;NXDOMAIN 首查/缓存命中均正确;RFC 9715 UDP 超限 → TC=1,TCP 重试得完整 10 条 TXT |
+| defense 六配置(spoofguard/hopguard/hopguard-spoofguard/splitguard/poisonguard/recursive-defense) | 6/6 通过 www.google.com 解析 |
+| upstream 外网(alidns tls/https/quic/http3、dnspod http-tlcp、quad9 dnscrypt) | 6/6 通过 |
+| pprof-dual 双端压测 | 14 协议各 ~34 万查询 fail=0;server/client 泄漏 goroutine = 0;panic = 0;falling back = 0;池 dialed 计数符合复用预期 |
+| 内存收敛(泄漏判定核心) | 同端两轮压测 inuse_space 16105.93kB → 16105.56kB,零增长 |
+
+## Benchmark 基线
+
+修复后全量刷新(118 项,含 -benchmem)。ServerProcessQuery 328ns/3.05M qps —— 优于审计前 353ns(布局回归修复附带收益,见 00-plan.md BENCH-1)。

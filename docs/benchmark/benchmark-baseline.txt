@@ -1,117 +1,118 @@
-BenchmarkBufferPool_GetPut-16        	 7515009	        79.06 ns/op
-BenchmarkBuildCookieResponse-16                     	21280556	        28.03 ns/op
-BenchmarkBuildDoHURL-16             	16349330	        35.10 ns/op
-BenchmarkBuildQueryMessage-16                 	 7465975	        67.20 ns/op
-BenchmarkCanServeExpired-16          	339706365	         1.774 ns/op
-BenchmarkClientExecuteQuery/TCP-16         	   25706	     23363 ns/op
-BenchmarkClientExecuteQuery/UDP-16         	   20246	     27895 ns/op
-BenchmarkCompress-16                       	  659806	       847.9 ns/op
-BenchmarkCompressDecompressRoundTrip-16    	  599575	       946.1 ns/op
-BenchmarkCompressSmall-16                  	 1910632	       312.8 ns/op
-BenchmarkCookieGenerator_GenerateServerCookie-16    	28728924	        20.90 ns/op
-BenchmarkCookieGenerator_IsServerCookieValid-16     	29478716	        20.68 ns/op
-BenchmarkCryptoValidator_VerifyDelegationDS-16    	 1000000	       556.3 ns/op
-BenchmarkCryptoValidator_VerifyRRset-16           	   17011	     35292 ns/op
-BenchmarkDecompress-16                     	 5283060	       112.8 ns/op
-BenchmarkDecompressReuseBuffer-16          	 6963865	        86.43 ns/op
-BenchmarkDeductElapsedCyclical-16    	20298184	        28.34 ns/op
-BenchmarkDefaultMessage_GetPut-16    	85669920	         7.169 ns/op
-BenchmarkDetector_IsPoisonedByTLD-16    	11371612	        52.40 ns/op
-BenchmarkDetector_Validate-16           	 2804755	       208.7 ns/op
-BenchmarkDetector_ValidateClean-16      	15696174	        37.89 ns/op
-BenchmarkDomainKey-16          	20494806	        29.30 ns/op
-BenchmarkElapsed-16                  	334105719	         1.791 ns/op
-BenchmarkEngine_HasIPTag-16    	100000000	         5.191 ns/op
-BenchmarkEngine_Match-16       	 6635775	        81.71 ns/op
-BenchmarkEngine_MatchIP-16     	 4867455	       122.4 ns/op
-BenchmarkEvaluator_EvaluateExact-16       	 2881496	       200.5 ns/op
-BenchmarkEvaluator_EvaluateMiss-16        	 9503996	        63.21 ns/op
-BenchmarkEvaluator_EvaluateWildcard-16    	 1904074	       314.8 ns/op
-BenchmarkEvaluator_LoadRules-16           	  217040	      2720 ns/op
-BenchmarkExtractIP-16                      	99831534	         6.019 ns/op
-BenchmarkExtractIPString-16                	44297468	        13.25 ns/op
-BenchmarkGet-16          	 1834324	       324.6 ns/op
-BenchmarkGetSorted-16    	  409503	      1451 ns/op
-BenchmarkGetZoneCutSigner-16    	 9674037	        61.42 ns/op
-BenchmarkGroupParallel-16       	 1475500	       403.6 ns/op
-BenchmarkGroupStartDone-16      	11962324	        48.96 ns/op
-BenchmarkGroupStartReject-16    	80006218	         7.528 ns/op
-BenchmarkHandler_ApplyToMessage-16                  	16315528	        36.31 ns/op
-BenchmarkHandler_ParseCookie-16                     	21858951	        27.89 ns/op
-BenchmarkHasPaddingOption_NoEDNS-16                 	379657228	         1.575 ns/op
-BenchmarkHasPaddingOption-16                        	369473673	         1.634 ns/op
-BenchmarkInc-16     	 5458556	       114.9 ns/op
-BenchmarkIPTrie_Match-16       	 6493491	        91.53 ns/op
-BenchmarkIPTrie_MatchTag-16    	 6511717	        93.58 ns/op
-BenchmarkIsExpired-16                	309333292	         1.828 ns/op
-BenchmarkIsResponseValid-16                       	173929554	         3.484 ns/op
-BenchmarkIsSecureProtocol-16               	57924613	        10.20 ns/op
-BenchmarkIsTemporaryError-16               	67491562	         9.074 ns/op
-BenchmarkIsZoneCut-16           	 9175082	        63.60 ns/op
-BenchmarkLogHandshake-16                   	362606871	         1.654 ns/op
-BenchmarkMapDelete-16             	15306658	        39.05 ns/op
-BenchmarkMapGet-16                	91945548	         6.494 ns/op
-BenchmarkMapLen-16                	198140670	         3.027 ns/op
-BenchmarkMapParallel-16           	 1870314	       322.8 ns/op
-BenchmarkMapSet-16                	98043892	         6.301 ns/op
-BenchmarkMapSetWithEviction-16    	 6838239	        89.01 ns/op
-BenchmarkMessagePool_GetPut-16       	81192950	         7.361 ns/op
-BenchmarkNew-16                       	18273531	        31.99 ns/op
-BenchmarkOpen-16         	      63	   9527621 ns/op
-BenchmarkParseDNSCrypt-16           	 5114198	       119.0 ns/op
-BenchmarkParseDNSCryptRelay-16      	 8201623	        73.23 ns/op
-BenchmarkParseDoH-16                	 4033330	       148.3 ns/op
-BenchmarkParseDoQ-16                	 5660958	       105.1 ns/op
-BenchmarkParseDoT-16                	 5973720	       100.6 ns/op
-BenchmarkParseODoHRelay-16          	 5612973	       108.0 ns/op
-BenchmarkParseODoHTarget-16         	 8788370	        68.02 ns/op
-BenchmarkParsePlainDNS-16           	 7074549	        75.19 ns/op
-BenchmarkParseRealWorldStamps-16    	  349398	      1686 ns/op
-BenchmarkParseRecordLine-16               	 8461180	        70.93 ns/op
-BenchmarkPatchQuestionCase-16    	14961168	        39.33 ns/op	      47 B/op	       1 allocs/op
-BenchmarkPoolAcquire/Cold-16         	  449611	      1449 ns/op
-BenchmarkPoolAcquire/Warm-16         	24354142	        24.13 ns/op
-BenchmarkPoolExchange-16             	  135807	      4158 ns/op
-BenchmarkProtoToConfig-16           	100000000	         5.257 ns/op
-BenchmarkPut-16          	  343814	      1720 ns/op
-BenchmarkRandomizeCase_NoLetters-16     	164384293	         3.692 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRandomizeCase-16               	 5262199	       116.1 ns/op	      16 B/op	       1 allocs/op
-BenchmarkRecord-16               	 2671010	       223.4 ns/op	       0 B/op	       0 allocs/op
-BenchmarkRemainingTTL_Fresh-16       	296260390	         2.012 ns/op
-BenchmarkRemainingTTL_Stale-16       	278070867	         2.166 ns/op
-BenchmarkResolveBindAddrs-16               	11583122	        51.47 ns/op
-BenchmarkResponseServeLargeWire-16                     	 4043348	       146.5 ns/op	      1629 wire-bytes	       0 B/op	       0 allocs/op
-BenchmarkResponseServePrePacked/direct-wire-16         	40843340	        14.79 ns/op	       0 B/op	       0 allocs/op
-BenchmarkResponseServePrePacked/unpack-EDNS-16         	 3820069	       156.8 ns/op	     208 B/op	       9 allocs/op
-BenchmarkRoundTripDNSCrypt-16       	 2894596	       208.9 ns/op
-BenchmarkRoundTripDoH-16            	 2321845	       256.0 ns/op
-BenchmarkServerDNSRequest_MultipleTypes-16    	  885140	       634.3 ns/op
-BenchmarkServerProcessQuery_Cold-16           	 1724289	       348.2 ns/op	   2871877 qps
-BenchmarkServerProcessQuery-16                	 1630278	       356.9 ns/op	   2801586 qps
-BenchmarkServerStartup-16                     	    3438	    167592 ns/op
-BenchmarkShouldPrefetch-16           	156659258	         3.839 ns/op
-BenchmarkShuffleSlice-16        	 9239019	        64.42 ns/op
-BenchmarkSnapshot-16             	  773727	       732.5 ns/op	     648 B/op	       4 allocs/op
-BenchmarkStoreGetSpillHit-16     	  251374	      2495 ns/op
-BenchmarkStoreParallel-16        	  638881	       988.4 ns/op
-BenchmarkStoreSetGet-16          	  777927	       801.7 ns/op
-BenchmarkStoreSetWithSpill-16    	  225408	      2515 ns/op
-BenchmarkStringDNSCrypt-16          	 7041526	        85.09 ns/op
-BenchmarkStringDNSCryptRelay-16     	15203617	        37.85 ns/op
-BenchmarkStringDoH-16               	 6364617	        93.74 ns/op
-BenchmarkStringDoQ-16               	 8000088	        76.06 ns/op
-BenchmarkStringDoT-16               	 8504666	        70.41 ns/op
-BenchmarkStringODoHRelay-16         	 7964728	        74.59 ns/op
-BenchmarkStringODoHTarget-16        	10288668	        57.63 ns/op
-BenchmarkStringPlainDNS-16          	16729653	        36.06 ns/op
-BenchmarkSum64_1024-16    	 1914180	       317.1 ns/op	3229.42 MB/s
-BenchmarkSum64_256-16     	 7448280	        81.19 ns/op	3153.15 MB/s
-BenchmarkSum64_64-16      	27156079	        22.26 ns/op	2874.97 MB/s
-BenchmarkSum64_8-16       	91846692	         6.708 ns/op	1192.57 MB/s
-BenchmarkSynthesizer_MapAddr-16       	167150881	         3.567 ns/op
-BenchmarkSynthesizer_Synthesize-16    	27298940	        20.95 ns/op
-BenchmarkTLDPlusOne-16         	32118123	        18.96 ns/op
-BenchmarkTokenize-16                      	 8228622	        71.11 ns/op
-BenchmarkTopN-16    	  111190	      5199 ns/op
-BenchmarkTryBind-16                        	   50619	     12224 ns/op
-BenchmarkUDPTruncateOversized-16    	 3831403	       137.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBufferPool_GetPut-16        	 7134021	        73.05 ns/op	      24 B/op	       1 allocs/op
+BenchmarkBuildCookieResponse-16                     	20438895	        28.21 ns/op	      96 B/op	       2 allocs/op
+BenchmarkBuildDoHURL-16             	17244248	        33.68 ns/op	      48 B/op	       1 allocs/op
+BenchmarkBuildQueryMessage-16                 	 9139562	        65.34 ns/op	      64 B/op	       2 allocs/op
+BenchmarkCanServeExpired-16          	339341323	         1.770 ns/op	       0 B/op	       0 allocs/op
+BenchmarkClientExecuteQuery/TCP-16         	   25980	     23061 ns/op	    1509 B/op	      37 allocs/op
+BenchmarkClientExecuteQuery/UDP-16         	   20130	     27791 ns/op	    1794 B/op	      43 allocs/op
+BenchmarkCompress-16                       	  659336	       833.6 ns/op	    1417 B/op	       2 allocs/op
+BenchmarkCompressDecompressRoundTrip-16    	  593329	       937.9 ns/op	    1984 B/op	       3 allocs/op
+BenchmarkCompressSmall-16                  	 1929250	       311.1 ns/op	     192 B/op	       2 allocs/op
+BenchmarkCookieGenerator_GenerateServerCookie-16    	28183843	        21.19 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCookieGenerator_IsServerCookieValid-16     	29516724	        20.51 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCryptoValidator_VerifyDelegationDS-16    	 1000000	       554.1 ns/op	    4562 B/op	      10 allocs/op
+BenchmarkCryptoValidator_VerifyRRset-16           	   16882	     34766 ns/op	    1793 B/op	      32 allocs/op
+BenchmarkDecompress-16                     	 5342613	       112.1 ns/op	     576 B/op	       1 allocs/op
+BenchmarkDecompressReuseBuffer-16          	 6951276	        86.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDeductElapsedCyclical-16    	20287004	        28.24 ns/op	     128 B/op	       3 allocs/op
+BenchmarkDefaultMessage_GetPut-16    	86449102	         7.111 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDetector_IsPoisonedByTLD-16    	11339912	        53.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDetector_Validate-16           	 9777115	        51.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDetector_ValidateClean-16      	14877154	        37.98 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDomainKey-16          	20221254	        29.79 ns/op	      16 B/op	       1 allocs/op
+BenchmarkElapsed-16                  	341494011	         1.761 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEngine_HasIPTag-16    	122454778	         4.912 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEngine_Match-16       	 7682362	        77.53 ns/op	     256 B/op	       2 allocs/op
+BenchmarkEngine_MatchIP-16     	 4975641	       120.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEvaluator_EvaluateExact-16       	 2823679	       208.1 ns/op	     256 B/op	       6 allocs/op
+BenchmarkEvaluator_EvaluateMiss-16        	11441010	        53.86 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEvaluator_EvaluateWildcard-16    	 2045059	       293.5 ns/op	     256 B/op	       6 allocs/op
+BenchmarkEvaluator_LoadRules-16           	  221138	      2565 ns/op	    4096 B/op	      42 allocs/op
+BenchmarkExtractIP-16                      	97396003	         5.980 ns/op	       4 B/op	       1 allocs/op
+BenchmarkExtractIPString-16                	45393504	        12.80 ns/op	      16 B/op	       1 allocs/op
+BenchmarkFoldCaseMixed-16                  	  148077	      4039 ns/op	    3770 B/op	      56 allocs/op
+BenchmarkFoldCaseNoOp-16                   	 2277982	       262.6 ns/op	     421 B/op	      15 allocs/op
+BenchmarkGet-16          	 1848969	       317.4 ns/op	     416 B/op	       1 allocs/op
+BenchmarkGetSorted-16    	  407312	      1473 ns/op	     472 B/op	       3 allocs/op
+BenchmarkGetZoneCutSigner-16    	 9944551	        59.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGroupParallel-16       	 1491631	       402.1 ns/op	      35 B/op	       1 allocs/op
+BenchmarkGroupStartDone-16      	10603938	        48.16 ns/op	      32 B/op	       1 allocs/op
+BenchmarkGroupStartReject-16    	84624252	         7.283 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHandler_ApplyToMessage-16                  	16468477	        35.86 ns/op	      56 B/op	       3 allocs/op
+BenchmarkHandler_ParseCookie-16                     	20902645	        27.55 ns/op	      72 B/op	       2 allocs/op
+BenchmarkHasPaddingOption-16                        	376099602	         1.600 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHasPaddingOption_NoEDNS-16                 	378425239	         1.576 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIPTrie_Match-16       	 6619578	        90.38 ns/op	      16 B/op	       1 allocs/op
+BenchmarkIPTrie_MatchTag-16    	 6436239	        91.75 ns/op	       0 B/op	       0 allocs/op
+BenchmarkInc-16     	 5413425	       107.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIsExpired-16                	296228821	         1.846 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIsResponseValid-16                       	188590558	         3.171 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIsSecureProtocol-16               	57477688	        10.30 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIsTemporaryError-16               	67396797	         9.070 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIsZoneCut-16           	 9706852	        60.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkLogHandshake-16                   	357436465	         1.653 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMapDelete-16             	15658198	        37.88 ns/op	      48 B/op	       1 allocs/op
+BenchmarkMapGet-16                	90048213	         6.575 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMapLen-16                	197585233	         3.007 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMapParallel-16           	 1878475	       320.1 ns/op	      13 B/op	       1 allocs/op
+BenchmarkMapSet-16                	96663108	         6.321 ns/op	       0 B/op	       0 allocs/op
+BenchmarkMapSetWithEviction-16    	 6725166	        87.98 ns/op	      71 B/op	       3 allocs/op
+BenchmarkMessagePool_GetPut-16       	82060275	         7.271 ns/op	       0 B/op	       0 allocs/op
+BenchmarkNew-16                       	18747900	        32.18 ns/op	      48 B/op	       1 allocs/op
+BenchmarkOpen-16         	     712	    872973 ns/op	 3387596 B/op	   10091 allocs/op
+BenchmarkParseDNSCrypt-16           	 5245438	       114.7 ns/op	     320 B/op	       5 allocs/op
+BenchmarkParseDNSCryptRelay-16      	 8132583	        73.18 ns/op	     176 B/op	       3 allocs/op
+BenchmarkParseDoH-16                	 4067323	       146.1 ns/op	     328 B/op	       7 allocs/op
+BenchmarkParseDoQ-16                	 5820123	       102.9 ns/op	     224 B/op	       4 allocs/op
+BenchmarkParseDoT-16                	 6030056	        99.49 ns/op	     224 B/op	       4 allocs/op
+BenchmarkParseODoHRelay-16          	 5668899	       105.5 ns/op	     232 B/op	       5 allocs/op
+BenchmarkParseODoHTarget-16         	 9615454	        62.18 ns/op	     224 B/op	       4 allocs/op
+BenchmarkParsePlainDNS-16           	 6936442	        75.92 ns/op	     184 B/op	       3 allocs/op
+BenchmarkParseRealWorldStamps-16    	  349122	      1671 ns/op	    4072 B/op	      72 allocs/op
+BenchmarkParseRecordLine-16               	 8687185	        68.40 ns/op	     144 B/op	       4 allocs/op
+BenchmarkPatchQuestionCase-16    	15263611	        38.42 ns/op	      47 B/op	       1 allocs/op
+BenchmarkPoolAcquire/Cold-16         	  448798	      1410 ns/op	    2765 B/op	      34 allocs/op
+BenchmarkPoolAcquire/Warm-16         	22488132	        26.05 ns/op	       8 B/op	       1 allocs/op
+BenchmarkPoolExchange-16             	  136225	      4163 ns/op	    1043 B/op	      24 allocs/op
+BenchmarkProtoToConfig-16           	100000000	         5.168 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPut-16          	  347845	      1714 ns/op	     448 B/op	       1 allocs/op
+BenchmarkRandomizeCase-16               	 5305344	       111.5 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRandomizeCase_NoLetters-16     	173773498	         3.458 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRecord-16               	 2795769	       242.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRemainingTTL_Fresh-16       	273820635	         2.121 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRemainingTTL_Stale-16       	279920649	         1.969 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResolveBindAddrs-16               	11381140	        51.43 ns/op	      80 B/op	       3 allocs/op
+BenchmarkResponseServeLargeWire-16                     	52759622	        11.65 ns/op	      1629 wire-bytes	       0 B/op	       0 allocs/op
+BenchmarkResponseServePrePacked/direct-wire-16         	53175622	        10.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkResponseServePrePacked/unpack-EDNS-16         	 3873073	       153.0 ns/op	     240 B/op	       9 allocs/op
+BenchmarkRoundTripDNSCrypt-16       	 2864288	       208.6 ns/op	     672 B/op	       8 allocs/op
+BenchmarkRoundTripDoH-16            	 2344870	       255.7 ns/op	     664 B/op	      10 allocs/op
+BenchmarkServerDNSRequest_MultipleTypes-16    	 1000000	       513.1 ns/op	     664 B/op	      17 allocs/op
+BenchmarkServerProcessQuery-16                	 1675012	       356.1 ns/op	   2807984 qps	     648 B/op	      16 allocs/op
+BenchmarkServerProcessQuery_Cold-16           	 1711647	       349.3 ns/op	   2862569 qps	     648 B/op	      16 allocs/op
+BenchmarkServerStartup-16                     	    3340	    174244 ns/op	 2990336 B/op	     391 allocs/op
+BenchmarkShouldPrefetch-16           	157641748	         3.746 ns/op	       0 B/op	       0 allocs/op
+BenchmarkShuffleSlice-16        	 9296612	        63.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSnapshot-16             	  739975	       747.3 ns/op	     648 B/op	       4 allocs/op
+BenchmarkStoreParallel-16        	  727297	       863.3 ns/op	    1170 B/op	      31 allocs/op
+BenchmarkStoreSetGet-16          	  911320	       642.7 ns/op	    1017 B/op	      28 allocs/op
+BenchmarkStoreSetWithSpill-16    	  939910	       597.4 ns/op	     806 B/op	      23 allocs/op
+BenchmarkStringDNSCrypt-16          	 7221160	        83.36 ns/op	     352 B/op	       3 allocs/op
+BenchmarkStringDNSCryptRelay-16     	15356542	        37.94 ns/op	      56 B/op	       2 allocs/op
+BenchmarkStringDoH-16               	 6342940	        94.97 ns/op	     336 B/op	       3 allocs/op
+BenchmarkStringDoQ-16               	 8068527	        74.07 ns/op	     224 B/op	       4 allocs/op
+BenchmarkStringDoT-16               	 8547373	        69.07 ns/op	     224 B/op	       4 allocs/op
+BenchmarkStringODoHRelay-16         	 8189648	        72.96 ns/op	     240 B/op	       4 allocs/op
+BenchmarkStringODoHTarget-16        	10640788	        56.52 ns/op	     192 B/op	       4 allocs/op
+BenchmarkStringPlainDNS-16          	16349905	        36.19 ns/op	      56 B/op	       2 allocs/op
+BenchmarkSum64_1024-16    	 1926806	       313.0 ns/op	3272.02 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSum64_256-16     	 7593722	        80.02 ns/op	3199.12 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSum64_64-16      	27327898	        21.99 ns/op	2910.79 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSum64_8-16       	87600859	         6.640 ns/op	1204.74 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSynthesizer_MapAddr-16       	159113391	         3.647 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSynthesizer_Synthesize-16    	27688845	        21.08 ns/op	      64 B/op	       2 allocs/op
+BenchmarkTLDPlusOne-16         	40094108	        16.29 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTokenize-16                      	 8634750	        69.28 ns/op	     240 B/op	       4 allocs/op
+BenchmarkTopN-16    	  114618	      4979 ns/op	    1744 B/op	       3 allocs/op
+BenchmarkTryBind-16                        	   49785	     12053 ns/op	     432 B/op	       7 allocs/op
+BenchmarkUDPTruncateOversized-16    	 4047351	       129.3 ns/op	       0 B/op	       0 allocs/op
