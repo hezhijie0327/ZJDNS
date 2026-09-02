@@ -15,7 +15,6 @@ import (
 	dtlsnet "github.com/pion/dtls/v3/pkg/net"
 	eHTTP "gitlab.com/go-extension/http"
 	eTLS "gitlab.com/go-extension/tls"
-	"golang.org/x/sync/errgroup"
 )
 
 // Host is the minimal interface the protocol server must implement for
@@ -86,17 +85,26 @@ type tcpRuntime struct {
 
 // udpRuntime holds the runtime state for one UDP shared port group.
 type udpRuntime struct {
-	cfg     *UDPGroup
-	conn    *net.UDPConn
-	dtlsPL  *dtlsPacketListener
-	quicPC  *quicPacketConn
-	h3PC    *quicPacketConn
-	dcState *sharedDNSCryptClient
+	cfg        *UDPGroup
+	conn       *net.UDPConn
+	dtlsPL     *dtlsPacketListener
+	quicPC     *quicPacketConn
+	h3PC       *quicPacketConn
+	dcState    *sharedDNSCryptClient
+	dtlcpState *sharedDTLSClient
+
+	// clientSem bounds concurrent per-client handler goroutines (DTLCP
+	// handshake/service, DNSCrypt drain).  Without a try-acquire cap, a
+	// spoofed-source flood created one DemuxPacketConn + goroutine per
+	// unique (IP, port) for the idle-reap window — unbounded (2026-09 P3).
+	clientSem chan struct{}
 }
 
 // Manager manages shared-port resources for all protocol pairs.
-// It owns its own errgroup for goroutine lifecycle and a mutex for
-// resource tracking, with zero coupling to the tlcp.Server struct.
+// It owns a cancelable lifecycle context and a mutex for resource tracking,
+// with zero coupling to the tlcp.Server struct.  Handler goroutines are
+// scheduled on the Host (whose group the server shutdown waits on); the
+// per-client flood bound is udpRuntime.clientSem, not a scheduling limit.
 type Manager struct {
 	host Host
 	cfg  *Config
@@ -107,7 +115,6 @@ type Manager struct {
 	// UDP shared port runtimes (one per UDPGroup).
 	udpRuntimes []*udpRuntime
 
-	group       *errgroup.Group
 	groupCtx    context.Context
 	groupCancel context.CancelCauseFunc
 }
@@ -120,17 +127,29 @@ type tcpDemuxCloser interface {
 
 // New creates a shared-port Manager.
 func New(host Host, cfg *Config) *Manager {
-	ctx, cancel := context.WithCancelCause(host.Ctx())
-	group, groupCtx := errgroup.WithContext(ctx)
-	group.SetLimit(config.DefaultServerGoroutineLimit)
+	groupCtx, groupCancel := context.WithCancelCause(host.Ctx())
 	return &Manager{
 		host:        host,
 		cfg:         cfg,
-		group:       group,
 		groupCtx:    groupCtx,
-		groupCancel: cancel,
+		groupCancel: groupCancel,
 	}
 }
+
+// admit reserves a per-client handler slot; it never blocks the dispatch
+// loop — over-cap sources are dropped (UDP semantics, clients retransmit).
+func (rt *udpRuntime) admit() bool {
+	select {
+	case rt.clientSem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// release frees a slot reserved by admit (run when the client handler
+// exits, including via reap-driven channel close).
+func (rt *udpRuntime) release() { <-rt.clientSem }
 
 // Start launches all configured shared-port listeners.
 func (m *Manager) Start() error {
