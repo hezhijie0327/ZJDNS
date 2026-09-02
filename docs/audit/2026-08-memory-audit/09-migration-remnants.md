@@ -33,6 +33,6 @@
 ## 已确认干净的项
 
 - config：`DefaultAsyncFlushInterval`、`DefaultDNSKeyCacheTTL` 等孤儿常量已删除；无 SQL 时代 config 字段残留；
-- 文档（CLAUDE.md / ARCHITECTURE.md / README / FLOWCHARTS / DEBUG）：6ec7150 + cee48da 已清理，本轮抽查无 SQL 引用残留（AUDIT-METHODOLOGY.md 本轮已同步更新，见 HANDOVER）；
+- 文档（AGENTS.md / ARCHITECTURE.md / README / FLOWCHARTS / DEBUG）：6ec7150 + cee48da 已清理，本轮抽查无 SQL 引用残留（AUDIT-METHODOLOGY.md 本轮已同步更新，见 HANDOVER）；
 - benchmark 基线已重定（迁移提交声明），无引用已删路径的陈旧 benchmark；
 - `PruneQueryJournal` no-op 与 `Flush()` no-op 为设计保留（接口兼容），非残留。

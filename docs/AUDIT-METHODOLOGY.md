@@ -34,7 +34,7 @@
 | **Goroutine 生命周期** | 每个 goroutine 有 `defer HandlePanic`；有明确的父 goroutine/owner；有取消路径（ctx.Done 或 done channel）；`errgroup` 使用 `SetLimit` 限制并发；channel 由唯一 owner 关闭 |
 | **资源生命周期** | `Close()` 幂等（`sync.Once` 或 atomic 守卫）；New 创建的资源在 Close 中全部释放；`Close()` 不阻塞（不在锁内做 IO）；`SetReadDeadline` 用于取消阻塞的 IO |
 | **日志质量** | 完整性（关键路径有日志）、精准性（级别正确、信息充分）、不刷屏（info/warn 不在热路径重复打印） |
-| **文档质量** | 架构文档与代码一致、CLAUDE.md 类型引用准确、注释不过时/不误导、关键设计决策有记录、公开 API 有 godoc |
+| **文档质量** | 架构文档与代码一致、AGENTS.md 类型引用准确、注释不过时/不误导、关键设计决策有记录、公开 API 有 godoc |
 | **参数校验** | 公开函数未检查 nil/空字符串/零值参数；构造后未验证字段有效性（如 `net.ParseIP("")` 返回 nil）；错误返回值被 `_` 丢弃导致后续代码基于零值继续执行；`func(_, name string)` 中 `_` 丢弃的参数是否存在应校验但未校验的值 |
 | **常量提取** | 魔法数字是否抽取为命名常量（含 `config/defaults.go`）；常量值是否符合 RFC/IETF 推荐（默认端口、超时、缓冲区大小）；同一常量是否跨包重复定义（应统一到一处） |
 | **RFC 一致性** | 实现是否偏离 RFC 规范；RFC 要求的边界条件/错误处理是否完整；新引入的 RFC 是否已在 `docs/rfc/` 存档；代码中的 RFC 注释引用是否正确（RFC 编号、章节号是否有效） |
@@ -70,7 +70,7 @@ Phase 2: 交叉分析（19 agent 并行）
 ├── CrossCut Perf:       快照序列化开销、热路径分配、原子快照替换竞态
 ├── CrossCut Arch:       导入分层验证、循环依赖风险、接口契约满足性
 ├── CrossCut Logging:    日志级别审计、info/warn 热路径刷屏、错误路径缺失日志、格式一致性
-├── CrossCut Docs:       全部 .md 文件与代码一致性、CLAUDE.md 准确性、注释是否过时、godoc 覆盖率
+├── CrossCut Docs:       全部 .md 文件与代码一致性、AGENTS.md 准确性、注释是否过时、godoc 覆盖率
 ├── CrossCut Constants:  魔法数字扫描、RFC 推荐值对比、跨包重复常量检测
 ├── CrossCut RFC:        实现 vs RFC 规范逐条对照、docs/rfc/ 存档完整性、RFC 注释引用有效性
 ├── CrossCut Comments:   注释引用符号存在性检查、注释行为描述 vs 代码实际行为、过时 TODO/FIXME
@@ -282,7 +282,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 | **Pool buffer 生命周期** | `response.Data` 指向已归还的 pool buffer（use-after-free） | `pool.Put` 前必须 `response.Data = nil`，参考 `tcp.go` 的 `resp.Data = nil` 模式 |
 | **TODO 管理** | TODO 注释累积但不实现，变成虚假安全感 | 每个 TODO 要么实现、要么改为 NOTE 并说明原因、要么删除 |
 | **日志质量** | info/warn 在热路径重复打印刷屏；错误路径缺少上下文（无 qname/qtype/server）；日志级别误用（error 用于可恢复、debug 用于关键信号） | 每查询一条日志原则：info 仅用于状态变更，warn 仅用于可恢复异常且带采样，error 仅用于不可恢复；热路径日志全部 debug；每个日志含足够定位信息 |
-| **文档腐烂** | 架构文档描述已删除的类型/字段/中间件；CLAUDE.md 类型参考表过时；注释引用的行号/函数名已失效；新功能无文档 | 每次 PR 检查受影响的 .md 文件；`grep` 文档中的类型名/函数名确认仍存在；注释中用 `FindSymbol` 而非行号引用代码 |
+| **文档腐烂** | 架构文档描述已删除的类型/字段/中间件；AGENTS.md 类型参考表过时；注释引用的行号/函数名已失效；新功能无文档 | 每次 PR 检查受影响的 .md 文件；`grep` 文档中的类型名/函数名确认仍存在；注释中用 `FindSymbol` 而非行号引用代码 |
 | **参数校验缺失** | 公开函数未检查 nil/空字符串/零值参数直接使用；构造后未验证字段有效性（如 `net.ParseIP("")` 返回 nil 后直接传入下游）；错误返回值被 `_` 丢弃，后续代码基于零值继续执行 | 每个公开函数入口处检查关键参数；`net.ParseIP` / `net.ParseCIDR` 结果立即判 nil；`_` 丢弃错误必须注释原因；构造函数返回前验证内部状态 |
 | **提交信息不规范** | 使用 `Round X audit`、`fix audit findings` 等笼统描述，无法从 `git log` 了解具体改了什么 | 主题行描述**具体修复内容**（"fix: acquire writeMu in TCP SERVFAIL path"），不是审计阶段；一个 commit 只含一类修复；跨维度修复分多次提交 |
 | **魔法数字** | 硬编码数值散落在业务逻辑中；默认值不符合 RFC 推荐；同一常量在多个包中独立定义 | `grep -nE '[0-9]{3,}'` 找长数字；与 RFC/IETF 标准值逐一对比；重复常量统一到 `config/defaults.go` 或所属包的最顶层 |
@@ -335,7 +335,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 6. **每查询一条日志原则**：hot-path（每次查询都经过的路径）只用 Debug；Info 仅用于状态变更（启动/关闭/重载）；Warn 用于可恢复异常且应带采样或限流；Error 仅用于不可恢复
 7. **日志必须含定位信息**：错误/Warn 日志至少包含 qname/qtype/server/error 中与上下文相关的字段；不要打印"query failed"而没说哪个查询
 8. **禁止 info/warn 在热路径**：`log.Infof` / `log.Warnf` 不得出现在每次查询都会执行的代码路径中（如 ServeDNS、middleware Wrap、upstream Exchange）。每查询超过一条 info/warn 即为刷屏
-9. **文档与代码同步更新**：修改函数签名、删除类型/字段、新增/删除中间件时，检查 `docs/*.md` 和 `CLAUDE.md` 是否引用该符号；用 `git grep` 确认
+9. **文档与代码同步更新**：修改函数签名、删除类型/字段、新增/删除中间件时，检查 `docs/*.md` 和 `AGENTS.md` 是否引用该符号；用 `git grep` 确认
 10. **注释引用符号名，不引用行号**：行号在每次编辑后失效。注释中如果必须引用代码位置，使用函数名/类型名（可 grep），而非行号
 11. **`_` 丢弃的值必须注释类型和原因**：`result, _ := someFunc()` 必须注释 `// _ = error: <原因>`，防止被调用函数签名变更后 `_` 静默丢弃不同类型的值。不写注释的 `_` 在重构时是定时炸弹——函数返回值从 `(T, error)` 变为 `(T, Cleanup)` 时编译通过但语义全变
 12. **废弃参数应删除而非改名 `_`**：`func f(name, target string)` 中如果 `name` 不再使用，应将 `name` 从签名中删除并更新所有调用方，而不是改成 `func f(_, target string)`。`_` 参数只用于接口实现（无法改签名）和 callback（协议要求）。Standalone function 的 `_` 参数是 dead code
@@ -360,7 +360,7 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 5. **info/warn 刷屏**：热路径上的 `log.Infof` / `log.Warnf` 在高 QPS 下产生海量日志，淹没真正重要的信号。所有每查询日志必须是 Debug 级别
 6. **日志缺少上下文**：`log.Warnf("resolve failed: %v", err)` 不包含 qname/qtype/server，无法定位问题
 7. **错误级别膨胀**：可恢复的错误（超时、单次查询失败）用 Warn，不可恢复的（配置错误、快照损坏）用 Error。不要把每个 upstream 超时都打成 Error
-8. **格式不一致**：同一组件内混用 `log.Infof("TLS: ...")` 和 `log.Infof("[TLS] ...")` 和 `log.Infof("tls: ...")` — 应统一使用 27 个规范前缀（清单见 CLAUDE.md「Logging」）
+8. **格式不一致**：同一组件内混用 `log.Infof("TLS: ...")` 和 `log.Infof("[TLS] ...")` 和 `log.Infof("tls: ...")` — 应统一使用 27 个规范前缀（清单见 AGENTS.md「Logging」）
 9. **架构文档过时**：`ARCHITECTURE.md` 描述已删除的中间件/类型/表；类型引用表未随代码更新。每次重构后 grep 文档确认引用的符号仍存在
 10. **注释与代码矛盾**：注释说"Phase 3 会改回来"但 Phase 3 永远不会来；注释描述的行为与实际代码不一致。每个注释在所在函数修改后必须重新验证
 11. **公开 API 无 godoc**：导出的类型/函数/方法缺少文档注释，或 godoc 只重复函数名没有说明用途和参数含义

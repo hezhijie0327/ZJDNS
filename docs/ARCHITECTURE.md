@@ -1,6 +1,6 @@
 # Architecture Reference
 
-Detailed technical reference for ZJDNS. For working guidelines, see [CLAUDE.md](../CLAUDE.md).
+Detailed technical reference for ZJDNS. For working guidelines, see [AGENTS.md](../AGENTS.md).
 
 ## Storage
 
@@ -337,7 +337,7 @@ pprof-verified: 300 queries (QUIC+DTLS+DTLCP) across the shared UDP dispatch pro
 
 ## EDNS Extensions & RFC Support
 
-The middleware chain (see CLAUDE.md for the full 10-layer pipeline) hosts the
+The middleware chain (see AGENTS.md for the full 10-layer pipeline) hosts the
 recent RFC features:
 
 - **RFC 10029 MQTYPE**: per-upstream `mqtype` config (numeric QTYPE list).

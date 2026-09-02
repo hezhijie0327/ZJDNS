@@ -30,7 +30,7 @@
 | DEBUG.md「双端压测」 | ZJDNS 转发客户端 → ZJDNS 服务端全链路 | `pprof-dual.sh` + benchclient | 协议 E2E、连接池复用、泄漏 |
 
 > 审计修复后的标准复核流程：跑 `pprof-dual.sh`（判定标准见 DEBUG.md「双端压测」章节），
-> 刷新两条基线（命令见 CLAUDE.md），对比无回归。
+> 刷新两条基线（命令见 AGENTS.md），对比无回归。
 
 ## 约定
 
