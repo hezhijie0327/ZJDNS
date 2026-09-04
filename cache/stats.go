@@ -68,9 +68,9 @@ func (s *Cache) FlushDB(target string) (int64, error) {
 			}
 		}
 		if s.spillW != nil {
-			s.entries.SetOnEvict(func(key string, ce *cacheEntry) {
+			s.entries.SetOnEvict(func(key cacheKey, ce *cacheEntry) {
 				if ce.ts > 0 && ttl.CanServeExpired(ce.ts, ce.ttl, config.DefaultStaleMaxAge) {
-					s.spillW.Enqueue(key, ce.ts, ce.ttl, ce.validated, ce.msgWire)
+					s.spillW.Enqueue(key.encode(), ce.ts, ce.ttl, ce.validated, ce.msgWire)
 				}
 			})
 		}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/netip"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -379,50 +380,80 @@ func TestGet_ECSFallback_IPv6(t *testing.T) {
 }
 
 func TestECSFallbackCandidates(t *testing.T) {
-	// nil ECS
-	c := ecsFallbackCandidates(nil)
-	if len(c) != 1 || c[0].addr != "" || c[0].prefix != 0 {
-		t.Errorf("nil ECS: got %+v, want [(, 0)]", c)
+	// The candidate list is generated inline in Get; this exercises the same
+	// ordering/masking contract through the cacheKey surface.
+	cands := func(ecs *config.ECSOption) []cacheKey {
+		var cand [5]cacheKey
+		cand[0].setECS(ecs)
+		n := 1
+		if ecs != nil {
+			std := ipv4FallbackPrefixes
+			if ecs.Address.To4() == nil {
+				std = ipv6FallbackPrefixes
+			}
+			for _, p := range std {
+				if p >= int(ecs.SourcePrefix) {
+					continue
+				}
+				c := cand[0]
+				c.ecsPref = uint8(p) //nolint:gosec // G115: bounded by the standard-prefix tables
+				c.mask(p)
+				cand[n] = c
+				n++
+			}
+		}
+		return cand[:n]
+	}
+	prefixes := func(cs []cacheKey) []int {
+		out := make([]int, len(cs))
+		for i, c := range cs {
+			out[i] = int(c.ecsPref)
+		}
+		return out
+	}
+	equal := func(addr [16]byte, want ...byte) bool {
+		for i, w := range want {
+			if addr[i] != w {
+				return false
+			}
+		}
+		for i := len(want); i < 16; i++ {
+			if addr[i] != 0 {
+				return false
+			}
+		}
+		return true
 	}
 
-	// IPv4 /24
+	// nil ECS → single no-ECS candidate.
+	if c := cands(nil); len(c) != 1 || c[0].ecsLen != 0 {
+		t.Errorf("nil ECS: got %+v", c)
+	}
+	// IPv4 /24 → exact + /16 /8 /0, masked in place.
 	ecs24 := &config.ECSOption{Family: 1, SourcePrefix: 24, Address: netParseIP("1.2.3.0").AsSlice()}
-	c = ecsFallbackCandidates(ecs24)
-	if len(c) != 4 {
-		t.Fatalf("IPv4 /24: got %d candidates, want 4", len(c))
+	c := cands(ecs24)
+	if len(c) != 4 || prefixes(c)[0] != 24 || !equal(c[0].ecsAddr, 1, 2, 3, 0) {
+		t.Fatalf("IPv4 /24 exact: %+v", c)
 	}
-	if c[0].prefix != 24 || c[1].prefix != 16 || c[2].prefix != 8 || c[3].prefix != 0 {
-		t.Errorf("prefix order wrong: %v", c)
+	if !slices.Equal(prefixes(c)[1:], []int{16, 8, 0}) || !equal(c[1].ecsAddr, 1, 2) || !equal(c[2].ecsAddr, 1) || c[3].ecsAddr != ([16]byte{}) {
+		t.Errorf("IPv4 /24 fallback masks: %+v", c)
 	}
-	if c[0].addr != "1.2.3.0" || c[1].addr != "1.2.0.0" || c[2].addr != "1.0.0.0" || c[3].addr != "0.0.0.0" {
-		t.Errorf("addr order wrong: %v", c)
+	// IPv4 /16 → exact + /8 /0.
+	if c := cands(&config.ECSOption{Family: 1, SourcePrefix: 16, Address: netParseIP("1.2.0.0").AsSlice()}); len(c) != 3 {
+		t.Errorf("IPv4 /16: %d candidates", len(c))
 	}
-
-	// IPv4 /16
-	ecs16 := &config.ECSOption{Family: 1, SourcePrefix: 16, Address: netParseIP("1.2.0.0").AsSlice()}
-	c = ecsFallbackCandidates(ecs16)
-	if len(c) != 3 {
-		t.Fatalf("IPv4 /16: got %d candidates, want 3", len(c))
+	// IPv4 /0 → exact only.
+	if c := cands(&config.ECSOption{Family: 1, SourcePrefix: 0, Address: netParseIP("0.0.0.0").AsSlice()}); len(c) != 1 || c[0].ecsPref != 0 {
+		t.Errorf("IPv4 /0: %+v", c)
 	}
-	if c[0].prefix != 16 || c[1].prefix != 8 || c[2].prefix != 0 {
-		t.Errorf("prefix order wrong: %v", c)
-	}
-
-	// IPv4 /0
-	ecs0 := &config.ECSOption{Family: 1, SourcePrefix: 0, Address: netParseIP("0.0.0.0").AsSlice()}
-	c = ecsFallbackCandidates(ecs0)
-	if len(c) != 1 || c[0].prefix != 0 {
-		t.Errorf("IPv4 /0: got %+v, want [(0.0.0.0, 0)]", c)
-	}
-
-	// IPv6 /56
+	// IPv6 /56 → exact + /48 /32 /0.
 	ecs56 := &config.ECSOption{Family: 2, SourcePrefix: 56, Address: netParseIP("2001:db8:1:ff00::").AsSlice()}
-	c = ecsFallbackCandidates(ecs56)
-	if len(c) != 4 {
-		t.Fatalf("IPv6 /56: got %d candidates, want 4", len(c))
+	c = cands(ecs56)
+	if len(c) != 4 || prefixes(c)[0] != 56 || prefixes(c)[3] != 0 {
+		t.Fatalf("IPv6 /56: %+v", c)
 	}
-	if c[0].prefix != 56 || c[1].prefix != 48 || c[2].prefix != 32 || c[3].prefix != 0 {
-		t.Errorf("prefix order wrong: %v", c)
+	if !equal(c[1].ecsAddr, 0x20, 0x01, 0x0d, 0xb8, 0, 1) { // /48 keeps first 6 bytes
+		t.Errorf("IPv6 /48 mask: %+v", c[1].ecsAddr)
 	}
 }
 

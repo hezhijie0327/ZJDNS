@@ -13,20 +13,19 @@ import "hash/maphash"
 const defaultShards = 64
 
 // NewSharded creates a Map whose storage is split across shards, each with
-// its own mutex and LRU list. String keys are distributed via maphash; other
-// key types fall back to a single shard (still correct, no contention win).
-// Capacities below 2×defaultShards degenerate to a single shard so the
-// capacity bound stays exact (sharding rounds per-shard capacity up).
+// its own mutex and LRU list. Keys of any comparable type are distributed via
+// maphash.Comparable (struct keys — e.g. the cache's fixed-size cacheKey —
+// hash by value, no stringification). Capacities below 2×defaultShards
+// degenerate to a single shard so the capacity bound stays exact (sharding
+// rounds per-shard capacity up).
 func NewSharded[K comparable, V any](capacity int) *Map[K, V] {
 	if capacity < 2*defaultShards {
 		return New[K, V](capacity)
 	}
 	perShard := capacity/defaultShards + 1
 	m := &Map[K, V]{}
-	if _, isString := any(*new(K)).(string); isString {
-		seed := maphash.MakeSeed()
-		m.hashKey = func(k K) uint64 { return maphash.String(seed, any(k).(string)) } //nolint:forcetypeassert // guarded by isString above
-	}
+	seed := maphash.MakeSeed()
+	m.hashKey = func(k K) uint64 { return maphash.Comparable(seed, k) }
 	for range defaultShards {
 		m.shards = append(m.shards, newShardMap[K, V](perShard))
 	}

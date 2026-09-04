@@ -84,7 +84,7 @@ func BenchmarkStoreGetSpillHit(b *testing.B) {
 	}
 
 	name := "host0.example.com."
-	key := buildCacheKey(name, dns.TypeA, dns.ClassINET, "", 0)
+	key := cacheKey{qname: name, qtype: dns.TypeA, qclass: dns.ClassINET}
 	b.ResetTimer()
 	for b.Loop() {
 		c.entries.Delete(key) // memory miss → disk tier

@@ -22,7 +22,7 @@ func init() {
 // this format, but buildEntry must still serve it defensively.
 func setLegacyWire(t *testing.T, mc *Cache, qname string, blob []byte) {
 	t.Helper()
-	key := buildCacheKey(qname, dns.TypeA, dns.ClassINET, "", 0)
+	key := cacheKey{qname: qname, qtype: dns.TypeA, qclass: dns.ClassINET}
 	mc.entries.Set(key, &cacheEntry{msgWire: blob, ts: 1, ttl: 300, validated: false})
 }
 
@@ -197,7 +197,7 @@ func TestGet_CorruptOffsetValue(t *testing.T) {
 
 	// Overwrite the stored BLOB's first offset with 0xFFFF — inside the
 	// table bound, far beyond the wire.
-	key := buildCacheKey(qname, dns.TypeA, dns.ClassINET, "", 0)
+	key := cacheKey{qname: qname, qtype: dns.TypeA, qclass: dns.ClassINET}
 	ce, ok := mc.entries.Get(key)
 	if !ok {
 		t.Fatal("entry missing after Set")

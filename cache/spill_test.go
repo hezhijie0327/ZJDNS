@@ -86,7 +86,7 @@ func TestSpillEvictPromote(t *testing.T) {
 func TestSpillStaleWindow(t *testing.T) {
 	c, _ := spillCache(t, 2, 0)
 	putSpill := func(name string, ts int64) {
-		key := buildCacheKey(name, dns.TypeA, dns.ClassINET, "", 0)
+		key := cacheKey{qname: name, qtype: dns.TypeA, qclass: dns.ClassINET}
 		msg := new(dns.Msg)
 		dnsutil.SetQuestion(msg, name, dns.TypeA)
 		msg.RecursionAvailable = true
@@ -96,7 +96,7 @@ func TestSpillStaleWindow(t *testing.T) {
 		}
 		// Pre-packed BLOB with an empty TTL offset table ([0x02][0x00 0x00][wire]).
 		blob := append([]byte{cacheFormatPrePacked, 0x00, 0x00}, msg.Data...)
-		if err := c.SpillStore().Put(key, ts, 300, false, blob); err != nil {
+		if err := c.SpillStore().Put(key.encode(), ts, 300, false, blob); err != nil {
 			t.Fatal(err)
 		}
 	}
