@@ -102,6 +102,10 @@ func generateExampleConfig() (string, error) {
 		// DNS stamps — protocol auto-detected by normalizeStamps
 		{Address: "sdns://AQMAAAAAAAAADDkuOS45Ljk6ODQ0MyBnyEe4yHWM0SAkVUO-dWdG3zTfHYTAC4xHA2jfgh2GPhkyLmRuc2NyeXB0LWNlcnQucXVhZDkubmV0"},
 		{Address: "sdns://AgMAAAAAAAAABzkuOS45LjkgKhX11qy258CQGt5Ou8dDsszUiQMrRuFkLwaTaDABJYoSZG5zOS5xdWFkOS5uZXQ6NDQzCi9kbnMtcXVlcnk"},
+		// Fallback upstream: results adopted only after DefaultFallbackTimeout
+		// (or when every primary has exited without a result) — EDE 65280
+		// marks fallback-served answers, which are never cached.
+		{Address: "https://1.1.1.1/dns-query", Protocol: config.ProtoHTTPS, ServerName: "one.one.one.one", Fallback: true},
 	}
 
 	// ── zone / ruleset ──────────────────────────────────────────────────────
