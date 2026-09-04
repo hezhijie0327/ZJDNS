@@ -156,8 +156,9 @@ go test -bench=. -short -benchmem -benchtime=500ms ./... \
 ./zjdns --probe --conn-reuse  tls://1.1.1.1:853  # RFC 1035 connection reuse
 ./zjdns --probe --idle-timeout tls://1.1.1.1:853 # server idle timeout
 
-# Load test client (all 12 protocols)
-go build -o /tmp/benchclient ./docs/benchmark/loadtest
+# Load test client (all 12 protocols) — docs/ is a nested module (zjdns/docs)
+# so its Go code stays out of the server build graph
+(cd docs && go build -o /tmp/benchclient ./benchmark/loadtest)
 /tmp/benchclient -proto quic -addr 127.0.0.1:10784 -workers 32 -seconds 30
 
 # Pre-commit hook

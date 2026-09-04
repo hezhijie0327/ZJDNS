@@ -27,7 +27,7 @@
 go build -o /tmp/zjdns-server ./cmd/zjdns
 
 # 构建压测客户端
-go build -o /tmp/benchclient ./docs/benchmark/loadtest
+(cd docs && go build -o /tmp/benchclient ./benchmark/loadtest)
 
 # 可选：UDP/TCP 对照压测（C 程序，高并发友好）
 brew install dnsperf
@@ -85,7 +85,7 @@ dig @127.0.0.1 -p 10533 www.bench.test A +short   # 应输出 1.2.3.4
 ## 3. 客户端构建与用法
 
 ```bash
-go build -o /tmp/benchclient ./docs/benchmark/loadtest
+(cd docs && go build -o /tmp/benchclient ./benchmark/loadtest)
 ```
 
 ```text

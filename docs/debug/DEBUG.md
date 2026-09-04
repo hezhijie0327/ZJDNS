@@ -396,7 +396,7 @@ h-\<proto\>.prof = client heap、hs-\<proto\>.prof = server heap、各端日志�
 ```bash
 # 1. 构建
 go build -o /tmp/zjdns ./cmd/zjdns
-go build -o /tmp/benchclient ./docs/benchmark/loadtest
+(cd docs && go build -o /tmp/benchclient ./benchmark/loadtest)
 
 # 2. 生成双端配置：从 loopback 复制并注入 pprof（端口见下）
 #    server:  pprof=16060, features.cache 三个 state_file
