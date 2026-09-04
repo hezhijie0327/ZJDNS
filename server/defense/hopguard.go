@@ -140,8 +140,8 @@ func (h *HopGuard) Feed(serverIP string, observed uint8) {
 		st.samples++
 		// Rebuild at most once per Feed: the time-based fallback (for
 		// low-traffic upstreams where the sample-based rebuild never fires)
-		// and the sample-based rebuild used to both fire in one call,
-		// applying the 3/4 decay twice (M-low).
+		// and the sample-based rebuild are mutually exclusive — firing
+		// both in one call would apply the 3/4 decay twice (M-low).
 		rebuild := false
 		if log.NowUnixNano()-st.lastRebuild > hopGuardRebuildIntervalNanos {
 			st.lastRebuild = log.NowUnixNano()
@@ -198,8 +198,7 @@ func (h *HopGuard) Confident(serverIP string) bool {
 // ShouldSampleRejected counts one Validate-rejected packet and reports
 // whether THIS one should be fed into the histogram anyway — uniform
 // 1-in-16 sampling (the count mutation is part of the contract: the "this
-// one" selection depends on it; S9 renamed nothing but documents the side
-// effect).  Legitimate TTL drift after an anycast reroute / PoP shift
+// one" selection depends on it).  Legitimate TTL drift after an anycast reroute / PoP shift
 // (which stays outside the ±2 window and is hard-rejected while armed)
 // re-enters the histogram this way and can become trusted at the next
 // rebuild, instead of locking the server into SERVFAIL with no recovery

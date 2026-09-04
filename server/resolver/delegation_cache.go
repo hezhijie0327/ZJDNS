@@ -25,8 +25,7 @@ type delegationEntry struct {
 	ttl     int   // min(NS, DS) TTL, floor 10s, cap 7d
 }
 
-// fresh reports whether the entry has not yet expired (lazy expiry — the
-// former SQL `expires_at > unixepoch()` filter).
+// fresh reports whether the entry has not yet expired (lazy expiry on read).
 func (e *delegationEntry) fresh() bool {
 	return e.ts+int64(e.ttl) > log.NowUnix()
 }
@@ -188,8 +187,7 @@ func (r *Recursive) lookupDelegation(qname string, qtype uint16) (*delegationEnt
 		}
 	}
 
-	// Deepest fresh match wins — walking zones deepest-first reproduces the
-	// former SQL ORDER BY LENGTH(zone) DESC LIMIT 1.
+	// Deepest fresh match wins — zones are walked deepest-first.
 	for _, z := range zones {
 		if e, ok := r.delegations.Get(z); ok && e.fresh() {
 			return e, true

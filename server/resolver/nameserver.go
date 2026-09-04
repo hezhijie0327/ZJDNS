@@ -386,8 +386,8 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		if err := g.Wait(); err != nil {
 			log.Debugf("RECURSION: NS query errgroup: %v", err)
 		}
-		// baseMsg is read by every worker (including those still queued
-		// behind SetLimit when the caller returned early on the first
+		// baseMsg is read by every worker (including stragglers still
+		// winding down after the caller returned early on the first
 		// response) — returning it here, after g.Wait, guarantees no
 		// worker reads a pooled message that was already zeroed or
 		// reused by another query.
@@ -424,8 +424,8 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	// NXDOMAIN before healthy peers return the real NOERROR: raising
 	// DefaultNXDOMAINDeferralWindow re-arms that race at the cost of a fixed
 	// delay per all-NXDOMAIN level.  The default 0 serves the first NXDOMAIN
-	// immediately — the level no longer waits for the SLOWEST nameserver to
-	// complete (a rate-limited or packet-lossy server previously stretched
+	// immediately — the level does not wait for the SLOWEST nameserver to
+	// complete (a rate-limited or packet-lossy server would otherwise stretch
 	// every all-NXDOMAIN level to its full tail — measured 41ms→382ms on a
 	// 15-server batch).  The poisonguard verdict + TCP fallback still gate
 	// poisoned responses.
@@ -569,8 +569,8 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 			// Each family contributes AS SOON AS ITS WALK RETURNS — the
 			// ≥2-names early exit and the shared address list must not wait
 			// for a straggling AAAA walk whose A sibling already answered
-			// (a blackholed AAAA path previously pinned the whole batch to
-			// its 3s budget).  resolveCancel() aborts the pending sibling
+			// (a blackholed AAAA path would otherwise pin the whole batch
+			// to its 3s budget).  resolveCancel() aborts the pending sibling
 			// once enough names have addresses.
 			//
 			// nameAddressed counts the NS name toward nsNamesDone exactly
@@ -752,7 +752,7 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 // the Additional section is also collected.  Concurrent walks for the same
 // (name, qtype) are deduplicated by resolveNSAddrFlight — the NS-address
 // cache alone cannot dedup when the addresses never resolve (unreachable
-// authorities), which previously amplified one lookup into ~290k queries.
+// authorities), which would amplify one lookup into ~290k queries.
 func (r *Recursive) resolveNSAddrType(ctx context.Context, nsName string, qtype uint16, depth int, forceTCP bool, nsAddrs *[]string, addrMu *sync.Mutex) (answer []dns.RR) {
 	res := r.resolveNSAddrFlight(ctx, nsName, qtype, depth, forceTCP)
 	if len(res.addrs) > 0 {

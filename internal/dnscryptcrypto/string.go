@@ -1,6 +1,6 @@
 package dnscryptcrypto
 
-// unpackTxtString unpacks a DNS TXT record value back into the original
+// UnpackTxtString unpacks a DNS TXT record value back into the original
 // binary certificate bytes.
 func UnpackTxtString(s string) (msg []byte) {
 	bs := []byte(s)

@@ -7,7 +7,7 @@ import (
 	"fmt"
 )
 
-// encryptedQuery handles encryption and decryption of DNSCrypt client queries.
+// EncryptedQuery handles encryption and decryption of DNSCrypt client queries.
 //
 // Classical wire format:
 //
@@ -34,7 +34,7 @@ type EncryptedQuery struct {
 	// this is zero-filled — the key material is in PQCiphertext.
 	ClientPk [KeySize]byte
 
-	// nonce is the 24-byte nonce used for encryption.  The first 12 bytes
+	// Nonce is the 24-byte nonce used for encryption.  The first 12 bytes
 	// are chosen by the client (including a timestamp); the remaining 12
 	// bytes are zero-filled (the server fills them for the response).
 	Nonce Nonce
@@ -51,7 +51,7 @@ type EncryptedQuery struct {
 	// by the server before decrypt/encrypt for PQ queries.
 	PQCertContext []byte
 
-	// sharedKey is the derived shared key for this query.  For resumed PQ
+	// SharedKey is the derived shared key for this query.  For resumed PQ
 	// queries it is set during decrypt and consumed during encrypt so the
 	// response uses the correct key.  For classical queries it is left
 	// zero — the encrypt path re-derives it from ClientPk.
@@ -70,7 +70,7 @@ type EncryptedQuery struct {
 	IsTCP bool
 }
 
-// encryptedResponse handles encryption and decryption of DNSCrypt server
+// EncryptedResponse handles encryption and decryption of DNSCrypt server
 // responses.
 //
 // Classical wire format:
@@ -88,7 +88,7 @@ type EncryptedResponse struct {
 	// ESVersion is the cryptographic construction to use.
 	ESVersion CryptoConstruction
 
-	// nonce is the 24-byte nonce.  The first 12 bytes come from the client
+	// Nonce is the 24-byte nonce.  The first 12 bytes come from the client
 	// query; the remaining 12 bytes are filled by the server.
 	Nonce Nonce
 
@@ -97,7 +97,7 @@ type EncryptedResponse struct {
 	PQControl []byte
 }
 
-// encrypt encrypts the DNS response packet and returns the wire-format
+// Encrypt encrypts the DNS response packet and returns the wire-format
 // response.  r.ESVersion and r.Nonce must be set beforehand.
 //
 // maxWireLen is the UDP anti-amplification budget (§10.3): the wire response
@@ -270,7 +270,7 @@ func (r *EncryptedResponse) encryptPQResponse(
 	return response, nil
 }
 
-// decrypt decrypts a wire-format server response and returns the original DNS
+// Decrypt decrypts a wire-format server response and returns the original DNS
 // packet.  r.ESVersion must be set beforehand.
 //
 // For PQ responses, the decrypted payload may include a control block which is
@@ -343,7 +343,7 @@ func (r *EncryptedResponse) Decrypt(
 	return packet, nil
 }
 
-// encrypt encrypts the DNS query packet and returns the wire-format query
+// Encrypt encrypts the DNS query packet and returns the wire-format query
 // along with the client nonce (needed later to verify the server response).
 func (q *EncryptedQuery) Encrypt(
 	packet []byte,
@@ -462,7 +462,7 @@ func (q *EncryptedQuery) EncryptPQ(
 	return query, clientNonce, nil
 }
 
-// decrypt decrypts a wire-format client query and returns the original DNS
+// Decrypt decrypts a wire-format client query and returns the original DNS
 // packet.  q.ClientMagic and q.ESVersion must be set beforehand.
 //
 // For PQ initial queries, q.PQCertContext must also be set and serverSecretKey
@@ -519,7 +519,7 @@ func (q *EncryptedQuery) Decrypt(
 	return packet, nil
 }
 
-// decryptPQInitial decrypts a PQ initial query carrying an X-Wing ciphertext.
+// DecryptPQInitial decrypts a PQ initial query carrying an X-Wing ciphertext.
 //
 // Wire format: <client-magic> (8) <xwing-ciphertext> (1120) <nonce/2> (12) <encrypted>
 func (q *EncryptedQuery) DecryptPQInitial(query, serverPrivateKey []byte) (packet []byte, err error) {
@@ -600,7 +600,7 @@ func ParsePQResumedHeader(query []byte) (ticket, nonceHalf []byte, payloadOffset
 	return ticket, nonceHalf, idx + NonceSize/2, nil
 }
 
-// decryptPQResumedPayload decrypts the payload of a resumed PQ query after
+// DecryptPQResumedPayload decrypts the payload of a resumed PQ query after
 // the caller has extracted the shared key.  q.Nonce must be set.
 func (q *EncryptedQuery) DecryptPQResumedPayload(encrypted []byte, sharedKey [SharedKeySize]byte) (packet []byte, err error) {
 	packet, err = q.DecryptPayload(encrypted, sharedKey)
@@ -614,7 +614,7 @@ func (q *EncryptedQuery) DecryptPQResumedPayload(encrypted []byte, sharedKey [Sh
 	return packet, nil
 }
 
-// decryptPayload decrypts the encrypted portion of the query using the
+// DecryptPayload decrypts the encrypted portion of the query using the
 // pre-computed shared key.  For XWingPQ the same XChaCha20-Poly1305 AEAD is
 // used.
 func (q *EncryptedQuery) DecryptPayload(

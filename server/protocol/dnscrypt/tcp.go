@@ -15,6 +15,7 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
+// tcpResponseWriter writes DNSCrypt-encrypted responses over TCP.
 type tcpResponseWriter struct {
 	conn    net.Conn
 	req     *dns.Msg
@@ -26,8 +27,6 @@ const (
 	defaultReadTimeout  = config.DefaultDNSCryptReadTimeout
 	defaultWriteTimeout = config.DefaultDNSCryptWriteTimeout
 )
-
-// tcpResponseWriter writes DNSCrypt-encrypted responses over TCP.
 
 func (w *tcpResponseWriter) LocalAddr() net.Addr  { return w.conn.LocalAddr() }
 func (w *tcpResponseWriter) RemoteAddr() net.Addr { return w.conn.RemoteAddr() }

@@ -49,10 +49,9 @@ type Group[K comparable] struct {
 // Group (skip-follower) — use ResultGroup when followers need the result or
 // its side effects to proceed.
 //
-// A follower whose context expires before the leader finishes is promoted to
-// leader and runs fn itself: the wait is bounded by ctx, never indefinite.
-// The promotion may duplicate fn under a slow leader — that is the same
-// graceful degradation as the map‑full path.
+// A follower whose context expires before the leader finishes returns
+// ctx.Err immediately — the wait is bounded by ctx, never indefinite, and
+// fn is never duplicated (see Do).
 //
 // fn must not call Do with the same key (self‑deadlock).
 //

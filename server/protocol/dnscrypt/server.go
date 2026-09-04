@@ -90,7 +90,8 @@ type Server struct {
 	replayCache *lrumap.Map[string, replayEntry]
 }
 
-// newKeyEntry mints the pair's precomputed TXT chunk (one TXT RR encoding both cert payloads, precomputed because it is served on every certificate fetch).s and PQ wire size.
+// newKeyEntry precomputes the pair's TXT chunks (classical and PQ) and the
+// PQ wire size — they are served on every certificate fetch.
 func newKeyEntry(pair *dnscryptcrypto.CertPair) keyEntry {
 	return keyEntry{
 		pair:         pair,

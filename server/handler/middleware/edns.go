@@ -138,10 +138,9 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			}
 		}
 
-		// Compute the response COOKIE string once here: the Response
-		// middleware previously re-ran the server-cookie HMAC per response
-		// (generateCookieStr) — for cookie-bearing clients that was two HMAC
-		// verifications plus a string build per query.
+		// Compute the response COOKIE string once here and cache it in
+		// qctx.CookieStr — the Response middleware must never re-run the
+		// server-cookie HMAC per response.
 		qctx.CookieStr = m.cookieResponseStr(cookieOpt, qctx.ClientIP, cookieStatus)
 
 		// Apply default ECS if no ECS was sent.

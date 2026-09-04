@@ -72,7 +72,7 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 			Subject:      pkix.Name{CommonName: config.DefaultProjectName + " TLCP"},
 			NotBefore:    time.Now(),
 			// The leaf must never outlive its signer — clamp to the CA's
-			// expiry (mirrors tls/certs.go leafNotAfter).
+			// expiry (zdnsutil.LeafNotAfter).
 			NotAfter:    zdnsutil.LeafNotAfter(time.Now(), caNotAfter, config.DefaultServerCertValidity),
 			KeyUsage:    smx509.KeyUsageDigitalSignature,
 			ExtKeyUsage: []smx509.ExtKeyUsage{smx509.ExtKeyUsageServerAuth},
@@ -124,7 +124,3 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 	}
 	return signCert, encCert, dtlcpSignCert, dtlcpEncCert, err
 }
-
-// leafNotAfter returns the leaf certificate's expiry: the configured server
-// validity clamped to the CA's expiry so the leaf never outlives its signer
-// (strict RFC 5280 validators reject a chain whose leaf outlives its CA).

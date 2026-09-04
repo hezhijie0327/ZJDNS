@@ -23,8 +23,7 @@ import (
 )
 
 // Cache is an in-memory DNS response cache backed by an LRU map, with an
-// optional disk spill tier.  It implements the Store interface.  The name
-// is historical — there is no SQLite involvement.
+// optional disk spill tier.  It implements the Store interface.
 type Cache struct {
 	entries    *lrumap.Map[string, *cacheEntry] // cache key → entry
 	maxEntries int
@@ -71,7 +70,7 @@ type cacheEntry struct {
 	validated bool
 }
 
-// latEntry is the in-memory form of the former ip_latency table row.
+// latEntry is one per-IP latency record.
 type latEntry struct {
 	latency   int   // measured latency in ms
 	lastProbe int64 // log.NowUnix() at probe time; 0 = never probed
@@ -85,7 +84,7 @@ type ecsCandidate struct {
 
 const (
 	defaultStaleMaxAge  = int64(config.DefaultStaleMaxAge)
-	maxLatencyLookupIPs = 64 // cap IN-clause IPs to bound SQL compilation overhead
+	maxLatencyLookupIPs = 64 // cap batched IPs per latency lookup
 	decompressBufCap    = 4096
 
 	// cacheFormatPrePacked is the BLOB format marker for pre-packed response
@@ -399,8 +398,7 @@ func buildCacheKey(qname string, qtype, qclass uint16, ecsAddr string, ecsPrefix
 // entry spills to disk in turn).
 func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption) (*Entry, bool, bool) {
 	// ECS fallback candidates from most to least specific — the first hit is
-	// the most specific match (the former SQL picked max(ecs_prefix) over the
-	// 5-candidate lookup).
+	// the most specific match.
 	candidates := ecsFallbackCandidates(ecs)
 	defer releaseECSCandidates(candidates)
 	for _, c := range candidates {
@@ -499,9 +497,8 @@ func (s *Cache) buildEntry(ts int64, entryTTL int, validated bool, msgWire []byt
 	// corrupt BLOB is treated as a miss.  The marker byte plus the
 	// structural checks (table fit; every offset addressing a full TTL
 	// field inside the FINAL wire, post-decompression) reject
-	// raw/misparsed wires; unlike the former count-high-byte discriminator
-	// this also accepts the writer's full domain — entries with >255 RRs
-	// used to be stored but permanently unreadable (2026-09 D3).
+	// raw/misparsed wires and accept the writer's full domain, including
+	// entries with more than 255 RRs (D3).
 	if msgWire[0] != cacheFormatPrePacked {
 		return nil, false, false
 	}
@@ -665,8 +662,8 @@ func (s *Cache) sortAnswerByLatency(entry *Entry) bool {
 }
 
 // lookupIPLatencies fetches latencies for a batch of IPs from the in-memory
-// latency map.  Caps at maxLatencyLookupIPs for symmetry with the former
-// SQL IN-clause bound (unusually large answer sets of 64+ A/AAAA records).
+// latency map.  Caps at maxLatencyLookupIPs to bound the lookup on unusually
+// large answer sets (64+ A/AAAA records).
 func (s *Cache) lookupIPLatencies(ips []string) map[string]int {
 	if len(ips) > maxLatencyLookupIPs {
 		ips = ips[:maxLatencyLookupIPs]
@@ -681,7 +678,6 @@ func (s *Cache) lookupIPLatencies(ips []string) map[string]int {
 	return latencies
 }
 
-// Set stores a DNS response in the cache. Wire format is zstd-compressed.
 // Set stores a DNS response in the cache.  Wire format is zstd-compressed
 // above the threshold.  Prep work (TTL calculation, wire packing, zstd
 // compression) runs before the synchronous in-memory write.
@@ -702,8 +698,7 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 	// Strip EDNS OPT pseudo-record from additional before caching
 	// (padding and other EDNS options have no semantic value and waste
 	// storage space, up to 468 bytes per encrypted response). The
-	// single-pass clone+filter below avoids the double deep copy of the
-	// previous stripOPT(zdnsutil.CloneRRs(x)) then zdnsutil.CloneRRs(x).
+	// single-pass clone+filter below avoids a second deep copy of the input.
 	additional = cloneRRsNoOPT(additional)
 
 	// Clone records to prevent downstream mutations (e.g. TTL deduction in
@@ -912,8 +907,7 @@ func releaseECSCandidates(candidates []ecsCandidate) {
 // cloneRRsNoOPT returns a deep copy of rrs excluding OPT pseudo-records.
 // These carry transport-layer padding which has no semantic value but can
 // occupy up to 468 bytes per encrypted response. The input slice belongs to
-// the caller, so filtering must not modify it in place (the previous stripOPT
-// required a pre-clone that doubled the deep copy on the cache write path).
+// the caller, so filtering must not modify it in place.
 func cloneRRsNoOPT(rrs []dns.RR) []dns.RR {
 	n := 0
 	for _, rr := range rrs {

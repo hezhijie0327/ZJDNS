@@ -21,7 +21,7 @@ type statsMetric struct {
 
 // RecordRequest updates the in-memory query statistics (atomic counters) and,
 // for non-hit results, the per-RCODE top-N domain journal. Pure memory — no
-// SQL, no allocation beyond the journal map — so it never blocks or fails the
+// allocation beyond the journal map — so it never blocks or fails the
 // query hot path. Stats are not persisted: counters reset on restart. The
 // caller must pass a canonical qname (dnsutil.Canonical) in r.Qname.
 func (s *Cache) RecordRequest(r *RequestRecord) {
@@ -102,7 +102,7 @@ func (s *Cache) FlushDB(target string) (int64, error) {
 	return 0, nil
 }
 
-// Clear resets the whole store: entries, delegations, ip_latency, plus the
+// Clear resets the whole store: entries and latency data, plus the
 // in-memory stats counters and per-RCODE journal.
 func (s *Cache) Clear() (int64, error) {
 	n1, err := s.FlushDB("cache")
@@ -130,7 +130,7 @@ func (s *Cache) Clear() (int64, error) {
 
 // Stats returns aggregated cache statistics as formatted TXT records.
 //
-// Reads the in-memory statsjournal snapshot — no SQL.  O(1) counters plus a
+// Reads the in-memory statsjournal snapshot.  O(1) counters plus a
 // per-RCODE top-N sort, so Stats() is cheap regardless of query volume.
 func (s *Cache) Stats() []string {
 	if s.statsMgr == nil {
@@ -147,7 +147,7 @@ func (s *Cache) Stats() []string {
 	}
 
 	// Percentages relative to total (DNSSEC rows relative to the validated
-	// subset, mirroring the partitioned selfdb stats layout).
+	// subset).
 	pct := func(v int64) float64 {
 		if total == 0 {
 			return 0
@@ -175,7 +175,7 @@ func (s *Cache) Stats() []string {
 	out = append(out, fmt.Sprintf("entries=%d total=%d avg=%.1fms",
 		snap.Entries, total, avgMs))
 
-	// Results — omit zero-count entries (selfdb stats format).
+	// Results — omit zero-count entries.
 	if s := formatStatsLine(
 		statsMetric{"hit", snap.Hits, hitR}, statsMetric{"miss", snap.Misses, missR},
 		statsMetric{"stale", snap.Stales, staleR}, statsMetric{"zone", snap.Zones, zoneR},
@@ -257,7 +257,7 @@ func sortedRcodes(byRcode map[int][]topk.Entry[string]) []int {
 }
 
 // formatStatsLine renders a partitioned stats line: zero-count entries are
-// skipped, nonzero entries appear as "name=count(pct%)" (selfdb format).
+// skipped, nonzero entries appear as "name=count(pct%)".
 func formatStatsLine(metrics ...statsMetric) string {
 	n := 0
 	for _, m := range metrics {
@@ -311,7 +311,7 @@ func (s *Cache) UpdateLatency(ip string, latencyMS int) {
 
 // LatencyLastProbe returns the last probe time for an IP. Returns (0, false)
 // if the IP has never been probed or its entry is older than the stale
-// window (lazy expiry — the former eviction-time DELETE FROM ip_latency).
+// window (lazy expiry on read).
 // A memory miss is retried against the latency spill tier (promoting on hit).
 func (s *Cache) LatencyLastProbe(ip string) (int64, bool) {
 	e, ok := s.latencies.Get(ip)

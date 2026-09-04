@@ -46,8 +46,8 @@ func (m *Any) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// nothing to do" marker, not a claim the data came from cache
 		// (semantic overload, M-low).
 		qctx.CacheServed = true
-		// Record the short-circuit like Zone/PTR do — previously ANY answers
-		// never appeared in query_stats/query_log (R3-M21).
+		// Record the short-circuit like Zone/PTR do — ANY answers must
+		// appear in query_stats/query_log (R3-M21).
 		if m.store != nil {
 			rec := cache.AcquireRequestRecord()
 			rec.Qname = qd.Header().Name

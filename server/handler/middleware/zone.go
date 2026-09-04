@@ -32,8 +32,8 @@ const wildcardPrefix = "*."
 var chaosDenialCount atomic.Uint64
 
 // destructiveChaosNames are the CHAOS control endpoints that mutate server
-// state, precomputed once (the former per-call ToLower+concat rebuilt five
-// constant strings on every zone-matched query, H-L6).
+// state, precomputed once — a per-call ToLower+concat rebuild would run on
+// every zone-matched query (H-L6).
 var destructiveChaosNames = func() map[string]struct{} {
 	base := strings.ToLower(config.DefaultProjectName)
 	names := []string{"cache.clear.", "stats.clear.", "latency.clear.", "querylog.clear.", "dnscrypt.clear."}
@@ -164,11 +164,8 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		}
 
 		// Records-less rule (Rcode=0): pass through to normal resolution.
-		// The question is NOT rewritten here — the old wildcard-rewrite
-		// branch set OriginalName/RewrittenName without ever mutating the
-		// question, so the rewrite was dead code and the query was dropped
-		// (CacheStore's ZoneMatched gate skipped response construction).
-		// Records-less rules now behave as pure pass-through (C3).
+		// The question is never rewritten here — records-less rules are pure
+		// pass-through (C3).
 		return next.ServeDNS(ctx, qctx)
 	})
 }

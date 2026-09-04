@@ -138,7 +138,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 	// fallback adoption gate has nothing left to protect: primariesDone
 	// wakes the wait loop to adopt the stash immediately instead of idling
 	// out the rest of the fallback timeout (a dead primary plus a 30 ms
-	// fallback previously still cost the client the full gate).
+	// fallback would otherwise still cost the client the full gate).
 	activePrimaries := make(chan struct{})
 	var nPrimaries atomic.Int32
 	finishPrimary := func() {
@@ -467,9 +467,9 @@ func (r *Resolver) filterRecordsByCIDR(records []dns.RR, matchTags []string) ([]
 			continue
 		}
 
-		// AND semantics: every pre-filtered tag must be satisfied. The old
-		// accept-on-first-match let a record inside tagB but outside tagA
-		// bypass a negated '!tagA' rule (the negate field was never used).
+		// AND semantics: every pre-filtered tag must be satisfied —
+		// accept-on-first-match would let a record inside tagB but outside
+		// tagA bypass a negated '!tagA' rule.
 		accepted := len(ipTags) == 0
 		ipStr := ip.String()
 		for _, t := range ipTags {

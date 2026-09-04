@@ -104,6 +104,3 @@ func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
 
 	return cert, nil
 }
-
-// leafNotAfter returns the leaf certificate's expiry: the configured server
-// validity clamped to the CA's expiry so the leaf never outlives its signer.

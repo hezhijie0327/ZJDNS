@@ -70,13 +70,12 @@ const ewmaDecay = 2.0 / 31.0
 // query budget — the "decrease over time" branch of draft §5.4.2
 // (dnscrypt-proxy QuestionSizeEstimator.adjust).  Shrink only fires once the
 // average is below half the current budget (hysteresis) and never below the
-// initial 512-byte floor.  Lock-free: a CAS loop keeps the per-response hot
-// path free of mutex contention (responses arrive on the read path, which
-// otherwise never touches state.mu).
-// adjustQuerySize shrinks the padded query budget toward the EWMA.  The
-// non-CAS Store may race a concurrent blindAdjust escalation computed
-// against the pre-reset EWMA — self-healing (the next TC re-escalates), one
-// lost padding escalation in a rare interleaving (U18).
+// initial 512-byte floor.  Lock-free: a CAS loop updates the EWMA on the
+// per-response hot path (responses arrive on the read path, which otherwise
+// never touches state.mu).  The non-CAS minQueryLen Store may race a
+// concurrent blindAdjust escalation computed against the pre-reset EWMA —
+// self-healing (the next TC re-escalates), one lost padding escalation in a
+// rare interleaving (U18).
 func (s *State) adjustQuerySize(wireLen int) {
 	for {
 		old := math.Float64frombits(s.ewmaQuerySize.Load())

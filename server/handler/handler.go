@@ -52,9 +52,8 @@ type Handler struct {
 	ctx               context.Context
 }
 
-// HandlerDeps carries the Handler's collaborators as named fields — the
-// former 8 positional parameters (with ctx last) were easy to transpose at
-// the wiring site (2026-09 E1).
+// HandlerDeps carries the Handler's collaborators as named fields —
+// positional parameters are easy to transpose at the wiring site (2026-09 E1).
 type HandlerDeps struct {
 	Chain            QueryHandler
 	EDNS             *edns.Handler
@@ -173,8 +172,7 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 		rec.Result = "error"
 		rec.Protocol = protocol
 		rec.Rcode = dns.RcodeServerFailure
-		// Full identification, matching every other error record (H-L8):
-		// journal rows for this class previously had empty qnames.
+		// Full identification, matching every other error record (H-L8).
 		if qd := req.Question[0]; qd != nil {
 			rec.Qname = strings.ToLower(qd.Header().Name)
 			rec.Qtype = dns.RRToType(qd)

@@ -99,8 +99,8 @@ func WriteDTLSFrame(conn net.Conn, resp *dns.Msg, safeMax, maxLen int, label str
 
 	// Local buffer pool: importing internal/pool from dnsutil shifted the
 	// hot binary's code layout and cost ~13% on the query pipeline
-	// (measured 2026-09, ServerProcessQuery 353→398ns; removing the import
-	// edge restored it) — keep this package import-light.
+	// (measured ServerProcessQuery 353→398ns; removing the import edge
+	// restored it) — keep this package import-light.
 	frameBufPtr := dtlsFrameBufPool.Get().(*[]byte)
 	frameBuf := *frameBufPtr
 	frameOK := len(frameBuf) >= DNSFramePrefixLen+len(wire)

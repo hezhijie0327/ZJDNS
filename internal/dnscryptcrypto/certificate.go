@@ -68,8 +68,6 @@ type CertPair struct {
 	PQ        *Certificate // ESVersion = XWingPQ (1320 bytes)
 }
 
-// type checks
-
 // Certificate wire format offsets.  The certificate has a fixed-size header
 // followed by a signed portion whose layout differs between classical and PQ
 // certificates.

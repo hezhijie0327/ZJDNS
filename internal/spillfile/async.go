@@ -14,7 +14,7 @@ import (
 // lrumap invokes OnEvict synchronously under the map mutex, which every
 // Get/Set of that cache needs — a direct Store.Put there performed a
 // WriteAt (and could queue behind a whole-file Compact) while the cache was
-// frozen for the IO duration (2026-09 D2).  Enqueue is non-blocking and
+// frozen for the IO duration.  Enqueue is non-blocking and
 // O(1); the single writer preserves per-key ordering because the enqueue
 // happens under the same map mutex that ordered the evictions.
 //

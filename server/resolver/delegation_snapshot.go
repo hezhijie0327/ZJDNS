@@ -174,7 +174,7 @@ func (r *Recursive) loadDelegationSpill(path string, diskCap, delegationMax int)
 		n++
 	}
 	// Spill-on-evict registered AFTER the warm-up load; the write runs on
-	// the async writer (lock-free enqueue; a synchronous Put here froze
+	// the async writer (lock-free enqueue; a synchronous Put would freeze
 	// every concurrent delegation lookup behind the disk, 2026-09 R1).
 	r.spillW = spillfile.NewAsyncWriter(spill)
 	r.delegations.SetOnEvict(func(zone string, de *delegationEntry) {
@@ -208,7 +208,7 @@ func (r *Recursive) getDelegationFromSpill(zone string) (*delegationEntry, bool)
 // flushDelegationSpill pushes the in-memory delegation cache to the spill
 // store (shutdown hook).  The queued async writes are drained first (so the
 // Indexed check sees them) and the remaining IO runs OUTSIDE the
-// delegations lock — a synchronous Range+Put held the lock that every
+// delegations lock — a synchronous Range+Put would hold the lock that every
 // recursive walk needs for the whole flush (2026-09 R1).
 func (r *Recursive) flushDelegationSpill() {
 	if r.spill == nil {

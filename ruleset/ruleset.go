@@ -74,12 +74,11 @@ func (e *Engine) LoadRules(rulesets []config.RuleSet) error {
 
 // addRule registers a single rule (inline or file line) into the table being
 // built.  Returns true when the rule was accepted.  Invalid CIDRs are
-// skipped and logged, matching the former SQL-insert behaviour.
+// skipped and logged.
 func addRule(table *ruleTable, tag, typ, value string) bool {
 	switch typ {
 	case "ip":
-		// Single parse (D13): the former double ParseCIDR discarded the
-		// second result's error without a comment and paid the parse twice.
+		// Single parse (D13).
 		_, n, err := net.ParseCIDR(value)
 		if err != nil {
 			log.Warnf("RULESET: skipping invalid CIDR rule %s=%s: %v", tag, value, err)

@@ -486,10 +486,10 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 
 	if len(chain.childDS) == 0 {
 		// Unsigned delegation (no DS at the cut): the zone has no verifiable
-		// keys, so a DNSKEY fetch can only return empty — skip it (previously
-		// paid one query per unsigned answer level).  The result is the same:
-		// unvalidated, and (matching the caller) no EDE for clean
-		// insecure delegations.
+		// keys, so a DNSKEY fetch can only return empty — skip it, it would
+		// cost one query per unsigned answer level for nothing.  The result
+		// is the same: unvalidated, and (matching the caller) no EDE for
+		// clean insecure delegations.
 		return false
 	}
 

@@ -21,14 +21,15 @@ type nsAddrFlightResult struct {
 }
 
 // resolveNSAddrFlight resolves one NS name/qtype pair, deduplicating
-// concurrent walks via singleflight.  The old per-walk independence ("the
-// NS-address cache deduplicates once populated") exploded when the cache
-// NEVER populated: a delegation whose authoritative servers are unreachable
-// respawns the full root walk for the same NS names at every level, and
-// self-similar NS sets (nsXX.constellix.com ↔ nsXX.constellix.net referring
-// to each other) multiply the tree — one client lookup of kernel.org fired
-// ~290k UDP queries (2026-08).  One leader walks; concurrent callers with
-// the same key wait for and share the result, bounded by their own ctx.
+// concurrent walks via singleflight.  Relying on the NS-address cache alone
+// ("the cache deduplicates once populated") does not bound the case where
+// the cache NEVER populates: a delegation whose authoritative servers are
+// unreachable respawns the full root walk for the same NS names at every
+// level, and self-similar NS sets (nsXX.constellix.com ↔
+// nsXX.constellix.net referring to each other) multiply the tree — one
+// client lookup of kernel.org fired ~290k UDP queries (2026-08).  One
+// leader walks; concurrent callers with the same key wait for and share the
+// result, bounded by their own ctx.
 //
 // Cross-name cycles (A's NS addresses need B's walk and vice versa) degrade
 // into bounded waits: the nested join becomes a follower, its level ctx

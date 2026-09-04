@@ -42,12 +42,11 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		}
 		// RFC 6147 §5.1.5: synthesis is needed when the AAAA response
 		// carries no AAAA record — including CNAME/DNAME chains without a
-		// terminating AAAA (the common CDN/ALIAS shape).  The former
-		// len(Answer)>0 gate skipped exactly those, leaving IPv6-only
-		// clients with NODATA (2026-09 H-M3).  A real AAAA answer needs no
-		// synthesis; §5.1.2's "treat other rcodes as empty answer" is left
-		// alone — SERVFAIL/timeout synthesis from a failed lookup would
-		// mask genuine outages.
+		// terminating AAAA (the common CDN/ALIAS shape); skipping those
+		// leaves IPv6-only clients with NODATA (2026-09 H-M3).  A real
+		// AAAA answer needs no synthesis; §5.1.2's "treat other rcodes as
+		// empty answer" is left alone — SERVFAIL/timeout synthesis from a
+		// failed lookup would mask genuine outages.
 		if qr.Err != nil {
 			return err
 		}

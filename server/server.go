@@ -608,9 +608,8 @@ func (s *Server) Start() error {
 		return errors.New("server is closed")
 	}
 
-	// Set DoH message acceptance function globally before any protocol servers
-	// start. The individual protocol start functions previously set this, but
-	// since it's a global variable it must be set only once.
+	// Set DoH message acceptance function globally before any protocol
+	// servers start — it is a global, so it must be set exactly once.
 	dnshttp.MsgAcceptFunc = zdnsutil.ServerDOHMsgAccept
 
 	errChan := make(chan error, 1)

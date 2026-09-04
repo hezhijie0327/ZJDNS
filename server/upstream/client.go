@@ -155,21 +155,9 @@ func New() *Client {
 	return c
 }
 
-// ExecuteQuery sends a DNS query to an upstream server and returns the result.
-//
-// When the upstream enables CapsGuard (config.UpstreamServer.CapsGuard), the
-// question name is 0x20-randomized on every outbound query
-// (draft-vixie-dnsext-dns0x20-00 §5.1): the case bit of each ASCII letter is
-// flipped randomly, and a legitimate response must echo the question
-// byte-for-byte — one extra bit of transaction entropy per ASCII letter
-// (RFC 4343 §3).  A response that does not echo the randomized case — a
-// spoofing signature or a case-rewriting middlebox — is discarded and the
-// query is retried once with the original case (§6.4 fallback; the retry's
-// security equals the pre-CapsGuard baseline).
-//
-// The address-level downgrade state is shared: capsDisabled reports
-// whether 0x20 randomisation is currently skipped for addr (too many echo
-// mismatches within the retry window).
+// capsDisabled reports whether 0x20 randomisation is currently skipped for
+// addr (too many echo mismatches within the retry window).  The address-level
+// downgrade state is shared across all queries.
 func (c *Client) capsDisabled(addr string) bool {
 	if c.capsDowngrades == nil {
 		return false
@@ -216,6 +204,17 @@ func (c *Client) noteCapsMismatch(addr string) bool {
 	return false
 }
 
+// ExecuteQuery sends a DNS query to an upstream server and returns the result.
+//
+// When the upstream enables CapsGuard (config.UpstreamServer.CapsGuard), the
+// question name is 0x20-randomized on every outbound query
+// (draft-vixie-dnsext-dns0x20-00 §5.1): the case bit of each ASCII letter is
+// flipped randomly, and a legitimate response must echo the question
+// byte-for-byte — one extra bit of transaction entropy per ASCII letter
+// (RFC 4343 §3).  A response that does not echo the randomized case — a
+// spoofing signature or a case-rewriting middlebox — is discarded and the
+// query is retried once with the original case (§6.4 fallback; the retry's
+// security equals the pre-CapsGuard baseline).
 func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) *Result {
 	if msg == nil {
 		return &Result{Error: errors.New("nil query message")}
@@ -555,8 +554,7 @@ func (c *Client) Close() {
 	// write would race those reads (same pattern as tls.Client.Close —
 	// server/upstream/tls/client.go). The map dies with the Client.
 	if c.proxyDialers != nil {
-		// The dialers are closed by this Range (M-low: comment previously
-		// pointed above the block instead of at it).
+		// The dialers are closed by this Range (M-low).
 		c.proxyDialers.Range(func(key string, d *socks5.Dialer) bool {
 			if d != nil {
 				_ = d.Close()

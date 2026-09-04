@@ -1,8 +1,8 @@
 // Package spillfile provides a sorted, disk-backed key-value store used as
 // the second tier of the DNS cache.  Records are written key-sorted into
 // fixed-size blocks (the "sorted region"); a sparse in-memory index holds one
-// entry per block, replacing the former full key hash index (~105 B/record)
-// with ~10 B/record.  Appends since the last merge land in an unsorted tail
+// entry per block (~10 B/record).  Appends since the last merge land in an
+// unsorted tail
 // region covered by a bounded in-memory map; a merge (Compact) folds the tail
 // into the sorted region atomically (temp + rename).
 //
@@ -111,7 +111,7 @@ const Version = 2
 const (
 	// maxKeyLen is the exact uint16 domain — a key of len 65536 would wrap
 	// the length field to 0 and write a record the scanner treats as
-	// corrupt, truncating the file tail on the next open (2026-09 F2).
+	// corrupt, truncating the file tail on the next open.
 	maxKeyLen  = math.MaxUint16
 	maxWireLen = 1 << 24 // 16 MiB — DNS responses are far smaller
 
@@ -301,9 +301,9 @@ func (s *Store) scan() error {
 	s.tail = fi.Size()
 	s.sparse = make([]sparseEntry, 0, blockCount)
 
-	// br buffers the sequential scan: the former unbuffered reads cost
-	// two read syscalls plus a Seek per record (~20M syscalls on a
-	// 6.7M-record file).  A large sequential buffer amortises them to
+	// br buffers the sequential scan: unbuffered per-record reads cost
+	// two read syscalls plus a Seek per record.  A large sequential buffer
+	// amortises them to
 	// ~1 per scanBufBytes; skipping the wire via Discard reads it through
 	// the page cache instead of seeking past it, which the sequential
 	// readahead had pulled in anyway.
@@ -491,8 +491,8 @@ func (s *Store) Delete(key string) {
 func (s *Store) Get(key string) (ts int64, ttl int, validated bool, wire []byte, ok bool) {
 	// The whole read runs under s.mu: Compact (also under s.mu) closes and
 	// reassigns s.f — a ReadAt released from the lock raced that swap and
-	// could read through the closed handle or at generation-stale offsets
-	// (2026-09 F1).  pread is thread-safe and page-cache-fast, and the bulk
+	// could read through the closed handle or at generation-stale offsets.
+	// pread is thread-safe and page-cache-fast, and the bulk
 	// operations (Entries/Warm/Compact) already hold this mutex across IO.
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -603,7 +603,7 @@ func scanBlock(blockStart int64, buf []byte, fn func(key string, ts int64, ttl i
 // given timestamp — used by callers to avoid re-appending unchanged entries
 // during a full-memory flush.
 func (s *Store) Indexed(key string, ts int64) bool {
-	// Under s.mu for the same Compact-race reason as Get (2026-09 F1).
+	// Under s.mu for the same Compact-race reason as Get.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if te, found := s.tailMap[key]; found {
@@ -661,10 +661,8 @@ func (s *Store) Entries() []Entry {
 // (non-deleted, non-superseded, keep-passing) records.
 //
 // One sequential pass over the sorted-region blocks (pooled buffers) plus
-// the tail map replaces the former startup sequence of Entries() (full
-// file read + per-record key copy) + sort.Slice (O(n log n) over all
-// records) + per-key Get (a ~64 KB block read per warmed entry) +
-// EntryCount() (a second full file scan for a log line).
+// the tail map — cheaper than the Entries() + sort + per-key Get sequence
+// it replaced.
 //
 // Stale records are skipped, not tombstoned — dead weight stays on disk
 // until the next Compact, which the caller already schedules.

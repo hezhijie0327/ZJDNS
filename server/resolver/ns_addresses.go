@@ -97,9 +97,9 @@ func (r *Recursive) getRootServers() []string {
 		return cached
 	}
 	// Cold or expired: install a PROVISIONAL set right now so concurrent
-	// walks return immediately.  The previous code only memoized AFTER the
-	// 26 spill-tier lookups below — under load every walk raced the still-cold
-	// cache and re-ran the full read path (lookupNSAddrsFromCache →
+	// walks return immediately — memoizing only AFTER the 26 spill-tier
+	// lookups below would let every walk race the still-cold cache and
+	// re-run the full read path (lookupNSAddrsFromCache →
 	// GetTypes/LatencyLastProbe per root name), piling thousands of
 	// goroutines onto the exhausted spill tier and wedging the process
 	// (observed: 2,469 LatencyLastProbe + 946 GetTypes waiters mid-batch).

@@ -121,7 +121,7 @@ func encryptPadding(packet []byte, minWireSize int) []byte {
 	return Pad(packet, paddedLen)
 }
 
-// unpad removes ISO/IEC 7816-4 padding from the packet.
+// UnPad removes ISO/IEC 7816-4 padding from the packet.
 func UnPad(packet []byte) (unpadded []byte, err error) {
 	for i := range slices.Backward(packet) {
 		if packet[i] == 0x80 {
@@ -136,7 +136,7 @@ func UnPad(packet []byte) (unpadded []byte, err error) {
 	return nil, ErrInvalidPadding
 }
 
-// computeSharedKey derives the shared secret key from the X25519 keypair using
+// ComputeSharedKey derives the shared secret key from the X25519 keypair using
 // the specified cryptographic construction.
 func ComputeSharedKey(
 	cryptoConstruction CryptoConstruction,

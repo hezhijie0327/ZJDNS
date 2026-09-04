@@ -23,10 +23,10 @@ type CryptoValidator struct {
 	rootKeys []*dns.DNSKEY
 	cache    cache.Store
 
-	// zoneKeyMemo caches the UNPACKED verified DNSKEYs per zone: the raw
-	// cache hit path re-Unpacked + re-filtered the RR set on every call
-	// (per delegation change, per walk).  Keys are shared read-only —
-	// callers must not mutate them (verification only reads
+	// zoneKeyMemo caches the UNPACKED verified DNSKEYs per zone — the raw
+	// cache hit path would otherwise re-Unpack + re-filter the RR set on
+	// every call (per delegation change, per walk).  Keys are shared
+	// read-only — callers must not mutate them (verification only reads
 	// flags/algorithm/key material).
 	zoneKeyMemo *lrumap.Map[string, zoneKeyMemoEntry]
 }
@@ -408,7 +408,8 @@ func serialLess(a, b uint32) bool {
 
 // KeyTags precomputes the RFC 4034 App. B key tag of each key once —
 // KeyTag() re-derives the digest on every call, so a sig×key matching
-// loop paid len(sigs)×len(keys) digest computations (2026-09 R5).
+// loop would otherwise pay len(sigs)×len(keys) digest computations
+// (2026-09 R5).
 func KeyTags(keys []*dns.DNSKEY) []uint16 {
 	tags := make([]uint16, len(keys))
 	for i, k := range keys {

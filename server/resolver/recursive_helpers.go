@@ -187,8 +187,9 @@ func (r *Recursive) validateNODATAWithNSEC(ctx context.Context, response *dns.Ms
 	if len(chain.childDS) == 0 {
 		// Unsigned delegation (no DS at the cut): the zone has no verifiable
 		// keys, so there is nothing to validate NSEC against — skip the
-		// DNSKEY prefetch (previously paid one query per unsigned NODATA
-		// level).  Signed zones keep the fetch and validation below.
+		// DNSKEY prefetch, which would cost one query per unsigned NODATA
+		// level for nothing.  Signed zones keep the fetch and validation
+		// below.
 		return validated
 	}
 	if len(chain.zoneDNSKEYs) == 0 {

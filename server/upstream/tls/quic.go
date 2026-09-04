@@ -20,8 +20,6 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-// ExecuteQUIC performs a DNS-over-QUIC query, using the QUIC connection pool
-// when available.
 // isQUICConnFatal reports whether err means the QUIC connection itself is
 // unusable (as opposed to a per-query timeout/cancellation/stream stall).
 func isQUICConnFatal(err error) bool {
@@ -38,6 +36,8 @@ func isQUICConnFatal(err error) bool {
 	return errors.As(err, &appErr)
 }
 
+// ExecuteQUIC performs a DNS-over-QUIC query, using the QUIC connection pool
+// when available.
 func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
 	if msg == nil {
 		return nil, errors.New("quic: nil query message")

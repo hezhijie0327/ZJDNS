@@ -550,8 +550,8 @@ func (s *Server) HandleHTTP3FromPacketConn(pc net.PacketConn) error {
 	if s.h3Server == nil {
 		// Same stream bounds and HTTP-layer idle timeout as the standalone
 		// path — a shared-port client could otherwise open 64k streams per
-		// connection, exactly what DefaultHTTP3MaxIncomingStreams (7939c64)
-		// was added to prevent (P-M1).
+		// connection, exactly what DefaultHTTP3MaxIncomingStreams was
+		// added to prevent (P-M1).
 		s.h3Server = &http3.Server{Handler: s, IdleTimeout: config.DefaultQUICServerIdleTimeout}
 	}
 	s.listenerMu.Unlock()

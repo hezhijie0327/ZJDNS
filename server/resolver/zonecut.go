@@ -74,8 +74,8 @@ func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
 		inZone := false
 		for _, sig := range sigs {
 			sigZone := dnsutil.Fqdn(sig.SignerName)
-			// A signer equal to the zone apex is in-zone; records signed by
-			// the zone itself were being stripped as cross-zone.
+			// A signer equal to the zone apex is in-zone (the zone signs
+			// its own records) — it is not a cross-zone signer.
 			if dns.EqualName(sigZone, fqZone) || dnsutil.IsBelow(fqZone, sigZone) {
 				inZone = true
 				break
@@ -323,8 +323,8 @@ func (r *Recursive) resolveChildNameservers(ctx context.Context, nameservers []s
 
 	// Thread the caller's depth instead of resetting to 0: the zone-cut
 	// path re-enters resolve → processAnswerWithDNSSEC → resolveZoneCut,
-	// and a hardcoded 0 let self-referentially-signed delegation chains
-	// nest past DefaultMaxRecursionDepth within the resolve window
+	// and a reset depth would let self-referentially-signed delegation
+	// chains nest past DefaultMaxRecursionDepth within the resolve window
 	// (2026-09 R3).
 	return r.resolveNSAddressesConcurrent(ctx, nsRecords, qname, depth, forceTCP)
 }

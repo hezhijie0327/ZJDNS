@@ -230,7 +230,7 @@ func (s *Server) Shutdown() error {
 		}
 	}
 	// Wake active TLCP DoT connections — their read loops block in
-	// ReadTCPMsg with a 60s idle deadline (M-3-5).
+	// io.ReadFull with a 60s idle deadline (M-3-5).
 	s.listenerMu.Lock()
 	for conn := range s.dotConns {
 		_ = conn.SetReadDeadline(time.Unix(1, 0))

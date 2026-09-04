@@ -1,8 +1,8 @@
-// The statsjournal provides an in-memory replacement for the SQLite
-// query_stats and query_log tables: atomic counters for aggregated query
-// metrics and a per-RCODE top-N domain journal for debugging.
+// The statsjournal provides the in-memory query statistics: atomic
+// counters for aggregated query metrics and a per-RCODE top-N domain
+// journal for debugging.
 //
-// Record is a nanosecond-scale pure-memory operation (no SQL, no disk, no
+// Record is a nanosecond-scale pure-memory operation (no disk, no
 // locks on the counter path); Snapshot reads are equally lock-free apart from
 // the per-RCODE journal. Data is intentionally not persisted — counters reset
 // on restart.
@@ -41,7 +41,7 @@ type StatsResult struct {
 	TopByRcode map[int][]topk.Entry[string]
 }
 
-// counters mirrors the aggregation dimensions of the former query_stats table.
+// counters holds every aggregation dimension of the query stats.
 // All fields are atomic.Int64 so the hot-path Record needs no locks.
 type counters struct {
 	total, hits, misses, stales, zones, errors, blocked, badcookie                        atomic.Int64
@@ -51,9 +51,9 @@ type counters struct {
 	totalMS                                                                               atomic.Int64
 }
 
-// rcodeJournal tracks per-RCODE domain counts, replacing the former
-// query_log table. Each RCODE owns a bounded topk.Map so the memory footprint
-// stays bounded while the highest-count domains survive eviction.
+// rcodeJournal tracks per-RCODE domain counts. Each RCODE owns a bounded
+// topk.Map so the memory footprint stays bounded while the highest-count
+// domains survive eviction.
 //
 // All buckets are pre-created at construction and the map is never written
 // again — record() is a lock-free map read plus the sharded topk.Inc (the
@@ -90,9 +90,7 @@ func (j *rcodeJournal) record(rcode int, qname string) {
 }
 
 // topAll returns the top-n domains per RCODE. The bucket map is immutable
-// after construction, so no lock is needed; empty buckets are omitted,
-// mirroring the lazily-created layout this journal had before buckets were
-// pre-created.
+// after construction, so no lock is needed; empty buckets are omitted.
 func (j *rcodeJournal) topAll(n int) map[int][]topk.Entry[string] {
 	out := make(map[int][]topk.Entry[string], len(j.byRcode))
 	for rc, m := range j.byRcode {

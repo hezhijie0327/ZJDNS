@@ -34,8 +34,8 @@ type DNSSECError struct {
 	Message string
 }
 
-// QueryResult bundles the return values of a DNS resolution query, replacing
-// the previous 8-return-value tuple at the public API boundary.
+// QueryResult bundles the return values of a DNS resolution query at the
+// public API boundary.
 type QueryResult struct {
 	Answer        []dns.RR
 	Authority     []dns.RR
@@ -65,8 +65,8 @@ type CIDRMatcher interface {
 }
 
 // upstreamSet holds the configured upstream server list. It is written
-// exactly once at startup (ConfigureServers) and read-only afterwards — the
-// old atomic.Pointer implied reload support that does not exist.
+// exactly once at startup (ConfigureServers) and read-only afterwards —
+// no reload support exists.
 type upstreamSet struct {
 	servers []*config.UpstreamServer
 }

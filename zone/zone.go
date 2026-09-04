@@ -1,6 +1,6 @@
 // Package zone provides DNS zone-file-style query matching backed by
 // in-memory maps.  Rules are loaded at startup from config (LoadRules) into
-// exact/wildcard lookup maps — no SQL on the query path.
+// exact/wildcard lookup maps.
 package zone
 
 import (
@@ -89,8 +89,7 @@ type zoneTable struct {
 	// equal-score ties resolve deterministically.
 	exactRules map[exactKey][]*zoneRule
 	// wildcardRules: wildcard suffix qname → rules (sorted by qtype DESC —
-	// concrete qtype rows win ties against sentinel rows, matching the
-	// former SQL ORDER BY qtype DESC).
+	// concrete qtype rows win ties against sentinel rows).
 	wildcardRules map[string][]*zoneRule
 }
 
@@ -179,9 +178,8 @@ func (e *Evaluator) LoadRules(rules []config.ZoneRule) error {
 	}
 
 	// Sort each bucket so equal-score ties resolve deterministically:
-	// exact buckets by match_tags text (the former SQLite PK order), wildcard
-	// buckets by qtype DESC (concrete qtype rows before sentinel rows, the
-	// former SQL ORDER BY qtype DESC).
+	// exact buckets by match_tags text, wildcard buckets by qtype DESC
+	// (concrete qtype rows before sentinel rows).
 	for _, rules := range table.exactRules {
 		slices.SortStableFunc(rules, func(a, b *zoneRule) int {
 			return strings.Compare(matchTagKey(a.matchTags), matchTagKey(b.matchTags))
@@ -318,7 +316,7 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 	// would re-lowercase via always-allocating strings.Map.
 	qname = strings.ToLower(dnsutil.Fqdn(qname))
 
-	// 1. Check dynamic content (Go map, not SQL).
+	// 1. Check dynamic content.
 	if de, ok := table.dynamics[qname]; ok {
 		return e.evalDynamic(qname, qtype, qclass, de, clientIP)
 	}
@@ -335,10 +333,9 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 		return r
 	}
 
-	// 4. Wildcard suffix walk — deepest suffix first (the former SQL ORDER
-	// BY length(qname) DESC tiebreak: the most specific suffix wins equal
-	// scores).  Per-suffix buckets are pre-sorted by qtype DESC so concrete
-	// qtype rows win ties against sentinel rows.
+	// 4. Wildcard suffix walk — deepest suffix first (the most specific
+	// suffix wins equal scores).  Per-suffix buckets are pre-sorted by qtype
+	// DESC so concrete qtype rows win ties against sentinel rows.
 	return e.lookupWildcard(table, qname, qtype, qclass, matchedTags, loadedAt)
 }
 
@@ -346,8 +343,7 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 // highest-scoring match.  Bucket order is deterministic (sorted at load), so
 // equal-score ties resolve the same way on every query.  When wildcard is
 // true, only rules whose (qtype, qclass) matches the query — or sentinel
-// rules (0, 0) — are considered, mirroring the former SQL
-// `((qtype = ? AND qclass = ?) OR (qtype = 0 AND qclass = 0))`.
+// rules (0, 0) — are considered.
 func (e *Evaluator) bestMatch(rules []*zoneRule, qname string, wildcard bool, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
 	var bestScore int
 	var best Result
@@ -378,10 +374,8 @@ func (e *Evaluator) bestMatch(rules []*zoneRule, qname string, wildcard bool, qt
 	if !best.Matched {
 		return Result{Rcode: dns.RcodeSuccess}
 	}
-	// The winner's RRs are shared with the immutable rule table — clone them
-	// once so the caller can mutate headers in place (2026-09 perf: previously
-	// every candidate decompressed a zstd blob per query, the single largest
-	// CPU cost on the zone-hit path).
+	// The winner's RRs are shared with the immutable rule table — clone
+	// them once so the caller can mutate headers in place.
 	best.Answer = cloneRRs(best.Answer)
 	best.Authority = cloneRRs(best.Authority)
 	best.Additional = cloneRRs(best.Additional)
@@ -396,8 +390,7 @@ func (e *Evaluator) lookupExact(table *zoneTable, qname string, qtype, qclass ui
 // shallowest and returns the best wildcard match across all of them.
 // Untagged rules score 0, so bestScore starts at -1 — the first (deepest)
 // match is always accepted, equal scores keep the deeper suffix, and only a
-// strictly higher score replaces it (the former SQL ORDER BY length DESC
-// tiebreak).
+// strictly higher score replaces it.
 func (e *Evaluator) lookupWildcard(table *zoneTable, qname string, qtype, qclass uint16, matchedTags map[string]bool, loadedAt int64) Result {
 	bestScore := -1
 	var best Result

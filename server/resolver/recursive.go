@@ -63,8 +63,8 @@ type Recursive struct {
 	spillCap int // spill record cap (≤0 = unbounded)
 
 	// spillW drains delegation eviction writes off the delegations mutex
-	// (2026-09 D2/R1 — OnEvict ran a synchronous WriteAt under the lock
-	// that guards every lookupDelegation on the recursive hot path).
+	// (2026-09 D2/R1) — a synchronous WriteAt under that lock would block
+	// every lookupDelegation on the recursive hot path.
 	spillW *spillfile.AsyncWriter
 
 	spoofguard  bool     // from protocol=recursive upstream
@@ -86,19 +86,19 @@ type Recursive struct {
 
 	// dnskeyFlight deduplicates concurrent DNSKEY fetches per zone.  The
 	// zone-key cache only deduplicates AFTER a fetch succeeds, so a
-	// cold-cache burst of concurrent walks previously fired N×len(nameservers)
-	// parallel upstream DNSKEY queries — the DNSSEC burst amplifier behind
-	// multi-hundred-MB transient heap spikes under load.
+	// cold-cache burst of concurrent walks would otherwise fire
+	// N×len(nameservers) parallel upstream DNSKEY queries — the DNSSEC burst
+	// amplifier behind multi-hundred-MB transient heap spikes under load.
 	dnskeyFlightOnce sync.Once
 	dnskeyFlight     *pending.ResultGroup[string, []*dns.DNSKEY]
 
 	// nsAddrFlight deduplicates concurrent NS-address walks per (name, qtype).
 	// When a delegation's NS addresses never resolve (unreachable
 	// authoritative servers), every level and every concurrent client query
-	// previously respawned the full walk for the same NS names — one lookup
-	// amplified into ~290k UDP queries (kernel.org → nsXX.constellix.{com,net}
-	// storm, 2026-08).  One leader walks; followers share the result, bounded
-	// by their own context.
+	// would otherwise respawn the full walk for the same NS names — one
+	// lookup amplified into ~290k UDP queries (kernel.org →
+	// nsXX.constellix.{com,net} storm, 2026-08).  One leader walks;
+	// followers share the result, bounded by their own context.
 	nsAddrFlightOnce sync.Once
 	nsAddrFlight     *pending.ResultGroup[string, nsAddrFlightResult]
 
@@ -184,8 +184,8 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 	// poisonProbed records that this walk already ran the TLD hijack probe;
 	// a positive verdict is persisted in forceTCP, so probing once per walk
-	// is sufficient (re-probing the same TLD servers for the same qname at
-	// every full-QNAME level only paid their straggler latency again).
+	// is sufficient — re-probing the same TLD servers for the same qname at
+	// every full-QNAME level would only re-pay their straggler latency.
 	var poisonProbed bool
 
 	log.Debugf("RECURSION: depth=%d, querying %s (type=%s, tcp=%t, zone=%s, ns=%v)", depth, question.Name, dns.TypeToString[question.Qtype], forceTCP, currentDomain, nameservers)
@@ -209,8 +209,8 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			poisonSeen = true
 			// A successful-but-poisoned UDP response for the root zone must
 			// restart over TCP like any other level — the main loop handles
-			// VerdictPoisoned regardless of err, this branch only handled
-			// the err != nil case and served/cached the poisoned answer.
+			// VerdictPoisoned regardless of err, and this success path must
+			// not serve or cache the poisoned answer.
 			if !forceTCP {
 				if response != nil {
 					pool.DefaultMessage.Put(response)
@@ -562,8 +562,8 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 // full QNAME and delegates the verdict to security.Detector.IsPoisonedByTLD.
 // Any peer's A/AAAA answer is injection evidence (a TLD server never
 // legitimately answers a subdomain), so any poisoned verdict forces TCP; the
-// concurrent fan-out covers single-server drops that previously stretched the
-// probe to its full timeout.
+// concurrent fan-out covers single-server drops that would otherwise
+// stretch the probe to its full timeout.
 func (r *Recursive) probeTLDForPoison(ctx context.Context, tldServers []string, qname string) bool {
 	if !r.poisonguard || len(tldServers) == 0 {
 		return false
@@ -720,8 +720,8 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 				continue
 			}
 			// Owner must be the current CNAME target: a type-only match
-			// (old behaviour) surfaced unrelated same-type records from
-			// other owners into the chain (M-low).
+			// would surface unrelated same-type records from other owners
+			// into the chain (M-low).
 			if strings.EqualFold(h.Name, currentQuestion.Name) {
 				allAnswers = append(allAnswers, rr)
 			}

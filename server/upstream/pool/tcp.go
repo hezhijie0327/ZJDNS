@@ -90,8 +90,6 @@ func newConn(addr string, conn net.Conn, maxPipe int) *Conn {
 	return c
 }
 
-// Exchange sends a DNS message over the pipelined connection and returns the
-// response.
 // SetSegmentation configures TCP DNS message segmentation for this connection.
 // segSize=0 disables segmentation (normal Write).
 func (c *Conn) SetSegmentation(segSize int) {

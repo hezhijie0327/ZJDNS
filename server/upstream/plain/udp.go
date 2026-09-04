@@ -46,10 +46,6 @@ type spoofguardState struct {
 	copyBuf []byte
 }
 
-// spoofguardBufPool reuses 4KB read buffers across spoofguard queries.
-// 4096 = standard DNS UDP max payload (RFC 6891 §6.2.5); responses larger
-// than 4096 bytes set TC=1 and are truncated, so 4096 is the correct upper
-// bound for a single UDP datagram.
 // Copy-buffer shrink cadence for spoofguardState.copyBuf (C-L6): after
 // copyBufShrinkAfter copies, an oversized buffer (copyBufShrinkFactor× the
 // working set, above copyBufShrinkMinCap) is reallocated down.
@@ -507,7 +503,6 @@ func sameRRData(x, y dns.RR) bool {
 	}
 }
 
-// When proxyDialer is nil, uses raw UDP; otherwise routes through SOCKS5.
 // exchangeViaProxyUDP sends a DNS query over UDP through a SOCKS5 proxy
 // using UDP ASSOCIATE (RFC 1928 §6).
 func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr string, proxyDialer *socks5.Dialer) (*dns.Msg, error) {
@@ -600,7 +595,7 @@ func (s *spoofguardState) copyData(raw []byte, n int) []byte {
 	s.copyBuf = s.copyBuf[:n]
 	copy(s.copyBuf, raw[:n])
 	s.copyBufShrinkCount++
-	// Copy-buffer shrink cadence: after copyBufUses copies, an oversized
+	// Copy-buffer shrink cadence: after copyBufShrinkAfter copies, an oversized
 	// buffer (4× the working set, ≥512 B floor) is reallocated down (C-L6).
 	if s.copyBufShrinkCount >= copyBufShrinkAfter && cap(s.copyBuf) > copyBufShrinkFactor*n && cap(s.copyBuf) > copyBufShrinkMinCap {
 		s.copyBuf = make([]byte, n)

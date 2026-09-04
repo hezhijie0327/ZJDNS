@@ -32,7 +32,7 @@ var (
 	errWeakPublicKey                = errors.New("weak public key")
 )
 
-// xchachaSharedKey computes a shared secret using X25519 followed by HChaCha20.
+// XchachaSharedKey computes a shared secret using X25519 followed by HChaCha20.
 func XchachaSharedKey(secretKey, publicKey [x25519.Size]byte) (sharedKey [XchachaKeySize]byte, err error) {
 	var shared x25519.Key
 	sk := x25519.Key(secretKey)
@@ -50,7 +50,7 @@ func XchachaSharedKey(secretKey, publicKey [x25519.Size]byte) (sharedKey [Xchach
 	return [XchachaKeySize]byte(hRes), nil
 }
 
-// xchachaSeal encrypts and authenticates message using XChaCha20-Poly1305,
+// XchachaSeal encrypts and authenticates message using XChaCha20-Poly1305,
 // appending the result to out.  nonce must be XchachaNonceSize bytes long.
 // key must be XchachaKeySize bytes long.
 func XchachaSeal(out, nonce, message, key []byte) (res []byte, err error) {
@@ -97,7 +97,7 @@ func XchachaSeal(out, nonce, message, key []byte) (res []byte, err error) {
 	return res, nil
 }
 
-// xchachaOpen decrypts and authenticates a box using XChaCha20-Poly1305.
+// XchachaOpen decrypts and authenticates a box using XChaCha20-Poly1305.
 // nonce must be XchachaNonceSize bytes, key must be XchachaKeySize bytes.
 func XchachaOpen(out, nonce, ciphertext, key []byte) (res []byte, err error) {
 	if len(nonce) != XchachaNonceSize {

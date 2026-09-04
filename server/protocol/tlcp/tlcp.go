@@ -104,8 +104,8 @@ func (s *Server) serveDOT(listener net.Listener) {
 			time.Sleep(config.DefaultAcceptRetryDelay)
 			continue
 		}
-		// Track the conn so Shutdown can wake it (the read loop blocks in
-		// ReadTCPMsg with a 60s idle deadline — M-3-5).
+		// Track the conn so Shutdown can close it and unblock the blocking
+		// read loop (M-3-5).
 		s.listenerMu.Lock()
 		s.dotConns[conn] = struct{}{}
 		s.listenerMu.Unlock()

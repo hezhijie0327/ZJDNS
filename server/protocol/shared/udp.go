@@ -107,8 +107,6 @@ type sharedDNSCryptClient struct {
 // Vars
 // ---------------------------------------------------------------------------
 
-// PacketBufPool manages pooled datagram buffers.  The dispatch loop
-// allocates from the pool; consumers copy data out and return the buffer.
 // Client-state bounds for the shared UDP dispatch loop.  Every unique
 // (source IP, port) gets a classification-map entry and, for
 // connection-oriented UDP protocols, a per-client conn + goroutine —
@@ -131,8 +129,8 @@ const (
 	reapCheckEveryPackets = 1024
 )
 
-// packetBuf is a pooled datagram buffer passed through dispatch channels.
-// The consumer copies data out and returns the buffer to PacketBufPool.
+// PacketBufPool manages pooled datagram buffers.  The dispatch loop
+// allocates from the pool; consumers copy data out and return the buffer.
 var PacketBufPool = sync.Pool{
 	New: func() any {
 		b := make([]byte, pool.SecureBufferSize)

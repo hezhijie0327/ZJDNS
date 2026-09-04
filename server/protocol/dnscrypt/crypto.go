@@ -14,8 +14,6 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
-// tcpMaxPaddingBudget is the worst-case TCP padding overhead of PadResponse:
-// up to 256 bytes (§5.4.5, 1+sha256[0]) plus 64-byte alignment.
 // replayEntry counts occurrences of one (client magic, client nonce half,
 // client key prefix) inside the replay window.
 type replayEntry struct {
@@ -23,6 +21,8 @@ type replayEntry struct {
 	count int
 }
 
+// tcpMaxPaddingBudget is the worst-case TCP padding overhead of PadResponse:
+// up to 256 bytes (§5.4.5, 1+sha256[0]) plus 64-byte alignment.
 const tcpMaxPaddingBudget = 256 + 64
 
 func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP bool) (encrypted []byte, err error) {

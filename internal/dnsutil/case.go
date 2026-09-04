@@ -56,7 +56,7 @@ func foldCaseRR(rr dns.RR) dns.RR {
 // mixed-case rdata names) returns after a pure scan with zero allocations;
 // the Builder only runs when a fold is actually needed.  FoldCase sits on
 // the per-response funnel of every upstream answer, so the scan-only fast
-// path keeps the no-op cost at one presentation serialisation (2026-09 F5).
+// path keeps the no-op cost at one presentation serialisation.
 func foldPresentationNames(s string) (string, bool) {
 	if !presentationNeedsFold(s) {
 		return s, false

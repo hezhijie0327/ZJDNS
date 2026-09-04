@@ -90,10 +90,10 @@ func (r *Recursive) resolveNextNameservers(
 		}
 	}
 
-	// Resolve independently any NS names not covered by cache or glue: the
-	// old short-circuit dropped the remaining delegation targets whenever
-	// cache/glue covered even a subset, so resolution could fail even though
-	// the uncovered servers were reachable.
+	// Resolve independently any NS names not covered by cache or glue —
+	// never short-circuit on a subset: dropping the remaining delegation
+	// targets whenever cache/glue covers even a subset would fail resolution
+	// even though the uncovered servers are reachable.
 	//
 	// In-bailiwick NS names of the zone being entered are skipped when cache
 	// and glue both miss: resolving ns1.example.com to enter example.com
