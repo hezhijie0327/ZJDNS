@@ -26,9 +26,11 @@ func benchGet(b *testing.B, withLatency bool, answers int) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			if _, ok, _ := c.Get("bench.example.com.", dns.TypeA, dns.ClassINET, nil); !ok {
+			e, ok, _ := c.Get("bench.example.com.", dns.TypeA, dns.ClassINET, nil)
+			if !ok {
 				b.Fatal("miss")
 			}
+			ReleaseTTLOffsets(e.TTLOffsets) // mirror the serve path — keep the offset pool warm
 		}
 	})
 }
