@@ -212,6 +212,10 @@ func (s *Server) serveDTLCPClient(cfg *dtlcp.Config, dc *shared.DemuxPacketConn,
 // handleDTLCPConnection reads DNS-over-DTLCP queries.  Each DTLCP record
 // carries one framed DNS message: a 2-byte big-endian length prefix followed
 // by the DNS payload, same as DNS-over-DTLS (TCP framing, RFC 1035 §4.2.2).
+//
+// Queries are served on bounded worker goroutines (DefaultMaxPipe) so one
+// slow upstream does not stall the connection; writes are serialized by a
+// per-connection mutex (datagram protocol — no stream-ordering hazard).
 func (s *Server) handleDTLCPConnection(conn net.Conn) {
 	defer zdnsutil.CloseWithLog(conn, "TLCP DTLCP connection", "TLCP")
 
@@ -221,8 +225,10 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 	}
 
 	idleTimeout := config.DefaultDTLSIdleTimeout
-	buf := pool.DefaultBuffer.Get()
-	defer pool.DefaultBuffer.Put(buf)
+	workerCap := make(chan struct{}, config.DefaultMaxPipe)
+	var writeMu sync.Mutex
+	var wg sync.WaitGroup
+	defer wg.Wait() // pending workers may still write; conn is closed after
 
 	for {
 		if err := conn.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
@@ -230,8 +236,12 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 			continue
 		}
 
+		// Fresh pooled buffer per datagram — ownership transfers to the
+		// worker goroutine, so the read loop must not reuse it.
+		buf := pool.DefaultBuffer.Get()
 		n, err := conn.Read(buf)
 		if err != nil {
+			pool.DefaultBuffer.Put(buf)
 			// A read-deadline expiry means the peer went idle — close the
 			// connection instead of retrying forever (a timeout was being
 			// classified as temporary and the loop spun).
@@ -246,11 +256,13 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 
 		// Parse 2-byte length prefix (TCP DNS framing, RFC 1035 §4.2.2).
 		if n < zdnsutil.DNSFramePrefixLen {
+			pool.DefaultBuffer.Put(buf)
 			continue
 		}
 		msgLen := binary.BigEndian.Uint16(buf[:zdnsutil.DNSFramePrefixLen])
 		if int(msgLen)+zdnsutil.DNSFramePrefixLen > n {
 			log.Debugf("TLCP: DTLCP short read: want %d + 2, got %d", msgLen, n)
+			pool.DefaultBuffer.Put(buf)
 			continue
 		}
 
@@ -259,20 +271,45 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 		if err := query.Unpack(); err != nil {
 			log.Debugf("TLCP: DTLCP unpack error: %v", err)
 			pool.DefaultMessage.Put(query)
+			pool.DefaultBuffer.Put(buf)
 			continue
 		}
 
-		// Sequential Put per loop iteration (defer would accumulate every
-		// query until the connection closes — the per-connection loop is
-		// not a single-request scope, AUDIT-METHODOLOGY §6.1.1).
-		response := s.handler.ServeDNS(query, clientIP, true, config.ProtoDTLCP)
-		if response == query { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
-			response = nil
+		// Non-blocking worker admission: a saturated client connection drops
+		// the datagram (the client retransmits) instead of stalling the read
+		// loop for every other in-flight query.
+		select {
+		case workerCap <- struct{}{}:
+		default:
+			pool.DefaultMessage.Put(query)
+			pool.DefaultBuffer.Put(buf)
+			continue
 		}
-		pool.DefaultMessage.Put(query)
-		if !s.sendDTLCPResponse(conn, response) {
-			return
-		}
+
+		wg.Add(1)
+		go func(query *dns.Msg, buf []byte) {
+			defer func() { <-workerCap }()
+			defer zdnsutil.HandlePanic("DTLCP query worker")
+			defer wg.Done()
+			defer pool.DefaultMessage.Put(query)
+			defer pool.DefaultBuffer.Put(buf)
+
+			response := s.handler.ServeDNS(query, clientIP, true, config.ProtoDTLCP)
+			if response == query { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+				response = nil
+			}
+			if response == nil {
+				return
+			}
+			writeMu.Lock()
+			ok := s.sendDTLCPResponse(conn, response)
+			writeMu.Unlock()
+			if !ok {
+				// Write error — close so the read loop exits and queued
+				// workers fail fast.
+				_ = conn.Close()
+			}
+		}(query, buf)
 	}
 }
 
