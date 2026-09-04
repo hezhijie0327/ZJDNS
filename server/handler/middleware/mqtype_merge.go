@@ -2,8 +2,8 @@ package middleware
 
 import (
 	"strings"
-	"zjdns/cache"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
@@ -131,9 +131,9 @@ func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY, qtResults <-
 		// under both DO keys; filtering happens at serve time).
 		mergeAnswer, mergeNs, mergeExtra := qr.Answer, qr.Authority, qr.Additional
 		if !dnssecOK {
-			mergeAnswer = cache.ProcessRecords(qr.Answer, 0, false, false)
-			mergeNs = cache.ProcessRecords(qr.Authority, 0, false, false)
-			mergeExtra = cache.ProcessRecords(qr.Additional, 0, false, false)
+			mergeAnswer = zdnsutil.ProcessRecords(qr.Answer, 0, false, false)
+			mergeNs = zdnsutil.ProcessRecords(qr.Authority, 0, false, false)
+			mergeExtra = zdnsutil.ProcessRecords(qr.Additional, 0, false, false)
 		}
 		msg.Answer = mergeRRs(msg.Answer, mergeAnswer)
 		msg.Ns = mergeRRs(msg.Ns, mergeNs)

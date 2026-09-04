@@ -185,7 +185,7 @@ Key dependencies: `codeberg.org/miekg/dns` (DNS), `github.com/quic-go/quic-go` (
 
 ### File Organization
 - One file per concern, split at ~500 lines. Declaration order: `type → const → var → func`.
-- `New*` constructors immediately follow their type. All magic numbers as named constants in `config/defaults.go`.
+- `New*` constructors immediately follow their type. All magic numbers as named constants in `config/defaults*.go`.
 
 ### Constructors & Interfaces
 - Return concrete types, accept interfaces. Group >5 params into config structs.
@@ -217,10 +217,10 @@ zjdns/
 ├── config/             ← ServerConfig, ProtocolSettings, UpstreamServer, defaults
 ├── dnscert/            ← DNSCrypt resolver-key/cert/stamp minting + config generation
 ├── edns/               ← EDNS handler (ECS, Cookie, EDE, Padding)
-├── cache/              ← DNS response cache (Store interface, LRU-backed)
+├── cache/              ← DNS response cache (Store interface, LRU-backed, two-tier spill)
 ├── ruleset/            ← CIDR + domain tag matching (binary radix trie)
 ├── zone/               ← DNS zone rules (Evaluator, zone-file import)
-├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, ...
+├── internal/           ← log, pool, ttl, dnsutil (incl. ProcessRecords), stats, ipdetect, latency, pending, spillfile, stamp, ...
 └── server/
     ├── handler/        ← query pipeline adapter + QueryContext
     │   └── middleware/ ← 11 composable middleware + AssembleChain
@@ -310,7 +310,8 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 | `ServerConfig` | `config` | Top-level config; owns `ECSConfig`, `ProtocolSettings`, `CertificateSettings` |
 | `UpstreamServer` | `config` | Per-upstream: `Address`, `Protocol`, `ServerName`, `SkipCache`, `Match`, `Proxy`, defense flags, `MQType` (RFC 10029 bundle list) |
 | `ProtocolSettings` | `config` | Per-protocol port/endpoint: `UDP`, `TCP`, `TLS`, `QUIC`, `HTTPS`, `HTTP3`, `TLCP`, `HTTPTLCP`, `DTLS`, `DTLCP`, `DNSCrypt` |
-| `Store` | `cache` | Interface: Get/Set/RecordRequest/FlushDB/Stats/Close |
+| `Store` | `cache` | Interface: Get/Set/RecordRequest (→ `internal/stats.Journal`)/FlushDB/Stats/Close |
+| `Journal` / `RequestRecord` | `internal/stats` | Query statistics: pooled records, atomic counters, per-RCODE top-N journal |
 | `Entry` | `cache` | Cached DNS response: Answer/Authority/Additional ([]dns.RR), Timestamp, TTL |
 | `Server` | `server` | Core lifecycle, wiring, background tasks |
 | `QueryContext` | `server/handler` | Mutable struct carrying all request state through the middleware chain |

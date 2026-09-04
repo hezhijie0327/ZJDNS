@@ -179,9 +179,9 @@ func (c *refreshCoordinator) serveExpiredWithRefresh(qctx *handler.QueryContext,
 				qctx.EDE = &dns.EDE{InfoCode: qr.DNSSECEDE, ExtraText: ""}
 			}
 			dnssecOK := qctx.ClientRequestedDNSSEC
-			msg.Answer = cache.ProcessRecords(qr.Answer, 0, false, dnssecOK)
-			msg.Ns = cache.ProcessRecords(qr.Authority, 0, false, dnssecOK)
-			msg.Extra = cache.ProcessRecords(qr.Additional, 0, false, dnssecOK)
+			msg.Answer = zdnsutil.ProcessRecords(qr.Answer, 0, false, dnssecOK)
+			msg.Ns = zdnsutil.ProcessRecords(qr.Authority, 0, false, dnssecOK)
+			msg.Extra = zdnsutil.ProcessRecords(qr.Additional, 0, false, dnssecOK)
 			if qr.Validated {
 				msg.AuthenticatedData = true
 			}

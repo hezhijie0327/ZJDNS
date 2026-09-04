@@ -1,7 +1,7 @@
 package dnssec
 
 import (
-	"zjdns/cache"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
@@ -222,7 +222,7 @@ func (c *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
 	// _ = error: an unpack failure leaves Answer nil — treated as a miss.
 	_ = cachedEntry.Unpack()
 
-	records := cache.ProcessRecords(cachedEntry.Answer, 0, false, true)
+	records := zdnsutil.ProcessRecords(cachedEntry.Answer, 0, false, true)
 	keys := FindDNSKEYs(records)
 	if c.zoneKeyMemo != nil && len(keys) > 0 {
 		remaining := cachedEntry.TTL - int(log.NowUnix()-cachedEntry.Timestamp)

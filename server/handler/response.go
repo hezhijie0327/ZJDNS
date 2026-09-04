@@ -111,9 +111,9 @@ func UnpackPrePackedForModify(qctx *QueryContext) bool {
 	msg.ID = qctx.Req.ID
 	msg.RecursionDesired = qctx.Req.RecursionDesired
 	if !qctx.ClientRequestedDNSSEC {
-		msg.Answer = cache.ProcessRecords(msg.Answer, 0, false, false)
-		msg.Ns = cache.ProcessRecords(msg.Ns, 0, false, false)
-		msg.Extra = cache.ProcessRecords(msg.Extra, 0, false, false)
+		msg.Answer = zdnsutil.ProcessRecords(msg.Answer, 0, false, false)
+		msg.Ns = zdnsutil.ProcessRecords(msg.Ns, 0, false, false)
+		msg.Extra = zdnsutil.ProcessRecords(msg.Extra, 0, false, false)
 	}
 	msg.Data = nil
 	return true

@@ -8,6 +8,7 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
@@ -134,9 +135,9 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	}
 
 	// Build response records.
-	msg.Answer = cache.ProcessRecords(qr.Answer, 0, false, dnssecOK)
-	msg.Ns = cache.ProcessRecords(qr.Authority, 0, false, dnssecOK)
-	msg.Extra = cache.ProcessRecords(qr.Additional, 0, false, dnssecOK)
+	msg.Answer = zdnsutil.ProcessRecords(qr.Answer, 0, false, dnssecOK)
+	msg.Ns = zdnsutil.ProcessRecords(qr.Authority, 0, false, dnssecOK)
+	msg.Extra = zdnsutil.ProcessRecords(qr.Additional, 0, false, dnssecOK)
 
 	if log.IsDebug() {
 		log.Debugf("RESULT: %s %s | rcode=NOERROR, answer=%d, validated=%t", qname, dns.TypeToString[qtype], len(qr.Answer), validated)

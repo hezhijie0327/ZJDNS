@@ -527,7 +527,7 @@ func TestEntry_RemainingTTL(t *testing.T) {
 
 func TestProcessRecords_PreservesTTL(t *testing.T) {
 	a := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netParseIP("192.0.2.1")}
-	result := ProcessRecords([]dns.RR{a}, 0, false, false)
+	result := zdnsutil.ProcessRecords([]dns.RR{a}, 0, false, false)
 	if len(result) != 1 {
 		t.Fatalf("got %d records, want 1", len(result))
 	}
@@ -551,12 +551,12 @@ func TestProcessRecords_DNSSECFiltering(t *testing.T) {
 	}
 	rrs := []dns.RR{aRec, rrsig}
 
-	withDNSSEC := ProcessRecords(rrs, 0, false, true)
+	withDNSSEC := zdnsutil.ProcessRecords(rrs, 0, false, true)
 	if len(withDNSSEC) != 2 {
 		t.Errorf("includeDNSSEC=true: got %d records, want 2", len(withDNSSEC))
 	}
 
-	withoutDNSSEC := ProcessRecords(rrs, 0, false, false)
+	withoutDNSSEC := zdnsutil.ProcessRecords(rrs, 0, false, false)
 	if len(withoutDNSSEC) != 1 {
 		t.Errorf("includeDNSSEC=false: got %d records, want 1 (RRSIG filtered out)", len(withoutDNSSEC))
 	}
@@ -564,7 +564,7 @@ func TestProcessRecords_DNSSECFiltering(t *testing.T) {
 
 func TestProcessRecords_ElapsedTTL(t *testing.T) {
 	a := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netParseIP("192.0.2.1")}
-	result := ProcessRecords([]dns.RR{a}, 100, true, false)
+	result := zdnsutil.ProcessRecords([]dns.RR{a}, 100, true, false)
 	if len(result) != 1 {
 		t.Fatal("expected 1 record")
 	}
