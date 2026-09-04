@@ -1,7 +1,6 @@
 package defense
 
 import (
-	"maps"
 	"testing"
 )
 
@@ -216,9 +215,8 @@ func (h *HopGuard) armed(serverIP string) bool {
 	if !ok {
 		return false
 	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.armed
+	v := st.view.Load()
+	return v != nil && v.armed
 }
 
 // trustedSet returns a copy of the trusted TTL set for a server (test helper).
@@ -227,9 +225,13 @@ func (h *HopGuard) trustedSet(serverIP string) map[uint8]int {
 	if !ok {
 		return nil
 	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	out := make(map[uint8]int, len(st.trusted))
-	maps.Copy(out, st.trusted)
+	v := st.view.Load()
+	if v == nil {
+		return nil
+	}
+	out := make(map[uint8]int, len(v.trusted))
+	for ttl := range v.trusted {
+		out[ttl] = 1
+	}
 	return out
 }

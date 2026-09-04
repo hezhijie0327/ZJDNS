@@ -57,3 +57,30 @@ func BenchmarkDetector_IsPoisonedByTLD(b *testing.B) {
 		_ = det.IsPoisonedByTLD(msg, "www.google.com.")
 	}
 }
+
+func BenchmarkHopGuardValidateArmed(b *testing.B) {
+	hg := NewHopGuard()
+	for range hopGuardMinSamples {
+		hg.Feed("192.0.2.10", 64)
+	}
+	if !hg.Confident("192.0.2.10") {
+		b.Fatal("hopguard did not arm")
+	}
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if !hg.Validate("192.0.2.10", 64) {
+				b.Fatal("trusted TTL rejected")
+			}
+		}
+	})
+}
+
+func BenchmarkHopGuardValidateLearning(b *testing.B) {
+	hg := NewHopGuard()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			hg.Validate("192.0.2.99", 64)
+		}
+	})
+}

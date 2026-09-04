@@ -378,8 +378,20 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					return resp, nil
 				}
 			case <-pollTimer.C:
-				pollTimer.Reset(config.DefaultSpoofguardPollInterval)
 				now := time.Now()
+				// Adaptive re-arm: with candidates collected, wake exactly
+				// when the silence window expires instead of a fixed 100ms
+				// cadence — the fixed poll quantised the 150ms single window
+				// to 150-250ms actual waits (avg +50ms per window-bound
+				// response).  Window semantics are unchanged: the same
+				// silence must still elapse before a candidate is served.
+				next := config.DefaultSpoofguardPollInterval
+				if sg.last != nil || sg.nonEDNS != nil {
+					if remaining := sg.collectWindow() - now.Sub(sg.lastRecv); remaining > 0 && remaining < next {
+						next = remaining
+					}
+				}
+				pollTimer.Reset(next)
 				if sg.last != nil && now.Sub(sg.lastRecv) > sg.collectWindow() {
 					// EDNS candidate — safe, return directly.
 					resp := sg.pickBest()

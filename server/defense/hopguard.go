@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
@@ -28,17 +29,27 @@ type HopGuard struct {
 	states *lrumap.Map[string, *serverState] // server IP → learning state
 }
 
+// hopView is an immutable read snapshot of the enforcement state.  Feed
+// publishes a fresh view under the write lock; Validate/Confident read it
+// lock-free — they run once per received packet on the spoofguard collect
+// path, so a per-server mutex there serialised every concurrent query to the
+// same upstream.
+type hopView struct {
+	armed   bool
+	trusted map[uint8]struct{} // TTLs within ±fluctuation of which pass
+}
+
 // serverState tracks TTL observation history for one upstream server.
-// The mutex protects all fields; Validate is called concurrently from
-// multiple goroutines sharing the same Client-level HopGuard instance.
+// mu guards the learning fields (histogram, samples, lastRebuild); the
+// enforcement view is published lock-free via view.  rejected is atomic —
+// ShouldSampleRejected may run on the read path.
 type serverState struct {
 	mu          sync.Mutex
 	histogram   map[uint8]int // TTL → occurrence count
-	trusted     map[uint8]int // trusted TTLs → count snapshot
 	samples     int           // total responses observed
-	armed       bool          // true once minimum samples reached
 	lastRebuild int64         // time-based rebuild fallback (log.NowUnixNano())
-	rejected    int           // rejection sampling counter (1-in-16 feed of Validate-rejected TTLs)
+	rejected    atomic.Int64  // rejection sampling counter (1-in-16 feed of Validate-rejected TTLs)
+	view        atomic.Pointer[hopView]
 }
 
 const (
@@ -65,7 +76,7 @@ const (
 // NewHopGuard creates a HopGuard with LRU cache.
 func NewHopGuard() *HopGuard {
 	return &HopGuard{
-		states: lrumap.New[string, *serverState](hopGuardCacheCapacity),
+		states: lrumap.NewSharded[string, *serverState](hopGuardCacheCapacity),
 	}
 }
 
@@ -89,23 +100,21 @@ func (h *HopGuard) Validate(serverIP string, observed uint8) bool {
 		return true
 	}
 
-	st.mu.Lock()
-	defer st.mu.Unlock()
-
-	// Learning phase: accept all.
-	if !st.armed {
+	v := st.view.Load()
+	// Learning phase (no view / not armed): accept all.
+	if v == nil || !v.armed {
 		return true
 	}
 
 	// Enforcement phase: check against trusted baselines.
-	if passTrusted(st, observed) {
+	if passTrusted(v, observed) {
 		return true
 	}
 
 	// Evaluate trustedKeys only when debug is on — it sorts and joins the
 	// baseline keys on every rejection (R3-M20).
 	if log.IsDebug() {
-		log.Debugf("UPSTREAM: hopguard reject TTL=%d for %s (trusted: %s)", observed, serverIP, trustedKeys(st))
+		log.Debugf("UPSTREAM: hopguard reject TTL=%d for %s (trusted: %s)", observed, serverIP, trustedKeys(v))
 	}
 	return false
 }
@@ -122,7 +131,6 @@ func (h *HopGuard) Feed(serverIP string, observed uint8) {
 	if !ok {
 		st = &serverState{
 			histogram:   make(map[uint8]int, 16),
-			trusted:     make(map[uint8]int, 4),
 			lastRebuild: log.NowUnixNano(),
 		}
 		actual, loaded := h.states.LoadOrStore(serverIP, st)
@@ -135,7 +143,7 @@ func (h *HopGuard) Feed(serverIP string, observed uint8) {
 	defer st.mu.Unlock()
 
 	// Already armed — keep histogram updated for periodic rebuild.
-	if st.armed {
+	if v := st.view.Load(); v != nil && v.armed {
 		st.histogram[observed]++
 		st.samples++
 		// Rebuild at most once per Feed: the time-based fallback (for
@@ -151,12 +159,11 @@ func (h *HopGuard) Feed(serverIP string, observed uint8) {
 		}
 		if rebuild {
 			rebuildTrusted(st)
-			if len(st.trusted) == 0 {
-				st.armed = false
+			if v := st.view.Load(); v != nil && len(v.trusted) == 0 {
 				st.samples = 0
 				log.Debugf("UPSTREAM: hopguard disarmed — all TTLs decayed, re-entering learning for %s", serverIP)
 			} else {
-				log.Debugf("UPSTREAM: hopguard rebuild (%d trusted, threshold=%d) for %s", len(st.trusted), trustThreshold(st), serverIP)
+				log.Debugf("UPSTREAM: hopguard rebuild (%d trusted, threshold=%d) for %s", len(st.view.Load().trusted), trustThreshold(st), serverIP)
 			}
 		}
 		return
@@ -171,10 +178,9 @@ func (h *HopGuard) Feed(serverIP string, observed uint8) {
 	}
 	if st.samples%hopGuardMinSamples == 0 { // ≥1 guaranteed — the samples counter starts at 1 (S9)
 		rebuildTrusted(st)
-		if len(st.trusted) > 0 {
-			st.armed = true
+		if v := st.view.Load(); v != nil && v.armed {
 			log.Debugf("UPSTREAM: hopguard armed (%d trusted, threshold=%d) for %s",
-				len(st.trusted), trustThreshold(st), serverIP)
+				len(v.trusted), trustThreshold(st), serverIP)
 		}
 	}
 }
@@ -190,9 +196,8 @@ func (h *HopGuard) Confident(serverIP string) bool {
 	if !ok {
 		return false
 	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.armed
+	v := st.view.Load()
+	return v != nil && v.armed
 }
 
 // ShouldSampleRejected counts one Validate-rejected packet and reports
@@ -212,13 +217,10 @@ func (h *HopGuard) ShouldSampleRejected(serverIP string) bool {
 	if !ok {
 		return false
 	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if !st.armed {
+	if v := st.view.Load(); v == nil || !v.armed {
 		return false // learning phase has no rejections
 	}
-	st.rejected++
-	return st.rejected%hopGuardRejectionSample == 0
+	return st.rejected.Add(1)%hopGuardRejectionSample == 0
 }
 
 // modeTTL returns the histogram's most frequent TTL (0 if empty).
@@ -253,8 +255,8 @@ func trustThreshold(st *serverState) int {
 }
 
 // passTrusted returns true if observed is within ±fluctuation of any trusted TTL.
-func passTrusted(st *serverState, observed uint8) bool {
-	for ttl := range st.trusted {
+func passTrusted(v *hopView, observed uint8) bool {
+	for ttl := range v.trusted {
 		lo := int(ttl) - hopGuardFluctuation
 		hi := int(ttl) + hopGuardFluctuation
 		if lo < 1 {
@@ -272,12 +274,12 @@ func passTrusted(st *serverState, observed uint8) bool {
 
 // trustedKeys returns a sorted comma-separated list of trusted TTL values
 // for debug logging (e.g. "100,95").
-func trustedKeys(st *serverState) string {
-	if len(st.trusted) == 0 {
+func trustedKeys(v *hopView) string {
+	if len(v.trusted) == 0 {
 		return "none"
 	}
-	keys := make([]int, 0, len(st.trusted))
-	for ttl := range st.trusted {
+	keys := make([]int, 0, len(v.trusted))
+	for ttl := range v.trusted {
 		keys = append(keys, int(ttl))
 	}
 	slices.Sort(keys)
@@ -312,13 +314,15 @@ func rebuildTrusted(st *serverState) {
 	// trusted set, weakening hopguard's discrimination.
 	threshold := trustThreshold(st)
 	mode := modeTTL(st)
-	clear(st.trusted)
+	trusted := make(map[uint8]struct{}, len(st.histogram)/2+1)
 	if mode > 0 {
-		st.trusted[mode] = st.histogram[mode]
+		trusted[mode] = struct{}{}
 	}
 	for ttl, count := range st.histogram {
 		if ttl != mode && count >= threshold && count >= st.histogram[mode]/2 {
-			st.trusted[ttl] = count
+			trusted[ttl] = struct{}{}
 		}
 	}
+	// Publish an immutable view — Validate/Confident read it lock-free.
+	st.view.Store(&hopView{armed: len(trusted) > 0, trusted: trusted})
 }
