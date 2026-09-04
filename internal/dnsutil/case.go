@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // FoldCase lowercases every record owner name and the embedded rdata names
@@ -139,6 +140,18 @@ func foldPresentationNamesBuild(s string) (string, bool) {
 		b.WriteString(tok)
 	}
 	return b.String(), changed
+}
+
+// Canonical lowercases the ASCII letters of an FQDN (RFC 4343 §3 fold),
+// appending the trailing dot when missing.  Drop-in replacement for miekg
+// dnsutil.Canonical on hot paths: that one is a strings.Map closure which
+// allocates even for an already-canonical name, while this scans first and
+// returns the input unchanged (zero-alloc) when nothing needs folding.
+func Canonical(s string) string {
+	if !dnsutil.IsFqdn(s) {
+		s += "."
+	}
+	return ASCIIFold(s)
 }
 
 // ASCIIFold lowercases only ASCII letters — RFC 4343 §3 folds exactly the

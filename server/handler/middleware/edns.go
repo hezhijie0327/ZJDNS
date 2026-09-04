@@ -128,14 +128,21 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		}
 
 		// RFC 7873: Full server cookie (16 bytes) → cryptographic validation.
+		var cookieStatus edns.CookieValStatus
 		if cookieOpt != nil && len(cookieOpt.ServerCookie) == edns.DefaultCookieServerLen {
-			status := m.edns.IsServerCookieValid(qctx.ClientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie)
-			if status == edns.CookieExpired || status == edns.CookieFuture || status == edns.CookieInvalid {
-				log.Debugf("EDNS: bad server cookie (status=%d) from %s, returning BADCOOKIE", status, qctx.ClientIP)
+			cookieStatus = m.edns.IsServerCookieValid(qctx.ClientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie)
+			if cookieStatus == edns.CookieExpired || cookieStatus == edns.CookieFuture || cookieStatus == edns.CookieInvalid {
+				log.Debugf("EDNS: bad server cookie (status=%d) from %s, returning BADCOOKIE", cookieStatus, qctx.ClientIP)
 				qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt, qctx.ECSOpt)
 				return nil
 			}
 		}
+
+		// Compute the response COOKIE string once here: the Response
+		// middleware previously re-ran the server-cookie HMAC per response
+		// (generateCookieStr) — for cookie-bearing clients that was two HMAC
+		// verifications plus a string build per query.
+		qctx.CookieStr = m.cookieResponseStr(cookieOpt, qctx.ClientIP, cookieStatus)
 
 		// Apply default ECS if no ECS was sent.
 		if qctx.ECSOpt == nil && len(req.Question) > 0 {
@@ -145,6 +152,8 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 					qctx.ECSOpt.Family, qctx.ECSOpt.Address, qctx.ECSOpt.SourcePrefix)
 			}
 		}
+
+		qctx.EDNSParsed = true
 
 		return next.ServeDNS(ctx, qctx)
 	})
@@ -173,4 +182,38 @@ func (m *EDNS) buildBadCookieResponse(req *dns.Msg, clientIP net.IP, cookieOpt *
 
 	m.edns.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil, false, edns.HasPaddingOption(req), 0)
 	return msg
+}
+
+// cookieResponseStr computes the COOKIE string for the response ("" when the
+// option is absent or the client cookie malformed).  Called once per query
+// during EDNS validation; the result is cached in qctx.CookieStr so the
+// Response middleware never re-runs the HMAC.  validatedStatus carries the
+// verification result for a full 16-byte server cookie (CookieValStatus zero
+// value = not verified here, i.e. client-only cookie).
+func (m *EDNS) cookieResponseStr(cookieOpt *edns.CookieOption, clientIP net.IP, validatedStatus edns.CookieValStatus) string {
+	if cookieOpt == nil {
+		return ""
+	}
+	if clientIP == nil {
+		clientIP = fallbackClientIP
+	}
+	if len(cookieOpt.ClientCookie) != edns.DefaultCookieClientLen {
+		log.Debugf("EDNS: invalid client cookie length %d (expected %d)", len(cookieOpt.ClientCookie), edns.DefaultCookieClientLen)
+		return ""
+	}
+
+	var serverCookie []byte
+	if len(cookieOpt.ServerCookie) == edns.DefaultCookieServerLen {
+		if validatedStatus == edns.CookieValid || validatedStatus == edns.CookieValidRenew {
+			serverCookie = cookieOpt.ServerCookie
+		} else {
+			serverCookie = m.edns.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
+		}
+	} else {
+		serverCookie = m.edns.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
+	}
+	if serverCookie == nil {
+		return ""
+	}
+	return edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
 }

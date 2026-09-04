@@ -166,7 +166,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 	question.Name = qname
 	nameservers := r.getRootServers()
 	currentDomain := "."
-	normalizedQname := dnsutil.Canonical(qname)
+	normalizedQname := zdnsutil.Canonical(qname)
 
 	// poisonSeen is set to true when any VerdictPoisoned is observed at any
 	// delegation level, including through internal TCP restarts.  The CNAME
@@ -652,7 +652,7 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 		default:
 		}
 
-		currentName := dnsutil.Canonical(currentQuestion.Name)
+		currentName := zdnsutil.Canonical(currentQuestion.Name)
 		if slices.Contains(visitedCNAMEs[:visitedCount], currentName) {
 			log.Debugf("RECURSION: CNAME loop detected for %s", currentName)
 			return QueryResult{Cacheable: true, Err: fmt.Errorf("CNAME loop detected: %s", currentName)}
@@ -745,7 +745,7 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 	}
 
 	if chainExhausted {
-		log.Debugf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, dnsutil.Canonical(question.Name))
+		log.Debugf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, zdnsutil.Canonical(question.Name))
 	}
 	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Rcode: finalRcode, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Poisoned: poisonOccurred, DNSSECEDE: allDNSSECEDE, Truncated: truncated}
 }

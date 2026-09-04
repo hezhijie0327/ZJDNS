@@ -3,6 +3,7 @@ package defense
 import (
 	"strconv"
 	"strings"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
@@ -79,8 +80,8 @@ func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 		return VerdictClean
 	}
 
-	z := dnsutil.Canonical(zone)
-	n := dnsutil.Canonical(queryName)
+	z := zdnsutil.Canonical(zone)
+	n := zdnsutil.Canonical(queryName)
 
 	for _, rr := range response.Answer {
 		if rr == nil {
@@ -133,7 +134,7 @@ func (d *Detector) IsPoisonedByTLD(response *dns.Msg, queryName string) bool {
 	if response == nil {
 		return false
 	}
-	n := dnsutil.Canonical(queryName)
+	n := zdnsutil.Canonical(queryName)
 	// Root-server hostnames and TLD-apex queries legitimately get A/AAAA
 	// answers from root/TLD servers (see classifyRoot/classifyTLD) — flagging
 	// them would force an unnecessary TCP fallback for every such query.

@@ -95,9 +95,11 @@ func (m *Response) Wrap(next handler.QueryHandler) handler.QueryHandler {
 // pre-packed fast path (deciding whether the wire can be served as-is) and
 // finalizeResponse (applying the options) so the parse work runs once.
 func (m *Response) ednsStateFor(qctx *handler.QueryContext) ednsState {
-	// Parse ECS if EDNS didn't run (early short-circuit).
+	// Parse ECS if EDNS didn't run (early short-circuit).  When EDNS already
+	// ran, ECSOpt == nil definitively means "no ECS" — the fallback re-parse
+	// of req.Pseudo (and the padding re-scan) is redundant work per response.
 	ecsOpt := qctx.ECSOpt
-	if ecsOpt == nil && m.edns != nil {
+	if ecsOpt == nil && !qctx.EDNSParsed && m.edns != nil {
 		ecsOpt = m.edns.ParseFromDNS(qctx.Req)
 		if ecsOpt == nil && len(qctx.Req.Question) > 0 {
 			ecsOpt = m.edns.ECSForQType(dns.RRToType(qctx.Req.Question[0]))
@@ -105,11 +107,16 @@ func (m *Response) ednsStateFor(qctx *handler.QueryContext) ednsState {
 	}
 
 	clientWantsPadding := qctx.ClientWantsPadding
-	if !clientWantsPadding {
+	if !clientWantsPadding && !qctx.EDNSParsed {
 		clientWantsPadding = edns.HasPaddingOption(qctx.Req)
 	}
 
-	cookieStr := m.generateCookieStr(qctx.CookieOpt, qctx.ClientIP)
+	// CookieStr was computed during EDNS validation (single HMAC per query);
+	// the fallback compute only serves early short-circuits before EDNS.
+	cookieStr := qctx.CookieStr
+	if cookieStr == "" && !qctx.EDNSParsed {
+		cookieStr = m.generateCookieStr(qctx.CookieOpt, qctx.ClientIP)
+	}
 
 	// qctx.IsSecure is deliberately NOT part of shouldAddEDNS — including it
 	// forced every TLS-family listener (DoT/DoQ/DoH/DoH3/DTLS/TLCP/DTLCP)

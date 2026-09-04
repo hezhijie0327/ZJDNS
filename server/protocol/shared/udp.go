@@ -373,7 +373,7 @@ func (l *dtlsPacketListener) dispatch(src *net.UDPAddr, pb *[]byte, n int) {
 		l.mu.Unlock()
 	}
 
-	cc.lastSeen.Store(time.Now().Unix())
+	cc.lastSeen.Store(log.NowUnix())
 	cc.sendMu.Lock()
 	if cc.closed.Load() {
 		cc.sendMu.Unlock()
@@ -767,7 +767,7 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 				dtlcpState.mu.Unlock()
 			}
 
-			dc.lastSeen.Store(time.Now().Unix())
+			dc.lastSeen.Store(log.NowUnix())
 			if !dc.Send(DemuxPacket{Data: (*pb)[:n], Addr: src}) {
 				PacketBufPool.Put(pb)
 			}
@@ -796,6 +796,12 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 
 				capturedDC := dc
 				capturedHandler := g.ServeDNSCrypt
+				// Per-client worker admission: DNSCrypt queries are stateless
+				// datagrams, so each packet goes to its own goroutine — the
+				// former synchronous drain (decrypt→resolve→respond inline in
+				// the drain loop) let one slow upstream stall every later
+				// packet of the client.  Saturated → drop (client retransmits).
+				sem := make(chan struct{}, config.DefaultMaxPipe)
 				m.host.Go(func() error {
 					defer zdnsutil.HandlePanic("Shared DNSCrypt UDP client")
 					defer rt.release()
@@ -804,17 +810,27 @@ func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
 						if !pktOk {
 							return nil
 						}
-						capturedHandler(m.host.Ctx(), pkt.Data, pkt.Addr, capturedDC)
-						// Return the pool buffer after synchronous processing.
-						full := pkt.Data[:cap(pkt.Data)]
-						PacketBufPool.Put(&full)
+						select {
+						case sem <- struct{}{}:
+						default:
+							full := pkt.Data[:cap(pkt.Data)]
+							PacketBufPool.Put(&full)
+							continue
+						}
+						go func(pkt DemuxPacket) {
+							defer func() { <-sem }()
+							defer zdnsutil.HandlePanic("Shared DNSCrypt UDP query")
+							capturedHandler(m.host.Ctx(), pkt.Data, pkt.Addr, capturedDC)
+							full := pkt.Data[:cap(pkt.Data)]
+							PacketBufPool.Put(&full)
+						}(pkt)
 					}
 				})
 			} else {
 				dnscryptState.mu.Unlock()
 			}
 
-			dc.lastSeen.Store(time.Now().Unix())
+			dc.lastSeen.Store(log.NowUnix())
 			if !dc.Send(DemuxPacket{Data: (*pb)[:n], Addr: src}) {
 				PacketBufPool.Put(pb)
 			}
