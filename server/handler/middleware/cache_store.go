@@ -80,17 +80,11 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 		msg.Rcode = qr.Rcode
 	}
 
-	// Determine DNSSEC status and EDE code.
-	var dnssecStatus string
+	// DNSSEC EDE for the response (the journal status is derived by the
+	// Stats middleware from the resolution result).
 	var dnssecEDECode uint16
-	switch {
-	case validated:
-		dnssecStatus = config.DNSSECStatusSecure
-	case qr.DNSSECEDE != 0:
+	if !validated && qr.DNSSECEDE != 0 {
 		dnssecEDECode = qr.DNSSECEDE
-		dnssecStatus = config.DNSSECStatusBogus
-	default:
-		dnssecStatus = config.DNSSECStatusInsecure
 	}
 
 	if validated {
@@ -114,18 +108,7 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 		// leak the first to the GC.
 		msg.Rcode = dns.RcodeServerFailure
 		qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorOther, ExtraText: "ECS response mismatch"}
-		// This SERVFAIL short-circuits below the standard record block —
-		// record it here or the security-relevant outcome never reaches
-		// query_stats/query_log (H-L11).
-		rec := cache.AcquireRequestRecord()
-		rec.Qname = qname
-		rec.Qtype = qtype
-		rec.Qclass = qclass
-		rec.Protocol = qctx.Protocol
-		rec.Result = "error"
-		rec.Rcode = dns.RcodeServerFailure
-		m.store.RecordRequest(rec)
-		cache.ReleaseRequestRecord(rec)
+		qctx.Result = "error"
 		return msg
 	}
 	if responseECS == nil && ecsOpt != nil {
@@ -143,20 +126,7 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 		log.Debugf("CACHE: populating cache for %s", qname)
 	}
 
-	// Request log.
-	rec := cache.AcquireRequestRecord()
-	rec.Qname = qname
-	rec.Qtype = qtype
-	rec.Qclass = qclass
-	rec.Protocol = qctx.Protocol
-	rec.Result = "miss"
-	rec.ResponseTime = handler.ElapsedMS(qctx.StartTime)
-	rec.Rcode = int(qr.Rcode) // real resolution rcode (NXDOMAIN/SERVFAIL land in the right journal group)
-	rec.Server = qr.Server
-	rec.Poisoned = qr.Poisoned
-	rec.DNSSECStatus = dnssecStatus
-	m.store.RecordRequest(rec)
-	cache.ReleaseRequestRecord(rec)
+	qctx.Result = "miss"
 
 	// Latency probe.
 	if m.prober != nil {
@@ -190,26 +160,16 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 	qr := qctx.ResolutionResult
 	qname := qctx.Qname
 	qtype := qctx.Qtype
-	qclass := qctx.Qclass
 	ecsOpt := qctx.ECSOpt
 	queryErr := qr.Err
 
 	// Try cache fallback — fresh or stale.
-	if entry, found, isExpired := m.store.Get(qname, qtype, qclass, ecsOpt); found {
+	if entry, found, isExpired := m.store.Get(qname, qtype, qctx.Qclass, ecsOpt); found {
 		if !isExpired || entry.CanServeExpired(config.DefaultStaleMaxAge) {
 			if log.IsDebug() {
 				log.Debugf("CACHE: serving cached result for %s, ttl_remaining=%d", qname, entry.RemainingTTL())
 			}
-			rec := cache.AcquireRequestRecord()
-			rec.Qname = qname
-			rec.Qtype = qtype
-			rec.Qclass = qclass
-			rec.Protocol = qctx.Protocol
-			rec.Result = "error"
-			rec.Rcode = dns.RcodeServerFailure
-			rec.ResponseTime = handler.ElapsedMS(qctx.StartTime)
-			m.store.RecordRequest(rec)
-			cache.ReleaseRequestRecord(rec)
+			qctx.Result = "error"
 			return buildCacheResponse(qctx, entry, isExpired)
 		}
 		// Entry cannot serve stale and is dropped — return the pool-owned
@@ -225,35 +185,19 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 	msg.Rcode = dns.RcodeServerFailure
 
 	edeCode := dns.ExtendedErrorNetworkError
-	dnssecStatus := ""
 	if qr.DNSSECEDE != 0 {
 		edeCode = qr.DNSSECEDE
-		dnssecStatus = config.DNSSECStatusBogus
 		if log.IsDebug() {
 			log.Debugf("SECURITY: using DNSSEC EDE %d from recursive resolver", edeCode)
 		}
-	}
-	if dnssecStatus == "" {
-		if dnsErr, ok := errors.AsType[*resolver.DNSSECError](queryErr); ok {
-			edeCode = dnsErr.EDECode
-			dnssecStatus = config.DNSSECStatusBogus
-			if log.IsDebug() {
-				log.Debugf("SECURITY: DNSSEC error mapped to EDE %d: %s", edeCode, dnsErr.Message)
-			}
+	} else if dnsErr, ok := errors.AsType[*resolver.DNSSECError](queryErr); ok {
+		edeCode = dnsErr.EDECode
+		if log.IsDebug() {
+			log.Debugf("SECURITY: DNSSEC error mapped to EDE %d: %s", edeCode, dnsErr.Message)
 		}
 	}
 
-	rec := cache.AcquireRequestRecord()
-	rec.Qname = qname
-	rec.Qtype = qtype
-	rec.Qclass = qclass
-	rec.Protocol = qctx.Protocol
-	rec.Result = "error"
-	rec.Rcode = dns.RcodeServerFailure
-	rec.ResponseTime = handler.ElapsedMS(qctx.StartTime)
-	rec.DNSSECStatus = dnssecStatus
-	m.store.RecordRequest(rec)
-	cache.ReleaseRequestRecord(rec)
+	qctx.Result = "error"
 
 	qctx.EDE = &dns.EDE{InfoCode: edeCode, ExtraText: ""}
 	return msg
@@ -262,7 +206,6 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 func (m *CacheStore) buildCIDRRefused(qctx *handler.QueryContext) *dns.Msg {
 	qname := qctx.Qname
 	qtype := qctx.Qtype
-	qclass := qctx.Qclass
 
 	if log.IsDebug() {
 		log.Debugf("RESULT: %s %s | rcode=REFUSED, blocked by CIDR filtering", qname, dns.TypeToString[qtype])
@@ -272,17 +215,7 @@ func (m *CacheStore) buildCIDRRefused(qctx *handler.QueryContext) *dns.Msg {
 	msg.Rcode = dns.RcodeRefused
 
 	qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorBlocked, ExtraText: ""}
-
-	rec := cache.AcquireRequestRecord()
-	rec.Qname = qname
-	rec.Qtype = qtype
-	rec.Qclass = qclass
-	rec.Protocol = qctx.Protocol
-	rec.Result = "blocked"
-	rec.Rcode = dns.RcodeRefused
-	rec.ResponseTime = handler.ElapsedMS(qctx.StartTime)
-	m.store.RecordRequest(rec)
-	cache.ReleaseRequestRecord(rec)
+	qctx.Result = "blocked"
 
 	return msg
 }

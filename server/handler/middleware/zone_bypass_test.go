@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"testing"
-	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/ruleset"
 	"zjdns/server/handler"
@@ -36,7 +35,7 @@ func TestZone_MatchNegation(t *testing.T) {
 		return engine.Match(qname, ip.String())
 	}
 
-	z := &Zone{evaluator: evaluator, tagMatcher: tagMatcher, cache: cache.New(config.LimitSettings{}, config.LimitSettings{}, "", "")}
+	z := &Zone{evaluator: evaluator, tagMatcher: tagMatcher}
 
 	nextCalled := false
 	h := z.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
@@ -95,7 +94,7 @@ func TestZone_MatchNegation_TwoIPs(t *testing.T) {
 		return engine.Match(qname, ip.String())
 	}
 
-	z := &Zone{evaluator: evaluator, tagMatcher: tagMatcher, cache: cache.New(config.LimitSettings{}, config.LimitSettings{}, "", "")}
+	z := &Zone{evaluator: evaluator, tagMatcher: tagMatcher}
 
 	nextCalled := false
 	h := z.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {

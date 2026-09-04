@@ -115,7 +115,7 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	// RFC 8482 minimal ANY response — wrapped INSIDE Zone (earlier Wrap call
 	// = inner layer), so operator-defined zone rules for ANY queries run
 	// first and take precedence; only unmatched ANY queries reach Any.
-	h = (&Any{store: deps.Cache}).Wrap(h)
+	h = (&Any{}).Wrap(h)
 
 	// Zone rule evaluation (short-circuit on match). The evaluator is
 	// always wired by server.New, but guard for tests and embedded use.
@@ -123,7 +123,6 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 		h = (&Zone{
 			evaluator:  deps.ZoneEvaluator,
 			tagMatcher: deps.TagMatcher,
-			cache:      deps.Cache,
 		}).Wrap(h)
 	}
 
@@ -158,6 +157,11 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 
 	// Response finalization: always runs, applies EDNS + restores domain.
 	h = (&Response{edns: deps.EDNS}).Wrap(h)
+
+	// Stats: the single journal recording site — materialises the outcome
+	// classification (qctx.Result) set by the deciding middleware.  Outermost
+	// layer, so ResponseTime covers the full chain.
+	h = (&Stats{store: deps.Cache}).Wrap(h)
 
 	return h
 }

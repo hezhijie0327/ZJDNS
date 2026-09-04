@@ -50,16 +50,7 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// Fresh hit — serve immediately.
 		if !isExpired {
 			qctx.Res = buildCacheResponse(qctx, entry, false)
-
-			rec := cache.AcquireRequestRecord()
-			rec.Qname = qname
-			rec.Qtype = qtype
-			rec.Qclass = qclass
-			rec.Protocol = qctx.Protocol
-			rec.Result = "hit"
-			rec.Rcode = int(qctx.Res.Rcode) // cached entry's real rcode (negative-cache NXDOMAIN → rcode 3)
-			m.store.RecordRequest(rec)
-			cache.ReleaseRequestRecord(rec)
+			qctx.Result = "hit" // journal rcode comes from the served response (negative-cache NXDOMAIN → 3)
 
 			// Prefetch if TTL is below threshold. TryGo, not Go: the call
 			// sits on the per-query path, and Go blocks when the refresh
@@ -111,15 +102,7 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 						m.finishRefresh(qname, qtype, qclass, ecsOpt) // slot saturated
 					}
 				}
-				rec := cache.AcquireRequestRecord()
-				rec.Qname = qname
-				rec.Qtype = qtype
-				rec.Qclass = qclass
-				rec.Protocol = qctx.Protocol
-				rec.Result = "stale"
-				rec.Rcode = int(qctx.Res.Rcode) // stale entry's real rcode
-				m.store.RecordRequest(rec)
-				cache.ReleaseRequestRecord(rec)
+				qctx.Result = "stale"
 				return nil
 			}
 
@@ -129,15 +112,7 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			// block all future refreshes for the key (2026-09 H-M1).
 			refreshed := m.refreshGroup != nil && m.closed != nil && !m.closed() && m.tryStartRefresh(qname, qtype, qclass, ecsOpt)
 			if !refreshed {
-				rec := cache.AcquireRequestRecord()
-				rec.Qname = qname
-				rec.Qtype = qtype
-				rec.Qclass = qclass
-				rec.Protocol = qctx.Protocol
-				rec.Result = "stale"
-				rec.Rcode = int(qctx.Res.Rcode) // stale entry's real rcode
-				m.store.RecordRequest(rec)
-				cache.ReleaseRequestRecord(rec)
+				qctx.Result = "stale"
 				return nil
 			}
 
@@ -227,38 +202,14 @@ func (m *CacheLookup) serveExpiredWithRefresh(qctx *handler.QueryContext, qname 
 			// the serve-expired window — a fast refresh would otherwise leave
 			// the entry permanently stale (H11).
 			handler.StoreIfCacheable(m.store, qname, qtype, qclass, ecsOpt, qr)
-			rec := cache.AcquireRequestRecord()
-			rec.Qname = qctx.Qname
-			rec.Qtype = qctx.Qtype
-			rec.Qclass = qctx.Qclass
-			rec.Protocol = qctx.Protocol
-			rec.Result = "miss"
-			rec.Rcode = int(qr.Rcode) // fresh resolution rcode (msg.Rcode was aligned to it above)
-			m.store.RecordRequest(rec)
-			cache.ReleaseRequestRecord(rec)
+			qctx.Result = "miss" // journal rcode: msg.Rcode was aligned to qr.Rcode above
 		} else {
 			// Refresh failed — serve stale response.
-			rec := cache.AcquireRequestRecord()
-			rec.Qname = qname
-			rec.Qtype = qtype
-			rec.Qclass = qclass
-			rec.Protocol = qctx.Protocol
-			rec.Result = "stale"
-			rec.Rcode = int(qctx.Res.Rcode) // stale entry's real rcode
-			m.store.RecordRequest(rec)
-			cache.ReleaseRequestRecord(rec)
+			qctx.Result = "stale"
 		}
 	case <-timer.C:
 		// Stale response stays in qctx.Res.  Background refresh continues.
-		rec := cache.AcquireRequestRecord()
-		rec.Qname = qname
-		rec.Qtype = qtype
-		rec.Qclass = qclass
-		rec.Protocol = qctx.Protocol
-		rec.Result = "stale"
-		rec.Rcode = int(qctx.Res.Rcode) // stale entry's real rcode
-		m.store.RecordRequest(rec)
-		cache.ReleaseRequestRecord(rec)
+		qctx.Result = "stale"
 		// TryGo, not Go: this call sits on the per-query path and Go blocks
 		// while the refresh limit is saturated. The foreground refresh
 		// (started above) already released its gate via refreshFinished, so

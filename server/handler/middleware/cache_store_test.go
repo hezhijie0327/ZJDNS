@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/netip"
 	"strings"
 	"testing"
@@ -82,8 +83,15 @@ func TestCacheStore_BogusEDENotCached(t *testing.T) {
 			DNSSECEDE: dns.ExtendedErrorDNSBogus, // EDE 6 — bogus
 		},
 	}).InitQuestion()
-	m := &CacheStore{store: store}
-	m.buildSuccess(qctx)
+	// Stats is the single journal recording site — drive buildSuccess
+	// through it, as the chain would.
+	chain := (&Stats{store: store}).Wrap(handler.QueryHandlerFunc(func(_ context.Context, qc *handler.QueryContext) error {
+		qc.Res = (&CacheStore{store: store}).buildSuccess(qc)
+		return nil
+	}))
+	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, found, _ := store.Get("example.com.", dns.TypeA, dns.ClassINET, nil); found {
 		t.Fatal("bogus result must not be cached")
@@ -271,8 +279,15 @@ func TestCacheStore_MissRecordsRealRcode(t *testing.T) {
 			Cacheable: true,
 		},
 	}).InitQuestion()
-	m := &CacheStore{store: store}
-	m.buildSuccess(qctx)
+	// Stats is the single journal recording site — drive buildSuccess
+	// through it, as the chain would.
+	chain := (&Stats{store: store}).Wrap(handler.QueryHandlerFunc(func(_ context.Context, qc *handler.QueryContext) error {
+		qc.Res = (&CacheStore{store: store}).buildSuccess(qc)
+		return nil
+	}))
+	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
 
 	lines := store.StatsRcode()
 	var journalLine string

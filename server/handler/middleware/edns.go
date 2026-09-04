@@ -128,6 +128,7 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				if log.IsDebug() {
 					log.Debugf("EDNS: bad server cookie length %d (expected %d) from %s, returning BADCOOKIE", len(cookieOpt.ServerCookie), edns.DefaultCookieServerLen, qctx.ClientIP)
 				}
+				qctx.Result = "badcookie"
 				qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt, qctx.ECSOpt)
 				return nil
 			}
@@ -141,6 +142,7 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				if log.IsDebug() {
 					log.Debugf("EDNS: bad server cookie (status=%d) from %s, returning BADCOOKIE", cookieStatus, qctx.ClientIP)
 				}
+				qctx.Result = "badcookie"
 				qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt, qctx.ECSOpt)
 				return nil
 			}

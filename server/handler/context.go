@@ -54,6 +54,14 @@ type QueryContext struct {
 
 	StartTime int64 // log.NowUnixNano() — zero-alloc timestamp for response-time calculation
 
+	// Result is the outcome classification for the request journal, set by
+	// the middleware that decided the outcome ("hit", "stale", "miss",
+	// "zone", "any", "badcookie", "blocked", "error").  The Stats middleware
+	// — the only journal recording site — materialises it after the chain
+	// returns.  Empty means "not journaled" (rejected before
+	// classification, e.g. the FORMERR gates).
+	Result string
+
 	// ── Pre-extracted question fields (set once in ServeDNS) ──
 	//
 	// The single source of truth for the question: middleware MUST read these

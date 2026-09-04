@@ -193,33 +193,11 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	err := h.chain.ServeDNS(h.ctx, qctx)
 
 	if err != nil && qctx.Res == nil {
+		// The chain broke before building a response (the Stats middleware
+		// already journalled the error outcome from qctx.Result/err).
 		msg := BuildResponseMsg(req)
 		msg.Rcode = dns.RcodeServerFailure
-		rec := cache.AcquireRequestRecord()
-		rec.Result = "error"
-		rec.Protocol = protocol
-		rec.Rcode = dns.RcodeServerFailure
-		// Full identification, matching every other error record (H-L8).
-		if qd := req.Question[0]; qd != nil {
-			rec.Qname = strings.ToLower(qd.Header().Name)
-			rec.Qtype = dns.RRToType(qd)
-		}
-		rec.ResponseTime = ElapsedMS(qctx.StartTime)
-		h.cache.RecordRequest(rec)
-		cache.ReleaseRequestRecord(rec)
 		return msg
-	}
-
-	// BADCOOKIE responses are short-circuited by the EDNS middleware before
-	// any stats-recording middleware; record them here so the badcookie
-	// result class is populated (RFC 7873 §5.2).
-	if qctx.Res != nil && qctx.Res.Rcode == dns.RcodeBadCookie {
-		rec := cache.AcquireRequestRecord()
-		rec.Result = "badcookie"
-		rec.Protocol = protocol
-		rec.Rcode = dns.RcodeBadCookie
-		h.cache.RecordRequest(rec)
-		cache.ReleaseRequestRecord(rec)
 	}
 
 	if qctx.Res != nil && log.IsDebug() {

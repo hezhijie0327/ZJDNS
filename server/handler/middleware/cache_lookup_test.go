@@ -24,18 +24,21 @@ func TestCacheLookup_HitRecordsCachedRcode(t *testing.T) {
 	store.Set("example.com.", dns.TypeA, dns.ClassINET, nil, nil, nil, nil, false, dns.RcodeNameError)
 
 	// Fresh hit path: CacheLookup.Wrap builds the response from the entry.
-	m := &CacheLookup{store: store}
+	// Stats is the single journal recording site — exercise it around the
+	// middleware under test, as AssembleChain wires it.
+	// next must never run on a fresh hit.
+	next := handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
+		t.Fatal("next chain invoked on a fresh cache hit")
+		return nil
+	})
+	m := (&Stats{store: store}).Wrap((&CacheLookup{store: store}).Wrap(next))
 	qctx := (&handler.QueryContext{
 		Req:      testQuery(t),
 		Qname:    "example.com.",
 		Qtype:    dns.TypeA,
 		Protocol: "udp",
 	}).InitQuestion()
-	// next must never run on a fresh hit.
-	if err := m.Wrap(handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
-		t.Fatal("next chain invoked on a fresh cache hit")
-		return nil
-	})).ServeDNS(context.Background(), qctx); err != nil {
+	if err := m.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
 	if qctx.Res == nil || qctx.Res.Rcode != dns.RcodeNameError {
@@ -70,16 +73,17 @@ func TestCacheLookup_StaleRecordsCachedRcode(t *testing.T) {
 		[]dns.RR{short}, nil, nil, false, dns.RcodeNameError)
 	time.Sleep(2500 * time.Millisecond)
 
-	m := &CacheLookup{store: store}
+	next := handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
+		return nil // miss path — unreachable for an expired-but-servable entry
+	})
+	m := (&Stats{store: store}).Wrap((&CacheLookup{store: store}).Wrap(next))
 	qctx := (&handler.QueryContext{
 		Req:      testQuery(t),
 		Qname:    "example.com.",
 		Qtype:    dns.TypeA,
 		Protocol: "udp",
 	}).InitQuestion()
-	if err := m.Wrap(handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
-		return nil // miss path — unreachable for an expired-but-servable entry
-	})).ServeDNS(context.Background(), qctx); err != nil {
+	if err := m.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
 	if qctx.Res == nil {

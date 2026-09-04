@@ -5,7 +5,6 @@ import (
 	"net"
 	"strings"
 	"sync/atomic"
-	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/internal/ttl"
@@ -22,7 +21,6 @@ import (
 type Zone struct {
 	evaluator  handler.ZoneEvaluator
 	tagMatcher func(qname string, ip net.IP) map[string]bool
-	cache      cache.Store
 }
 
 // wildcardPrefix is the zone-rule wildcard marker (matches zone package).
@@ -109,15 +107,7 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			log.Debugf("ZONE: matched rule for %s -> domain=%s rcode=%d", qname, zoneResult.Domain, zoneResult.Rcode)
 		}
 
-		rec := cache.AcquireRequestRecord()
-		rec.Qname = qname
-		rec.Qtype = qtype
-		rec.Qclass = qclass
-		rec.Protocol = qctx.Protocol
-		rec.Result = "zone"
-		rec.Rcode = zoneResult.Rcode
-		m.cache.RecordRequest(rec)
-		cache.ReleaseRequestRecord(rec)
+		qctx.Result = "zone"
 
 		// Non-success rcode → build error response.
 		if zoneResult.Rcode != dns.RcodeSuccess {
