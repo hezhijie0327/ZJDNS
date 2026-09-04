@@ -190,7 +190,7 @@ func New(cfg *Config) (*Resolver, error) {
 	r.recursive = &Recursive{
 		resolver:      r,
 		cache:         cfg.Cache,
-		delegations:   lrumap.New[string, *delegationEntry](delegationMax),
+		delegations:   lrumap.NewSharded[string, *delegationEntry](delegationMax),
 		ctx:           cfg.Ctx,
 		addressFamily: cfg.AddressFamily,
 	}

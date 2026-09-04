@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/pending"
 
 	"codeberg.org/miekg/dns"
@@ -41,7 +42,7 @@ func (r *Recursive) resolveNSAddrFlight(ctx context.Context, nsName string, qtyp
 	r.nsAddrFlightOnce.Do(func() {
 		r.nsAddrFlight = pending.NewResultGroup[string, nsAddrFlightResult]()
 	})
-	key := dnsutil.Canonical(dnsutil.Fqdn(nsName)) + "|" + dns.TypeToString[qtype]
+	key := zdnsutil.Canonical(dnsutil.Fqdn(nsName)) + "|" + dns.TypeToString[qtype]
 	// _ = error/leader: a follower whose ctx expired gets the zero value;
 	// the len(res.addrs) checks below treat it as a miss.
 	res, _, _ := r.nsAddrFlight.Do(ctx, key, func(ctx context.Context) (nsAddrFlightResult, error) {

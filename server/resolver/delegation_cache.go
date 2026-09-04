@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/defense"
 
@@ -94,7 +95,7 @@ func nsNamesFrom(nsRecords []*dns.NS) []string {
 	names := make([]string, 0, len(nsRecords))
 	for _, ns := range nsRecords {
 		if ns.Ns != "" {
-			names = append(names, dnsutil.Canonical(ns.Ns))
+			names = append(names, zdnsutil.Canonical(ns.Ns))
 		}
 	}
 	return names
@@ -147,8 +148,8 @@ func (r *Recursive) storeDelegation(zone, parent string, nsRecords []*dns.NS, ad
 		return
 	}
 
-	zone = dnsutil.Canonical(zone)
-	parent = dnsutil.Canonical(parent)
+	zone = zdnsutil.Canonical(zone)
+	parent = zdnsutil.Canonical(parent)
 	nsNames := nsNamesFrom(nsRecords)
 	if len(nsNames) == 0 {
 		return
@@ -180,7 +181,7 @@ func (r *Recursive) lookupDelegation(qname string, qtype uint16) (*delegationEnt
 	}
 
 	// For parent-side qtypes at the qname exactly, skip the qname zone.
-	if dns.EqualName(zones[0], dnsutil.Canonical(dnsutil.Fqdn(qname))) && parentSideType(qtype) {
+	if dns.EqualName(zones[0], zdnsutil.Canonical(dnsutil.Fqdn(qname))) && parentSideType(qtype) {
 		zones = zones[1:]
 		if len(zones) == 0 {
 			return nil, false

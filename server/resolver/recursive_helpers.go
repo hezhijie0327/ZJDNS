@@ -6,6 +6,7 @@ import (
 	"strings"
 	"zjdns/config"
 	"zjdns/edns"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 
@@ -24,7 +25,7 @@ func (r *Recursive) collectBestNSMatch(response *dns.Msg, normalizedQname, query
 
 	for _, rrec := range allRRSections {
 		if ns, ok := rrec.(*dns.NS); ok {
-			nsName := dnsutil.Canonical(rrec.Header().Name)
+			nsName := zdnsutil.Canonical(rrec.Header().Name)
 			isMatch := dnsutil.IsBelow(dnsutil.Fqdn(nsName), dnsutil.Fqdn(normalizedQname))
 			if isMatch && len(nsName) >= len(bestMatch) {
 				if len(nsName) > len(bestMatch) {
@@ -136,17 +137,17 @@ func (r *Recursive) advanceApexZoneCut(ctx context.Context, queryName string, na
 	// keys or treat a would-be-insecure delegation as unverifiable.
 	r.updateDNSSECChain(ctx, nsResp, currentDomain, queryName, nameservers, chain)
 	r.cacheGlueRecords(nsResult.glue)
-	r.storeDelegation(dnsutil.Canonical(queryName), currentDomain, nsRecords, nsResult.addrs, chain, nsVerdict)
+	r.storeDelegation(zdnsutil.Canonical(queryName), currentDomain, nsRecords, nsResult.addrs, chain, nsVerdict)
 	log.Debugf("RECURSION: zone=%s via authoritative-NODATA zone cut, %d NS names -> %d addresses (source=%s): %v",
 		queryName, len(nsRecords), len(nsResult.addrs), nsResult.source, nsResult.addrs)
-	return nsResult.addrs, dnsutil.Canonical(queryName), true
+	return nsResult.addrs, zdnsutil.Canonical(queryName), true
 }
 
 // checkLameDelegation detects lame delegations where NS records point back
 // to the same zone but the response is not authoritative (AA flag not set).
 // Returns a terminal result for the caller to return, or nil if not lame.
 func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMatch string, validated bool, ecsResponse *edns.ECSOption) *QueryResult {
-	currentDomainNormalized := dnsutil.Canonical(currentDomain)
+	currentDomainNormalized := zdnsutil.Canonical(currentDomain)
 	if bestMatch != currentDomainNormalized || currentDomainNormalized == "." {
 		return nil
 	}
@@ -215,7 +216,7 @@ func (r *Recursive) shouldRetryMinimisedQname(queryName, qname string, qnameMini
 		return false
 	}
 	for _, rr := range response.Answer {
-		if rr != nil && strings.EqualFold(dnsutil.Canonical(rr.Header().Name), normalizedQname) {
+		if rr != nil && strings.EqualFold(zdnsutil.Canonical(rr.Header().Name), normalizedQname) {
 			return false
 		}
 	}

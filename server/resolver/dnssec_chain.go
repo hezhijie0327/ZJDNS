@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"zjdns/config"
 	"zjdns/edns"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pending"
 	"zjdns/internal/pool"
@@ -24,6 +25,24 @@ type dnssecChain struct {
 	lastEDECode            uint16 // EDE code for the most recent validation failure
 	zoneCutDetected        bool   // set when answer RRSIGs are signed by a child zone's keys
 	dsPresentButUnverified bool   // DS records found but RRSIG verification failed
+
+	// verifyMemo caches the IsResponseValid outcome for the response of the
+	// CURRENT delegation level: isValidWithDNSSEC runs at the level gate
+	// (recursive.go) and isDNSSECValid re-ran the same full crypto
+	// verification via processAnswerWithDNSSEC — twice the RRSA/ECDSA
+	// verify cost per level on every signed-zone walk.  The response
+	// pointer identifies the level's response (a new *dns.Msg per level);
+	// the keys slice is compared by identity (chain.zoneDNSKEYs is not
+	// mutated between the two call sites of one level).
+	verifyMemo dnssecVerifyMemo
+}
+
+// dnssecVerifyMemo is the per-level verification cache (see dnssecChain).
+type dnssecVerifyMemo struct {
+	response *dns.Msg
+	keys     []*dns.DNSKEY
+	valid    bool
+	err      error
 }
 
 // errDNSKEYSelfSign is returned by verifyDNSKEYWithDS when the child zone's
@@ -75,7 +94,7 @@ func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, c
 
 	// If the response came from a zone with known DNSKEYs, verify the answer
 	if len(chain.zoneDNSKEYs) > 0 && len(response.Answer) > 0 {
-		validated, valErr := crypto.IsResponseValid(response, currentDomain, chain.zoneDNSKEYs)
+		validated, valErr := r.verifyResponseOnce(chain, response, currentDomain, chain.zoneDNSKEYs)
 		if validated {
 			// Clear any EDE a previous delegation level left behind.
 			chain.lastEDECode = 0
@@ -321,7 +340,7 @@ func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string,
 	})
 	// _ = error/leader: a follower whose ctx expired gets the zero value;
 	// the len(keys) check below treats it as a miss.
-	keys, _, _ := r.dnskeyFlight.Do(ctx, dnsutil.Canonical(dnsutil.Fqdn(zone)), func(ctx context.Context) ([]*dns.DNSKEY, error) {
+	keys, _, _ := r.dnskeyFlight.Do(ctx, zdnsutil.Canonical(dnsutil.Fqdn(zone)), func(ctx context.Context) ([]*dns.DNSKEY, error) {
 		// A concurrent walk may have populated the zone-key cache while we
 		// waited for leadership — re-check before fetching.
 		if cached := crypto.ZoneKeys(zone); len(cached) > 0 {
@@ -517,10 +536,30 @@ func (r *Recursive) isDNSSECValid(ctx context.Context, response *dns.Msg, namese
 // are missing, it retries the authoritative query once — a different NS may
 // have synchronised signatures.  Missing RRSIGs (not bogus) don't set DNSBogus
 // and don't trigger dnssec_enforce.
-func (r *Recursive) validateOrRetry(ctx context.Context, response *dns.Msg, nameservers []string, question Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain, verifiedKeys []*dns.DNSKEY) bool {
-	crypto := r.resolver.validator.Crypto
+// verifyResponseOnce runs crypto.IsResponseValid with the per-level memo:
+// the level gate (isValidWithDNSSEC) and processAnswerWithDNSSEC share one
+// verification per response+keys pair instead of paying the full signature
+// pass twice on every signed delegation level.
+func (r *Recursive) verifyResponseOnce(chain *dnssecChain, response *dns.Msg, currentDomain string, keys []*dns.DNSKEY) (bool, error) {
+	if m := chain.verifyMemo; m.response == response && sameKeySlice(m.keys, keys) {
+		return m.valid, m.err
+	}
+	valid, err := r.resolver.validator.Crypto.IsResponseValid(response, currentDomain, keys)
+	chain.verifyMemo = dnssecVerifyMemo{response: response, keys: keys, valid: valid, err: err}
+	return valid, err
+}
 
-	validated, err := crypto.IsResponseValid(response, currentDomain, verifiedKeys)
+// sameKeySlice reports identity equality — the memo is only valid for the
+// same underlying keys slice, never for equal-but-different sets.
+func sameKeySlice(a, b []*dns.DNSKEY) bool {
+	if len(a) == 0 || len(a) != len(b) {
+		return len(a) == 0 && len(b) == 0
+	}
+	return &a[0] == &b[0]
+}
+
+func (r *Recursive) validateOrRetry(ctx context.Context, response *dns.Msg, nameservers []string, question Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, chain *dnssecChain, verifiedKeys []*dns.DNSKEY) bool {
+	validated, err := r.verifyResponseOnce(chain, response, currentDomain, verifiedKeys)
 	// A previous delegation level may have left a non-zero lastEDECode
 	// (e.g. DNSBogus when the TLD's DNSKEYs were unreachable).  If THIS
 	// level validates cleanly, the stale EDE must not surface to the
