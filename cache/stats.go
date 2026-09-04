@@ -297,19 +297,53 @@ func (s *Cache) UpdateLatency(ip string, latencyMS int) {
 		// anything (D16).
 		return
 	}
+	s.UpdateLatencyBatch(map[string]int{ip: latencyMS})
+}
+
+// UpdateLatencyBatch stores a batch of latency measurements and bumps the
+// latency generation ONCE when any smoothed value changed — a probe round
+// touching N IPs must not invalidate every per-entry sorted-wire cache N
+// times.  Entries whose IPs kept their smoothed value (stable RTTs) keep
+// serving their cached sort across probe rounds.
+func (s *Cache) UpdateLatencyBatch(values map[string]int) {
+	if len(values) == 0 {
+		return
+	}
 	s.hasLatencyData.Store(true)
 
 	now := log.NowUnix()
-	if old, ok := s.latencies.Get(ip); ok && old.lastProbe > 0 && old.lastProbe >= now-defaultStaleMaxAge {
-		// Unbiased integer EWMA: srtt = ((N-1)·srtt + rtt) / N.  The naive
-		// (srtt + rtt) / N form converges to rtt/(N-1) for N > 2 — a
-		// systematic underestimate — so N must weight the previous value.
-		latencyMS = ((config.DefaultLatencyProbeSmoothFactor-1)*old.latency + latencyMS) / config.DefaultLatencyProbeSmoothFactor
+	changed := false
+	for ip, latencyMS := range values {
+		if latencyMS < 0 {
+			latencyMS = 0
+		}
+		if net.ParseIP(ip) == nil {
+			// Flag AFTER validation: a non-IP arg previously enabled the
+			// per-hit latency sort with an empty table that can never reorder
+			// anything (D16).
+			continue
+		}
+		oldLatency, hadOld := -1, false
+		if old, ok := s.latencies.Get(ip); ok {
+			if old.lastProbe > 0 && old.lastProbe >= now-defaultStaleMaxAge {
+				// Unbiased integer EWMA: srtt = ((N-1)·srtt + rtt) / N.  The
+				// naive (srtt + rtt) / N form converges to rtt/(N-1) for
+				// N > 2 — a systematic underestimate — so N must weight the
+				// previous value.
+				latencyMS = ((config.DefaultLatencyProbeSmoothFactor-1)*old.latency + latencyMS) / config.DefaultLatencyProbeSmoothFactor
+			}
+			oldLatency, hadOld = old.latency, true
+		}
+		s.latencies.Set(ip, latEntry{latency: latencyMS, lastProbe: now})
+		if !hadOld || oldLatency != latencyMS {
+			changed = true
+		}
 	}
-	s.latencies.Set(ip, latEntry{latency: latencyMS, lastProbe: now})
-	// Bump the latency generation: per-entry sorted-wire caches built under
-	// an older generation are stale and rebuild on their next hit.
-	s.latencyGen.Add(1)
+	if changed {
+		// Bump the latency generation: per-entry sorted-wire caches built
+		// under an older generation are stale and rebuild on their next hit.
+		s.latencyGen.Add(1)
+	}
 }
 
 // LatencyLastProbe returns the last probe time for an IP. Returns (0, false)

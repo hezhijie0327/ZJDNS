@@ -22,6 +22,7 @@ import (
 type CacheSetter interface {
 	Set(qname string, qtype, qclass uint16, ecs *edns.ECSOption, answer, authority, additional []dns.RR, validated bool, rcode uint16)
 	UpdateLatency(ip string, latencyMS int)
+	UpdateLatencyBatch(values map[string]int)
 	LatencyLastProbe(ip string) (int64, bool)
 }
 
@@ -169,9 +170,9 @@ func (p *Prober) probeAndReorder(ctx context.Context, qname string, answer []dns
 		return nil
 	}
 
-	for ipStr, lat := range latencies {
-		p.cache.UpdateLatency(ipStr, lat)
-	}
+	// One batched update — a single generation bump keeps the per-entry
+	// sorted-wire caches of unrelated domains valid across this probe round.
+	p.cache.UpdateLatencyBatch(latencies)
 	log.Debugf("LATENCY: updated %d latency values for %s", len(latencies), qname)
 	return nil
 }
@@ -271,10 +272,7 @@ func ProbeNSAddrs(ctx context.Context, cache CacheSetter, addrs []string) {
 	if len(latencies) == 0 {
 		return
 	}
-
-	for ipStr, lat := range latencies {
-		cache.UpdateLatency(ipStr, lat)
-	}
+	cache.UpdateLatencyBatch(latencies)
 }
 
 // defaultNSProbeSteps returns the default probe steps for NS/Root latency

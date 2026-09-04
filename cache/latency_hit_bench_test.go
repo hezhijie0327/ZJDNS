@@ -102,3 +102,38 @@ func TestLatencySortedWireCache(t *testing.T) {
 		t.Fatalf("post-update order = %v, want 1.2.3.10 first", flipped)
 	}
 }
+
+// TestLatencyBatchStableNoBump verifies the batch generation semantics: a
+// probe round whose EWMA-smoothed values are unchanged keeps per-entry
+// sorted-wire caches valid; a changed value invalidates exactly once.
+func TestLatencyBatchStableNoBump(t *testing.T) {
+	c := New(config.LimitSettings{}, config.LimitSettings{}, "", "")
+	ans := []dns.RR{
+		&dns.A{Hdr: dns.Header{Name: "b.example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("1.2.3.10")},
+		&dns.A{Hdr: dns.Header{Name: "b.example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("1.2.3.20")},
+	}
+	c.Set("b.example.com.", dns.TypeA, dns.ClassINET, nil, ans, nil, nil, false, 0)
+	c.UpdateLatency("1.2.3.10", 100)
+	c.UpdateLatency("1.2.3.20", 100)
+
+	sortHit := func() uint64 { return c.latencyGen.Load() }
+	_ = sortHit
+	gen0 := c.latencyGen.Load()
+	// Prime the sorted-wire cache with one hit.
+	if _, ok, _ := c.Get("b.example.com.", dns.TypeA, dns.ClassINET, nil); !ok {
+		t.Fatal("miss")
+	}
+
+	// Same-value probe round (stable RTT, converged EWMA): 100 == 100 →
+	// no change → generation must not move.
+	c.UpdateLatencyBatch(map[string]int{"1.2.3.10": 100, "1.2.3.20": 100})
+	if g := c.latencyGen.Load(); g != gen0 {
+		t.Fatalf("stable probe round bumped generation %d → %d", gen0, g)
+	}
+
+	// Changed value: exactly one bump.
+	c.UpdateLatencyBatch(map[string]int{"1.2.3.10": 5, "1.2.3.20": 100})
+	if g := c.latencyGen.Load(); g != gen0+1 {
+		t.Fatalf("changed round bumped %d, want exactly +1 (got %d)", g-gen0, g)
+	}
+}
