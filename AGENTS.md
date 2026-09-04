@@ -330,6 +330,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full type reference and des
 
 All logs use `zjdns/internal/log` (package-level `Default` logger). Default level: `info`.
 
+**Call-site performance contract:** bare `log.Debugf` is worry-free anywhere (~20ns / 3 small allocs when filtered — cheaper than stdlib slog; pinned by `BenchmarkDebugfFiltered`). ONLY per-query hot loops (middleware chain, protocol listeners) wrap with `if log.IsDebug()` — 1.6ns / 0 allocs (`BenchmarkDebugfGated`).
+
 **Component filtering:** `log_level` supports `"level:comp1,comp2"` syntax (e.g. `"debug:UPSTREAM,RECURSION"`).
 
 **canonical prefixes:** `TLS`, `CACHE`, `UPSTREAM`, `SERVER`, `EDNS`, `RECURSION`, `SECURITY`, `TCPPOOL`, `LATENCY`, `CONFIG`, `ZONE`, `PLAIN`, `PPROF`, `QUERY`, `RESULT`, `SIGNAL`, `PANIC`, `DNSCRYPT`, `TLCP`, `RULESET`, `DNS64`, `RESPONSE`, `ANY`, `IPDETECT`, `UDPPOOL`, `DOH`, `RESOLVER`, `MQTYPE` (28 total).

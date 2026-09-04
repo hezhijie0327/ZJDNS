@@ -12,6 +12,19 @@
 //
 // Messages with a "PREFIX: " prefix are filtered by component; messages
 // without a recognized prefix always pass through.
+//
+// ── Performance contract ──────────────────────────────────────────────────
+// A FILTERED-OUT Debugf call costs ~20ns and three small short-lived
+// allocations (the ...any boxing at the call site — measured cheaper than
+// stdlib slog's disabled path).  The compiler heap-allocates the boxed args
+// whenever they flow to fmt.Sprintf on ANY branch, so no in-package
+// structure can remove it; calling log.Debugf anywhere is therefore SAFE by
+// default — no gating ritual required.
+//
+// The exception is per-query hot loops (middleware chain, listeners): at
+// 100k+ qps the boxing is measurable allocation churn.  There — and only
+// there — wrap with `if log.IsDebug() { log.Debugf(...) }` (1.6ns, zero
+// allocations when filtered; BenchmarkDebugfFiltered/Gated pin both costs).
 package log
 
 import (
@@ -30,11 +43,13 @@ type Level int
 // Logger manages leveled logging with configurable output and optional
 // component-based filtering.
 type Logger struct {
-	level           atomic.Int32
-	writer          io.Writer
-	colorMap        [4]string
-	componentFilter map[string]bool // nil = all enabled; non-nil = only listed components
-	mu              sync.RWMutex    // protects componentFilter
+	level    atomic.Int32
+	writer   io.Writer
+	colorMap [4]string
+	// componentFilter is published lock-free: it is only written by
+	// SetComponentFilter at startup, but every emitted log line reads it —
+	// a per-line RWMutex made even filtered-out calls contend.
+	componentFilter atomic.Pointer[map[string]bool] // nil = all enabled
 }
 
 // TimeCache caches the current time with periodic one-second updates.
@@ -168,10 +183,8 @@ func (t *TimeCache) Stop() {
 // matching "PREFIX:" prefix are emitted. Messages without a recognized prefix
 // always pass through.
 func (m *Logger) SetComponentFilter(components []string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if len(components) == 0 {
-		m.componentFilter = nil
+		m.componentFilter.Store(nil)
 		return
 	}
 	filter := make(map[string]bool, len(components))
@@ -182,10 +195,10 @@ func (m *Logger) SetComponentFilter(components []string) {
 		}
 	}
 	if len(filter) == 0 {
-		m.componentFilter = nil
-	} else {
-		m.componentFilter = filter
+		m.componentFilter.Store(nil)
+		return
 	}
+	m.componentFilter.Store(&filter)
 }
 
 // Log logs a message at the specified level, respecting both the level
@@ -215,17 +228,15 @@ func (m *Logger) Log(lvl Level, format string, args ...any) {
 	// through, so a filtered component cannot swallow operational failures
 	// (a config-load error under "info:CACHE" would otherwise exit the
 	// process with no visible message).
-	m.mu.RLock()
-	filter := m.componentFilter
-	m.mu.RUnlock()
+	filter := m.componentFilter.Load()
 	if filter != nil && lvl >= Info {
-		if prefix := extractPrefix(format); prefix != "" && !filter[prefix] {
+		if prefix := extractPrefix(format); prefix != "" && !(*filter)[prefix] {
 			return
 		}
 	}
 	message := sanitizeLogMessage(fmt.Sprintf(format, args...))
 	if filter != nil && lvl >= Info {
-		if prefix := extractPrefix(message); prefix != "" && !filter[prefix] {
+		if prefix := extractPrefix(message); prefix != "" && !(*filter)[prefix] {
 			return
 		}
 	}
@@ -343,6 +354,10 @@ func Warnf(format string, args ...any) { Default.Warn(format, args...) }
 func Infof(format string, args ...any) { Default.Info(format, args...) }
 
 // Debugf logs a debug-level message via the default logger.
+//
+// Worry-free by default: a filtered-out call costs ~20ns / 56 B (see the
+// package performance contract).  Only per-query hot loops need the
+// `if log.IsDebug()` gate.
 func Debugf(format string, args ...any) { Default.Debug(format, args...) }
 
 // IsDebug reports whether the default logger is at Debug level or higher.

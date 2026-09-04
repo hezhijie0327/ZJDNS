@@ -141,11 +141,11 @@ func TestExtractPrefix(t *testing.T) {
 func TestSetComponentFilter_Empty(t *testing.T) {
 	m := NewLogger()
 	m.SetComponentFilter(nil)
-	if m.componentFilter != nil {
+	if m.componentFilter.Load() != nil {
 		t.Error("nil components should set filter to nil")
 	}
 	m.SetComponentFilter([]string{})
-	if m.componentFilter != nil {
+	if m.componentFilter.Load() != nil {
 		t.Error("empty components should set filter to nil")
 	}
 }
@@ -153,15 +153,14 @@ func TestSetComponentFilter_Empty(t *testing.T) {
 func TestSetComponentFilter_Normal(t *testing.T) {
 	m := NewLogger()
 	m.SetComponentFilter([]string{"UPSTREAM", "cache "})
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if len(m.componentFilter) != 2 {
-		t.Fatalf("filter length = %d, want 2", len(m.componentFilter))
+	filter := m.componentFilter.Load()
+	if filter == nil || len(*filter) != 2 {
+		t.Fatalf("filter = %v, want 2 components", filter)
 	}
-	if !m.componentFilter["UPSTREAM"] {
+	if !(*filter)["UPSTREAM"] {
 		t.Error("UPSTREAM should be in filter")
 	}
-	if !m.componentFilter["CACHE"] {
+	if !(*filter)["CACHE"] {
 		t.Error("CACHE (trimmed+uppered) should be in filter")
 	}
 }
