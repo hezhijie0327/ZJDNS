@@ -21,6 +21,7 @@ import (
 	"hash/maphash"
 	"slices"
 	"sync"
+	"sync/atomic"
 )
 
 // Entry is a single (key, count) pair returned by TopN, ordered by count
@@ -30,10 +31,12 @@ type Entry[K comparable] struct {
 	Count uint64
 }
 
-// shard is one lock-slice of the counter map.
+// shard is one lock-slice of the counter map. n mirrors len(m) atomically
+// so Len and empty-map fast paths need no locks.
 type shard[K comparable] struct {
 	mu       sync.Mutex
 	m        map[K]uint64
+	n        atomic.Int64
 	capacity int
 }
 
@@ -105,6 +108,7 @@ func (m *Map[K]) Inc(key K) {
 		m.evictMinLocked(s)
 	}
 	s.m[key] = 1
+	s.n.Add(1)
 	s.mu.Unlock()
 }
 
@@ -121,6 +125,7 @@ func (m *Map[K]) evictMinLocked(s *shard[K]) {
 	}
 	if !first {
 		delete(s.m, minKey)
+		s.n.Add(-1)
 	}
 }
 
@@ -128,6 +133,9 @@ func (m *Map[K]) evictMinLocked(s *shard[K]) {
 // descending. Fewer than n entries are returned when the map holds fewer.
 // The result is a fresh slice — callers may keep it.
 func (m *Map[K]) TopN(n int) []Entry[K] {
+	if m.Len() == 0 {
+		return nil
+	}
 	entries := make([]Entry[K], 0, n)
 	for i := range m.shards {
 		s := &m.shards[i]
@@ -156,10 +164,7 @@ func (m *Map[K]) TopN(n int) []Entry[K] {
 func (m *Map[K]) Len() int {
 	n := 0
 	for i := range m.shards {
-		s := &m.shards[i]
-		s.mu.Lock()
-		n += len(s.m)
-		s.mu.Unlock()
+		n += int(m.shards[i].n.Load())
 	}
 	return n
 }
@@ -170,6 +175,7 @@ func (m *Map[K]) Clear() {
 		s := &m.shards[i]
 		s.mu.Lock()
 		clear(s.m)
+		s.n.Store(0)
 		s.mu.Unlock()
 	}
 }

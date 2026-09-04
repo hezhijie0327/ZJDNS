@@ -349,8 +349,8 @@ func (l *dtlsPacketListener) Addr() net.Addr { return l.udpConn.LocalAddr() }
 
 // dispatch routes a DTLS datagram to the per-client channel, creating a
 // new client connection (and Accept entry) on first sight.
-// The pooled buffer pb is copied into a new pool buffer for the client
-// channel; pb is always returned to the pool before returning.
+// Ownership of the pooled buffer pb transfers to the client channel (no
+// second copy); pb is returned to the pool only on drop/closed paths.
 func (l *dtlsPacketListener) dispatch(src *net.UDPAddr, pb *[]byte, n int) {
 	key := makeAddrKey(src)
 
@@ -374,22 +374,18 @@ func (l *dtlsPacketListener) dispatch(src *net.UDPAddr, pb *[]byte, n int) {
 	}
 
 	cc.lastSeen.Store(time.Now().Unix())
-	cpBuf := PacketBufPool.Get().(*[]byte)
-	copy(*cpBuf, (*pb)[:n])
 	cc.sendMu.Lock()
 	if cc.closed.Load() {
 		cc.sendMu.Unlock()
-		PacketBufPool.Put(cpBuf)
 		PacketBufPool.Put(pb)
 		return
 	}
 	select {
-	case cc.ch <- packetBuf{data: *cpBuf, src: src, n: n}:
+	case cc.ch <- packetBuf{data: *pb, src: src, n: n}:
 	default:
-		PacketBufPool.Put(cpBuf)
+		PacketBufPool.Put(pb)
 	}
 	cc.sendMu.Unlock()
-	PacketBufPool.Put(pb)
 }
 
 // ---------------------------------------------------------------------------
