@@ -45,10 +45,10 @@ func TestZone_MatchNegation(t *testing.T) {
 	}))
 
 	newQctx := func(ip string) *handler.QueryContext {
-		return &handler.QueryContext{
+		return (&handler.QueryContext{
 			Req:      newMsg("example.com.", &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}),
 			ClientIP: net.ParseIP(ip),
-		}
+		}).InitQuestion()
 	}
 
 	// 127.0.0.1 has "admin" -> !admin NOT satisfied -> rule doesn't match -> falls through.
@@ -104,10 +104,10 @@ func TestZone_MatchNegation_TwoIPs(t *testing.T) {
 	}))
 
 	newQctx := func(ip string) *handler.QueryContext {
-		return &handler.QueryContext{
+		return (&handler.QueryContext{
 			Req:      newMsg("example.com.", &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}),
 			ClientIP: net.ParseIP(ip),
-		}
+		}).InitQuestion()
 	}
 
 	for _, ip := range []string{"10.192.0.1", "10.192.32.1"} {

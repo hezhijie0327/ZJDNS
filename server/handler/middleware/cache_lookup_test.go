@@ -25,12 +25,12 @@ func TestCacheLookup_HitRecordsCachedRcode(t *testing.T) {
 
 	// Fresh hit path: CacheLookup.Wrap builds the response from the entry.
 	m := &CacheLookup{store: store}
-	qctx := &handler.QueryContext{
+	qctx := (&handler.QueryContext{
 		Req:      testQuery(t),
 		Qname:    "example.com.",
 		Qtype:    dns.TypeA,
 		Protocol: "udp",
-	}
+	}).InitQuestion()
 	// next must never run on a fresh hit.
 	if err := m.Wrap(handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		t.Fatal("next chain invoked on a fresh cache hit")
@@ -71,12 +71,12 @@ func TestCacheLookup_StaleRecordsCachedRcode(t *testing.T) {
 	time.Sleep(2500 * time.Millisecond)
 
 	m := &CacheLookup{store: store}
-	qctx := &handler.QueryContext{
+	qctx := (&handler.QueryContext{
 		Req:      testQuery(t),
 		Qname:    "example.com.",
 		Qtype:    dns.TypeA,
 		Protocol: "udp",
-	}
+	}).InitQuestion()
 	if err := m.Wrap(handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		return nil // miss path — unreachable for an expired-but-servable entry
 	})).ServeDNS(context.Background(), qctx); err != nil {

@@ -53,7 +53,7 @@ func newResponseChain(t *testing.T, secure bool) (handler.QueryHandler, *dns.Msg
 func TestResponseMiddleware_PrePackedFastPath(t *testing.T) {
 	chain, req := newResponseChain(t, false)
 
-	qctx := &handler.QueryContext{Req: req}
+	qctx := (&handler.QueryContext{Req: req}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestResponseMiddleware_PrePackedFastPath(t *testing.T) {
 func TestResponseMiddleware_PrePackedEDNSPath(t *testing.T) {
 	chain, req := newResponseChain(t, false)
 
-	qctx := &handler.QueryContext{Req: req, EDE: &dns.EDE{InfoCode: dns.ExtendedErrorNetworkError}}
+	qctx := (&handler.QueryContext{Req: req, EDE: &dns.EDE{InfoCode: dns.ExtendedErrorNetworkError}}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestResponseMiddleware_PrePackedEDNSPath(t *testing.T) {
 func TestResponseMiddleware_SecurePaddingSinglePack(t *testing.T) {
 	chain, req := newResponseChain(t, true)
 
-	qctx := &handler.QueryContext{Req: req, IsSecure: true}
+	qctx := (&handler.QueryContext{Req: req, IsSecure: true}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestResponseMiddleware_DNSSECFilterDO0(t *testing.T) {
 	})
 	chain := (&Response{edns: ednsH}).Wrap(next)
 
-	qctx := &handler.QueryContext{Req: req} // DO=0
+	qctx := (&handler.QueryContext{Req: req}).InitQuestion() // DO=0
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestResponseMiddleware_DNSSECFilterDO1(t *testing.T) {
 	})
 	chain := (&Response{edns: ednsH}).Wrap(next)
 
-	qctx := &handler.QueryContext{Req: req, ClientRequestedDNSSEC: true}
+	qctx := (&handler.QueryContext{Req: req, ClientRequestedDNSSEC: true}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestResponseMiddleware_PrePackedFastPath_SecureTransport(t *testing.T) {
 	// EDNS client without padding: explicitly opts out of padding.
 	req.UDPSize = 1232
 
-	qctx := &handler.QueryContext{Req: req, IsSecure: true}
+	qctx := (&handler.QueryContext{Req: req, IsSecure: true}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestResponseMiddleware_PrePackedFastPath_SecureTransport(t *testing.T) {
 func TestResponseMiddleware_SecureLegacyClient_Pads(t *testing.T) {
 	chain, req := newResponseChain(t, false)
 
-	qctx := &handler.QueryContext{Req: req, IsSecure: true}
+	qctx := (&handler.QueryContext{Req: req, IsSecure: true}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}

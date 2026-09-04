@@ -9,7 +9,6 @@ import (
 	"zjdns/server/resolver"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // DNS64 synthesises AAAA records from A-record answers when the
@@ -35,9 +34,7 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 
 		qr := qctx.ResolutionResult
 
-		qd := qctx.Req.Question[0]
-		qtype := dns.RRToType(qd)
-		if qtype != dns.TypeAAAA {
+		if qctx.Qtype != dns.TypeAAAA {
 			return err
 		}
 		// RFC 6147 §5.1.5: synthesis is needed when the AAAA response
@@ -56,12 +53,10 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			}
 		}
 
-		// Canonicalize: cache.Get requires a canonical qname (Set stores the
-		// canonical form) — the raw wire name may carry mixed case, which
-		// would miss every time (regression of the removed internal
-		// canonicalization).
-		qname := dnsutil.Canonical(qd.Header().Name)
-		qclass := qd.Header().Class
+		// qctx.Qname is canonical (the form cache keys require) — cache.Get
+		// and store.Set both key on it directly.
+		qname := qctx.Qname
+		qclass := qctx.Qclass
 		ecsOpt := qctx.ECSOpt
 		dnssecOK := qctx.ClientRequestedDNSSEC
 
@@ -117,7 +112,7 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				reason = aqr.Err.Error()
 			}
 			if log.IsDebug() {
-				log.Debugf("DNS64: skipping synthesis for %s (qtype=%d): %s", qname, qtype, reason)
+				log.Debugf("DNS64: skipping synthesis for %s (qtype=%d): %s", qname, qctx.Qtype, reason)
 			}
 		}
 

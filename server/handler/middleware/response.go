@@ -103,8 +103,8 @@ func (m *Response) ednsStateFor(qctx *handler.QueryContext) ednsState {
 	ecsOpt := qctx.ECSOpt
 	if ecsOpt == nil && !qctx.EDNSParsed && m.edns != nil {
 		ecsOpt = m.edns.ParseFromDNS(qctx.Req)
-		if ecsOpt == nil && len(qctx.Req.Question) > 0 {
-			ecsOpt = m.edns.ECSForQType(dns.RRToType(qctx.Req.Question[0]))
+		if ecsOpt == nil {
+			ecsOpt = m.edns.ECSForQType(qctx.Qtype)
 		}
 	}
 
@@ -135,7 +135,7 @@ func (m *Response) ednsStateFor(qctx *handler.QueryContext) ednsState {
 		clientWantsPad: clientWantsPadding,
 		shouldAddEDNS: ecsOpt != nil || qctx.ClientRequestedDNSSEC || cookieStr != "" ||
 			qctx.EDE != nil || (qctx.IsSecure && clientWantsPadding) ||
-			qctx.TCPKeepalive > 0 || len(qctx.Req.Pseudo) > 0,
+			len(qctx.Req.Pseudo) > 0,
 	}
 }
 
@@ -161,7 +161,7 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext, st ednsState) {
 		// response built by the EDNS middleware applied its own
 		// SUBNET/COOKIE/padding, and re-applying would duplicate options
 		// inside a single OPT (RFC 7873: at most one COOKIE per message).
-		m.edns.ApplyToMessage(msg, st.ecsOpt, qctx.IsSecure, st.cookieStr, qctx.EDE, false, st.clientWantsPad, qctx.TCPKeepalive)
+		m.edns.ApplyToMessage(msg, st.ecsOpt, qctx.IsSecure, st.cookieStr, qctx.EDE, false, st.clientWantsPad, 0)
 	}
 }
 

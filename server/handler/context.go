@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net"
+	"strings"
 	"zjdns/edns"
 	"zjdns/server/resolver"
 
@@ -41,9 +42,6 @@ type QueryContext struct {
 
 	// ── Cache state: populated by CacheLookup ──
 
-	CacheHit    bool // true when cache.Get found an entry (fresh or expired)
-	CacheServed bool // true when the response was built from cache (for logging)
-
 	// ResHasDNSSEC mirrors Entry.HasDNSSEC for the pre-packed response —
 	// lets the Response serve gate skip the per-hit wire scan.
 	ResHasDNSSEC bool
@@ -59,11 +57,41 @@ type QueryContext struct {
 
 	// ── Coordination ──
 
-	TCPKeepalive uint16
-	StartTime    int64 // log.NowUnixNano() — zero-alloc timestamp for response-time calculation
+	StartTime int64 // log.NowUnixNano() — zero-alloc timestamp for response-time calculation
 
 	// ── Pre-extracted question fields (set once in ServeDNS) ──
+	//
+	// The single source of truth for the question: middleware MUST read these
+	// instead of re-extracting qctx.Req.Question[0].  Qname is the canonical
+	// (lowercased, FQDN) form — the form cache keys, zone evaluation and
+	// pending dedup require.  The raw wire case is only echoed via
+	// BuildResponseMsg/SetReply, never by middleware logic.
 
-	Qname string // canonical question name (already FQDN)
-	Qtype uint16 // question type (A, AAAA, etc.)
+	Qname  string // canonical question name (lowercased FQDN)
+	Qtype  uint16 // question type (A, AAAA, etc.)
+	Qclass uint16 // question class (IN, CHAOS, ...)
+}
+
+// InitQuestion pre-extracts the canonical question fields from Req.  It is
+// the constructor contract of QueryContext: ServeDNS performs the equivalent
+// inline on entry (pool reuse — zero extra calls on the hot path), and any
+// code that hand-builds a QueryContext — tests — must call it after setting
+// Req.  Each field is derived independently when unset (Qname "" / Qtype 0 /
+// Qclass 0 are never valid question values); a Req without a question is a
+// no-op.
+func (qctx *QueryContext) InitQuestion() *QueryContext {
+	if qctx.Req == nil || len(qctx.Req.Question) == 0 {
+		return qctx
+	}
+	qd := qctx.Req.Question[0]
+	if qctx.Qname == "" {
+		qctx.Qname = strings.ToLower(qd.Header().Name)
+	}
+	if qctx.Qtype == 0 {
+		qctx.Qtype = dns.RRToType(qd)
+	}
+	if qctx.Qclass == 0 {
+		qctx.Qclass = qd.Header().Class
+	}
+	return qctx
 }

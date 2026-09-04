@@ -20,7 +20,7 @@ func TestValidation_NilRequest(t *testing.T) {
 	h := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
 		return nil
 	}))
-	qctx := &handler.QueryContext{Req: nil}
+	qctx := (&handler.QueryContext{Req: nil}).InitQuestion()
 	_ = h.ServeDNS(context.Background(), qctx)
 	if qctx.Res == nil {
 		t.Fatal("expected response for nil request")
@@ -37,7 +37,7 @@ func TestValidation_NoQuestions(t *testing.T) {
 		nextCalled = true
 		return nil
 	}))
-	qctx := &handler.QueryContext{Req: new(dns.Msg)}
+	qctx := (&handler.QueryContext{Req: new(dns.Msg)}).InitQuestion()
 	_ = h.ServeDNS(context.Background(), qctx)
 	if nextCalled {
 		t.Error("next should not be called for empty questions")
@@ -51,9 +51,9 @@ func TestValidation_ValidQuery(t *testing.T) {
 		nextCalled = true
 		return nil
 	}))
-	qctx := &handler.QueryContext{
+	qctx := (&handler.QueryContext{
 		Req: newMsg("example.com.", &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}),
-	}
+	}).InitQuestion()
 	_ = h.ServeDNS(context.Background(), qctx)
 	if !nextCalled {
 		t.Error("next should be called for valid query")
@@ -70,9 +70,9 @@ func TestValidation_ANY_PassesThrough(t *testing.T) {
 		nextCalled = true
 		return nil
 	}))
-	qctx := &handler.QueryContext{
+	qctx := (&handler.QueryContext{
 		Req: newMsg("example.com.", &dns.ANY{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}),
-	}
+	}).InitQuestion()
 	_ = h.ServeDNS(context.Background(), qctx)
 	if !nextCalled {
 		t.Error("next should be called for ANY query (RFC 8482 minimal response)")
@@ -89,9 +89,9 @@ func TestValidation_NXNAME_Rejected(t *testing.T) {
 		nextCalled = true
 		return nil
 	}))
-	qctx := &handler.QueryContext{
+	qctx := (&handler.QueryContext{
 		Req: newMsg("example.com.", &dns.NXNAME{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}),
-	}
+	}).InitQuestion()
 	_ = h.ServeDNS(context.Background(), qctx)
 	if nextCalled {
 		t.Error("next should not be called for NXNAME query")
@@ -112,9 +112,9 @@ func TestValidation_LongDomain(t *testing.T) {
 		return nil
 	}))
 	longName := strings.Repeat("a", 260) + ".com."
-	qctx := &handler.QueryContext{
+	qctx := (&handler.QueryContext{
 		Req: newMsg(longName, &dns.A{Hdr: dns.Header{Name: longName, Class: dns.ClassINET}}),
-	}
+	}).InitQuestion()
 	_ = h.ServeDNS(context.Background(), qctx)
 	if nextCalled {
 		t.Error("long domain should be rejected")

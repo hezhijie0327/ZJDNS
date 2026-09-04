@@ -13,7 +13,6 @@ import (
 	"zjdns/server/resolver"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // MQTYPE implements RFC 10029 server-side MQTYPE-Query handling: a client may
@@ -92,7 +91,6 @@ func (m *MQTYPE) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// QTx is detached from the request lifecycle and bounded by its
 		// own timeout (§4 amplification bound); on a failed primary the
 		// buffered results are simply discarded (bounded by the QTx cap).
-		qd := qctx.Req.Question[0]
 		qtTypes := mqQuery.Types
 		if len(qtTypes) > config.DefaultMQTypeMaxQTx {
 			qtTypes = qtTypes[:config.DefaultMQTypeMaxQTx]
@@ -105,7 +103,7 @@ func (m *MQTYPE) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				defer qtCancel()
 				qtResults <- qtResult{
 					qt: qt,
-					qr: m.resolve(qtCtx, qd.Header().Name, qt, qd.Header().Class, qctx.ECSOpt, qctx.ClientRequestedDNSSEC),
+					qr: m.resolve(qtCtx, qctx.Qname, qt, qctx.Qclass, qctx.ECSOpt, qctx.ClientRequestedDNSSEC),
 				}
 			}()
 		}
@@ -196,9 +194,8 @@ func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY, qtResults <-
 		return
 	}
 
-	qd := qctx.Req.Question[0]
-	qname := qd.Header().Name
-	qclass := qd.Header().Class
+	qname := qctx.Qname
+	qclass := qctx.Qclass
 	ecsOpt := qctx.ECSOpt
 	dnssecOK := qctx.ClientRequestedDNSSEC
 	primaryRcode := msg.Rcode
@@ -312,10 +309,6 @@ func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY, qtResults <-
 // QTx is bounded by DefaultMQTypeResolveTimeout so a merge cannot blow the
 // request budget through amplification (RFC 10029 §4).
 func (m *MQTYPE) resolve(ctx context.Context, qname string, qt, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool) *resolver.QueryResult {
-	// Canonicalize: cache.Get requires the canonical qname (Set stores it) —
-	// the merge entry passes the raw wire name, which can carry mixed case
-	// (regression of the removed internal canonicalization).
-	qname = dnsutil.Canonical(qname)
 	if m.store != nil {
 		// Skip expired entries: merging a stale answer with the full stored
 		// TTL would serve data past its freshness window without the

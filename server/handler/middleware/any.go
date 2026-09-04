@@ -25,34 +25,30 @@ type Any struct {
 // Wrap implements Wrapper.
 func (m *Any) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
-		qd := qctx.Req.Question[0]
-		if dns.RRToType(qd) != dns.TypeANY {
+		if qctx.Qtype != dns.TypeANY {
 			return next.ServeDNS(ctx, qctx)
 		}
+		qname := qctx.Qname
 
 		// RFC 8482 §4.2: "RFC8482" as the CPU field, empty OS — the same
 		// minimal response Cloudflare and BIND serve.
 		msg := handler.BuildResponseMsg(qctx.Req)
 		msg.Answer = []dns.RR{&dns.HINFO{
 			Hdr: dns.Header{
-				Name:  qd.Header().Name,
+				Name:  qname,
 				TTL:   config.DefaultHINFOTTL,
 				Class: dns.ClassINET,
 			},
 			Cpu: "RFC8482", Os: "",
 		}}
 		qctx.Res = msg
-		// CacheServed here is a "response already built — CacheStore has
-		// nothing to do" marker, not a claim the data came from cache
-		// (semantic overload, M-low).
-		qctx.CacheServed = true
 		// Record the short-circuit like Zone/PTR do — ANY answers must
 		// appear in query_stats/query_log (R3-M21).
 		if m.store != nil {
 			rec := cache.AcquireRequestRecord()
-			rec.Qname = qd.Header().Name
+			rec.Qname = qname
 			rec.Qtype = dns.TypeANY
-			rec.Qclass = qd.Header().Class
+			rec.Qclass = qctx.Qclass
 			rec.Protocol = qctx.Protocol
 			rec.Result = "any"
 			rec.Rcode = dns.RcodeSuccess
@@ -60,7 +56,7 @@ func (m *Any) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			cache.ReleaseRequestRecord(rec)
 		}
 		if log.IsDebug() {
-			log.Debugf("ANY: serving RFC 8482 minimal response for %s", qd.Header().Name)
+			log.Debugf("ANY: serving RFC 8482 minimal response for %s", qname)
 		}
 		return nil
 	})

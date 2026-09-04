@@ -162,8 +162,8 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		qctx.CookieStr = m.cookieResponseStr(cookieOpt, qctx.ClientIP, cookieStatus)
 
 		// Apply default ECS if no ECS was sent.
-		if qctx.ECSOpt == nil && len(req.Question) > 0 {
-			qctx.ECSOpt = m.edns.ECSForQType(dns.RRToType(req.Question[0]))
+		if qctx.ECSOpt == nil {
+			qctx.ECSOpt = m.edns.ECSForQType(qctx.Qtype)
 			if qctx.ECSOpt != nil {
 				if log.IsDebug() {
 					log.Debugf("EDNS: using default ECS: family=%d addr=%s/%d",

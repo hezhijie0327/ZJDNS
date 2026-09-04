@@ -48,7 +48,7 @@ func TestEDNSMiddleware_BadCookieSingleOption(t *testing.T) {
 	// 8-byte client cookie + 15-byte server cookie (hex): the server cookie
 	// length != 16 triggers the RFC 7873 BADCOOKIE path.
 	req := queryMsg(t, &dns.COOKIE{Cookie: "0123456789abcdef0123456789abcde0"}) // 16 + 15 hex chars
-	qctx := &handler.QueryContext{Req: req, ClientIP: net.IPv4(192, 0, 2, 1)}
+	qctx := (&handler.QueryContext{Req: req, ClientIP: net.IPv4(192, 0, 2, 1)}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestEDNSMiddleware_BadVers(t *testing.T) {
 	req.Pseudo = nil
 	req.Version = 0
 
-	qctx := &handler.QueryContext{Req: req, ClientIP: net.IPv4(192, 0, 2, 1)}
+	qctx := (&handler.QueryContext{Req: req, ClientIP: net.IPv4(192, 0, 2, 1)}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}

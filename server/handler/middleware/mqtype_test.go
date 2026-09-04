@@ -70,7 +70,7 @@ func TestMQTYPE_NoOption_Delegates(t *testing.T) {
 	}))
 	req := new(dns.Msg)
 	req.Question = []dns.RR{&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}}
-	if err := chain.ServeDNS(context.Background(), &handler.QueryContext{Req: req}); err != nil {
+	if err := chain.ServeDNS(context.Background(), (&handler.QueryContext{Req: req}).InitQuestion()); err != nil {
 		t.Fatal(err)
 	}
 	if !nextCalled {
@@ -95,7 +95,7 @@ func TestMQTYPE_InvalidOptions_FORMERR(t *testing.T) {
 				t.Error("next must not run for invalid MQTYPE-Query")
 				return nil
 			}))
-			qctx := &handler.QueryContext{Req: mqQuery(t, tc.types...)}
+			qctx := (&handler.QueryContext{Req: mqQuery(t, tc.types...)}).InitQuestion()
 			if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 				t.Fatal(err)
 			}
@@ -115,7 +115,7 @@ func TestMQTYPE_DuplicateOption_FORMERR(t *testing.T) {
 	}))
 	req := mqQuery(t, dns.TypeAAAA)
 	req.Pseudo = append(req.Pseudo, &dns.MQQUERY{Types: []uint16{dns.TypeTXT}})
-	qctx := &handler.QueryContext{Req: req}
+	qctx := (&handler.QueryContext{Req: req}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestMQTYPE_InboundResponse_FORMERR(t *testing.T) {
 	req := new(dns.Msg)
 	req.Question = []dns.RR{&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}}
 	req.Pseudo = append(req.Pseudo, &dns.MQRESPONSE{Types: []uint16{dns.TypeAAAA}})
-	qctx := &handler.QueryContext{Req: req}
+	qctx := (&handler.QueryContext{Req: req}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestMQTYPE_Merge_CacheHit(t *testing.T) {
 		return nil
 	}))
 
-	qctx := &handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA)}
+	qctx := (&handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA)}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestMQTYPE_Merge_SkipMismatch(t *testing.T) {
 		return nil
 	}))
 
-	qctx := &handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA)}
+	qctx := (&handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA)}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestMQTYPE_Merge_TruncatedPrimary(t *testing.T) {
 		return nil
 	}))
 
-	qctx := &handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA)}
+	qctx := (&handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA)}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestMQTYPE_Merge_BudgetClientUDPSize(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			req := mqQuery(t, dns.TypeTXT)
 			req.UDPSize = tc.udpSize
-			qctx := &handler.QueryContext{Req: req}
+			qctx := (&handler.QueryContext{Req: req}).InitQuestion()
 			if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 				t.Fatal(err)
 			}
@@ -327,7 +327,7 @@ func TestMQTYPE_Merge_AAFlagMismatch(t *testing.T) {
 				return nil
 			}))
 
-			qctx := &handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA)}
+			qctx := (&handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA)}).InitQuestion()
 			if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 				t.Fatal(err)
 			}
@@ -377,7 +377,7 @@ func TestMQTYPE_Merge_FiltersDNSSECForDO0(t *testing.T) {
 		{"DO=1 — proofs kept", true, true, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			qctx := &handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA), ClientRequestedDNSSEC: tc.do}
+			qctx := (&handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA), ClientRequestedDNSSEC: tc.do}).InitQuestion()
 			if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 				t.Fatal(err)
 			}
@@ -432,7 +432,7 @@ func TestMQTYPE_Merge_MaxQTx(t *testing.T) {
 		return nil
 	}))
 
-	qctx := &handler.QueryContext{Req: mqQuery(t, types...)}
+	qctx := (&handler.QueryContext{Req: mqQuery(t, types...)}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +499,7 @@ func TestMQTYPE_Chain_MissPath(t *testing.T) {
 	chain := AssembleChain(chainTestDeps(store, fake))
 
 	req := mqQuery(t, dns.TypeAAAA)
-	qctx := &handler.QueryContext{Req: req, Qname: "example.com.", Qtype: dns.TypeA}
+	qctx := (&handler.QueryContext{Req: req, Qname: "example.com.", Qtype: dns.TypeA}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -543,7 +543,7 @@ func TestMQTYPE_Chain_HitPath(t *testing.T) {
 	chain := AssembleChain(chainTestDeps(store, fake))
 
 	req := mqQuery(t, dns.TypeAAAA)
-	qctx := &handler.QueryContext{Req: req, Qname: "example.com.", Qtype: dns.TypeA}
+	qctx := (&handler.QueryContext{Req: req, Qname: "example.com.", Qtype: dns.TypeA}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -603,7 +603,7 @@ func TestMQTYPE_Chain_PlainTransportPseudoEmpty(t *testing.T) {
 		t.Fatal("test setup: expected Pseudo empty after question-only unpack")
 	}
 
-	qctx := &handler.QueryContext{Req: req2, Qname: "example.com.", Qtype: dns.TypeA}
+	qctx := (&handler.QueryContext{Req: req2, Qname: "example.com.", Qtype: dns.TypeA}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -650,7 +650,7 @@ func TestMQTYPE_ForwardingMode_MergesLocally(t *testing.T) {
 		return nil
 	}))
 
-	qctx := &handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA)}
+	qctx := (&handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA)}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -764,7 +764,7 @@ func TestMQTYPE_Chain_MissPath_RecursivePseudoServer(t *testing.T) {
 	chain := AssembleChain(chainTestDeps(store, fake))
 
 	req := mqQuery(t, dns.TypeAAAA)
-	qctx := &handler.QueryContext{Req: req, Qname: "example.com.", Qtype: dns.TypeA}
+	qctx := (&handler.QueryContext{Req: req, Qname: "example.com.", Qtype: dns.TypeA}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}

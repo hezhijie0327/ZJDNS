@@ -172,6 +172,7 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 		StartTime: log.NowUnixNano(),
 		Qname:     strings.ToLower(qd.Header().Name),
 		Qtype:     dns.RRToType(qd),
+		Qclass:    qd.Header().Class,
 	}
 	defer qctxPool.Put(qctx)
 

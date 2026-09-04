@@ -27,7 +27,7 @@ func TestAnyMiddleware_SynthesizesHINFO(t *testing.T) {
 		return nil
 	}))
 
-	qctx := &handler.QueryContext{Req: newAnyMsg("example.com.")}
+	qctx := (&handler.QueryContext{Req: newAnyMsg("example.com.")}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestAnyMiddleware_NonANY_Delegates(t *testing.T) {
 
 	req := new(dns.Msg)
 	req.Question = []dns.RR{&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, Addr: netip.MustParseAddr("192.0.2.1")}}
-	qctx := &handler.QueryContext{Req: req}
+	qctx := (&handler.QueryContext{Req: req}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)
 	}

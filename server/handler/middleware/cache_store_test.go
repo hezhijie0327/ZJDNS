@@ -69,7 +69,7 @@ func TestCacheStore_BogusEDENotCached(t *testing.T) {
 	store := testStore(t)
 	defer func() { _ = store.Close() }()
 
-	qctx := &handler.QueryContext{
+	qctx := (&handler.QueryContext{
 		Req:       testQuery(t),
 		Qname:     "example.com.",
 		Qtype:     dns.TypeA,
@@ -81,7 +81,7 @@ func TestCacheStore_BogusEDENotCached(t *testing.T) {
 			Cacheable: true,
 			DNSSECEDE: dns.ExtendedErrorDNSBogus, // EDE 6 — bogus
 		},
-	}
+	}).InitQuestion()
 	m := &CacheStore{store: store}
 	m.buildSuccess(qctx)
 
@@ -96,7 +96,7 @@ func TestCacheStore_RRSIGsMissingCached(t *testing.T) {
 	store := testStore(t)
 	defer func() { _ = store.Close() }()
 
-	qctx := &handler.QueryContext{
+	qctx := (&handler.QueryContext{
 		Req:       testQuery(t),
 		Qname:     "example.com.",
 		Qtype:     dns.TypeA,
@@ -108,7 +108,7 @@ func TestCacheStore_RRSIGsMissingCached(t *testing.T) {
 			Cacheable: true,
 			DNSSECEDE: dns.ExtendedErrorRRSIGsMissing, // EDE 22 — insecure treatment
 		},
-	}
+	}).InitQuestion()
 	m := &CacheStore{store: store}
 	m.buildSuccess(qctx)
 
@@ -124,7 +124,7 @@ func TestCacheStore_NoEDECached(t *testing.T) {
 	store := testStore(t)
 	defer func() { _ = store.Close() }()
 
-	qctx := &handler.QueryContext{
+	qctx := (&handler.QueryContext{
 		Req:       testQuery(t),
 		Qname:     "example.com.",
 		Qtype:     dns.TypeA,
@@ -136,7 +136,7 @@ func TestCacheStore_NoEDECached(t *testing.T) {
 			Cacheable: true,
 			Validated: true,
 		},
-	}
+	}).InitQuestion()
 	m := &CacheStore{store: store}
 	m.buildSuccess(qctx)
 
@@ -158,7 +158,7 @@ func TestCacheStore_ValidatedStickyBogusEDE(t *testing.T) {
 	// happen in production (validateOrRetry clears lastEDECode on success).
 	// Verify that if it DOES happen, the response is cached (Validated
 	// takes priority over DNSSECEDE).
-	qctx := &handler.QueryContext{
+	qctx := (&handler.QueryContext{
 		Req:       testQuery(t),
 		Qname:     "example.com.",
 		Qtype:     dns.TypeA,
@@ -171,7 +171,7 @@ func TestCacheStore_ValidatedStickyBogusEDE(t *testing.T) {
 			Validated: true,
 			DNSSECEDE: dns.ExtendedErrorDNSBogus, // EDE 6 — stale from intermediate level
 		},
-	}
+	}).InitQuestion()
 	m := &CacheStore{store: store}
 	m.buildSuccess(qctx)
 
@@ -187,7 +187,7 @@ func TestCacheStore_UnvalidatedNoEDECached(t *testing.T) {
 	store := testStore(t)
 	defer func() { _ = store.Close() }()
 
-	qctx := &handler.QueryContext{
+	qctx := (&handler.QueryContext{
 		Req:       testQuery(t),
 		Qname:     "example.com.",
 		Qtype:     dns.TypeA,
@@ -200,7 +200,7 @@ func TestCacheStore_UnvalidatedNoEDECached(t *testing.T) {
 			Validated: false,
 			DNSSECEDE: 0,
 		},
-	}
+	}).InitQuestion()
 	m := &CacheStore{store: store}
 	m.buildSuccess(qctx)
 
@@ -228,7 +228,7 @@ func TestCacheStore_UnvalidatedBogusEDENotCached(t *testing.T) {
 			store := testStore(t)
 			defer func() { _ = store.Close() }()
 
-			qctx := &handler.QueryContext{
+			qctx := (&handler.QueryContext{
 				Req:       testQuery(t),
 				Qname:     "example.com.",
 				Qtype:     dns.TypeA,
@@ -241,7 +241,7 @@ func TestCacheStore_UnvalidatedBogusEDENotCached(t *testing.T) {
 					Validated: false,
 					DNSSECEDE: c.code,
 				},
-			}
+			}).InitQuestion()
 			m := &CacheStore{store: store}
 			m.buildSuccess(qctx)
 
@@ -260,7 +260,7 @@ func TestCacheStore_MissRecordsRealRcode(t *testing.T) {
 	store := testStore(t)
 	defer func() { _ = store.Close() }()
 
-	qctx := &handler.QueryContext{
+	qctx := (&handler.QueryContext{
 		Req:       testQuery(t),
 		Qname:     "example.com.",
 		Qtype:     dns.TypeA,
@@ -270,7 +270,7 @@ func TestCacheStore_MissRecordsRealRcode(t *testing.T) {
 			Rcode:     dns.RcodeNameError, // NXDOMAIN
 			Cacheable: true,
 		},
-	}
+	}).InitQuestion()
 	m := &CacheStore{store: store}
 	m.buildSuccess(qctx)
 

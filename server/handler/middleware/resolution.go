@@ -36,10 +36,9 @@ func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return nil
 		}
 
-		qd := qctx.Req.Question[0]
-		qname := qd.Header().Name
-		qtype := dns.RRToType(qd)
-		qclass := qd.Header().Class
+		qname := qctx.Qname
+		qtype := qctx.Qtype
+		qclass := qctx.Qclass
 		ecsOpt := qctx.ECSOpt
 		dnssecOK := qctx.ClientRequestedDNSSEC
 

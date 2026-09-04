@@ -71,10 +71,9 @@ func rewriteOwnerNames(rrs []dns.RR, from, to string) []dns.RR {
 // Wrap implements Wrapper.
 func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
-		qd := qctx.Req.Question[0]
-		qname := qd.Header().Name
-		qtype := dns.RRToType(qd)
-		qclass := qd.Header().Class
+		qname := qctx.Qname
+		qtype := qctx.Qtype
+		qclass := qctx.Qclass
 
 		var matchedTags map[string]bool
 		if m.tagMatcher != nil {

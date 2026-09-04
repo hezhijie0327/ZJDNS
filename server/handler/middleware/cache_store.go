@@ -35,7 +35,7 @@ func (m *CacheStore) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		err := next.ServeDNS(ctx, qctx)
 
 		// Already handled by an upstream middleware — nothing to do.
-		// Gate on Res alone: CacheServed/ZoneMatched were redundant here
+		// Gate on Res alone — markers like ZoneMatched were redundant here
 		// (both are always accompanied by Res except the records-less zone
 		// rule path, which must reach buildSuccess below or the query is
 		// silently dropped — C3).
@@ -66,7 +66,7 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	qr := qctx.ResolutionResult
 	qname := qctx.Qname
 	qtype := qctx.Qtype
-	qclass := qctx.Req.Question[0].Header().Class
+	qclass := qctx.Qclass
 	ecsOpt := qctx.ECSOpt
 	dnssecOK := qctx.ClientRequestedDNSSEC
 	validated := qr.Validated
@@ -200,7 +200,7 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 	qr := qctx.ResolutionResult
 	qname := qctx.Qname
 	qtype := qctx.Qtype
-	qclass := qctx.Req.Question[0].Header().Class
+	qclass := qctx.Qclass
 	ecsOpt := qctx.ECSOpt
 	queryErr := qr.Err
 
@@ -272,7 +272,7 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 func (m *CacheStore) buildCIDRRefused(qctx *handler.QueryContext) *dns.Msg {
 	qname := qctx.Qname
 	qtype := qctx.Qtype
-	qclass := qctx.Req.Question[0].Header().Class
+	qclass := qctx.Qclass
 
 	if log.IsDebug() {
 		log.Debugf("RESULT: %s %s | rcode=REFUSED, blocked by CIDR filtering", qname, dns.TypeToString[qtype])

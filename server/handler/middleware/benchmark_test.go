@@ -47,7 +47,7 @@ func BenchmarkResponseServePrePacked(b *testing.B) {
 	chain := m.Wrap(next)
 
 	b.Run("direct-wire", func(b *testing.B) {
-		qctx := &handler.QueryContext{Req: req}
+		qctx := (&handler.QueryContext{Req: req}).InitQuestion()
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -60,7 +60,7 @@ func BenchmarkResponseServePrePacked(b *testing.B) {
 		}
 	})
 	b.Run("unpack-EDNS", func(b *testing.B) {
-		qctx := &handler.QueryContext{Req: req, EDE: &dns.EDE{InfoCode: dns.ExtendedErrorNetworkError}}
+		qctx := (&handler.QueryContext{Req: req, EDE: &dns.EDE{InfoCode: dns.ExtendedErrorNetworkError}}).InitQuestion()
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -113,7 +113,7 @@ func BenchmarkResponseServeLargeWire(b *testing.B) {
 	})
 	chain := m.Wrap(next)
 
-	qctx := &handler.QueryContext{Req: req} // DO=0 → WireHasDNSSEC scan runs
+	qctx := (&handler.QueryContext{Req: req}).InitQuestion() // DO=0 → WireHasDNSSEC scan runs
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

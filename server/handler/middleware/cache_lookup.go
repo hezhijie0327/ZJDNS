@@ -37,10 +37,9 @@ type CacheLookup struct {
 // Wrap implements Wrapper.
 func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
-		qd := qctx.Req.Question[0]
 		qname := qctx.Qname
-		qtype := dns.RRToType(qd)
-		qclass := qd.Header().Class
+		qtype := qctx.Qtype
+		qclass := qctx.Qclass
 		ecsOpt := qctx.ECSOpt
 
 		entry, found, isExpired := m.store.Get(qname, qtype, qclass, ecsOpt)
@@ -48,12 +47,9 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return next.ServeDNS(ctx, qctx)
 		}
 
-		qctx.CacheHit = true
-
 		// Fresh hit — serve immediately.
 		if !isExpired {
 			qctx.Res = buildCacheResponse(qctx, entry, false)
-			qctx.CacheServed = true
 
 			rec := cache.AcquireRequestRecord()
 			rec.Qname = qname
@@ -98,7 +94,6 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// Can serve stale.
 		if entry.CanServeExpired(config.DefaultStaleMaxAge) {
 			qctx.Res = buildCacheResponse(qctx, entry, true)
-			qctx.CacheServed = true
 
 			// Handle stale serving strategies.
 			if m.preferStale && m.closed != nil && !m.closed() {
@@ -227,7 +222,6 @@ func (m *CacheLookup) serveExpiredWithRefresh(qctx *handler.QueryContext, qname 
 				msg.AuthenticatedData = true
 			}
 			qctx.Res = msg
-			qctx.CacheServed = false
 			// Heal the cache: resolver.Query never writes entries, and the
 			// timer-path goroutine below only runs when the refresh outlasts
 			// the serve-expired window — a fast refresh would otherwise leave
@@ -239,7 +233,7 @@ func (m *CacheLookup) serveExpiredWithRefresh(qctx *handler.QueryContext, qname 
 			rec := cache.AcquireRequestRecord()
 			rec.Qname = qctx.Qname
 			rec.Qtype = qctx.Qtype
-			rec.Qclass = qctx.Req.Question[0].Header().Class
+			rec.Qclass = qctx.Qclass
 			rec.Protocol = qctx.Protocol
 			rec.Result = "miss"
 			rec.Rcode = int(qr.Rcode) // fresh resolution rcode (msg.Rcode was aligned to it above)
