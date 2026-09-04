@@ -145,6 +145,20 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 		return nil
 	}
 
+	// Plain-transport listeners deliver question-only unpacks (listeners set
+	// MsgOptionUnpackQuestion for routing); the chain operates on the fully
+	// parsed message (Pseudo options, EDNS version, flags).  Force the full
+	// unpack once here, at the pipeline entry — this used to hide inside the
+	// EDNS middleware, coupling a transport concern into it.
+	if err := EnsureFullUnpack(req); err != nil {
+		if log.IsDebug() {
+			log.Debugf("QUERY: full unpack failed: %v", err)
+		}
+		msg := BuildResponseMsg(req)
+		msg.Rcode = dns.RcodeFormatError
+		return msg
+	}
+
 	if log.IsDebug() {
 		qname := req.Question[0].Header().Name
 		qtype := dns.RRToType(req.Question[0])
@@ -221,6 +235,22 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	}
 
 	return qctx.Res
+}
+
+// EnsureFullUnpack force-parses a question-only-unpacked request from its
+// wire so the chain sees the EDNS options (Pseudo), version and flags.  It is
+// the pipeline-entry parse step: ServeDNS calls it before dispatching to the
+// chain, and protocol-level tests that feed packed wires to a middleware
+// chain directly must call it too (mirroring the production entry contract).
+// A request built from fields (Data == nil — direct ServeDNS calls,
+// benchmarks) has no wire to unpack and is left untouched; a message whose
+// Pseudo is already populated was fully unpacked by its listener.
+func EnsureFullUnpack(req *dns.Msg) error {
+	if len(req.Pseudo) == 0 && req.Data != nil {
+		req.Options = 0
+		return req.Unpack()
+	}
+	return nil
 }
 
 // ElapsedMS returns the elapsed time in milliseconds since startNs

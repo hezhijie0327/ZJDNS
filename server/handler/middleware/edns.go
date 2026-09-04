@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net"
+	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -18,37 +19,40 @@ type EDNS struct {
 	edns handler.EDNSHandler
 }
 
+// fallbackClientIP substitutes for a nil client address (unix-domain /
+// internal callers) in server-cookie HMACs — pre-parsed to avoid per-query
+// allocation.
+var fallbackClientIP = net.ParseIP(config.FallbackClientIP)
+
 // Wrap implements Wrapper.
+//
+// Parse-then-validate: every qctx EDNS field (ClientRequestedDNSSEC, ECSOpt,
+// CookieOpt, ClientWantsPadding) is populated BEFORE any short-circuit
+// returns, so the Response middleware reads qctx state only — it never
+// re-parses the request, whatever path a query takes through this layer.
+// (The full request unpack happens at the pipeline entry, in
+// Handler.ServeDNS.)
 func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		req := qctx.Req
 
-		// (MsgOptionUnpackQuestion) for routing.  When the OPT record is
-		// already present in Pseudo (full unpack already done), skip the
-		// redundant second parse to avoid per-query CPU and allocation cost.
-		// Otherwise force a full unpack so that EDNS options (ECS, Cookie,
-		// etc.) are extracted into req.Pseudo.  If this pass fails, the
-		// message is malformed — reject it rather than silently operating on
-		// a partially-parsed message.
-		//
-		// Data == nil means the caller built the request from fields
-		// (direct ServeDNS calls, benchmarks) — there is no wire to unpack
-		// and Pseudo cannot exist; treat it as a no-EDNS request instead of
-		// FORMERRing on a nil Data (chain-reorder regression: EDNS now runs
-		// before the Zone short-circuit, so this path executes for every
-		// zone-matched query).
-		if len(req.Pseudo) == 0 && req.Data != nil {
-			req.Options = 0
-			if err := req.Unpack(); err != nil {
-				if log.IsDebug() {
-					log.Debugf("EDNS: full unpack failed: %v", err)
-				}
-				msg := handler.BuildResponseMsg(req)
-				msg.Rcode = dns.RcodeFormatError
-				qctx.Res = msg
-				return nil
+		// ── Parse phase ──────────────────────────────────────────────────
+
+		qctx.ClientRequestedDNSSEC = req.Security
+		qctx.ECSOpt = m.edns.ParseFromDNS(req)
+		if qctx.ECSOpt != nil {
+			if log.IsDebug() {
+				log.Debugf("EDNS: client ECS parsed: family=%d addr=%s/%d scope=%d",
+					qctx.ECSOpt.Family, qctx.ECSOpt.Address, qctx.ECSOpt.SourcePrefix, qctx.ECSOpt.ScopePrefix)
 			}
+		} else if log.IsDebug() {
+			log.Debugf("EDNS: no ECS from client")
 		}
+		var cookieMalformed bool
+		qctx.CookieOpt, cookieMalformed = m.edns.ParseCookie(req)
+		qctx.ClientWantsPadding = edns.HasPaddingOption(req)
+
+		// ── Validation short-circuits (rejection-precedence order) ───────
 
 		// RFC 6891 §6.1.3 MUST: a request carrying an unsupported EDNS
 		// version is answered with RCODE=BADVERS and an OPT that carries the
@@ -68,23 +72,11 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return nil
 		}
 
-		qctx.ClientRequestedDNSSEC = req.Security
-		qctx.ECSOpt = m.edns.ParseFromDNS(req)
-		if qctx.ECSOpt != nil {
-			if log.IsDebug() {
-				log.Debugf("EDNS: client ECS parsed: family=%d addr=%s/%d scope=%d",
-					qctx.ECSOpt.Family, qctx.ECSOpt.Address, qctx.ECSOpt.SourcePrefix, qctx.ECSOpt.ScopePrefix)
-			}
-		} else {
-			if log.IsDebug() {
-				log.Debugf("EDNS: no ECS from client")
-			}
-		}
 		// RFC 7871 §6: reject malformed ECS options with FORMERR. The
 		// malformed state must be cleared and the SUBNET stripped from
-		// Pseudo: the outer Response middleware re-applies qctx.ECSOpt (and
-		// falls back to re-parsing req.Pseudo) for every non-BADCOOKIE
-		// response, which would echo the invalid option back to the client.
+		// Pseudo: the Response middleware applies qctx.ECSOpt to every
+		// non-BADCOOKIE response, which would echo the invalid option back
+		// to the client.
 		if qctx.ECSOpt != nil && !qctx.ECSOpt.IsValid() {
 			if log.IsDebug() {
 				log.Debugf("EDNS: malformed ECS option from %s", qctx.ClientIP)
@@ -102,11 +94,10 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			qctx.Res = msg
 			return nil
 		}
-		var cookieMalformed bool
-		qctx.CookieOpt, cookieMalformed = m.edns.ParseCookie(req)
+
+		// RFC 7873 §5.2.2: a malformed client cookie is rejected with
+		// FORMERR, not silently treated as absent.
 		if cookieMalformed {
-			// RFC 7873 §5.2.2: a malformed client cookie is rejected with
-			// FORMERR, not silently treated as absent.
 			if log.IsDebug() {
 				log.Debugf("EDNS: malformed client cookie from %s", qctx.ClientIP)
 			}
@@ -115,7 +106,6 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			qctx.Res = msg
 			return nil
 		}
-		qctx.ClientWantsPadding = edns.HasPaddingOption(req)
 
 		cookieOpt := qctx.CookieOpt
 
@@ -156,8 +146,10 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			}
 		}
 
+		// ── Post-validation state ────────────────────────────────────────
+
 		// Compute the response COOKIE string once here and cache it in
-		// qctx.CookieStr — the Response middleware must never re-run the
+		// qctx.CookieStr — the Response middleware never re-runs the
 		// server-cookie HMAC per response.
 		qctx.CookieStr = m.cookieResponseStr(cookieOpt, qctx.ClientIP, cookieStatus)
 
@@ -171,8 +163,6 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				}
 			}
 		}
-
-		qctx.EDNSParsed = true
 
 		return next.ServeDNS(ctx, qctx)
 	})

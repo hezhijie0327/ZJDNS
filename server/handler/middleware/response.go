@@ -3,9 +3,7 @@ package middleware
 import (
 	"context"
 	"encoding/binary"
-	"net"
 	"zjdns/cache"
-	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/server/handler"
@@ -28,8 +26,6 @@ type ednsState struct {
 	clientWantsPad bool
 	shouldAddEDNS  bool
 }
-
-var fallbackClientIP = net.ParseIP(config.FallbackClientIP) // pre-parsed to avoid per-query allocation
 
 // Wrap implements Wrapper.
 func (m *Response) Wrap(next handler.QueryHandler) handler.QueryHandler {
@@ -93,33 +89,11 @@ func (m *Response) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	})
 }
 
-// ednsStateFor computes the EDNS decision state for a response.  Shared by the
-// pre-packed fast path (deciding whether the wire can be served as-is) and
-// finalizeResponse (applying the options) so the parse work runs once.
+// ednsStateFor assembles the EDNS decision state for a response from the
+// qctx fields the EDNS middleware populated during its parse phase (which
+// runs before every short-circuit — see EDNS.Wrap).  Response never re-parses
+// the request.
 func (m *Response) ednsStateFor(qctx *handler.QueryContext) ednsState {
-	// Parse ECS if EDNS didn't run (early short-circuit).  When EDNS already
-	// ran, ECSOpt == nil definitively means "no ECS" — the fallback re-parse
-	// of req.Pseudo (and the padding re-scan) is redundant work per response.
-	ecsOpt := qctx.ECSOpt
-	if ecsOpt == nil && !qctx.EDNSParsed && m.edns != nil {
-		ecsOpt = m.edns.ParseFromDNS(qctx.Req)
-		if ecsOpt == nil {
-			ecsOpt = m.edns.ECSForQType(qctx.Qtype)
-		}
-	}
-
-	clientWantsPadding := qctx.ClientWantsPadding
-	if !clientWantsPadding && !qctx.EDNSParsed {
-		clientWantsPadding = edns.HasPaddingOption(qctx.Req)
-	}
-
-	// CookieStr was computed during EDNS validation (single HMAC per query);
-	// the fallback compute only serves early short-circuits before EDNS.
-	cookieStr := qctx.CookieStr
-	if cookieStr == "" && !qctx.EDNSParsed {
-		cookieStr = m.generateCookieStr(qctx.CookieOpt, qctx.ClientIP)
-	}
-
 	// qctx.IsSecure is deliberately NOT part of shouldAddEDNS — including it
 	// forced every TLS-family listener (DoT/DoQ/DoH/DoH3/DTLS/TLCP/DTLCP)
 	// onto the unpack+re-Pack path, silently disabling the pre-packed
@@ -130,11 +104,11 @@ func (m *Response) ednsStateFor(qctx *handler.QueryContext) ednsState {
 	// them), EDNS clients that send no PADDING option opt out explicitly and
 	// can take the fast path, and plain transports never pad.
 	return ednsState{
-		ecsOpt:         ecsOpt,
-		cookieStr:      cookieStr,
-		clientWantsPad: clientWantsPadding,
-		shouldAddEDNS: ecsOpt != nil || qctx.ClientRequestedDNSSEC || cookieStr != "" ||
-			qctx.EDE != nil || (qctx.IsSecure && clientWantsPadding) ||
+		ecsOpt:         qctx.ECSOpt,
+		cookieStr:      qctx.CookieStr,
+		clientWantsPad: qctx.ClientWantsPadding,
+		shouldAddEDNS: qctx.ECSOpt != nil || qctx.ClientRequestedDNSSEC || qctx.CookieStr != "" ||
+			qctx.EDE != nil || (qctx.IsSecure && qctx.ClientWantsPadding) ||
 			len(qctx.Req.Pseudo) > 0,
 	}
 }
@@ -163,43 +137,6 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext, st ednsState) {
 		// inside a single OPT (RFC 7873: at most one COOKIE per message).
 		m.edns.ApplyToMessage(msg, st.ecsOpt, qctx.IsSecure, st.cookieStr, qctx.EDE, false, st.clientWantsPad, 0)
 	}
-}
-
-func (m *Response) generateCookieStr(cookieOpt *edns.CookieOption, clientIP net.IP) string {
-	if m.edns == nil || cookieOpt == nil {
-		return ""
-	}
-
-	if clientIP == nil {
-		clientIP = fallbackClientIP
-	}
-
-	if len(cookieOpt.ClientCookie) != edns.DefaultCookieClientLen {
-		if log.IsDebug() {
-			log.Debugf("EDNS: invalid client cookie length %d (expected %d)", len(cookieOpt.ClientCookie), edns.DefaultCookieClientLen)
-		}
-		return ""
-	}
-
-	var serverCookie []byte
-	if len(cookieOpt.ServerCookie) == edns.DefaultCookieServerLen {
-		status := m.edns.IsServerCookieValid(clientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie)
-		if status == edns.CookieValid || status == edns.CookieValidRenew {
-			serverCookie = cookieOpt.ServerCookie
-		} else {
-			if log.IsDebug() {
-				log.Debugf("EDNS: server cookie status=%d for %s, renewing", status, clientIP)
-			}
-			serverCookie = m.edns.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
-		}
-	} else {
-		serverCookie = m.edns.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
-	}
-
-	if serverCookie == nil {
-		return ""
-	}
-	return edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
 }
 
 // msgHasEDNSOptions reports whether the response already carries EDNS

@@ -23,8 +23,6 @@ func newResponseChain(t *testing.T, secure bool) (handler.QueryHandler, *dns.Msg
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &Response{edns: ednsH}
-
 	req := dnsutil.SetQuestion(new(dns.Msg), "example.com.", dns.TypeA)
 	req.ID = 0xBEEF
 
@@ -44,7 +42,10 @@ func newResponseChain(t *testing.T, secure bool) (handler.QueryHandler, *dns.Msg
 		qctx.Res = packed
 		return nil
 	})
-	return m.Wrap(next), req
+	// Response outermost over the real EDNS middleware: the parse-phase
+	// contract (qctx EDNS fields populated before any short-circuit) is what
+	// Response relies on for padding decisions.
+	return (&Response{edns: ednsH}).Wrap((&EDNS{edns: ednsH}).Wrap(next)), req
 }
 
 // TestResponseMiddleware_PrePackedFastPath verifies the direct-wire serve:

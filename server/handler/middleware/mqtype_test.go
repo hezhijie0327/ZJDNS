@@ -603,6 +603,9 @@ func TestMQTYPE_Chain_PlainTransportPseudoEmpty(t *testing.T) {
 		t.Fatal("test setup: expected Pseudo empty after question-only unpack")
 	}
 
+	if err := handler.EnsureFullUnpack(req2); err != nil { // pipeline-entry parse (ServeDNS owns it now)
+		t.Fatalf("entry unpack: %v", err)
+	}
 	qctx := (&handler.QueryContext{Req: req2, Qname: "example.com.", Qtype: dns.TypeA}).InitQuestion()
 	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
 		t.Fatal(err)

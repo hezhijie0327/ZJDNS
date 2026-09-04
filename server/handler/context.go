@@ -30,11 +30,6 @@ type QueryContext struct {
 	ClientWantsPadding    bool     // true if the request included EDNS padding option
 	EDE                   *dns.EDE // EDE code set by error-producing middlewares
 
-	// EDNSParsed is set by the EDNS middleware once it has run: the Response
-	// middleware then skips its fallback re-parse of req.Pseudo (ECS /
-	// padding detection) — ECSOpt == nil then definitively means "no ECS",
-	// not "EDNS hasn't run yet".
-	EDNSParsed bool
 	// CookieStr caches the response COOKIE string computed during EDNS
 	// validation — the Response middleware reuses it instead of running the
 	// server-cookie HMAC a second time per query.
