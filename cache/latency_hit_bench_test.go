@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"testing"
 	"zjdns/config"
+	zpool "zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
 )
@@ -30,7 +31,10 @@ func benchGet(b *testing.B, withLatency bool, answers int) {
 			if !ok {
 				b.Fatal("miss")
 			}
-			ReleaseTTLOffsets(e.TTLOffsets) // mirror the serve path — keep the offset pool warm
+			// Mirror the serve path: Message.Put recycles the wire after the
+			// response is written; the offsets are released by the serve path.
+			zpool.ReleaseWire(e.ResponseWire)
+			ReleaseTTLOffsets(e.TTLOffsets)
 		}
 	})
 }

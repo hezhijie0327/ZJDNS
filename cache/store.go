@@ -654,8 +654,11 @@ func (s *Cache) buildEntry(ce *cacheEntry, ts int64, entryTTL int, validated boo
 		// *cacheEntry per LRU slot) and the serve path mutates it in place
 		// (buildFromPrePacked deducts TTLs via the offset table) — handing
 		// out the shared slice would let one query corrupt another's TTLs
-		// and race its writes.  Clone per hit (H7/H10).
-		owned = slices.Clone(wire)
+		// and race its writes.  Copy per hit into the pooled wire class
+		// (H7/H10); the copy is recycled by Message.Put after the response
+		// is written.
+		owned = pool.AcquireWire(len(wire))
+		copy(owned, wire)
 	}
 	// Each offset must address a complete TTL field (4 bytes) inside the
 	// FINAL wire (post-decompression — the table indexes the uncompressed
@@ -692,11 +695,13 @@ func (s *Cache) buildEntry(ce *cacheEntry, ts int64, entryTTL int, validated boo
 		gen := s.latencyGen.Load()
 		if ce != nil {
 			if blob := ce.sorted.Load(); blob != nil && blob.version == gen {
+				fastWire := pool.AcquireWire(len(blob.wire))
+				copy(fastWire, blob.wire)
 				fast := &Entry{
 					Timestamp:    ts,
 					TTL:          entryTTL,
 					Validated:    validated,
-					ResponseWire: slices.Clone(blob.wire),
+					ResponseWire: fastWire,
 					TTLOffsets:   clonePooledOffsets(blob.offsets),
 				}
 				fast.HasDNSSEC = entryHasDNSSEC
