@@ -24,7 +24,7 @@ import (
 type Cache struct {
 	entries    *lrumap.Map[cacheKey, *cacheEntry] // cache key → entry
 	maxEntries int
-	statsMgr   *Manager // in-memory query stats + per-RCODE top-N journal
+	statsMgr   *Journal // in-memory query stats + per-RCODE top-N journal
 
 	// spill is the second-tier disk store: evicted-but-fresh entries land
 	// here and are promoted back on a memory miss.  nil when no state_file

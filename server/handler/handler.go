@@ -10,7 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
 	"zjdns/internal/log"
@@ -19,7 +18,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
-	"golang.org/x/sync/errgroup"
 )
 
 // Question is a type alias for resolver.Question.
@@ -38,31 +36,15 @@ type LatencyProber interface {
 }
 
 // Handler processes DNS queries by delegating to the assembled middleware
-// chain.  It is a thin adapter between protocol listeners and the chain.
+// chain.  It is a thin adapter between protocol listeners and the chain —
+// deliberately free of any other collaborator: the wiring (Server) owns the
+// shared dependencies so background tasks read them from there, not through
+// Handler accessors.
 type Handler struct {
 	closed atomic.Int32 // hot-path: checked on every query via atomic load
 
-	chain             QueryHandler
-	edns              *edns.Handler
-	cache             cache.Store
-	prober            LatencyProber
-	resolver          Resolver
-	cacheRefreshGroup *errgroup.Group
-	prefetchCooldown  *PrefetchCooldown
-	ctx               context.Context
-}
-
-// HandlerDeps carries the Handler's collaborators as named fields —
-// positional parameters are easy to transpose at the wiring site (2026-09 E1).
-type HandlerDeps struct {
-	Chain            QueryHandler
-	EDNS             *edns.Handler
-	CacheStore       cache.Store
-	Prober           LatencyProber
-	Resolver         Resolver
-	RefreshGroup     *errgroup.Group
-	PrefetchCooldown *PrefetchCooldown
-	Ctx              context.Context
+	chain QueryHandler
+	ctx   context.Context
 }
 
 // qctxPool reuses QueryContext structs — one is allocated per query.  The
@@ -72,19 +54,10 @@ type HandlerDeps struct {
 // only values (qname/qtype/ecs), never the QueryContext itself.
 var qctxPool = sync.Pool{New: func() any { return new(QueryContext) }}
 
-// NewHandler creates a Handler from the assembled middleware chain and
-// essential dependencies.
-func NewHandler(deps *HandlerDeps) *Handler {
-	return &Handler{
-		chain:             deps.Chain,
-		edns:              deps.EDNS,
-		cache:             deps.CacheStore,
-		prober:            deps.Prober,
-		resolver:          deps.Resolver,
-		cacheRefreshGroup: deps.RefreshGroup,
-		prefetchCooldown:  deps.PrefetchCooldown,
-		ctx:               deps.Ctx,
-	}
+// NewHandler creates a Handler that dispatches queries to the assembled
+// middleware chain under the given (server lifecycle) context.
+func NewHandler(chain QueryHandler, ctx context.Context) *Handler {
+	return &Handler{chain: chain, ctx: ctx}
 }
 
 // ── Lifecycle ────────────────────────────────────────────────────────────
@@ -94,26 +67,6 @@ func (h *Handler) IsClosed() bool { return h.closed.Load() != 0 }
 
 // MarkClosed signals the handler to stop accepting new work.
 func (h *Handler) MarkClosed() { h.closed.Store(1) }
-
-// ── Accessors ────────────────────────────────────────────────────────────
-
-// Edns returns the EDNS handler.
-func (h *Handler) EDNS() *edns.Handler { return h.edns }
-
-// CacheStore returns the cache store.
-func (h *Handler) CacheStore() cache.Store { return h.cache }
-
-// Prober returns the latency prober.
-func (h *Handler) Prober() LatencyProber { return h.prober }
-
-// PrefetchCooldown returns the prefetch cooldown tracker.
-func (h *Handler) PrefetchCooldown() *PrefetchCooldown { return h.prefetchCooldown }
-
-// CacheRefreshGroup returns the errgroup for cache refresh goroutines.
-func (h *Handler) CacheRefreshGroup() *errgroup.Group { return h.cacheRefreshGroup }
-
-// UpstreamServers returns the configured upstream servers.
-func (h *Handler) UpstreamServers() []*config.UpstreamServer { return h.resolver.UpstreamServers() }
 
 // ── Query entry point ────────────────────────────────────────────────────
 

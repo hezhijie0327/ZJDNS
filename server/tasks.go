@@ -39,7 +39,7 @@ func (s *Server) startStateMaintenance() {
 	if cachePath == "" && latencyPath == "" && delegationPath == "" {
 		return
 	}
-	cacheStore := s.handler.CacheStore()
+	cacheStore := s.cacheStore
 	if cacheStore == nil {
 		return
 	}
@@ -130,7 +130,7 @@ func (s *Server) runBackgroundTicker(name string, interval time.Duration, fn fun
 
 // startCookieRotation rotates the DNS cookie secret on a fixed interval.
 func (s *Server) startCookieRotation() {
-	ednsH := s.handler.EDNS()
+	ednsH := s.ednsHandler
 	if ednsH == nil || ednsH.CookieGenerator == nil {
 		return
 	}
@@ -145,7 +145,7 @@ func (s *Server) startCookieRotation() {
 
 // refreshECSOnce attempts a single ECS refresh and logs the result.
 func (s *Server) refreshECSOnce() {
-	ednsH := s.handler.EDNS()
+	ednsH := s.ednsHandler
 	if ednsH == nil {
 		return
 	}
@@ -166,7 +166,7 @@ func (s *Server) refreshECSOnce() {
 
 // startECSRefresh periodically refreshes the default EDNS Client Subnet value.
 func (s *Server) startECSRefresh() {
-	ednsH := s.handler.EDNS()
+	ednsH := s.ednsHandler
 	if ednsH == nil || !ednsH.ShouldRefreshDefaultECS() {
 		return
 	}
@@ -209,7 +209,7 @@ func (s *Server) startPoolReap() {
 // startPrefetchCooldownCleanup periodically evicts stale entries from the prefetch cooldown map.
 func (s *Server) startPrefetchCooldownCleanup() {
 	s.runBackgroundTicker("prefetch cooldown cleanup", config.DefaultPrefetchThrottleInterval*10, func() {
-		s.handler.PrefetchCooldown().Cleanup(log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds())
+		s.prefetchCooldown.Cleanup(log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds())
 	})
 }
 
@@ -323,7 +323,7 @@ func (s *Server) shutdownServer() {
 	refreshDone := make(chan error, 1)
 	go func() {
 		defer zdnsutil.HandlePanic("Cache refresh group wait")
-		refreshDone <- s.handler.CacheRefreshGroup().Wait()
+		refreshDone <- s.cacheRefreshGroup.Wait()
 	}()
 
 	refreshTimer := time.NewTimer(config.DefaultBackgroundShutdownTimeout)
@@ -340,7 +340,7 @@ func (s *Server) shutdownServer() {
 
 	// Close latency prober before the query client — it owns HTTP/3
 	// QUIC connections that must be released explicitly.
-	if p := s.handler.Prober(); p != nil {
+	if p := s.prober; p != nil {
 		p.Close()
 	}
 
@@ -350,7 +350,7 @@ func (s *Server) shutdownServer() {
 		s.queryClient.Close()
 	}
 
-	if cacheStore := s.handler.CacheStore(); cacheStore != nil {
+	if cacheStore := s.cacheStore; cacheStore != nil {
 		// Push the in-memory tiers to their spill stores before closing
 		// (entries + latency; the delegation spill flushes in the resolver's
 		// own shutdown hook).  Bounded by DefaultShutdownTimeout: a stalled

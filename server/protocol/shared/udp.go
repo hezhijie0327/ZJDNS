@@ -448,7 +448,7 @@ func (c *quicPacketConn) dispatch(src *net.UDPAddr, pb *[]byte, n int) {
 // startUDPGroup — start one UDP shared port group
 // ---------------------------------------------------------------------------
 
-func (m *Manager) startUDPGroup(g *UDPGroup) error {
+func (m *Mux) startUDPGroup(g *UDPGroup) error {
 	addrs, err := zdnsutil.ResolveBindAddrs("udp", g.Port)
 	if err != nil {
 		return err
@@ -598,7 +598,7 @@ func joinStrings(elems []string, sep string) string {
 // Per-packet allocation-free: the read buffer is pooled (PacketBufPool),
 // the map key is a value-type addrKey (no src.String()), and the pooled
 // buffer is passed through channels — consumers copy out and return it.
-func (m *Manager) udpDispatchLoop(rt *udpRuntime) {
+func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 	g := rt.cfg
 	udpConn := rt.conn
 	dtlsPL := rt.dtlsPL

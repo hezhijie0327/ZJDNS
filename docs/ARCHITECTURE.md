@@ -343,7 +343,7 @@ pprof-verified: 300 queries (QUIC+DTLS+DTLCP) across the shared UDP dispatch pro
 
 ## EDNS Extensions & RFC Support
 
-The middleware chain (see AGENTS.md for the full 10-layer pipeline) hosts the
+The middleware chain (see AGENTS.md for the full 11-layer pipeline) hosts the
 recent RFC features:
 
 - **RFC 10029 MQTYPE**: per-upstream `mqtype` config (numeric QTYPE list).

@@ -63,9 +63,9 @@ type rcodeJournal struct {
 	capacity int
 }
 
-// Manager combines the atomic counters and the per-RCODE journal. It is the
+// Journal combines the atomic counters and the per-RCODE journal. It is the
 // single entry point for the cache package's stats hot path.
-type Manager struct {
+type Journal struct {
 	cnt     counters
 	journal *rcodeJournal
 }
@@ -101,14 +101,14 @@ func (j *rcodeJournal) topAll(n int) map[int][]topk.Entry[string] {
 	return out
 }
 
-// newStatsJournal creates a Manager. journalCapacity bounds the per-RCODE
+// newStatsJournal creates a Journal. journalCapacity bounds the per-RCODE
 // domain journal (capacity <= 0 applies the topk package default).
-func newStatsJournal(journalCapacity int) *Manager {
+func newStatsJournal(journalCapacity int) *Journal {
 	byRcode := make(map[int]*topk.Map[string], maxRcodeBucket+1)
 	for rc := range maxRcodeBucket + 1 {
 		byRcode[rc] = topk.New[string](journalCapacity)
 	}
-	return &Manager{
+	return &Journal{
 		journal: &rcodeJournal{
 			byRcode:  byRcode,
 			capacity: journalCapacity,
@@ -118,9 +118,9 @@ func newStatsJournal(journalCapacity int) *Manager {
 
 // Record updates the aggregated counters and, for non-hit results, the
 // per-RCODE domain journal. Pure memory: atomic adds + one short critical
-// section. Must not be called after Close (there is none — the Manager is
+// section. Must not be called after Close (there is none — the Journal is
 // owned by the cache and dies with it).
-func (m *Manager) Record(r *Record) {
+func (m *Journal) Record(r *Record) {
 	c := &m.cnt
 	c.total.Add(1)
 	c.totalMS.Add(r.ResponseTime)
@@ -201,7 +201,7 @@ func (m *Manager) Record(r *Record) {
 
 // ResetCounters zeroes all atomic counters. Used by the .stats.clear CHAOS
 // control endpoint.
-func (m *Manager) ResetCounters() {
+func (m *Journal) ResetCounters() {
 	c := &m.cnt
 	c.total.Store(0)
 	c.hits.Store(0)
@@ -239,7 +239,7 @@ func (m *Manager) ResetCounters() {
 
 // ResetJournal clears the per-RCODE domain journal. Used by the
 // .querylog.clear CHAOS control endpoint.
-func (m *Manager) ResetJournal() {
+func (m *Journal) ResetJournal() {
 	for _, mm := range m.journal.byRcode {
 		mm.Clear()
 	}
@@ -248,7 +248,7 @@ func (m *Manager) ResetJournal() {
 // Snapshot returns a consistent point-in-time view of all counters and the
 // per-RCODE top-N journal (top 10 per RCODE). entryCount is the cache's entry
 // count, passed through from the caller.
-func (m *Manager) Snapshot(entryCount int64) *StatsResult {
+func (m *Journal) Snapshot(entryCount int64) *StatsResult {
 	c := &m.cnt
 	return &StatsResult{
 		Entries:     entryCount,

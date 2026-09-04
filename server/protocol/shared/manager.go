@@ -18,7 +18,7 @@ import (
 )
 
 // Host is the minimal interface the protocol server must implement for
-// the shared-port Manager to schedule goroutines and observe cancellation.
+// the shared-port Mux to schedule goroutines and observe cancellation.
 type Host interface {
 	Go(f func() error)
 	Ctx() context.Context
@@ -61,9 +61,9 @@ type UDPGroup struct {
 	ClassifyDNSCrypt func(data []byte) string
 }
 
-// Config carries all handlers and configuration the Manager needs from
+// Config carries all handlers and configuration the Mux needs from
 // the TLS and TLCP protocol servers.  All fields are optional; the
-// Manager starts only the port pairs for which handlers are provided.
+// Mux starts only the port pairs for which handlers are provided.
 type Config struct {
 	// TCP shared port groups.  Each group binds one TCP port and
 	// demultiplexes among TLS/TLCP/DNSCrypt by record-layer detection.
@@ -100,12 +100,12 @@ type udpRuntime struct {
 	clientSem chan struct{}
 }
 
-// Manager manages shared-port resources for all protocol pairs.
+// Mux manages shared-port resources for all protocol pairs.
 // It owns a cancelable lifecycle context and a mutex for resource tracking,
 // with zero coupling to the tlcp.Server struct.  Handler goroutines are
 // scheduled on the Host (whose group the server shutdown waits on); the
 // per-client flood bound is udpRuntime.clientSem, not a scheduling limit.
-type Manager struct {
+type Mux struct {
 	host Host
 	cfg  *Config
 
@@ -125,10 +125,10 @@ type tcpDemuxCloser interface {
 	Listener(proto string) net.Listener
 }
 
-// New creates a shared-port Manager.
-func New(host Host, cfg *Config) *Manager {
+// New creates a shared-port Mux.
+func New(host Host, cfg *Config) *Mux {
 	groupCtx, groupCancel := context.WithCancelCause(host.Ctx())
-	return &Manager{
+	return &Mux{
 		host:        host,
 		cfg:         cfg,
 		groupCtx:    groupCtx,
@@ -152,7 +152,7 @@ func (rt *udpRuntime) admit() bool {
 func (rt *udpRuntime) release() { <-rt.clientSem }
 
 // Start launches all configured shared-port listeners.
-func (m *Manager) Start() error {
+func (m *Mux) Start() error {
 	for i := range m.cfg.TCPGroups {
 		if err := m.startTCPGroup(&m.cfg.TCPGroups[i]); err != nil {
 			return err
@@ -167,7 +167,7 @@ func (m *Manager) Start() error {
 }
 
 // Shutdown gracefully stops all shared-port listeners and servers.
-func (m *Manager) Shutdown() {
+func (m *Mux) Shutdown() {
 	m.groupCancel(errors.New("shared port shutdown"))
 
 	m.mu.Lock()

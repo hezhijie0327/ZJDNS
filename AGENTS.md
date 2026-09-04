@@ -214,6 +214,7 @@ Audit framework: [docs/AUDIT-METHODOLOGY.md](docs/AUDIT-METHODOLOGY.md). Reports
 zjdns/
 ├── cmd/zjdns/          ← binary + CLI
 ├── config/             ← ServerConfig, ProtocolSettings, UpstreamServer, defaults
+├── dnscert/            ← DNSCrypt resolver-key/cert/stamp minting + config generation
 ├── edns/               ← EDNS handler (ECS, Cookie, EDE, Padding)
 ├── cache/              ← DNS response cache (Store interface, LRU-backed)
 ├── ruleset/            ← CIDR + domain tag matching (binary radix trie)
@@ -221,7 +222,7 @@ zjdns/
 ├── internal/           ← log, pool, ttl, dnsutil, ipdetect, latency, pending, stamp, ...
 └── server/
     ├── handler/        ← query pipeline adapter + QueryContext
-    │   └── middleware/ ← 10 composable middleware + AssembleChain
+    │   └── middleware/ ← 11 composable middleware + AssembleChain
     ├── defense/        ← DNS anti-pollution (Detector, capsguard/hopguard/poisonguard — spoofguard lives in upstream/plain, splitguard in upstream)
     ├── protocol/       ← {plain,tls,tlcp,dnscrypt} server listeners
     ├── upstream/       ← {plain,tls,tlcp,dnscrypt} outbound client + pool + SOCKS5
@@ -237,14 +238,14 @@ Foundation (zero zjdns imports):
 Layer 1–2: internal/dnsutil, config, internal/latency
 
 Layer 3 (domain packages — never import each other):
-  edns, cache, ruleset, zone
+  edns, cache, ruleset, zone, dnscert
 
 Layer 4 (server sub-packages — never import server/ parent):
   server/resolver, server/handler, server/upstream, server/protocol/*, server/defense
 
 Top layer (wiring):
   server → all domain + all server sub-packages
-  cmd/zjdns → config, log, server
+  cmd/zjdns → config, log, server, dnscert (CLI config generation)
 ```
 
 Key rules:
@@ -256,20 +257,21 @@ Key rules:
 
 Execution order (outermost → innermost):
 
-1. `ResponseMiddleware` — EDNS / Cookie / EDE finalisation
-2. `EDNSMiddleware` — ECS parsing, DNS Cookie validation (RFC 7873/9018)
-3. `MQTYPE` — RFC 10029 multi-QTYPE merge (recursive mode) + FORMERR (§3.3); forwarding mode also merges locally
-4. `CacheStoreMiddleware` — cache write, request logging, latency probe
-5. `ValidationMiddleware` — domain / label / NXNAME-AXFR-IXFR rejection (RFC 9824 §3.5)
-6. `ZoneMiddleware` — zone rule evaluation, synthetic response (runs before Any so rules win)
-7. `AnyMiddleware` — RFC 8482 minimal ANY response (HINFO "RFC8482")
-8. `CacheLookupMiddleware` — fresh→serve, stale→serve+refresh, miss→delegate
-9. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147)
-10. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive with singleflight dedup
+1. `Stats` — the single request-journal recording site; materialises the outcome classification (`qctx.Result`) set by the deciding middleware
+2. `ResponseMiddleware` — EDNS / Cookie / EDE finalisation
+3. `EDNSMiddleware` — ECS parsing, DNS Cookie validation (RFC 7873/9018); parse-then-validate — every qctx EDNS field is populated before any short-circuit
+4. `MQTYPE` — RFC 10029 multi-QTYPE merge (recursive mode) + FORMERR (§3.3); forwarding mode also merges locally
+5. `CacheStoreMiddleware` — miss-path response building, cache write (via `handler.StoreIfCacheable`), latency probe
+6. `ValidationMiddleware` — domain / label / NXNAME-AXFR-IXFR rejection (RFC 9824 §3.5)
+7. `ZoneMiddleware` — zone rule evaluation, synthetic response (runs before Any so rules win)
+8. `AnyMiddleware` — RFC 8482 minimal ANY response (HINFO "RFC8482")
+9. `CacheLookupMiddleware` — fresh→serve, stale→serve+refresh (delegates to the refreshCoordinator), miss→delegate
+10. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147); secondary A lookup via `handler.Secondary`
+11. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive with singleflight dedup
 
 All layers share a mutable `QueryContext`. Any layer may short-circuit by setting `qctx.Res`.
 
-> **Note:** Names like `ResponseMiddleware`, `CacheStoreMiddleware`, etc. are descriptive labels for the pipeline. The actual Go types are simply `Response`, `CacheStore`, `MQTYPE`, `Validation`, `Zone`, `Any`, `EDNS`, `CacheLookup`, `DNS64`, and `Resolution`.
+> **Note:** Names like `ResponseMiddleware`, `CacheStoreMiddleware`, etc. are descriptive labels for the pipeline. The actual Go types are simply `Stats`, `Response`, `CacheStore`, `MQTYPE`, `Validation`, `Zone`, `Any`, `EDNS`, `CacheLookup`, `DNS64`, and `Resolution`.
 
 ### RFC 10029 MQTYPE (`upstream[*].mqtype`, numeric QTYPE list)
 - Client: outbound queries attach `MQQUERY{config − primary}`; merged records (with RRSIGs) warm the cache; bundled types stripped from the client response **across the whole CNAME chain** (owner-independent, `stripMQBundled`); an upstream that fails/refuses the optioned query (observed: CN resolvers SERVFAILing the unknown EDNS option) is retried once optionless on BOTH the recursive and forwarding paths (§3.5)

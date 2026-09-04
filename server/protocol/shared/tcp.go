@@ -36,7 +36,7 @@ func (q *queueListener) Addr() net.Addr            { return q.inner.Addr() }
 // The TLS handler is either DOHHandler (HTTP-level, port 443) or
 // DOTHandler (raw listener, port 853).  Similarly for TLCP: DOHTLCP
 // (HTTP-level) or DOTTLCP (raw listener).
-func (m *Manager) startTCPGroup(g *TCPGroup) error {
+func (m *Mux) startTCPGroup(g *TCPGroup) error {
 	addrs, err := zdnsutil.ResolveBindAddrs("tcp", g.Port)
 	if err != nil {
 		return fmt.Errorf("resolve bind addrs: %w", err)
