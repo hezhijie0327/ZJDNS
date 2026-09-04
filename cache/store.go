@@ -44,6 +44,11 @@ type Cache struct {
 	// ever been written), the per-hit latency lookup is skipped entirely.
 	hasLatencyData atomic.Bool
 
+	// latencyGen is the latency-table generation: bumped on every
+	// UpdateLatency so per-entry sorted-wire caches can detect staleness
+	// without re-reading the latency map.
+	latencyGen atomic.Uint64
+
 	// latencies holds per-IP latency data — written by background latency
 	// probes, read on the cache-hit hot path (sortAnswerByLatency).  LRU-
 	// bounded (latencyMax), TTL-expired lazily on read and physically
@@ -68,6 +73,19 @@ type cacheEntry struct {
 	ts        int64 // log.NowUnix() at store
 	ttl       int
 	validated bool
+
+	// sorted caches the latency-sorted wire for A/AAAA entries so every
+	// cache hit skips the Unpack + sort + maps; rebuilt whenever the
+	// latency-table generation moves.  The offsets copy is NOT pool-owned —
+	// readers clone into the TTL-offset pool per hit.
+	sorted atomic.Pointer[latencySortedWire]
+}
+
+// latencySortedWire is the cached latency-sort result for one entry.
+type latencySortedWire struct {
+	wire    []byte
+	offsets []uint16
+	version uint64 // Cache.latencyGen when built
 }
 
 // latEntry is one per-IP latency record.
@@ -95,6 +113,11 @@ const (
 	// pre-packed BLOB (bit 7 of msgWire[1]): set when the wire carries
 	// DNSSEC record types.  The remaining 15 bits hold the offset count.
 	dnssecFlagMask = 0x8000
+
+	// maxSortedWireCache bounds the per-entry latency-sorted wire cache:
+	// responses above this size skip caching (a second copy would double
+	// large-entry memory) and re-sort per hit instead.
+	maxSortedWireCache = 1024
 
 	// maxTTLOffsets caps pooled TTL-offset slices: responses beyond this RR
 	// count allocate fresh instead of growing the pool entry (large
@@ -404,7 +427,7 @@ func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption) (
 	for _, c := range candidates {
 		key := buildCacheKey(qname, qtype, qclass, c.addr, c.prefix)
 		if ce, ok := s.entries.Get(key); ok {
-			entry, found, expired := s.buildEntry(ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qtype)
+			entry, found, expired := s.buildEntry(ce, ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qtype)
 			if !found {
 				// Corrupt BLOB — self-heal instead of warn-per-read: the
 				// next query for this key re-fetches from upstream (D8).
@@ -414,7 +437,7 @@ func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption) (
 		}
 		if s.spill != nil {
 			if entry, found := s.getFromSpill(key); found {
-				e, ok2, expired := s.buildEntry(entry.ts, entry.ttl, entry.validated, entry.msgWire, qname, qtype)
+				e, ok2, expired := s.buildEntry(entry, entry.ts, entry.ttl, entry.validated, entry.msgWire, qname, qtype)
 				if !ok2 {
 					s.spill.Delete(key)
 					s.entries.Delete(key)
@@ -451,7 +474,7 @@ func (s *Cache) GetTypes(qname string, qclass uint16, qtypes [2]uint16) (entries
 	for i, qt := range qtypes {
 		key := buildCacheKey(qname, qt, qclass, "", 0)
 		if ce, ok := s.entries.Get(key); ok {
-			entries[i], found[i], expired[i] = s.buildEntry(ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qt)
+			entries[i], found[i], expired[i] = s.buildEntry(ce, ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qt)
 			if !found[i] {
 				s.entries.Delete(key) // corrupt BLOB — self-heal (D8)
 			}
@@ -459,7 +482,7 @@ func (s *Cache) GetTypes(qname string, qclass uint16, qtypes [2]uint16) (entries
 		}
 		if s.spill != nil {
 			if ce, ok := s.getFromSpill(key); ok {
-				entries[i], found[i], expired[i] = s.buildEntry(ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qt)
+				entries[i], found[i], expired[i] = s.buildEntry(ce, ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qt)
 				if !found[i] {
 					s.spill.Delete(key)
 					s.entries.Delete(key)
@@ -487,7 +510,7 @@ func (s *Cache) LatencySpillCap() int { return s.spillLatCap }
 // buildEntry parses a stored BLOB (pre-packed) into an Entry, applying
 // latency sorting.  Returns (entry, found, expired); found=false on corrupt
 // data.
-func (s *Cache) buildEntry(ts int64, entryTTL int, validated bool, msgWire []byte, qname string, qtype uint16) (*Entry, bool, bool) {
+func (s *Cache) buildEntry(ce *cacheEntry, ts int64, entryTTL int, validated bool, msgWire []byte, qname string, qtype uint16) (*Entry, bool, bool) {
 	if len(msgWire) < 3 {
 		return nil, false, false
 	}
@@ -578,15 +601,53 @@ func (s *Cache) buildEntry(ts int64, entryTTL int, validated bool, msgWire []byt
 	// (TXT, MX, DNSKEY, ...) paid the full Unpack + clone + map allocs for
 	// a sort that could never change the wire.
 	if s.hasLatencyData.Load() && (qtype == dns.TypeA || qtype == dns.TypeAAAA) {
+		// Sorted-wire fast path: when this entry was already sorted under
+		// the current latency-table generation, serve the cached result —
+		// the per-hit Unpack + sort + maps were the dominant cost of a
+		// multi-answer A/AAAA cache hit (3× CPU, 6× allocs at 8 answers).
+		gen := s.latencyGen.Load()
+		if ce != nil {
+			if blob := ce.sorted.Load(); blob != nil && blob.version == gen {
+				fast := &Entry{
+					Timestamp:    ts,
+					TTL:          entryTTL,
+					Validated:    validated,
+					ResponseWire: slices.Clone(blob.wire),
+					TTLOffsets:   clonePooledOffsets(blob.offsets),
+				}
+				fast.HasDNSSEC = entryHasDNSSEC
+				return fast, true, ttl.IsExpired(ts, entryTTL)
+			}
+		}
 		if err := entry.Unpack(); err != nil {
 			log.Debugf("CACHE: latency sort unpack failed (name=%s type=%d): %v", qname, qtype, err) // corrupt wire — served unsorted (E9)
 		}
 		if s.sortAnswerByLatency(entry) && len(entry.Answer) > 0 {
 			entry.rebuildResponseWire()
 		}
+		// Cache the sorted pair for same-generation hits (bounded: large
+		// wires re-sort per hit instead of doubling memory).
+		if ce != nil && len(entry.ResponseWire) <= maxSortedWireCache && entry.TTLOffsets != nil {
+			wcopy := make([]byte, len(entry.ResponseWire))
+			copy(wcopy, entry.ResponseWire)
+			ocopy := make([]uint16, len(entry.TTLOffsets))
+			copy(ocopy, entry.TTLOffsets)
+			ce.sorted.Store(&latencySortedWire{wire: wcopy, offsets: ocopy, version: gen})
+		}
 	}
 	isExpired := ttl.IsExpired(ts, entryTTL)
 	return entry, true, isExpired
+}
+
+// clonePooledOffsets copies an offsets table into a pooled slice for a
+// per-hit Entry (the cached copy stays owned by the entry).
+func clonePooledOffsets(src []uint16) []uint16 {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := AcquireTTLOffsets(len(src))
+	copy(dst, src)
+	return dst
 }
 
 // sortAnswerByLatency reorders A/AAAA records in entry.Answer by probe

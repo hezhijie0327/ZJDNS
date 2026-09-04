@@ -307,6 +307,9 @@ func (s *Cache) UpdateLatency(ip string, latencyMS int) {
 		latencyMS = ((config.DefaultLatencyProbeSmoothFactor-1)*old.latency + latencyMS) / config.DefaultLatencyProbeSmoothFactor
 	}
 	s.latencies.Set(ip, latEntry{latency: latencyMS, lastProbe: now})
+	// Bump the latency generation: per-entry sorted-wire caches built under
+	// an older generation are stale and rebuild on their next hit.
+	s.latencyGen.Add(1)
 }
 
 // LatencyLastProbe returns the last probe time for an IP. Returns (0, false)

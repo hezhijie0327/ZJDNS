@@ -137,6 +137,14 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 		return msg
 	}
 
+	// RFC 1035 §4.1.1: a message with the QR (response) bit set is not a
+	// query — silently drop it.  Replying would answer to a spoofed source
+	// (reflection) and miekg's UDP listener already skips these; the
+	// hand-rolled TCP-family listeners funneled them into the chain.
+	if req.Response {
+		return nil
+	}
+
 	if log.IsDebug() {
 		qname := req.Question[0].Header().Name
 		qtype := dns.RRToType(req.Question[0])
