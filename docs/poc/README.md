@@ -63,7 +63,13 @@ upstream server. These injected responses arrive with a different IP-layer TTL
    the trusted set.
 3. **Enforcement phase:** Responses with TTL outside `trusted ± 2` are rejected.
 4. **Periodic rebuild:** Every 32 samples, histogram counts are decayed by ×¾,
-   preventing stale baselines from persisting after routing changes.
+   preventing stale baselines from persisting after routing changes. When every
+   baseline has decayed away, hopguard disarms and re-enters learning.
+5. **Drift recovery (1-in-16 sampling):** Validate-rejected TTLs are fed back
+   into the histogram on a uniform 1-in-16 sample — a legitimate TTL shift
+   (anycast reroute / PoP change) re-arms on the new TTL instead of locking
+   the server into SERVFAIL, while attacker-injected TTLs are diluted 16× and
+   can never win the mode competition.
 
 ### Demo Output
 ```
@@ -72,6 +78,9 @@ Scenario A: Google directly (no warm-up) → NOT ARMED (only 12 real samples)
 
 Scenario B: Baidu warm-up → Google → ▲ ARMED, trusted TTLs: 51,52,53 (±2)
   Result: 8/8 GFW fakes REJECTED — already armed from Baidu warm-up
+
+Scenario C: anycast reroute (TTL 52→40) → REJECTING… sampled feeds rebuild…
+  → RE-ARMED @ 40 — traffic flows again (1-in-16 rejection sampling)
 ```
 
 ### Key Insight
@@ -240,14 +249,23 @@ unpredictable transaction entropy.
    a mismatch means the responder never saw the real query → discard.
 3. **§6.4 fallback:** after a mismatch, the query is retried once with the
    original case so case-rewriting middleboxes keep service working.
-4. **Cache hits** patch the stored wire back to the client's question case
+4. **Consecutive-mismatch downgrade:** 8 *consecutive* mismatches (a success
+   resets the counter) skip randomization for that upstream entirely for the
+   retry window — a permanently non-compliant upstream stops paying the
+   per-query retry cost.
+5. **PTR exemption:** reverse-lookup queries skip echo verification — some
+   middleboxes (Cisco DNS guard) legitimately rewrite reverse qnames.
+6. **Cache hits** patch the stored wire back to the client's question case
    (`handler/response.go` `patchQuestionCase`).
 
-### Demo Output (scenarios A–C)
+### Demo Output (scenarios A–E)
 ```
 Scenario A: 0x20-capable server       → every query accepted first try (0 retries)
 Scenario B: case-rewriting middlebox  → DISCARD + §6.4 unrandomized retry per query
 Scenario C: spoofer (wrong echo)      → every attempt discarded → SERVFAIL
+Scenario D: persistent middlebox      → query 8 downgrades: queries 9+ skip
+                                         randomization (no retry, no doubled RTT)
+Scenario E: PTR through middlebox     → accepted — PTR exempt from 0x20 check
 ```
 
 ### Key Insight

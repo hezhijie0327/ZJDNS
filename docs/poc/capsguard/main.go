@@ -50,7 +50,19 @@ type row struct {
 
 // ── Constants ─────────────────────────────────────────────────────
 
+// downgradeState mirrors the mainline capsDowngrades map in
+// server/upstream/client.go: after DefaultCapsGuardDowngradeAfter (8)
+// CONSECUTIVE mismatches, randomisation is skipped for the whole retry
+// window — no per-query retry doubling.  A successful echo resets the
+// counter (intermittent middleboxes never accumulate to a downgrade, S8).
+type downgradeState struct {
+	consecutive int
+	disabled    bool
+}
+
 const (
+	downgradeAfter = 8
+
 	reset       = "\033[0m"
 	bold        = "\033[1m"
 	dim         = "\033[2m"
@@ -114,6 +126,19 @@ func simulate(name string, srv simServer) []row {
 	echo2, _ := srv(orig)
 	rows = append(rows, row{2, orig, echo2, "ACCEPT — §6.4 baseline retry", true})
 	return rows
+}
+
+func (d *downgradeState) noteMatch() { d.consecutive = 0 }
+
+// noteMismatch counts one mismatch and reports whether THIS one triggered
+// the downgrade.
+func (d *downgradeState) noteMismatch() bool {
+	d.consecutive++
+	if d.consecutive >= downgradeAfter {
+		d.disabled = true
+		return true
+	}
+	return false
 }
 
 // renderRows renders the attempt table shared by simulation and real-network
@@ -244,10 +269,58 @@ func main() {
 	printScenario("Scenario B: case-rewriting middlebox (§6.2, lowercasing)", lowercasingMiddlebox, "wWw.GoOgLe.CoM")
 	printScenario("Scenario C: spoofer (never echoes the right case)", spoofer, "wWw.GoOgLe.CoM")
 
+	// ── Scenario D: persistent middlebox → consecutive-mismatch downgrade ──
+	fmt.Printf("\n  %s━━━ Scenario D: persistent middlebox — consecutive-mismatch downgrade ━━━%s\n", red, reset)
+	dg := &downgradeState{}
+	var rowsD []row
+	downgradedAt := 0
+	for i := 1; i <= 12; i++ {
+		orig := "www.google.com." // canonical (lowercase) name
+		if dg.disabled {
+			// Randomisation skipped: send the canonical name, verify nothing
+			// (baseline semantics), zero extra round-trips.
+			echo, _ := lowercasingMiddlebox(orig)
+			rowsD = append(rowsD, row{1, orig, echo, "ACCEPT — randomisation skipped (downgraded)", true})
+			dg.noteMatch()
+			continue
+		}
+		randName := randomizeCase(orig)
+		echo, _ := lowercasingMiddlebox(randName)
+		if echo == randName {
+			rowsD = append(rowsD, row{1, randName, echo, "ACCEPT — echo matches 0x20", true})
+			dg.noteMatch()
+			continue
+		}
+		rowsD = append(rowsD, row{1, randName, echo, "DISCARD — echo mismatch", false})
+		if dg.noteMismatch() && downgradedAt == 0 {
+			downgradedAt = i
+		}
+		echo2, _ := lowercasingMiddlebox(orig)
+		rowsD = append(rowsD, row{2, orig, echo2, "ACCEPT — §6.4 baseline retry", true})
+	}
+	renderRows(rowsD)
+	fmt.Printf("\n  %s→ query %d hit 8 consecutive mismatches — queries %d+ send the canonical\n", yellow, downgradedAt, downgradedAt+1)
+	fmt.Printf("     name directly: no randomisation, no retry, no doubled latency%s\n", reset)
+
+	// ── Scenario E: PTR exemption ──
+	fmt.Printf("\n  %s━━━ Scenario E: PTR query through the case-rewriting middlebox ━━━%s\n", red, reset)
+	ptrName := randomizeCase("1.2.0.192.in-addr.arpa.")
+	echo, _ := lowercasingMiddlebox(ptrName)
+	rowsE := []row{{1, ptrName, echo, "ACCEPT — PTR exempt (no 0x20 check)", true}}
+	renderRows(rowsE)
+	fmt.Printf("\n  %s→ reverse-lookup names skip echo verification: some middleboxes\n", yellow)
+	fmt.Printf("     (Cisco DNS guard) rewrite reverse qnames, which would trigger a\n")
+	fmt.Printf("     spurious mismatch on every PTR query (mirrors the PTR exemption\n")
+	fmt.Printf("     in server/upstream/client.go ExecuteQuery)%s\n", reset)
+
 	fmt.Printf("\n  %sTakeaways%s\n", bold, reset)
 	fmt.Printf("  %s•%s A: every query accepted on the first attempt — zero overhead.\n", green, reset)
 	fmt.Printf("  %s•%s B: one extra unrandomized round-trip per query — the §6.4 fallback\n", yellow, reset)
 	fmt.Printf("     keeps service working against case-rewriting middleboxes.\n")
 	fmt.Printf("  %s•%s C: no correct response ever arrives — the spoofer cannot forge\n", red, reset)
 	fmt.Printf("     the per-query random case pattern (2^n bits of entropy).\n")
+	fmt.Printf("  %s•%s D: 8 consecutive mismatches downgrade to plain queries — a\n", yellow, reset)
+	fmt.Printf("     permanently non-compliant upstream stops paying the retry cost.\n")
+	fmt.Printf("  %s•%s E: PTR queries are exempt — case-rewriting of reverse names is\n", green, reset)
+	fmt.Printf("     known middlebox behaviour, not spoofing.\n")
 }

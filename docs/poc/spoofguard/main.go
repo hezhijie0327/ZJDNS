@@ -195,7 +195,9 @@ func sameAnswers(a, b []string) bool {
 // ── Real-network mode ─────────────────────────────────────────────
 
 // realCollect sends one query and reads every datagram arriving within the
-// spoofguard window (500ms), converting each into simResp for the shared
+// spoofguard silence window — 150ms for the first datagram, extended to
+// 500ms once a second one lands (mirrors collectWindow in
+// server/upstream/plain/udp.go), converting each into simResp for the shared
 // rule engine. On a polluted path this yields multiple candidates (real +
 // GFW fakes, or fakes only).
 func realCollect(server, qname string) []simResp {
@@ -215,7 +217,11 @@ func realCollect(server, qname string) []simResp {
 	if _, err := conn.Write(msg.Data); err != nil {
 		return nil
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	// Adaptive silence window: single-candidate 150ms, multi 500ms — the
+	// deadline extends on every datagram (mirrors collectWindow + the
+	// exact-wake timer re-arm in the production collect loop).
+	const singleWindow, multiWindow = 150 * time.Millisecond, 500 * time.Millisecond
+	_ = conn.SetReadDeadline(time.Now().Add(singleWindow))
 
 	var out []simResp
 	buf := make([]byte, 4096)
@@ -224,6 +230,9 @@ func realCollect(server, qname string) []simResp {
 		if err != nil {
 			return out // deadline — window closed
 		}
+		// First datagram landed — a second (injected) one may still arrive:
+		// extend to the full multi-candidate window from now on.
+		_ = conn.SetReadDeadline(time.Now().Add(multiWindow))
 		resp := new(dns.Msg)
 		resp.Data = buf[:n]
 		if err := resp.Unpack(); err != nil {

@@ -36,10 +36,11 @@ import (
 // ── Types ─────────────────────────────────────────────────────────
 
 type hgState struct {
-	hist    map[uint8]int
-	trusted map[uint8]int
-	samples int
-	armed   bool
+	hist     map[uint8]int
+	trusted  map[uint8]int
+	samples  int
+	armed    bool
+	rejected int // rejection sampling counter (1-in-16 recovery feed)
 }
 
 type queryRow struct {
@@ -137,12 +138,31 @@ func newHGState() *hgState {
 func (s *hgState) feed(ttl uint8) {
 	s.hist[ttl]++
 	s.samples++
-	if s.samples >= minSamples && s.samples%minSamples == 0 {
-		s.rebuild()
-		if len(s.trusted) > 0 {
-			s.armed = true
-		}
+	if s.samples%minSamples != 0 {
+		return
 	}
+	// Rebuild runs on the same cadence while armed (periodic refresh) and
+	// while learning (arming attempt) — mirrors server/defense/hopguard.go.
+	s.rebuild()
+	if len(s.trusted) > 0 {
+		s.armed = true
+	} else {
+		// Every baseline decayed away — disarm and re-enter learning.
+		s.armed = false
+		s.samples = 0
+	}
+}
+
+// shouldSampleRejected mirrors ShouldSampleRejected: uniform 1-in-16
+// sampling of Validate-rejected TTLs back into the histogram — the recovery
+// path for legitimate TTL drift (anycast reroute / PoP change) without
+// letting attacker TTLs win the mode competition (diluted 16×).
+func (s *hgState) shouldSampleRejected() bool {
+	if !s.armed {
+		return false // learning phase has no rejections
+	}
+	s.rejected++
+	return s.rejected%16 == 0
 }
 
 func (s *hgState) validate(ttl uint8) bool {
@@ -577,7 +597,13 @@ func main() {
 		}
 		wasArmed := warm.armed
 		accept := warm.validate(ttl)
-		if !isGFW {
+		switch {
+		case accept:
+			warm.feed(ttl)
+		case warm.shouldSampleRejected():
+			// Rejected TTL sampled back into the histogram (mainline
+			// ShouldSampleRejected → Feed recovery path) — GFW values are
+			// diluted 16× and cannot win the mode competition.
 			warm.feed(ttl)
 		}
 		warmRows = append(warmRows, queryRow{id: id, domain: "www.google.com", ttl: ttl, gfw: isGFW, armed: wasArmed, accept: accept})
@@ -763,6 +789,80 @@ func main() {
 		}
 		fmt.Printf("  %sTTL %-3d %s %s%d%s\n", mark, h.ttl, b, dim, h.count, extra)
 	}
+
+	// ── Scenario C: anycast reroute — TTL drift recovery ────────
+	// The upstream reroutes (anycast PoP change): every response now arrives
+	// with TTL 40±1 instead of the trusted 52±1.  While armed, hopguard
+	// hard-rejects the new TTL — the 1-in-16 rejection sampling keeps feeding
+	// it into the histogram, the ×¾ decay erodes the stale 52 baseline, and
+	// the next rebuild re-arms on 40 (mirrors ShouldSampleRejected → Feed).
+
+	fmt.Println()
+	fmt.Println()
+	fmt.Println(bold + "  ╔══════════════════════════════════════════════════════════╗" + reset)
+	fmt.Println(bold + "  ║  Scenario C: anycast reroute — TTL drift self-recovery    ║" + reset)
+	fmt.Println(bold + "  ╚══════════════════════════════════════════════════════════╝" + reset)
+	fmt.Println()
+	fmt.Printf("  Reroute: server TTL changes %d±1 → 40±1 while armed on %v\n\n", realBaseTTL, trustedTTLs(warm))
+
+	drift := warm
+	driftBase := uint8(40)
+	type driftMilestone struct {
+		query   int
+		hist52  int
+		hist40  int
+		armed   bool
+		verdict string
+	}
+	var milestones []driftMilestone
+	rejectedTotal, sampledTotal, passedTotal := 0, 0, 0
+	const driftQueries = 700
+	for i := 1; i <= driftQueries; i++ {
+		ttl := driftBase + uint8(rand.IntN(3)) - 1 //nolint:gosec // G404: demo simulation — not cryptographic
+		accept := drift.validate(ttl)
+		switch {
+		case accept:
+			drift.feed(ttl)
+			passedTotal++
+		case drift.shouldSampleRejected():
+			drift.feed(ttl) // sampled rejection re-enters the histogram
+			rejectedTotal++
+			sampledTotal++
+		default:
+			rejectedTotal++
+		}
+		if i%100 == 0 || i == driftQueries {
+			milestones = append(milestones, driftMilestone{
+				query: i, hist52: drift.hist[realBaseTTL], hist40: drift.hist[driftBase],
+				armed: drift.armed,
+				verdict: func() string {
+					if drift.armed && drift.validate(driftBase) {
+						return green + "RE-ARMED @ 40 — traffic flows again" + reset
+					}
+					return red + "REJECTING (stale 52 baseline)" + reset
+				}(),
+			})
+		}
+	}
+
+	fmt.Println(dim + "  ┌──────────────┬───────────┬───────────┬────────┬──────────────────────────────────┐" + reset)
+	fmt.Printf(dim+"  │ %-12s │ %-9s │ %-9s │ %-6s │ %-32s │"+reset+"\n", "Query", "hist[52]", "hist[40]", "Armed", "State")
+	fmt.Println(dim + "  ├──────────────┼───────────┼───────────┼────────┼──────────────────────────────────┤" + reset)
+	for _, m := range milestones {
+		armedStr := red + "NO " + reset
+		if m.armed {
+			armedStr = green + "YES" + reset
+		}
+		fmt.Printf("  │ %-12d │ %-9d │ %-9d │ %s │ %s\n", m.query, m.hist52, m.hist40, rpad(armedStr, 8), rpad(m.verdict, 42))
+	}
+	fmt.Println(dim + "  └──────────────┴───────────┴───────────┴────────┴──────────────────────────────────┘" + reset)
+	fmt.Printf("  %s→ %d queries: %d rejected, %d fed back via 1-in-16 sampling, %d passed after re-arm%s\n",
+		yellow, driftQueries, rejectedTotal, sampledTotal, passedTotal, reset)
+	fmt.Println()
+	fmt.Println("  The ×¾ decay erodes the stale baseline; the sampled new-TTL feeds win")
+	fmt.Println("  the mode competition; rebuild re-arms on the new TTL. An attacker's")
+	fmt.Println("  injected TTLs get the same treatment but are diluted 16× — they can")
+	fmt.Println("  never out-count the real server's responses.")
 
 	fmt.Println()
 	fmt.Println(bold + "  Key insight:" + reset)
