@@ -54,9 +54,9 @@ func (e *Evaluator) loadFile(table *zoneTable, parent *config.ZoneRule) (int, er
 		groups := groupRecordsByTypeClass(curRecords)
 		if len(groups) > 0 {
 			for _, g := range groups {
-				aw := packRRs(curRawName, g.records)
-				auth := packRRs(curRawName, curAuth)
-				addl := packRRs(curRawName, curAddl)
+				aw := buildRRs(curRawName, g.records)
+				auth := buildRRs(curRawName, curAuth)
+				addl := buildRRs(curRawName, curAddl)
 				addRule(table, &zoneRule{
 					qname: curDomain, qtype: g.qtype, qclass: g.qclass, rcode: curRcode,
 					answer: aw, authority: auth, additional: addl,
@@ -65,8 +65,8 @@ func (e *Evaluator) loadFile(table *zoneTable, parent *config.ZoneRule) (int, er
 				count++
 			}
 		} else if curRcode != dns.RcodeSuccess {
-			auth := packRRs(curRawName, curAuth)
-			addl := packRRs(curRawName, curAddl)
+			auth := buildRRs(curRawName, curAuth)
+			addl := buildRRs(curRawName, curAddl)
 			addRule(table, &zoneRule{
 				qname: curDomain, qtype: 0, qclass: 0, rcode: curRcode,
 				authority: auth, additional: addl,

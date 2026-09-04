@@ -60,19 +60,19 @@ type exactKey struct {
 	qclass uint16
 }
 
-// zoneRule is one rule in memory.  Answer/Authority/Additional are kept as
-// zstd-compressed wire blobs (packRRs) so every match decompresses a fresh
-// copy — the zone middleware mutates the returned RRs in place
-// (rewriteOwnerNames, TTL deduction), so shared RRs would corrupt each other
-// across queries.  matchTags is pre-parsed at load time.
+// zoneRule is one rule in memory.  Answer/Authority/Additional RRs are
+// parsed once at load time (buildRRs); every match clones the winning
+// rule's RRs (cloneRRs) — the zone middleware mutates the returned RRs in
+// place (rewriteOwnerNames, TTL deduction), so shared RRs would corrupt
+// each other across queries.  matchTags is pre-parsed at load time.
 type zoneRule struct {
 	qname      string
 	qtype      uint16
 	qclass     uint16
 	rcode      int
-	answer     []byte
-	authority  []byte
-	additional []byte
+	answer     []dns.RR
+	authority  []dns.RR
+	additional []dns.RR
 	matchTags  []matchTag
 	isWildcard bool
 }
@@ -239,9 +239,9 @@ func (e *Evaluator) loadInline(table *zoneTable, rule *config.ZoneRule) (int, er
 
 	if len(groups) > 0 {
 		for _, g := range groups {
-			aw := packRRs(rule.Name, g.records)
-			auth := packRRs(rule.Name, rule.Authority)
-			addl := packRRs(rule.Name, rule.Additional)
+			aw := buildRRs(rule.Name, g.records)
+			auth := buildRRs(rule.Name, rule.Authority)
+			addl := buildRRs(rule.Name, rule.Additional)
 			addRule(table, &zoneRule{
 				qname: normalizedName, qtype: g.qtype, qclass: g.qclass,
 				rcode: rule.Rcode, answer: aw, authority: auth, additional: addl,
@@ -251,8 +251,8 @@ func (e *Evaluator) loadInline(table *zoneTable, rule *config.ZoneRule) (int, er
 		}
 	} else if rule.Rcode != dns.RcodeSuccess || rule.DynamicContent != nil {
 		// Sentinel entry for rcode-only or dynamic rules.
-		auth := packRRs(rule.Name, rule.Authority)
-		addl := packRRs(rule.Name, rule.Additional)
+		auth := buildRRs(rule.Name, rule.Authority)
+		addl := buildRRs(rule.Name, rule.Additional)
 		addRule(table, &zoneRule{
 			qname: normalizedName, qtype: 0, qclass: 0,
 			rcode: rule.Rcode, authority: auth, additional: addl,
@@ -368,9 +368,9 @@ func (e *Evaluator) bestMatch(rules []*zoneRule, qname string, wildcard bool, qt
 			Matched:    true,
 			Wildcard:   wildcard,
 			Rcode:      r.rcode,
-			Answer:     unpackRRs(r.answer),
-			Authority:  unpackRRs(r.authority),
-			Additional: unpackRRs(r.additional),
+			Answer:     r.answer,
+			Authority:  r.authority,
+			Additional: r.additional,
 			CreatedAt:  loadedAt,
 			score:      score,
 		}
@@ -378,6 +378,13 @@ func (e *Evaluator) bestMatch(rules []*zoneRule, qname string, wildcard bool, qt
 	if !best.Matched {
 		return Result{Rcode: dns.RcodeSuccess}
 	}
+	// The winner's RRs are shared with the immutable rule table — clone them
+	// once so the caller can mutate headers in place (2026-09 perf: previously
+	// every candidate decompressed a zstd blob per query, the single largest
+	// CPU cost on the zone-hit path).
+	best.Answer = cloneRRs(best.Answer)
+	best.Authority = cloneRRs(best.Authority)
+	best.Additional = cloneRRs(best.Additional)
 	return best
 }
 

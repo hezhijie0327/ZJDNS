@@ -103,8 +103,10 @@ func TestClear(t *testing.T) {
 
 func TestDefaultCapacity(t *testing.T) {
 	m := New[string](0)
-	if m.capacity != defaultCapacity {
-		t.Fatalf("capacity = %d, want %d", m.capacity, defaultCapacity)
+	// Sharded map: per-shard capacity = total/shardCount + 1.
+	want := defaultCapacity/shardCount + 1
+	if m.shards[0].capacity != want {
+		t.Fatalf("capacity = %d, want %d", m.shards[0].capacity, want)
 	}
 }
 

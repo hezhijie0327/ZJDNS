@@ -9,8 +9,6 @@
 package cache
 
 import (
-	maps0 "maps"
-	"sync"
 	"sync/atomic"
 	"zjdns/internal/topk"
 )
@@ -56,8 +54,11 @@ type counters struct {
 // rcodeJournal tracks per-RCODE domain counts, replacing the former
 // query_log table. Each RCODE owns a bounded topk.Map so the memory footprint
 // stays bounded while the highest-count domains survive eviction.
+//
+// All buckets are pre-created at construction and the map is never written
+// again — record() is a lock-free map read plus the sharded topk.Inc (the
+// per-query stats path must not serialise on a journal-wide mutex).
 type rcodeJournal struct {
-	mu       sync.Mutex
 	byRcode  map[int]*topk.Map[string]
 	capacity int
 }
@@ -85,28 +86,19 @@ func rcodeBucket(rcode int) int {
 }
 
 func (j *rcodeJournal) record(rcode int, qname string) {
-	bucket := rcodeBucket(rcode)
-	j.mu.Lock()
-	m, ok := j.byRcode[bucket]
-	if !ok {
-		m = topk.New[string](j.capacity)
-		j.byRcode[bucket] = m
-	}
-	j.mu.Unlock()
-	m.Inc(qname)
+	j.byRcode[rcodeBucket(rcode)].Inc(qname)
 }
 
-// topAll returns the top-n domains per RCODE. The maps are collected under
-// the journal lock, then TopN runs lock-free outside it.
+// topAll returns the top-n domains per RCODE. The bucket map is immutable
+// after construction, so no lock is needed; empty buckets are omitted,
+// mirroring the lazily-created layout this journal had before buckets were
+// pre-created.
 func (j *rcodeJournal) topAll(n int) map[int][]topk.Entry[string] {
-	j.mu.Lock()
-	maps := make(map[int]*topk.Map[string], len(j.byRcode))
-	maps0.Copy(maps, j.byRcode)
-	j.mu.Unlock()
-
-	out := make(map[int][]topk.Entry[string], len(maps))
-	for rc, m := range maps {
-		out[rc] = m.TopN(n)
+	out := make(map[int][]topk.Entry[string], len(j.byRcode))
+	for rc, m := range j.byRcode {
+		if entries := m.TopN(n); len(entries) > 0 {
+			out[rc] = entries
+		}
 	}
 	return out
 }
@@ -114,9 +106,13 @@ func (j *rcodeJournal) topAll(n int) map[int][]topk.Entry[string] {
 // newStatsJournal creates a Manager. journalCapacity bounds the per-RCODE
 // domain journal (capacity <= 0 applies the topk package default).
 func newStatsJournal(journalCapacity int) *Manager {
+	byRcode := make(map[int]*topk.Map[string], maxRcodeBucket+1)
+	for rc := range maxRcodeBucket + 1 {
+		byRcode[rc] = topk.New[string](journalCapacity)
+	}
 	return &Manager{
 		journal: &rcodeJournal{
-			byRcode:  make(map[int]*topk.Map[string]),
+			byRcode:  byRcode,
 			capacity: journalCapacity,
 		},
 	}
@@ -246,11 +242,9 @@ func (m *Manager) ResetCounters() {
 // ResetJournal clears the per-RCODE domain journal. Used by the
 // .querylog.clear CHAOS control endpoint.
 func (m *Manager) ResetJournal() {
-	m.journal.mu.Lock()
 	for _, mm := range m.journal.byRcode {
 		mm.Clear()
 	}
-	m.journal.mu.Unlock()
 }
 
 // Snapshot returns a consistent point-in-time view of all counters and the

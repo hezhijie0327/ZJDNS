@@ -4,7 +4,6 @@ import (
 	"strconv"
 	"strings"
 	"zjdns/config"
-
 	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
@@ -13,37 +12,15 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Wire encoding: zstd(dns.Msg.Pack())
+// RR construction — records are parsed once at load time; every match clones
+// the winning rule's RRs (the zone middleware mutates them in place:
+// rewriteOwnerNames, TTL deduction), so shared RRs would corrupt each other
+// across queries.
 // ---------------------------------------------------------------------------
 
-// packRRs builds RRs from config, packs into a dns.Msg, and compresses.
-func packRRs(domain string, records []config.ZoneRecord) []byte {
-	rrs := buildRRs(domain, records)
-	if len(rrs) == 0 {
-		return nil
-	}
-	msg := &dns.Msg{Answer: rrs}
-	if err := msg.Pack(); err != nil {
-		return nil
-	}
-	return zdnsutil.Compress(msg.Data)
-}
-
-// unpackRRs decompresses a blob and unpacks the RRs from the dns.Msg.
-func unpackRRs(blob []byte) []dns.RR {
-	if len(blob) == 0 {
-		return nil
-	}
-	wire, err := zdnsutil.Decompress(blob, nil)
-	if err != nil {
-		return nil
-	}
-	msg := &dns.Msg{}
-	msg.Data = wire
-	if err := msg.Unpack(); err != nil {
-		return nil
-	}
-	return msg.Answer
+// cloneRRs deep-copies an RR slice so callers can mutate headers freely.
+func cloneRRs(rrs []dns.RR) []dns.RR {
+	return zdnsutil.CloneRRs(rrs)
 }
 
 // ---------------------------------------------------------------------------
