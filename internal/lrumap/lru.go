@@ -22,6 +22,8 @@ type lruEntry[K comparable, V any] struct {
 
 // Map is a concurrent-safe bounded map with LRU eviction.
 // The zero value is not usable; use New to create one.
+// A Map created via NewSharded dispatches every method to the shard owning
+// the key — mu/head/tail are unused in that case.
 type Map[K comparable, V any] struct {
 	mu   sync.Mutex
 	m    map[K]*lruEntry[K, V]
@@ -29,6 +31,11 @@ type Map[K comparable, V any] struct {
 	tail *lruEntry[K, V] // sentinel: least-recent side
 	len  int
 	cap  int
+
+	// Sharding (NewSharded): non-empty ⇒ every method dispatches to the
+	// shard owning the key. Set before the map is published; read-only after.
+	shards  []*Map[K, V]
+	hashKey func(K) uint64
 
 	// OnEvict, if set, is called with the key and value of an entry
 	// that is evicted to make room.  It runs with the map mutex held,
@@ -55,8 +62,15 @@ func New[K comparable, V any](capacity int) *Map[K, V] {
 }
 
 // SetOnEvict configures the eviction callback. The assignment is performed
-// under the map mutex so it cannot race a concurrent eviction read.
+// under the map mutex so it cannot race a concurrent eviction read.  On a
+// sharded map the callback is propagated to every shard.
 func (m *Map[K, V]) SetOnEvict(fn func(K, V)) {
+	if len(m.shards) > 0 {
+		for _, s := range m.shards {
+			s.SetOnEvict(fn)
+		}
+		return
+	}
 	m.mu.Lock()
 	m.OnEvict = fn
 	m.mu.Unlock()
@@ -65,6 +79,9 @@ func (m *Map[K, V]) SetOnEvict(fn func(K, V)) {
 // Get returns the value for key and whether it was found.
 // Accessing an entry marks it as most recently used.
 func (m *Map[K, V]) Get(key K) (V, bool) {
+	if len(m.shards) > 0 {
+		return m.shardFor(key).Get(key)
+	}
 	m.mu.Lock()
 	if e, ok := m.m[key]; ok {
 		m.moveToFront(e)
@@ -83,6 +100,10 @@ func (m *Map[K, V]) Get(key K) (V, bool) {
 // (dialers, clients, sessions) must be released when replaced, exactly as
 // capacity eviction releases them (R2 finding).
 func (m *Map[K, V]) Set(key K, val V) {
+	if len(m.shards) > 0 {
+		m.shardFor(key).Set(key, val)
+		return
+	}
 	m.mu.Lock()
 	if e, ok := m.m[key]; ok {
 		if m.OnEvict != nil {
@@ -108,6 +129,9 @@ func (m *Map[K, V]) Set(key K, val V) {
 // The loaded result is true if the key was already present, false if
 // the value was freshly stored.
 func (m *Map[K, V]) LoadOrStore(key K, val V) (V, bool) {
+	if len(m.shards) > 0 {
+		return m.shardFor(key).LoadOrStore(key, val)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if e, ok := m.m[key]; ok {
@@ -126,6 +150,13 @@ func (m *Map[K, V]) LoadOrStore(key K, val V) (V, bool) {
 
 // Len returns the current number of entries.
 func (m *Map[K, V]) Len() int {
+	if len(m.shards) > 0 {
+		n := 0
+		for _, s := range m.shards {
+			n += s.Len()
+		}
+		return n
+	}
 	m.mu.Lock()
 	n := m.len
 	m.mu.Unlock()
@@ -136,6 +167,10 @@ func (m *Map[K, V]) Len() int {
 // entry, mirroring eviction and overwrite semantics — resource-holding
 // values (dialers, clients, sessions) must be released on every exit path.
 func (m *Map[K, V]) Delete(key K) {
+	if len(m.shards) > 0 {
+		m.shardFor(key).Delete(key)
+		return
+	}
 	m.mu.Lock()
 	if e, ok := m.m[key]; ok {
 		m.remove(e)
@@ -151,6 +186,12 @@ func (m *Map[K, V]) Delete(key K) {
 // Clear removes all entries from the map.
 // OnEvict is called for each evicted entry.
 func (m *Map[K, V]) Clear() {
+	if len(m.shards) > 0 {
+		for _, s := range m.shards {
+			s.Clear()
+		}
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for e := m.head.next; e != m.tail; e = e.next {
@@ -169,6 +210,9 @@ func (m *Map[K, V]) Clear() {
 // would panic here). It reports whether the entry was removed; a concurrent
 // Set installing a different value for the same key is preserved.
 func (m *Map[K, V]) CompareAndDelete(key K, val V) bool {
+	if len(m.shards) > 0 {
+		return m.shardFor(key).CompareAndDelete(key, val)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if e, ok := m.m[key]; ok && any(e.val) == any(val) {
@@ -183,9 +227,16 @@ func (m *Map[K, V]) CompareAndDelete(key K, val V) bool {
 	return false
 }
 
-// Range calls fn for each entry in the map, from most recent to least recent.
+// Range calls fn for each entry in the map, from most recent to least recent
+// (per shard on a sharded map; cross-shard ordering is not defined).
 // Iteration stops if fn returns false.
 func (m *Map[K, V]) Range(fn func(K, V) bool) {
+	if len(m.shards) > 0 {
+		for _, s := range m.shards {
+			s.Range(fn)
+		}
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for e := m.head.next; e != m.tail; e = e.next {

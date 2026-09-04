@@ -228,10 +228,12 @@ func New(entriesLimit, latencyLimit config.LimitSettings, spillPath, latencySpil
 		latencyMax = config.DefaultMaxLatencyEntries
 	}
 	c := &Cache{
-		entries:    lrumap.New[string, *cacheEntry](maxEntries),
+		// Sharded: every query's Get/Set (hit or miss) touches these maps —
+		// a single LRU mutex serialised the whole server at high QPS.
+		entries:    lrumap.NewSharded[string, *cacheEntry](maxEntries),
 		maxEntries: maxEntries,
 		statsMgr:   newStatsJournal(0),
-		latencies:  lrumap.New[string, latEntry](latencyMax),
+		latencies:  lrumap.NewSharded[string, latEntry](latencyMax),
 		latencyMax: latencyMax,
 	}
 	c.loadSpill(spillPath, entriesLimit.Disk, maxEntries)
