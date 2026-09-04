@@ -274,3 +274,65 @@ func hasDNSSECRecords(rrs []dns.RR) bool {
 	}
 	return false
 }
+
+// WireRcode extracts the response rcode from the entry's pre-packed wire
+// header, including extended rcodes (>= 16): the low 4 bits live in the
+// header flags byte, the extended bits in the OPT record's TTL high byte
+// (RFC 6891 §6.1.3).  Reading only the low nibble would misclassify e.g.
+// BADVERS (16) as NOERROR, breaking RCODE-match checks (RFC 10029 §3.4).
+func (e *Entry) WireRcode() uint16 {
+	wire := e.ResponseWire
+	if len(wire) < 4 {
+		return 0
+	}
+	rcode := uint16(wire[3] & 0x0F) //nolint:gosec // G115: DNS rcode — protocol-bounded byte
+	// Scan the wire for the OPT record.  The cached wire's question section
+	// is uncompressed (canonical qname built by Set), so a plain label walk
+	// finds its end.
+	pos := dns.MsgHeaderSize
+	for pos < len(wire) {
+		l := int(wire[pos])
+		if l == 0 {
+			pos += 1 + 4 // root label + QTYPE(2) + QCLASS(2)
+			break
+		}
+		if l&0xC0 == 0xC0 {
+			return rcode // compression pointer in the question — not the cache format
+		}
+		pos += l + 1
+	}
+	for pos+11 <= len(wire) {
+		off := pos
+		// Name: labels or a compression pointer.
+		for off < len(wire) {
+			b := wire[off]
+			if b&0xC0 == 0xC0 {
+				off += 2
+				break
+			}
+			if b == 0 {
+				off++
+				break
+			}
+			off += int(b) + 1
+		}
+		if off+10 > len(wire) {
+			break
+		}
+		typ := binary.BigEndian.Uint16(wire[off:])
+		if typ == dns.TypeOPT {
+			rcode |= uint16(wire[off+4]) << 4 // OPT TTL byte 0 = extended rcode (RFC 6891 §6.1.3)
+			return rcode
+		}
+		pos = off + 10 + int(binary.BigEndian.Uint16(wire[off+8:]))
+	}
+	return rcode
+}
+
+// WireAuthoritative reads the AA flag from the entry's pre-packed wire
+// header (bit 2 of the flags byte) — the cached wire preserves the AA of the
+// response as received, needed for flag-match checks (RFC 10029 §3.4).
+func (e *Entry) WireAuthoritative() bool {
+	wire := e.ResponseWire
+	return len(wire) >= 4 && wire[2]&0x04 != 0
+}

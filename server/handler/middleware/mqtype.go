@@ -2,11 +2,9 @@ package middleware
 
 import (
 	"context"
-	"encoding/binary"
 	"strings"
 	"zjdns/cache"
 	"zjdns/config"
-	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/handler"
@@ -33,9 +31,8 @@ type qtResult struct {
 }
 
 type MQTYPE struct {
-	store    cache.Store
-	resolver handler.Resolver
-	pending  *handler.PendingRequests
+	store     cache.Store
+	secondary *handler.Secondary
 }
 
 type mqtypeError string
@@ -103,7 +100,7 @@ func (m *MQTYPE) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				defer qtCancel()
 				qtResults <- qtResult{
 					qt: qt,
-					qr: m.resolve(qtCtx, qctx.Qname, qt, qctx.Qclass, qctx.ECSOpt, qctx.ClientRequestedDNSSEC),
+					qr: m.secondary.Lookup(qtCtx, qctx.Qname, qt, qctx.Qclass, qctx.ECSOpt, qctx.ClientRequestedDNSSEC),
 				}
 			}()
 		}
@@ -165,22 +162,12 @@ func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY, qtResults <-
 		// rebuild the sections from it, silently discarding the merge.
 		// This also makes msg.Len() report the true primary size for the
 		// merge budget below.
-		if err := msg.Unpack(); err != nil {
+		if !handler.UnpackPrePackedForModify(qctx) {
 			if log.IsDebug() {
-				log.Debugf("MQTYPE: unpack pre-packed primary response: %v", err)
+				log.Debugf("MQTYPE: unpack pre-packed primary response failed")
 			}
 			return
 		}
-		msg.ID = qctx.Req.ID
-		msg.RecursionDesired = qctx.Req.RecursionDesired
-		// Filter DNSSEC proofs for DO=0 clients, mirroring the Response
-		// middleware's unpack path.
-		if !qctx.ClientRequestedDNSSEC {
-			msg.Answer = cache.ProcessRecords(msg.Answer, 0, false, false)
-			msg.Ns = cache.ProcessRecords(msg.Ns, 0, false, false)
-			msg.Extra = cache.ProcessRecords(msg.Extra, 0, false, false)
-		}
-		msg.Data = nil
 	}
 
 	// RFC 10029 §3.4: a truncated primary response MUST NOT be extended —
@@ -287,11 +274,9 @@ func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY, qtResults <-
 		completed = append(completed, qt)
 
 		// Cache the additional response so future requests (including
-		// CacheLookup for the same QTYPE) hit the warm cache.  Bogus
-		// validation results are never cached (see resolver.DNSSECCacheable).
-		if qr.Cacheable && resolver.DNSSECCacheable(qr.Validated, qr.DNSSECEDE) {
-			m.store.Set(qname, qt, qclass, ecsOpt, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
-		}
+		// CacheLookup for the same QTYPE) hit the warm cache (single
+		// cacheability gate, RFC 4035 §5.3.3 TTL cap included).
+		handler.StoreIfCacheable(m.store, qname, qt, qclass, ecsOpt, qr)
 	}
 
 	if len(completed) > 0 || len(mq.Types) > 0 {
@@ -302,38 +287,6 @@ func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY, qtResults <-
 	if log.IsDebug() {
 		log.Debugf("MQTYPE: merged %d/%d types for %s", len(completed), len(types), qname)
 	}
-}
-
-// resolve performs the secondary lookup for one QTYPE: cache first, then
-// singleflight resolution — the same pattern as the DNS64 middleware.  Each
-// QTx is bounded by DefaultMQTypeResolveTimeout so a merge cannot blow the
-// request budget through amplification (RFC 10029 §4).
-func (m *MQTYPE) resolve(ctx context.Context, qname string, qt, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool) *resolver.QueryResult {
-	if m.store != nil {
-		// Skip expired entries: merging a stale answer with the full stored
-		// TTL would serve data past its freshness window without the
-		// stale-answer EDE the CacheLookup path applies (M-cache).
-		if entry, found, isExpired := m.store.Get(qname, qt, qclass, ecsOpt); found && !isExpired {
-			if entry.Unpack() == nil {
-				cache.ReleaseTTLOffsets(entry.TTLOffsets)
-				return &resolver.QueryResult{
-					Answer: entry.Answer, Authority: entry.Authority, Additional: entry.Additional,
-					Validated: entry.Validated, Rcode: entryRcode(entry), Authoritative: entryAuthoritative(entry),
-					Cacheable: true,
-				}
-			}
-			// Unpack failed — the entry is dropped; still return the
-			// pool-owned TTL-offset slice (audit M-pool).
-			cache.ReleaseTTLOffsets(entry.TTLOffsets)
-		}
-	}
-	query := func() *resolver.QueryResult {
-		return m.resolver.Query(ctx, handler.Question{Name: qname, Qtype: qt, Qclass: qclass}, ecsOpt)
-	}
-	if m.pending != nil {
-		return m.pending.DoJoin(qname, qt, qclass, ecsOpt, dnssecOK, query)
-	}
-	return query()
 }
 
 // findMQQUERY returns the single MQTYPE-Query option from Pseudo.  present
@@ -409,66 +362,4 @@ func foldRRData(rr dns.RR) string {
 		}
 	}
 	return strings.Join(rdata, " ")
-}
-
-// entryAuthoritative reads the AA flag from a pre-packed entry's wire header
-// (bit 2 of the flags byte) — the cached wire preserves the AA of the
-// response as received, needed for the RFC 10029 §3.4 flag match.
-func entryAuthoritative(entry *cache.Entry) bool {
-	wire := entry.ResponseWire
-	return len(wire) >= 4 && wire[2]&0x04 != 0
-}
-
-// entryRcode extracts the rcode from a pre-packed entry's wire header,
-// including extended rcodes (>= 16): the low 4 bits live in the header flags
-// byte, the extended bits in the OPT record's TTL high byte (RFC 6891
-// §6.1.3).  Reading only the low nibble misclassified e.g. BADVERS (16) as
-// NOERROR, breaking the RFC 10029 §3.4 RCODE-match check.
-func entryRcode(entry *cache.Entry) uint16 {
-	wire := entry.ResponseWire
-	if len(wire) < 4 {
-		return 0
-	}
-	rcode := uint16(wire[3] & 0x0F) //nolint:gosec // G115: DNS rcode — protocol-bounded byte
-	// Scan the wire for the OPT record.  The cached wire's question section
-	// is uncompressed (canonical qname built by Set), so a plain label walk
-	// finds its end.
-	pos := dns.MsgHeaderSize
-	for pos < len(wire) {
-		l := int(wire[pos])
-		if l == 0 {
-			pos += 1 + 4 // root label + QTYPE(2) + QCLASS(2)
-			break
-		}
-		if l&0xC0 == 0xC0 {
-			return rcode // compression pointer in the question — not the cache format
-		}
-		pos += l + 1
-	}
-	for pos+11 <= len(wire) {
-		off := pos
-		// Name: labels or a compression pointer.
-		for off < len(wire) {
-			b := wire[off]
-			if b&0xC0 == 0xC0 {
-				off += 2
-				break
-			}
-			if b == 0 {
-				off++
-				break
-			}
-			off += int(b) + 1
-		}
-		if off+10 > len(wire) {
-			break
-		}
-		typ := binary.BigEndian.Uint16(wire[off:])
-		if typ == dns.TypeOPT {
-			rcode |= uint16(wire[off+4]) << 4 // OPT TTL byte 0 = extended rcode (RFC 6891 §6.1.3)
-			return rcode
-		}
-		pos = off + 10 + int(binary.BigEndian.Uint16(wire[off+8:]))
-	}
-	return rcode
 }

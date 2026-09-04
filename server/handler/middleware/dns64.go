@@ -2,11 +2,9 @@ package middleware
 
 import (
 	"context"
-	"zjdns/cache"
 	"zjdns/internal/dns64"
 	"zjdns/internal/log"
 	"zjdns/server/handler"
-	"zjdns/server/resolver"
 
 	"codeberg.org/miekg/dns"
 )
@@ -17,9 +15,7 @@ import (
 // checks if DNS64 synthesis is needed and performs a secondary A lookup.
 type DNS64 struct {
 	synthesizer *dns64.Synthesizer
-	resolver    handler.Resolver
-	pending     *handler.PendingRequests
-	store       cache.Store // response cache for the secondary A lookup
+	secondary   *handler.Secondary
 }
 
 // Wrap implements Wrapper.
@@ -60,38 +56,10 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		ecsOpt := qctx.ECSOpt
 		dnssecOK := qctx.ClientRequestedDNSSEC
 
-		// Perform A-record lookup for DNS64 synthesis. Check the response
-		// cache first: CacheLookup already ran upstream of this middleware,
-		// and going straight to the resolver would bypass the cache — a full
-		// upstream query per AAAA miss.
-		var aqr *resolver.QueryResult
-		if m.store != nil {
-			// Skip expired entries: synthesizing from a stale A answer would
-			// serve it with the full stored TTL and no stale-answer EDE
-			// (M-cache).
-			if entry, found, isExpired := m.store.Get(qname, dns.TypeA, qclass, ecsOpt); found {
-				if !isExpired && entry.Unpack() == nil && len(entry.Answer) > 0 {
-					aqr = &resolver.QueryResult{
-						Answer: entry.Answer, Authority: entry.Authority, Additional: entry.Additional,
-						Validated: entry.Validated,
-					}
-				}
-				// Every found path — usable, empty, unpack failure or expired
-				// — releases the pool-owned TTL-offset slice (H-L1).
-				cache.ReleaseTTLOffsets(entry.TTLOffsets)
-			}
-		}
-		if aqr == nil {
-			if m.pending != nil {
-				aqr = m.pending.DoJoin(qname, dns.TypeA, qclass, ecsOpt, dnssecOK, func() *resolver.QueryResult {
-					aQuestion := handler.Question{Name: qname, Qtype: dns.TypeA, Qclass: qclass}
-					return m.resolver.Query(ctx, aQuestion, ecsOpt)
-				})
-			} else {
-				aQuestion := handler.Question{Name: qname, Qtype: dns.TypeA, Qclass: qclass}
-				aqr = m.resolver.Query(ctx, aQuestion, ecsOpt)
-			}
-		}
+		// Perform the secondary A lookup through the shared cache-first /
+		// singleflight helper.  A cached NODATA answer (empty Answer)
+		// short-circuits the lookup — no upstream re-query per AAAA miss.
+		aqr := m.secondary.Lookup(ctx, qname, dns.TypeA, qclass, ecsOpt, dnssecOK)
 
 		if aqr != nil && aqr.Err == nil && len(aqr.Answer) > 0 {
 			qr.Answer, qr.Authority, qr.Additional = m.synthesizer.Synthesize(

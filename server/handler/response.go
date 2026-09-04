@@ -96,6 +96,29 @@ func buildFromPrePacked(req *dns.Msg, entry *cache.Entry, isExpired bool) *dns.M
 	return msg
 }
 
+// UnpackPrePackedForModify unpacks a pre-packed response (Data populated by
+// BuildCacheEntryResponse) into its RR sections so middleware can modify it:
+// patches in the client's message ID and RD bit (the cached wire carries the
+// values from Set() time), filters DNSSEC proofs for DO=0 clients (RFC 3225
+// §4.4), and clears Data so the response is re-packed on the way out.
+// Returns false when the wire cannot be unpacked — the caller serves
+// SERVFAIL or skips its modification.
+func UnpackPrePackedForModify(qctx *QueryContext) bool {
+	msg := qctx.Res
+	if err := msg.Unpack(); err != nil {
+		return false
+	}
+	msg.ID = qctx.Req.ID
+	msg.RecursionDesired = qctx.Req.RecursionDesired
+	if !qctx.ClientRequestedDNSSEC {
+		msg.Answer = cache.ProcessRecords(msg.Answer, 0, false, false)
+		msg.Ns = cache.ProcessRecords(msg.Ns, 0, false, false)
+		msg.Extra = cache.ProcessRecords(msg.Extra, 0, false, false)
+	}
+	msg.Data = nil
+	return true
+}
+
 // patchQuestionCase overwrites the question name bytes of a pre-packed
 // response wire with the client's original case.  The cached wire stores the
 // canonical (lowercased) qname from Set() — echoing it would strip the

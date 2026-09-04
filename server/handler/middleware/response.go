@@ -3,7 +3,6 @@ package middleware
 import (
 	"context"
 	"encoding/binary"
-	"zjdns/cache"
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/server/handler"
@@ -65,23 +64,13 @@ func (m *Response) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			// EDNS options are needed — unpack the pre-built wire so the
 			// EDNS + Pack pipeline below can modify the message.  TTLs were
 			// already adjusted by buildFromPrePacked.
-			if err := qctx.Res.Unpack(); err != nil {
+			if !handler.UnpackPrePackedForModify(qctx) {
 				if log.IsDebug() {
-					log.Debugf("RESPONSE: unpack pre-packed response: %v", err)
+					log.Debugf("RESPONSE: unpack pre-packed response failed")
 				}
 				qctx.Res.Rcode = dns.RcodeServerFailure
 				return err
 			}
-			qctx.Res.ID = qctx.Req.ID
-			qctx.Res.RecursionDesired = qctx.Req.RecursionDesired
-			// Filter DNSSEC proofs for DO=0 clients, mirroring the miss path
-			// (ProcessRecords with dnssecOK).
-			if !qctx.ClientRequestedDNSSEC {
-				qctx.Res.Answer = cache.ProcessRecords(qctx.Res.Answer, 0, false, false)
-				qctx.Res.Ns = cache.ProcessRecords(qctx.Res.Ns, 0, false, false)
-				qctx.Res.Extra = cache.ProcessRecords(qctx.Res.Extra, 0, false, false)
-			}
-			qctx.Res.Data = nil
 		}
 
 		m.finalizeResponse(qctx, st)

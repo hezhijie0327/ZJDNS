@@ -156,7 +156,7 @@ func TestMQTYPE_Merge_CacheHit(t *testing.T) {
 		nil, nil, false, 0)
 
 	fake := &fakeMQResolver{results: map[uint16]*resolver.QueryResult{}}
-	m := &MQTYPE{store: store, resolver: fake, pending: nil}
+	m := &MQTYPE{store: store, secondary: handler.NewSecondary(store, fake, nil)}
 	chain := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
 		// Primary response: A record.
 		qctx.Res = handler.BuildResponseMsg(qctx.Req)
@@ -195,7 +195,7 @@ func TestMQTYPE_Merge_SkipMismatch(t *testing.T) {
 	fake := &fakeMQResolver{results: map[uint16]*resolver.QueryResult{
 		dns.TypeAAAA: {Rcode: dns.RcodeNameError, Cacheable: true}, // NXDOMAIN ≠ primary NOERROR
 	}}
-	m := &MQTYPE{store: store, resolver: fake, pending: nil}
+	m := &MQTYPE{store: store, secondary: handler.NewSecondary(store, fake, nil)}
 	chain := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
 		qctx.Res = handler.BuildResponseMsg(qctx.Req)
 		qctx.Res.Answer = []dns.RR{aRecord("192.0.2.1")}
@@ -230,7 +230,7 @@ func TestMQTYPE_Merge_TruncatedPrimary(t *testing.T) {
 	fake := &fakeMQResolver{results: map[uint16]*resolver.QueryResult{
 		dns.TypeAAAA: {Answer: []dns.RR{aaaaRecord("2001:db8::1")}, Rcode: 0, Cacheable: true},
 	}}
-	m := &MQTYPE{store: store, resolver: fake, pending: nil}
+	m := &MQTYPE{store: store, secondary: handler.NewSecondary(store, fake, nil)}
 	chain := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
 		qctx.Res = handler.BuildResponseMsg(qctx.Req)
 		qctx.Res.Answer = []dns.RR{aRecord("192.0.2.1")}
@@ -265,7 +265,7 @@ func TestMQTYPE_Merge_BudgetClientUDPSize(t *testing.T) {
 	fake := &fakeMQResolver{results: map[uint16]*resolver.QueryResult{
 		dns.TypeTXT: {Answer: []dns.RR{bigTXT}, Rcode: 0, Cacheable: true},
 	}}
-	m := &MQTYPE{store: store, resolver: fake, pending: nil}
+	m := &MQTYPE{store: store, secondary: handler.NewSecondary(store, fake, nil)}
 	chain := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
 		qctx.Res = handler.BuildResponseMsg(qctx.Req)
 		qctx.Res.Answer = []dns.RR{aRecord("192.0.2.1")}
@@ -319,7 +319,7 @@ func TestMQTYPE_Merge_AAFlagMismatch(t *testing.T) {
 			fake := &fakeMQResolver{results: map[uint16]*resolver.QueryResult{
 				dns.TypeAAAA: {Answer: []dns.RR{aaaaRecord("2001:db8::1")}, Rcode: 0, Cacheable: true, Authoritative: tc.addAA},
 			}}
-			m := &MQTYPE{store: store, resolver: fake, pending: nil}
+			m := &MQTYPE{store: store, secondary: handler.NewSecondary(store, fake, nil)}
 			chain := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
 				qctx.Res = handler.BuildResponseMsg(qctx.Req)
 				qctx.Res.Answer = []dns.RR{aRecord("192.0.2.1")}
@@ -360,7 +360,7 @@ func TestMQTYPE_Merge_FiltersDNSSECForDO0(t *testing.T) {
 	store.Set("example.com.", dns.TypeAAAA, dns.ClassINET, nil, entry, nil, nil, false, 0)
 
 	fake := &fakeMQResolver{results: map[uint16]*resolver.QueryResult{}}
-	m := &MQTYPE{store: store, resolver: fake, pending: nil}
+	m := &MQTYPE{store: store, secondary: handler.NewSecondary(store, fake, nil)}
 	chain := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
 		qctx.Res = handler.BuildResponseMsg(qctx.Req)
 		qctx.Res.Answer = []dns.RR{aRecord("192.0.2.1")}
@@ -425,7 +425,7 @@ func TestMQTYPE_Merge_MaxQTx(t *testing.T) {
 		results[qt] = &resolver.QueryResult{Answer: []dns.RR{rr}, Rcode: 0, Cacheable: true}
 	}
 	fake := &fakeMQResolver{results: results}
-	m := &MQTYPE{store: store, resolver: fake, pending: nil}
+	m := &MQTYPE{store: store, secondary: handler.NewSecondary(store, fake, nil)}
 	chain := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
 		qctx.Res = handler.BuildResponseMsg(qctx.Req)
 		qctx.Res.Answer = []dns.RR{aRecord("192.0.2.1")}
@@ -646,7 +646,7 @@ func TestMQTYPE_ForwardingMode_MergesLocally(t *testing.T) {
 			dns.TypeAAAA: {Answer: []dns.RR{aaaaRecord("2001:db8::1")}, Cacheable: true},
 		},
 	}
-	m := &MQTYPE{store: store, resolver: fake, pending: nil}
+	m := &MQTYPE{store: store, secondary: handler.NewSecondary(store, fake, nil)}
 	chain := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
 		qctx.Res = handler.BuildResponseMsg(qctx.Req)
 		qctx.Res.Answer = []dns.RR{aRecord("192.0.2.1")}
@@ -725,7 +725,7 @@ func TestEntryRcode_ExtendedRcode(t *testing.T) {
 		t.Fatalf("pack: %v", err)
 	}
 	entry := &cache.Entry{ResponseWire: msg.Data}
-	if got := entryRcode(entry); got != dns.RcodeBadVers {
+	if got := entry.WireRcode(); got != dns.RcodeBadVers {
 		t.Errorf("entryRcode = %d, want %d (extended rcode via OPT)", got, dns.RcodeBadVers)
 	}
 }
@@ -738,13 +738,13 @@ func TestEntryRcode_LowRcode(t *testing.T) {
 		t.Fatalf("pack: %v", err)
 	}
 	entry := &cache.Entry{ResponseWire: msg.Data}
-	if got := entryRcode(entry); got != dns.RcodeNameError {
+	if got := entry.WireRcode(); got != dns.RcodeNameError {
 		t.Errorf("entryRcode = %d, want %d", got, dns.RcodeNameError)
 	}
 }
 
 func TestEntryRcode_ShortWire(t *testing.T) {
-	if got := entryRcode(&cache.Entry{}); got != 0 {
+	if got := (&cache.Entry{}).WireRcode(); got != 0 {
 		t.Errorf("entryRcode on empty wire = %d, want 0", got)
 	}
 }

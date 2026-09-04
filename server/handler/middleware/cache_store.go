@@ -11,7 +11,6 @@ import (
 	"zjdns/internal/log"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
-	"zjdns/server/resolver/dnssec"
 
 	"codeberg.org/miekg/dns"
 )
@@ -70,7 +69,6 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	ecsOpt := qctx.ECSOpt
 	dnssecOK := qctx.ClientRequestedDNSSEC
 	validated := qr.Validated
-	cacheable := qr.Cacheable
 
 	msg := handler.BuildResponseMsg(qctx.Req)
 
@@ -139,18 +137,10 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 		}
 	}
 
-	// Cache population.  Bogus validation results are never cached — an
-	// enforce instance sharing the DB must not serve them from cache.
-	if cacheable && resolver.DNSSECCacheable(validated, qr.DNSSECEDE) {
-		// RFC 4035 §5.3.3: cap TTL of authenticated RRsets.
-		if validated {
-			dnssec.CapValidatedTTL(qr.Answer, qr.Authority, qr.Additional)
-		}
-
-		if log.IsDebug() {
-			log.Debugf("CACHE: populating cache for %s", qname)
-		}
-		m.store.Set(qname, qtype, qclass, ecsOpt, qr.Answer, qr.Authority, qr.Additional, validated, qr.Rcode)
+	// Cache population — the single cacheability gate (bogus results never
+	// cached; validated RRsets TTL-capped per RFC 4035 §5.3.3).
+	if handler.StoreIfCacheable(m.store, qname, qtype, qclass, ecsOpt, qr) && log.IsDebug() {
+		log.Debugf("CACHE: populating cache for %s", qname)
 	}
 
 	// Request log.

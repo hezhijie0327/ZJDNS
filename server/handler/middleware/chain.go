@@ -81,6 +81,10 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 		return nil
 	})
 
+	// Secondary lookups (MQTYPE QTx, DNS64 A-query) share one cache-first /
+	// singleflight implementation.
+	secondary := handler.NewSecondary(deps.Cache, deps.Resolver, deps.PendingReqs)
+
 	// Wrap the terminal handler with Resolution.
 	h = (&Resolution{
 		resolver: deps.Resolver,
@@ -92,9 +96,7 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	if deps.DNS64 != nil {
 		h = (&DNS64{
 			synthesizer: deps.DNS64,
-			resolver:    deps.Resolver,
-			pending:     deps.PendingReqs,
-			store:       deps.Cache,
+			secondary:   secondary,
 		}).Wrap(h)
 	}
 
@@ -143,9 +145,8 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	// has built qctx.Res from ResolutionResult (miss path), and inside EDNS
 	// so the MQTYPE-Query option is visible in Pseudo before pre runs.
 	h = (&MQTYPE{
-		store:    deps.Cache,
-		resolver: deps.Resolver,
-		pending:  deps.PendingReqs,
+		store:     deps.Cache,
+		secondary: secondary,
 	}).Wrap(h)
 
 	// EDNS parsing + cookie validation — outside MQTYPE: EDNS.pre performs
