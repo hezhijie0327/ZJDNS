@@ -132,7 +132,7 @@ go test -bench=. -short -benchtime=500ms ./...                 # stable numbers
 go test -bench=BenchmarkServerProcessQuery -benchtime=3s ./cmd/zjdns  # integration QPS
 ```
 
-**117 benchmarks** across 28 test files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
+**133 benchmarks** across 31 test files. Baseline: `docs/benchmark/benchmark-baseline.txt`.
 
 ```bash
 # Update baseline
@@ -156,8 +156,7 @@ go test -bench=. -short -benchmem -benchtime=500ms ./... \
 ./zjdns --probe --conn-reuse  tls://1.1.1.1:853  # RFC 1035 connection reuse
 ./zjdns --probe --idle-timeout tls://1.1.1.1:853 # server idle timeout
 
-# Load test client (all 12 protocols) — docs/ is a nested module (zjdns/docs)
-# so its Go code stays out of the server build graph
+# Load test client (all 12 protocols)
 (cd docs && go build -o /tmp/benchclient ./benchmark/loadtest)
 /tmp/benchclient -proto quic -addr 127.0.0.1:10784 -workers 32 -seconds 30
 

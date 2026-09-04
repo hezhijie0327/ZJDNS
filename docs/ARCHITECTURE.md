@@ -28,7 +28,7 @@ are loaded into memory, the rest stay on disk. The DNSCrypt state file
 | Data                            | Structure                                                                                                                                                                                                                                                                  | Lifetime                                                                                                                             |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | DNS cache entries               | `lrumap.Map[string, *cacheEntry]` — key = (qname, qtype, qclass, ecs) flattened, value = pre-packed wire (format 0x02) + ts/ttl. The key never splits on the client's DO bit — outbound queries always carry DO=1 (RFC 6840 §5.9) and DO=0 filtering happens at serve time | LRU-bounded (limit.mem), TTL-expired lazily on read; spill tier when `state_file` set (evict → disk, miss → promote, shutdown flush) |
-| Query stats + per-RCODE journal | `statsjournal` (atomic counters + `topk.Map`)                                                                                                                                                                                                                              | Resets on restart                                                                                                                    |
+| Query stats + per-RCODE journal | `internal/stats.Journal` (atomic counters + `topk.Map`)                                                                                                                                                                                                                              | Resets on restart                                                                                                                    |
 | Zone rules                      | `zoneTable` atomic.Pointer snapshot (exact/wildcard maps, compressed RR blobs)                                                                                                                                                                                             | Rebuilt from config at startup                                                                                                       |
 | Ruleset rules                   | `ruleTable` atomic.Pointer snapshot (IP trie + domain suffix map)                                                                                                                                                                                                          | Rebuilt from config at startup                                                                                                       |
 | IP latency                      | `lrumap.Map[string, latEntry]`                                                                                                                                                                                                                                             | LRU-bounded, lazy expiry + periodic cleanup                                                                                          |
@@ -50,7 +50,7 @@ so cache hits serve the exact rcode.
   DO=1 upstream returned, so one entry serves both DO variants. Entries
   below the compression threshold are stored uncompressed (no decompress
   either).
-- **RecordRequest**: All results → in-memory atomic counters (`cache/statsjournal.go`); non-hit events also enter a per-RCODE top-N domain journal (`topk.Map`, bounded). No SQL, no disk — pure memory, reset on restart.
+- **RecordRequest**: middleware classify their outcome via `qctx.Result`; the Stats middleware (outermost layer) materialises the single `RequestRecord` → in-memory atomic counters (`internal/stats/journal.go`); non-hit events also enter a per-RCODE top-N domain journal (`topk.Map`, bounded). No SQL, no disk — pure memory, reset on restart.
 - **Stats aggregation**: `Stats()` reads the in-memory snapshot — O(1) counters + per-RCODE top-N sort. Output keeps the previous TXT layout plus `top-rcode<N>` lines.
 - **Pruning**: `PruneQueryJournal` is a no-op — the journal is bounded in memory, nothing to prune.
 - **Eviction**: Pure LRU — on `Set()` when count > maxEntries the least-recently-used entry is evicted (`lrumap`). With a spill tier the evicted entry (still fresh) is appended to the spill log; a memory miss reads the record back and promotes it. Latency and delegation entries expire lazily on read (past the stale window / TTL); periodic cleanup and spill compaction run only when their `state_file` is configured (5-min state-maintenance ticker).
@@ -130,9 +130,9 @@ the flags of its `protocol: "recursive"` upstream).
 - `server/defense/hopguard.go` — HopGuard TTL learning + validation
 - `server/defense/poisonguard.go` — PoisonGuard zone classification
 - `server/defense/capsguard.go` — `RandomizeCase` (0x20 question randomization)
-- `server/upstream/plain/udp.go` — SpoofGuard multi-read loop
+- `server/upstream/plain/spoofguard.go` — SpoofGuard multi-read loop
 - `server/upstream/plain/tcp.go` — SplitGuard segmentation parameter
-- `server/upstream/pool/tcp.go` — SplitGuard via `WriteTCPMsgSegmented`
+- `server/upstream/pool/tcp_conn.go` — SplitGuard via `WriteTCPMsgSegmented`
 - `server/upstream/client.go` — `ExecuteQuery` CapsGuard randomization, echo verification, unrandomized retry
 
 ### CapsGuard
@@ -240,7 +240,7 @@ Full implementation with PQC support. Two crypto constructions: XWingPQ (default
 - `decrypt()` tries keys newest-first; `decryptPQResumed()` validates tickets against all active certs
 - Persistence: identity + cert windows stored in the `certificate.dnscrypt.state_file` state file (`server/protocol/dnscrypt/persist_file.go`) — a restart resumes the exact same windows (client-cached certs stay valid); config key change drops the persisted state and mints fresh windows
 - CHAOS `zjdns.dnscrypt.clear` (loopback-only) regenerates all windows immediately (ResetKeys)
-- Config generator: `GenerateDNSCryptConfig()` in `generate.go` → called from `cmd/zjdns/cli/generate.go`
+- Config generator: `GenerateDNSCryptConfig()` in `dnscert/generate.go` → called from `cmd/zjdns/cli/generate.go`
 
 ### Client (`server/upstream/dnscrypt/`)
 
@@ -318,7 +318,7 @@ Protocol detection is structural and deliberately conservative (a wrong positive
 
 The detection result is cached per client address (`peerProto` map, capped at 65536 entries and rebuilt on overflow). Per-client state is reaped: DNSCrypt/DTLCP `DemuxPacketConn`s, DTLS clients and DTLCP conns idle for more than 60s are closed and forgotten by an amortised reaper inline in the dispatch loop; the channel send and `Close()` are serialised by a per-conn mutex (handler-side closes must never race a dispatch send — an unguarded send on a closed channel panicked the whole dispatch loop).
 
-**Zero per-packet allocation dispatch** (`server/protocol/shared/udp.go`):
+**Zero per-packet allocation dispatch** (`server/protocol/shared/udp_dispatch.go` + `packet_conn.go`):
 
 | Mechanism                     | Purpose                                                                                                   |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------- |

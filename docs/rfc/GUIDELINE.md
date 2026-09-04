@@ -123,7 +123,7 @@ Section 标题栏位格式：`[RFC NNNN: 状态]` `合规标记`
 
 - `config.MaxDNSMessageSize = 65535`（TCP 最大消息）
 - `config.MaxDomainLength = 253`
-- TCP 管线化：`server/upstream/pool/tcp.go`（RFC 7766 增强）
+- TCP 管线化：`server/upstream/pool/tcp.go` + `tcp_conn.go`（RFC 7766 增强）
 
 ---
 
@@ -892,7 +892,7 @@ Client ← [2字节长度][DNS响应] ← Server  (按序)
 
 ### 我们的实现
 
-- ConnPool 管线化连接池：`server/upstream/pool/tcp.go`
+- ConnPool 管线化连接池：`server/upstream/pool/tcp.go`（单连接交换路径在 `tcp_conn.go`）
 - `DefaultTCPPoolIdleTimeout = 60s`（客户端侧，减少重连）
 
 ---

@@ -36,7 +36,7 @@
 graph LR
     C[Clients] --> L
     subgraph ZJDNS
-        L[Listeners<br/>UDP · TCP · DoT · DoH · DoH3<br/>DoQ · DTLS · TLCP · DTLCP<br/>DNSCrypt] --> MW[Middleware Chain<br/>Response · EDNS · MQTYPE · CacheStore<br/>Validation · Zone · Any<br/>CacheLookup · DNS64<br/>Resolution]
+        L[Listeners<br/>UDP · TCP · DoT · DoH · DoH3<br/>DoQ · DTLS · TLCP · DTLCP<br/>DNSCrypt] --> MW[Middleware Chain<br/>Stats · Response · EDNS · MQTYPE<br/>CacheStore · Validation · Zone · Any<br/>CacheLookup · DNS64 · Resolution]
         MW --> RES[Resolver<br/>Forwarding · Recursive<br/>QNAME Minimisation · DNSSEC<br/>Delegation Cache]
         RES --> UP[Upstream Pool<br/>TCP Pipeline · QUIC Pool<br/>SOCKS5 Proxy]
     end
@@ -113,10 +113,11 @@ graph TD
 
 ```mermaid
 graph LR
-    Q[Query] --> R[Response<br/>EDNS · Cookie · EDE<br/>Pre-packed fast path]
-    R --> E[EDNS<br/>Full unpack · ECS<br/>Cookie · Padding]
+    Q[Query] --> ST[Stats<br/>qctx.Result 分类<br/>唯一 journal 记录点]
+    ST --> R[Response<br/>EDNS · Cookie · EDE<br/>Pre-packed fast path]
+    R --> E[EDNS<br/>Parse-then-Validate · ECS<br/>Cookie · Padding]
     E --> MQ[MQTYPE<br/>RFC 10029 合并 · FORMERR<br/>所有模式]
-    MQ --> CS[CacheStore<br/>Write · Request Log]
+    MQ --> CS[CacheStore<br/>Miss 响应构建 · Cache 写<br/>延迟探测]
     CS --> V[Validation<br/>Domain · Label · Type<br/>Opcode · QCLASS · NXNAME/XFR]
     V --> Z[Zone<br/>Rules · Wildcard<br/>Bypass · Loopback Gate]
     Z --> A[Any<br/>RFC 8482 HINFO]
@@ -125,13 +126,14 @@ graph LR
     D64 --> RE[Resolution<br/>Upstream · Recursive<br/>Singleflight]
     classDef mw fill:#fef3c7,stroke:#f59e0b,color:#78350f
     class Q mw
-    class R,E,MQ,CS,V,Z,A,CL,D64,RE mw
+    class ST,R,E,MQ,CS,V,Z,A,CL,D64,RE mw
 ```
 
-> 执行顺序（外层→内层）：`Response → EDNS → MQTYPE → CacheStore → Validation → Zone → Any →
-> CacheLookup → DNS64 → Resolution`（`middleware/chain.go`）。`Zone` 仅当配置了 zone 规则、
-> `DNS64` 仅当配置了 DNS64 时挂载。`MQTYPE` 位于 CacheStore 外侧（post 阶段在 CacheStore
-> 构建主响应之后合并）、EDNS 内侧（pre 阶段可见已解析的 Pseudo 选项）。
+> 执行顺序（外层→内层）：`Stats → Response → EDNS → MQTYPE → CacheStore → Validation →
+> Zone → Any → CacheLookup → DNS64 → Resolution`（`middleware/chain.go`）。`Zone` 仅当配置了
+> zone 规则、`DNS64` 仅当配置了 DNS64 时挂载。`MQTYPE` 位于 CacheStore 外侧（post 阶段在
+> CacheStore 构建主响应之后合并）、EDNS 内侧（pre 阶段可见已解析的 Pseudo 选项）。各层通过
+> 设置 `qctx.Result` 分类结果，由最外层 `Stats` 统一记录请求日志（`internal/stats.Journal`）。
 
 ### MQTYPE (RFC 10029)
 
@@ -1118,7 +1120,7 @@ graph TD
 
 ```mermaid
 graph LR
-    REQ[RecordRequest] -->|同步 · 请求路径内| ATOMIC[原子计数器<br/>total · hit · miss<br/>rcode 计数]
+    REQ[Stats 中间件<br/>qctx.Result → RequestRecord] -->|同步 · 请求路径内| ATOMIC[原子计数器<br/>total · hit · miss<br/>rcode 计数]
     ATOMIC --> TOPK[非命中事件<br/>per-RCODE top-N 域名<br/>topk.Map 有界]
     TOPK --> DONE[Done<br/>无 channel · 无后台 goroutine<br/>重启归零]
     QUERY[zjdns.stats CHAOS] --> SNAP["读取内存快照<br/>O(1) 计数 + top-N 排序"]
@@ -1131,6 +1133,7 @@ graph LR
     class DONE done
 ```
 
-> 统计为纯同步内存实现（`cache/statsjournal.go`）：原子计数器 + mutex 保护的 topk journal，
-> 无缓冲 channel、无批量刷新、无过载丢弃。清空端点 `zjdns.stats.clear` / `zjdns.querylog.clear`
-> 仅限回环地址。
+> 统计为纯同步内存实现（`internal/stats/journal.go`）：原子计数器 + mutex 保护的 topk journal，
+> 无缓冲 channel、无批量刷新、无过载丢弃。中间件只设置 `qctx.Result` 分类（hit/miss/stale/
+> zone/any/badcookie/blocked/error），`Stats` 中间件（最外层）据此生成唯一的 RequestRecord。
+> 清空端点 `zjdns.stats.clear` / `zjdns.querylog.clear` 仅限回环地址。
