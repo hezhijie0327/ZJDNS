@@ -10,6 +10,7 @@ import (
 	"time"
 	"zjdns/config"
 	"zjdns/internal/log"
+	"zjdns/internal/stats"
 
 	"codeberg.org/miekg/dns"
 
@@ -637,7 +638,7 @@ func TestRecordRequest_Hit(t *testing.T) {
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
 
 	// Cache hit via UDP
-	mc.RecordRequest(&RequestRecord{
+	mc.RecordRequest(&stats.RequestRecord{
 		Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
 		Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess,
 	})
@@ -663,7 +664,7 @@ func TestRecordRequest_Stale(t *testing.T) {
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
 
 	// Stale serve via TCP
-	mc.RecordRequest(&RequestRecord{
+	mc.RecordRequest(&stats.RequestRecord{
 		Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
 		Protocol: "tcp", Result: "stale", Rcode: dns.RcodeSuccess,
 	})
@@ -685,9 +686,9 @@ func TestRecordRequest_MultipleResults(t *testing.T) {
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("1.2.3.4")}
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
 
-	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(&RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "https", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "https", Result: "hit", Rcode: dns.RcodeSuccess})
 
 	snap := mc.statsMgr.Snapshot(0)
 	if snap.Hits != 3 {
@@ -707,8 +708,8 @@ func TestRecordRequest_Zone(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	mc.RecordRequest(&RequestRecord{Qname: "blocked.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
-	mc.RecordRequest(&RequestRecord{Qname: "blocked.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "blocked.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "blocked.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 
 	snap := mc.statsMgr.Snapshot(0)
 	if snap.Zones != 2 {
@@ -909,7 +910,7 @@ func TestRecordRequest_Error(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	mc.RecordRequest(&RequestRecord{
+	mc.RecordRequest(&stats.RequestRecord{
 		Qname: "error.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
 		Protocol: "udp", Result: "error", Rcode: dns.RcodeServerFailure,
 		Server: "1.2.3.4:53 (UDP)", ResponseTime: 500,
@@ -936,7 +937,7 @@ func TestStats(t *testing.T) {
 
 	rr := &dns.A{Hdr: dns.Header{Name: "sum.example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("4.5.6.7")}
 	mc.Set("sum.example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
-	mc.RecordRequest(&RequestRecord{Qname: "sum.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "sum.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
 
 	s := mc.Stats()
 	if len(s) == 0 {
@@ -977,7 +978,7 @@ func TestE2E_FullLifecycle(t *testing.T) {
 
 	mc.Set("error.example.com.", dns.TypeA, dns.ClassINET, nil,
 		nil, nil, nil, false, 0)
-	mc.RecordRequest(&RequestRecord{
+	mc.RecordRequest(&stats.RequestRecord{
 		Qname: "error.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET,
 		Protocol: "tcp", Result: "error", Rcode: dns.RcodeServerFailure,
 		Server: "192.0.2.1:53 (TCP)", Poisoned: true, DNSSECStatus: "bogus",
@@ -1043,12 +1044,12 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	}
 
 	// ── Phase 5: RecordRequest logs queries ────────────────────────────────
-	mc.RecordRequest(&RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(&RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(&RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "https", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(&RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "quic", Result: "stale", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(&RequestRecord{Qname: "github.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(&RequestRecord{Qname: "github.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "stale", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "https", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "quic", Result: "stale", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "github.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "github.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "stale", Rcode: dns.RcodeSuccess})
 
 	snap := mc.statsMgr.Snapshot(0)
 	if snap.Hits != 4 {
@@ -1115,9 +1116,9 @@ func TestE2E_FullLifecycle(t *testing.T) {
 	}
 
 	// ── Phase 9: RecordRequest Zone ──────────────────────────────────────
-	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
-	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
-	mc.RecordRequest(&RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "zone.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "", Result: "zone", Rcode: dns.RcodeRefused})
 
 	snap2 := mc.statsMgr.Snapshot(0)
 	if snap2.Zones != 3 {
@@ -1255,8 +1256,8 @@ func TestE2E_CompressionEfficacy(t *testing.T) {
 	}
 
 	// Verify hit counters
-	mc.RecordRequest(&RequestRecord{Qname: "host-00.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
-	mc.RecordRequest(&RequestRecord{Qname: "host-01.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "host-00.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "hit", Rcode: dns.RcodeSuccess})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "host-01.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "tcp", Result: "hit", Rcode: dns.RcodeSuccess})
 
 	snap := mc.statsMgr.Snapshot(0)
 	if snap.Total != 2 {
@@ -1406,7 +1407,7 @@ func TestPruneQueryJournal(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
-	mc.RecordRequest(&RequestRecord{Qname: "stale.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "miss", Rcode: dns.RcodeNameError})
+	mc.RecordRequest(&stats.RequestRecord{Qname: "stale.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET, Protocol: "udp", Result: "miss", Rcode: dns.RcodeNameError})
 
 	// The journal is pure memory and bounded, so pruning is a no-op that must
 	// neither error nor clear the journal.
@@ -1443,7 +1444,7 @@ func TestPoolReturnsToIdleAfterLoad(t *testing.T) {
 					Addr: netip.MustParseAddr("192.0.2.1"),
 				}
 				s.Set(qname, dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
-				s.RecordRequest(&RequestRecord{
+				s.RecordRequest(&stats.RequestRecord{
 					Qname: qname, Qtype: dns.TypeA, Qclass: dns.ClassINET,
 					Protocol: "udp", Result: "hit", Rcode: 0,
 				})

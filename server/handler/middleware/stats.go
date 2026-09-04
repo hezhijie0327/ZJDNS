@@ -5,6 +5,7 @@ import (
 	"errors"
 	"zjdns/cache"
 	"zjdns/config"
+	"zjdns/internal/stats"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
 
@@ -44,7 +45,7 @@ func (m *Stats) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			rcode = int(qctx.Res.Rcode)
 		}
 
-		rec := cache.AcquireRequestRecord()
+		rec := stats.AcquireRequestRecord()
 		rec.Qname = qctx.Qname
 		rec.Qtype = qctx.Qtype
 		rec.Qclass = qctx.Qclass
@@ -68,7 +69,7 @@ func (m *Stats) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			}
 		}
 		m.store.RecordRequest(rec)
-		cache.ReleaseRequestRecord(rec)
+		stats.ReleaseRequestRecord(rec)
 		return err
 	})
 }

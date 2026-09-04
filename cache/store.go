@@ -11,6 +11,7 @@ import (
 	"zjdns/internal/lrumap"
 	"zjdns/internal/pool"
 	"zjdns/internal/spillfile"
+	"zjdns/internal/stats"
 	"zjdns/internal/ttl"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -24,7 +25,7 @@ import (
 type Cache struct {
 	entries    *lrumap.Map[cacheKey, *cacheEntry] // cache key → entry
 	maxEntries int
-	statsMgr   *Journal // in-memory query stats + per-RCODE top-N journal
+	statsMgr   *stats.Journal // in-memory query stats + per-RCODE top-N journal
 
 	// spill is the second-tier disk store: evicted-but-fresh entries land
 	// here and are promoted back on a memory miss.  nil when no state_file
@@ -257,7 +258,7 @@ func New(entriesLimit, latencyLimit config.LimitSettings, spillPath, latencySpil
 		// a single LRU mutex serialised the whole server at high QPS.
 		entries:    lrumap.NewSharded[cacheKey, *cacheEntry](maxEntries),
 		maxEntries: maxEntries,
-		statsMgr:   newStatsJournal(0),
+		statsMgr:   stats.NewJournal(0),
 		latencies:  lrumap.NewSharded[string, latEntry](latencyMax),
 		latencyMax: latencyMax,
 	}

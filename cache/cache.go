@@ -3,29 +3,13 @@ package cache
 
 import (
 	"encoding/binary"
-	"sync"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/stats"
 	"zjdns/internal/ttl"
 
 	"codeberg.org/miekg/dns"
 )
-
-// RequestRecord captures per-request metadata. Every request updates the
-// in-memory stats counters; non-hit results also enter the per-RCODE top-N
-// domain journal (see cache/statsjournal.go).
-type RequestRecord struct {
-	Qname        string // normalized FQDN
-	Qtype        uint16
-	Qclass       uint16
-	Protocol     string // 'udp','tcp','tls','quic','https','http3','dtls','dnscrypt','dnscrypt-tcp','tlcp','http-tlcp','dtlcp'
-	Result       string // 'hit','miss','stale','zone','error','blocked','badcookie'
-	ResponseTime int64  // milliseconds
-	Rcode        int    // DNS response code
-	Server       string // upstream server identifier
-	Poisoned     bool   // true when DNS poison was detected
-	DNSSECStatus string // 'secure','insecure','bogus', or ''
-}
 
 // StoreReader is the read-only subset of Store.  Consumers that only need
 // cache lookups should depend on this interface rather than the full Store.
@@ -44,7 +28,7 @@ type StoreReader interface {
 type StoreWriter interface {
 	Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 		answer, authority, additional []dns.RR, validated bool, rcode uint16)
-	RecordRequest(r *RequestRecord)
+	RecordRequest(r *stats.RequestRecord)
 	UpdateLatency(ip string, latencyMS int)
 	UpdateLatencyBatch(values map[string]int)
 }
@@ -91,11 +75,6 @@ type Entry struct {
 	// flag bit) so the DO=0 serve gate skips the per-hit wire scan.
 	HasDNSSEC bool
 }
-
-// requestRecordPool reuses RequestRecord values on the per-query hot path.
-// RecordRequest reads all fields synchronously, so callers may release
-// immediately after the call.
-var requestRecordPool = sync.Pool{New: func() any { return new(RequestRecord) }}
 
 // Unpack populates Answer, Authority and Additional by unpacking the
 // pre-packed ResponseWire.  Callers that need the parsed RRs (tests,
@@ -184,15 +163,6 @@ func (e *Entry) ReleaseOffsets() {
 	}
 	ReleaseTTLOffsets(e.TTLOffsets)
 	e.TTLOffsets = nil
-}
-
-// AcquireRequestRecord returns a zeroed RequestRecord from the pool.
-func AcquireRequestRecord() *RequestRecord { return requestRecordPool.Get().(*RequestRecord) }
-
-// ReleaseRequestRecord returns a record to the pool after RecordRequest.
-func ReleaseRequestRecord(r *RequestRecord) {
-	*r = RequestRecord{}
-	requestRecordPool.Put(r)
 }
 
 // IsExpired reports whether the entry's TTL has elapsed.

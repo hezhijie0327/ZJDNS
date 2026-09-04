@@ -1,4 +1,4 @@
-package cache
+package stats
 
 import (
 	"sync"
@@ -6,8 +6,8 @@ import (
 )
 
 func TestCountersEveryDimension(t *testing.T) {
-	m := newStatsJournal(10)
-	recs := []*Record{
+	m := NewJournal(10)
+	recs := []*RequestRecord{
 		{Qname: "a.com.", Result: "hit", Protocol: "udp", Rcode: 0, ResponseTime: 1},
 		{Qname: "b.com.", Result: "miss", Protocol: "tcp", Rcode: 3, ResponseTime: 2, DNSSECStatus: "bogus", Poisoned: true},
 		{Qname: "c.com.", Result: "stale", Protocol: "tls", Rcode: 5, ResponseTime: 3},
@@ -57,22 +57,22 @@ func TestCountersEveryDimension(t *testing.T) {
 }
 
 func TestJournalTopNAndSkipHits(t *testing.T) {
-	m := newStatsJournal(10)
+	m := NewJournal(10)
 	// Hits must not enter the journal.
-	m.Record(&Record{Qname: "hit.com.", Result: "hit", Rcode: 3})
+	m.Record(&RequestRecord{Qname: "hit.com.", Result: "hit", Rcode: 3})
 	// RCODE 3: a=5, b=3, c=2
 	for range 5 {
-		m.Record(&Record{Qname: "a.com.", Result: "miss", Rcode: 3})
+		m.Record(&RequestRecord{Qname: "a.com.", Result: "miss", Rcode: 3})
 	}
 	for range 3 {
-		m.Record(&Record{Qname: "b.com.", Result: "error", Rcode: 3})
+		m.Record(&RequestRecord{Qname: "b.com.", Result: "error", Rcode: 3})
 	}
 	for range 2 {
-		m.Record(&Record{Qname: "c.com.", Result: "stale", Rcode: 3})
+		m.Record(&RequestRecord{Qname: "c.com.", Result: "stale", Rcode: 3})
 	}
 	// RCODE 5: x=4
 	for range 4 {
-		m.Record(&Record{Qname: "x.net.", Result: "refused", Rcode: 5})
+		m.Record(&RequestRecord{Qname: "x.net.", Result: "refused", Rcode: 5})
 	}
 
 	s := m.Snapshot(0)
@@ -96,13 +96,13 @@ func TestJournalTopNAndSkipHits(t *testing.T) {
 }
 
 func TestJournalBoundedCapacity(t *testing.T) {
-	m := newStatsJournal(3)
+	m := NewJournal(3)
 	// First key dominates; then 10 one-off keys overflow the capacity.
 	for range 100 {
-		m.Record(&Record{Qname: "hot.com.", Result: "miss", Rcode: 1})
+		m.Record(&RequestRecord{Qname: "hot.com.", Result: "miss", Rcode: 1})
 	}
 	for i := range 10 {
-		m.Record(&Record{Qname: string(rune('a'+i)) + ".one.com.", Result: "miss", Rcode: 1})
+		m.Record(&RequestRecord{Qname: string(rune('a'+i)) + ".one.com.", Result: "miss", Rcode: 1})
 	}
 	s := m.Snapshot(0)
 	if got := len(s.TopByRcode[1]); got != 3 {
@@ -114,13 +114,13 @@ func TestJournalBoundedCapacity(t *testing.T) {
 }
 
 func TestConcurrentRecord(t *testing.T) {
-	m := newStatsJournal(1000)
+	m := NewJournal(1000)
 	const workers, iters = 8, 1000
 	var wg sync.WaitGroup
 	for range workers {
 		wg.Go(func() {
 			for range iters {
-				m.Record(&Record{Qname: "x.com.", Result: "miss", Protocol: "udp", Rcode: 3, ResponseTime: 1})
+				m.Record(&RequestRecord{Qname: "x.com.", Result: "miss", Protocol: "udp", Rcode: 3, ResponseTime: 1})
 			}
 		})
 	}
@@ -138,8 +138,8 @@ func TestConcurrentRecord(t *testing.T) {
 }
 
 func BenchmarkRecord(b *testing.B) {
-	m := newStatsJournal(1000)
-	r := &Record{Qname: "example.com.", Result: "miss", Protocol: "udp", Rcode: 3, ResponseTime: 42}
+	m := NewJournal(1000)
+	r := &RequestRecord{Qname: "example.com.", Result: "miss", Protocol: "udp", Rcode: 3, ResponseTime: 42}
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -149,9 +149,9 @@ func BenchmarkRecord(b *testing.B) {
 }
 
 func BenchmarkSnapshot(b *testing.B) {
-	m := newStatsJournal(1000)
+	m := NewJournal(1000)
 	for range 100 {
-		m.Record(&Record{Qname: "example.com.", Result: "miss", Protocol: "udp", Rcode: 3})
+		m.Record(&RequestRecord{Qname: "example.com.", Result: "miss", Protocol: "udp", Rcode: 3})
 	}
 	b.ReportAllocs()
 	for range b.N {

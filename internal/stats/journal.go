@@ -1,29 +1,17 @@
-// The statsjournal provides the in-memory query statistics: atomic
-// counters for aggregated query metrics and a per-RCODE top-N domain
-// journal for debugging.
+// Package stats provides the in-memory query statistics: pooled request
+// records, atomic counters for aggregated query metrics, and a per-RCODE
+// top-N domain journal for debugging.
 //
-// Record is a nanosecond-scale pure-memory operation (no disk, no
-// locks on the counter path); Snapshot reads are equally lock-free apart from
-// the per-RCODE journal. Data is intentionally not persisted — counters reset
-// on restart.
-package cache
+// Record is a nanosecond-scale pure-memory operation (no disk, no locks on
+// the counter path); Snapshot reads are equally lock-free apart from the
+// per-RCODE journal. Data is intentionally not persisted — counters reset on
+// restart.
+package stats
 
 import (
 	"sync/atomic"
 	"zjdns/internal/topk"
 )
-
-// Record captures per-query metadata. Every query updates the counters; only
-// non-hit results enter the per-RCODE domain journal.
-type Record struct {
-	Qname        string // normalized FQDN
-	Result       string // 'hit','miss','stale','zone','error','blocked','badcookie'
-	Protocol     string // 'udp','tcp','tls','quic','https','http3','dtls','dnscrypt','dnscrypt-tcp','tlcp','http-tlcp','dtlcp'
-	Rcode        int
-	ResponseTime int64  // milliseconds
-	DNSSECStatus string // 'secure','insecure','bogus', or ''
-	Poisoned     bool
-}
 
 // StatsResult is a point-in-time snapshot of all counters and the per-RCODE
 // top-N journal.
@@ -101,9 +89,9 @@ func (j *rcodeJournal) topAll(n int) map[int][]topk.Entry[string] {
 	return out
 }
 
-// newStatsJournal creates a Journal. journalCapacity bounds the per-RCODE
-// domain journal (capacity <= 0 applies the topk package default).
-func newStatsJournal(journalCapacity int) *Journal {
+// NewJournal creates a Journal. journalCapacity bounds the per-RCODE domain
+// journal (capacity <= 0 applies the topk package default).
+func NewJournal(journalCapacity int) *Journal {
 	byRcode := make(map[int]*topk.Map[string], maxRcodeBucket+1)
 	for rc := range maxRcodeBucket + 1 {
 		byRcode[rc] = topk.New[string](journalCapacity)
@@ -120,7 +108,7 @@ func newStatsJournal(journalCapacity int) *Journal {
 // per-RCODE domain journal. Pure memory: atomic adds + one short critical
 // section. Must not be called after Close (there is none — the Journal is
 // owned by the cache and dies with it).
-func (m *Journal) Record(r *Record) {
+func (m *Journal) Record(r *RequestRecord) {
 	c := &m.cnt
 	c.total.Add(1)
 	c.totalMS.Add(r.ResponseTime)
