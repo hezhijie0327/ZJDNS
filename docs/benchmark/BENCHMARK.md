@@ -34,14 +34,17 @@ go test -bench=. -short -benchtime=500ms ./... \
 
 ## dnsperf QPS Benchmark (Zone Cache)
 
-Minimal config for pure zone-lookup QPS:
+外部真实客户端压测（dnsperf ≥ 2.14 支持 `-m udp|tcp|dot|doh`）。
+dnsperf 与 ZJDNS 同机时 UDP 结果受客户端 CPU 饱和约束（见下「解读」）。
+
+### 1. Zone 命中配置（纯服务端 QPS）
 
 ```bash
-# Config: /tmp/zjdns-bench.json
+# Config: /tmp/zjdns-bench.json（UDP + TCP 同端口）
 {
   "server": {
     "log_level": "error",
-    "protocol": { "udp": "10533" },
+    "protocol": { "udp": "10533", "tcp": "10533" },
     "features": { "cache": { "entries": { "limit": { "mem": 100 } } } }
   },
   "zone": [
@@ -53,12 +56,85 @@ Minimal config for pure zone-lookup QPS:
 # Test data: /tmp/dnsperf-data.txt
 echo "www.baidu.com A" > /tmp/dnsperf-data.txt
 
-# Run
+# Run (UDP)
+chmod 600 /tmp/zjdns-bench.json
 /tmp/zjdns -config /tmp/zjdns-bench.json > /dev/null 2>&1 &
 sleep 2
 dnsperf -s 127.0.0.1 -p 10533 -d /tmp/dnsperf-data.txt -c 100 -l 30 -Q 500000
 pkill -f zjdns
 ```
+
+TCP 用同一端口加 `-m tcp`。
+
+### 2. DoT / DoH（需要 dnsperf 信任的证书链）
+
+dnsperf 校验服务端证书，`self_signed: true` 无法通过 — 用 openssl 生成
+CA + 服务端证书，`SSL_CERT_FILE` 指向 CA：
+
+```bash
+# /tmp/zjdns-dnsperf-certs/
+openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem \
+  -days 2 -subj "/CN=ZJDNS Test CA"
+openssl req -newkey rsa:2048 -nodes -keyout server.key -out server.csr \
+  -subj "/CN=localhost"
+printf 'subjectAltName=IP:127.0.0.1,DNS:localhost\n' > san.cnf
+openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
+  -out server.pem -days 2 -extfile san.cnf
+
+# Config: /tmp/zjdns-bench-dot.json
+# 注意: certificate 必须嵌在 server 下（顶层会被忽略），
+# 且启用安全协议时 server.certificate.domain 为必填项。
+{
+  "server": {
+    "log_level": "error",
+    "protocol": { "tls": "10554" },
+    "features": { "cache": { "entries": { "limit": { "mem": 100 } } } },
+    "certificate": {
+      "domain": "localhost",
+      "tls": {
+        "cert_file": "/tmp/zjdns-dnsperf-certs/server.pem",
+        "key_file": "/tmp/zjdns-dnsperf-certs/server.key"
+      }
+    }
+  },
+  "zone": [
+    { "name": "www.baidu.com",
+      "answer": [{ "type": 1, "ttl": 3600, "content": "1.2.3.4" }] }
+  ]
+}
+
+# Run (DoT)
+chmod 600 /tmp/zjdns-bench-dot.json
+/tmp/zjdns -config /tmp/zjdns-bench-dot.json > /dev/null 2>&1 &
+sleep 2
+SSL_CERT_FILE=/tmp/zjdns-dnsperf-certs/ca.pem \
+  dnsperf -s 127.0.0.1 -p 10554 -d /tmp/dnsperf-data.txt \
+    -c 100 -l 30 -Q 500000 -m dot -O tls-sni=localhost
+pkill -f zjdns
+```
+
+DoH：把 protocol 换成 `"https": {"port": "10555", "endpoint": "/dns-query"}`，
+加 `-m doh -O doh-uri=https://localhost/dns-query -O tls-sni=localhost`。
+
+### 3. 参考数据（v4.4.6, Apple M4 Max, 同机回环）
+
+| 协议 | c | QPS | 平均延迟 | 完成 |
+|------|---|-----|---------|------|
+| UDP | 100 | 111,885 | 0.68 ms | 100% / 0 lost |
+| UDP | 8 | 97,984 | 0.33 ms | 100% |
+| TCP | 100 | 188,573 | 0.28 ms | 100% |
+| TCP | 8 | 387,597 | 0.23 ms | 100% |
+| DoT | 100 | 181,195 | 0.39 ms | 100% |
+| DoH (H2) | 100 | 103,076 | 0.78 ms | 100% |
+
+### 4. 解读
+
+- **同机 UDP ≈ 客户端饱和值**：dnsperf 与服务器抢占同机 CPU，
+  c=100 与 c=8 结果倒挂即客户端受限的信号 — 测服务器 UDP 真实上限需跨机。
+- **TCP c=8 >> c=100 不代表降速**：dnsperf 每连接打满 pipelining 深度，
+  少连接少锁竞争；低并发高 QPS 是 RFC 7766 pipelining 生效的直接证据。
+- DoT 与裸 TCP 几乎持平说明 TLS 加解密在 writer/worker 模型下不是瓶颈。
+- 判定标准：完成率 100%、0 lost、无 SERVFAIL；延迟看 Avg 与 StdDev。
 
 ## DNSCrypt E2E Test (ZJDNS ↔ dnscrypt-proxy)
 
