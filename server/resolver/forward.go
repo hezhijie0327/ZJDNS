@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
-	"strings"
 	"sync/atomic"
 	"time"
 	"zjdns/config"
@@ -508,10 +507,6 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 		return false
 	}
 	rcode := queryResult.Response.Rcode
-	serverDesc := server.Address
-	if server.Protocol != "" && server.Protocol != config.ProtoUDP {
-		serverDesc = server.Address + " (" + strings.ToUpper(server.Protocol) + ")"
-	}
 
 	upstreamEDE := captureUpstreamEDE(lastEDE, queryResult.Response, server.Address)
 	// A cascaded ZJDNS marks fallback-served responses with its private EDE
@@ -563,7 +558,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 				Authoritative: queryResult.Response.Authoritative,
 				Cacheable:     false,
 				ECS:           ecsResponse,
-				Server:        serverDesc,
+				Server:        server.Address,
 				UpstreamEDE:   fallbackMarkEDE(),
 				Truncated:     queryResult.Response.Truncated,
 				Rcode:         rcode,
@@ -581,7 +576,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 			queryResult.Response.Answer = stripMQBundled(queryResult.Response.Answer, mqr.Types)
 		}
 
-		res := QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Authoritative: queryResult.Response.Authoritative, Cacheable: !server.SkipCache && !fallbackMarked, ECS: ecsResponse, Server: serverDesc, UpstreamEDE: upstreamEDE, Truncated: queryResult.Response.Truncated, Rcode: rcode}
+		res := QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Authoritative: queryResult.Response.Authoritative, Cacheable: !server.SkipCache && !fallbackMarked, ECS: ecsResponse, Server: server.Address, UpstreamEDE: upstreamEDE, Truncated: queryResult.Response.Truncated, Rcode: rcode}
 		select {
 		case resultChan <- res:
 			remaining := activeConnections.Load() - 1
@@ -613,7 +608,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 				Cacheable:     false,
 				Rcode:         dns.RcodeNameError,
 				ECS:           r.edns.ParseFromDNS(queryResult.Response),
-				Server:        serverDesc,
+				Server:        server.Address,
 				UpstreamEDE:   fallbackMarkEDE(),
 			})
 			pool.DefaultMessage.Put(queryResult.Response)
@@ -628,7 +623,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 			Cacheable:     !server.SkipCache && !fallbackMarked,
 			Rcode:         dns.RcodeNameError,
 			ECS:           r.edns.ParseFromDNS(queryResult.Response),
-			Server:        serverDesc,
+			Server:        server.Address,
 			UpstreamEDE:   upstreamEDE,
 		}
 		if nxdomainResult.CompareAndSwap(nil, &nxRes) {
