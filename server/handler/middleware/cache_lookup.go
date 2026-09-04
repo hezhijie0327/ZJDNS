@@ -77,9 +77,9 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		}
 
 		// Expired and cannot serve stale — let the resolver handle it.
-		// The entry is dropped without being served: return the pool-owned
+		// The entry is dropped without being served: release the pooled
 		// TTL-offset slice (buildCacheResponse would have released it).
-		cache.ReleaseTTLOffsets(entry.TTLOffsets)
+		entry.ReleaseOffsets()
 		return next.ServeDNS(ctx, qctx)
 	})
 }

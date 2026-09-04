@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"zjdns/dnscert"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
 
@@ -110,7 +111,7 @@ func windowsFromState(windows []windowRecord) []windowRecord {
 }
 
 // windowsToKeyEntries reconstructs keyEntry slices from persisted window records.
-func windowsToKeyEntries(rc *ResolverConfig, windows []windowRecord) ([]keyEntry, error) {
+func windowsToKeyEntries(rc *dnscert.ResolverConfig, windows []windowRecord) ([]keyEntry, error) {
 	entries := make([]keyEntry, 0, len(windows))
 	for _, w := range windows {
 		rc.ResolverSk = dnscryptcrypto.HexEncodeKey(w.ResolverSk)

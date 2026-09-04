@@ -242,7 +242,7 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) [
 	defer func() {
 		for _, e := range entries {
 			if e != nil {
-				cache.ReleaseTTLOffsets(e.TTLOffsets)
+				e.ReleaseOffsets()
 			}
 		}
 	}()

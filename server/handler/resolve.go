@@ -39,8 +39,8 @@ func (s *Secondary) Lookup(ctx context.Context, qname string, qtype, qclass uint
 				}
 			}
 			// Every skipped path — expired, or unpack failure — still
-			// returns the pool-owned TTL-offset slice to the pool.
-			cache.ReleaseTTLOffsets(entry.TTLOffsets)
+			// returns the pooled TTL-offset slice.
+			entry.ReleaseOffsets()
 		}
 	}
 	query := func() *resolver.QueryResult {

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 	"zjdns/config"
+	"zjdns/dnscert"
 	"zjdns/edns"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
@@ -127,7 +128,7 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, 
 	if !ok {
 		return nil, errors.New("dnscrypt: signing key is not Ed25519")
 	}
-	rc := ResolverConfig{
+	rc := dnscert.ResolverConfig{
 		ProviderName: providerName,
 		PublicKey:    dnscryptcrypto.HexEncodeKey(signingPK),
 		PrivateKey:   certificateCfg.PrivateKey,
@@ -580,7 +581,7 @@ func (s *Server) updateKeys() {
 // reference encrypted-dns-server.  A nil previous mints a single window from
 // a fresh random seed — the start of a new chain.
 func (s *Server) deriveAndSign(previous *dnscryptcrypto.CertPair, now uint32) []keyEntry {
-	rc := ResolverConfig{
+	rc := dnscert.ResolverConfig{
 		ProviderName: s.providerName,
 		PublicKey:    dnscryptcrypto.HexEncodeKey(s.signingSK.Public().(ed25519.PublicKey)),
 		PrivateKey:   dnscryptcrypto.HexEncodeKey(s.signingSK),

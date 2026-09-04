@@ -74,7 +74,7 @@ func buildFromPrePacked(req *dns.Msg, entry *cache.Entry, isExpired bool) *dns.M
 	patchQuestionCase(wire, req)
 
 	// The TTL offsets are no longer needed — return them to the pool.
-	cache.ReleaseTTLOffsets(entry.TTLOffsets)
+	entry.ReleaseOffsets()
 
 	msg := pool.DefaultMessage.Get()
 	msg.Data = wire

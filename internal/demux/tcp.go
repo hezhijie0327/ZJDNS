@@ -3,7 +3,6 @@ package demux
 import (
 	"net"
 	"sync"
-	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 )
 
@@ -20,6 +19,11 @@ import (
 type TCPConfig struct {
 	Inner  net.Listener
 	Routes map[string]func(net.Conn) net.Conn
+
+	// SniffConcurrency bounds concurrent sniff goroutines; <= 0 selects the
+	// package default.  Injected by the caller (the wiring layer reads the
+	// config) — internal/ packages must not import config.
+	SniffConcurrency int
 }
 
 // TCPDemuxListener demultiplexes TCP connections by record-layer protocol.
@@ -31,26 +35,34 @@ type TCPDemuxListener struct {
 	inner  net.Listener
 	routes map[string]func(net.Conn) net.Conn
 	queues map[string]*protocolQueue
-	mu     sync.Mutex
-	closed bool
-	done   chan struct{} // closed when the accept loop exits
+	// sniffSem bounds concurrent sniff goroutines (see TCPConfig).
+	sniffSem chan struct{}
+	mu       sync.Mutex
+	closed   bool
+	done     chan struct{} // closed when the accept loop exits
 }
 
-// sniffSem bounds concurrent sniff goroutines: each accepted connection
-// spawns one and lives up to sniffTimeout when the peer is silent — an
-// unbounded spawn let a connect flood (port scanners) exhaust goroutines
-// and fds while the downstream LimitListeners only gate post-sniff (P-M6).
-var sniffSem = make(chan struct{}, config.DefaultServerGoroutineLimit)
+// defaultSniffConcurrency bounds concurrent sniff goroutines when the
+// caller does not configure one: each accepted connection spawns a sniffer
+// that lives up to sniffTimeout when the peer is silent — an unbounded
+// spawn let a connect flood (port scanners) exhaust goroutines and fds
+// while the downstream LimitListeners only gate post-sniff (P-M6).
+const defaultSniffConcurrency = 4096
 
 // NewTCPDemux creates and starts a TCP demux listener.  The accept loop
 // runs in a background goroutine and exits when Close() is called or the
 // inner listener returns a non-temporary error.
 func NewTCPDemux(cfg TCPConfig) *TCPDemuxListener {
+	sniffLimit := cfg.SniffConcurrency
+	if sniffLimit <= 0 {
+		sniffLimit = defaultSniffConcurrency
+	}
 	d := &TCPDemuxListener{
-		inner:  cfg.Inner,
-		routes: cfg.Routes,
-		queues: make(map[string]*protocolQueue),
-		done:   make(chan struct{}),
+		inner:    cfg.Inner,
+		routes:   cfg.Routes,
+		queues:   make(map[string]*protocolQueue),
+		done:     make(chan struct{}),
+		sniffSem: make(chan struct{}, sniffLimit),
 	}
 
 	// Pre-create a queue for each configured route so that Listener()
@@ -129,13 +141,13 @@ func (d *TCPDemuxListener) acceptLoop() {
 		// is dropped at the gate instead of exhausting goroutines/fds
 		// for the full sniffTimeout window (P-M6).
 		select {
-		case sniffSem <- struct{}{}:
+		case d.sniffSem <- struct{}{}:
 		default:
 			_ = conn.Close()
 			continue
 		}
 		go func() {
-			defer func() { <-sniffSem }()
+			defer func() { <-d.sniffSem }()
 			d.handleConn(conn)
 		}()
 	}

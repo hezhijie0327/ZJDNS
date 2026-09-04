@@ -4,15 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"zjdns/config"
+	"zjdns/dnscert"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
-
-	// NOTE(DC-05): CLI imports server/protocol/dnscrypt directly for config
-	// generation.  Key generation was extracted to internal/dnscryptcrypto,
-	// but GenerateDNSCryptConfig still lives in server/protocol/dnscrypt
-	// because it wires cert signing into the protocol package's config.
-	serverdnscrypt "zjdns/server/protocol/dnscrypt"
 )
 
 // generateExampleConfig returns a complete example configuration as indented JSON.
@@ -144,5 +139,5 @@ func generateExampleConfig() (string, error) {
 
 // generateDNSCryptConfig wraps the server/dnscrypt config generator for CLI use.
 func generateDNSCryptConfig(provider, addr string) (string, error) {
-	return serverdnscrypt.GenerateDNSCryptConfig(provider, addr)
+	return dnscert.GenerateDNSCryptConfig(provider, addr)
 }

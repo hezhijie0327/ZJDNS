@@ -174,6 +174,18 @@ func (e *Entry) rebuildResponseWire() {
 	e.TTLOffsets = offsets
 }
 
+// ReleaseOffsets returns the entry's pooled TTL-offset slice to the pool.
+// Idempotent: it clears TTLOffsets, so every consumer exit path may call it
+// unconditionally without risking a double-put of the same slice into the
+// pool (two owners of one backing array).
+func (e *Entry) ReleaseOffsets() {
+	if e.TTLOffsets == nil {
+		return
+	}
+	ReleaseTTLOffsets(e.TTLOffsets)
+	e.TTLOffsets = nil
+}
+
 // AcquireRequestRecord returns a zeroed RequestRecord from the pool.
 func AcquireRequestRecord() *RequestRecord { return requestRecordPool.Get().(*RequestRecord) }
 

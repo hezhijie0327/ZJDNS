@@ -1,4 +1,7 @@
-package dnscrypt
+// Package dnscert implements DNSCrypt certificate minting and complete
+// resolver/upstream configuration generation: resolver key pairs, cert
+// pairs (classic + X-Wing PQ), sdns:// stamps, and the ZJDNS JSON config.
+package dnscert
 
 import (
 	"crypto/rand"

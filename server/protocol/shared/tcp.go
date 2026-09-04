@@ -91,7 +91,8 @@ func (m *Manager) startTCPGroup(g *TCPGroup) error {
 				Listener:        rawListener,
 				KeepAlivePeriod: config.DefaultTCPKeepAlivePeriod,
 			},
-			Routes: routes,
+			Routes:           routes,
+			SniffConcurrency: config.DefaultServerGoroutineLimit,
 		})
 
 		rt := &tcpRuntime{cfg: g, demux: d}

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 	"zjdns/config"
+	"zjdns/dnscert"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 
 	"github.com/cloudflare/circl/sign/ed25519"
@@ -269,7 +270,7 @@ func TestRestoredEntriesCarryCertTXT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("signing key: %v", err)
 	}
-	rc := &ResolverConfig{
+	rc := &dnscert.ResolverConfig{
 		PrivateKey: dnscryptcrypto.HexEncodeKey(signSk),
 		PublicKey:  dnscryptcrypto.HexEncodeKey(signPk),
 	}

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 	"zjdns/config"
+	"zjdns/dnscert"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	serverdnscrypt "zjdns/server/protocol/dnscrypt"
 
@@ -36,7 +37,7 @@ func (h *testDNSHandler) ServeDNS(req *dns.Msg, _ net.IP, _ bool, _ string) *dns
 
 func startTestDNSCryptServer(t *testing.T) (addr, stamp string) {
 	t.Helper()
-	rc, err := serverdnscrypt.GenerateResolverConfig("example.com", nil)
+	rc, err := dnscert.GenerateResolverConfig("example.com", nil)
 	if err != nil {
 		t.Fatalf("GenerateResolverConfig: %v", err)
 	}
@@ -457,7 +458,7 @@ func startTestDNSCryptServerWithHandler(t *testing.T, handler interface {
 },
 ) (addr, stamp string) {
 	t.Helper()
-	rc, err := serverdnscrypt.GenerateResolverConfig("example.com", nil)
+	rc, err := dnscert.GenerateResolverConfig("example.com", nil)
 	if err != nil {
 		t.Fatalf("GenerateResolverConfig: %v", err)
 	}
