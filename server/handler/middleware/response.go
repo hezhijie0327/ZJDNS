@@ -70,7 +70,9 @@ func (m *Response) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			// EDNS + Pack pipeline below can modify the message.  TTLs were
 			// already adjusted by buildFromPrePacked.
 			if err := qctx.Res.Unpack(); err != nil {
-				log.Debugf("RESPONSE: unpack pre-packed response: %v", err)
+				if log.IsDebug() {
+					log.Debugf("RESPONSE: unpack pre-packed response: %v", err)
+				}
 				qctx.Res.Rcode = dns.RcodeServerFailure
 				return err
 			}
@@ -148,8 +150,10 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext, st ednsState) {
 	}
 
 	if st.ecsOpt != nil {
-		log.Debugf("EDNS: response ECS: family=%d addr=%s/%d scope=%d fromClient=%t",
-			st.ecsOpt.Family, st.ecsOpt.Address, st.ecsOpt.SourcePrefix, st.ecsOpt.ScopePrefix, qctx.ECSOpt != nil)
+		if log.IsDebug() {
+			log.Debugf("EDNS: response ECS: family=%d addr=%s/%d scope=%d fromClient=%t",
+				st.ecsOpt.Family, st.ecsOpt.Address, st.ecsOpt.SourcePrefix, st.ecsOpt.ScopePrefix, qctx.ECSOpt != nil)
+		}
 	}
 
 	if st.shouldAddEDNS && m.edns != nil && !msgHasEDNSOptions(msg) {
@@ -171,7 +175,9 @@ func (m *Response) generateCookieStr(cookieOpt *edns.CookieOption, clientIP net.
 	}
 
 	if len(cookieOpt.ClientCookie) != edns.DefaultCookieClientLen {
-		log.Debugf("EDNS: invalid client cookie length %d (expected %d)", len(cookieOpt.ClientCookie), edns.DefaultCookieClientLen)
+		if log.IsDebug() {
+			log.Debugf("EDNS: invalid client cookie length %d (expected %d)", len(cookieOpt.ClientCookie), edns.DefaultCookieClientLen)
+		}
 		return ""
 	}
 
@@ -181,7 +187,9 @@ func (m *Response) generateCookieStr(cookieOpt *edns.CookieOption, clientIP net.
 		if status == edns.CookieValid || status == edns.CookieValidRenew {
 			serverCookie = cookieOpt.ServerCookie
 		} else {
-			log.Debugf("EDNS: server cookie status=%d for %s, renewing", status, clientIP)
+			if log.IsDebug() {
+				log.Debugf("EDNS: server cookie status=%d for %s, renewing", status, clientIP)
+			}
 			serverCookie = m.edns.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 		}
 	} else {

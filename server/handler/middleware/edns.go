@@ -40,7 +40,9 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		if len(req.Pseudo) == 0 && req.Data != nil {
 			req.Options = 0
 			if err := req.Unpack(); err != nil {
-				log.Debugf("EDNS: full unpack failed: %v", err)
+				if log.IsDebug() {
+					log.Debugf("EDNS: full unpack failed: %v", err)
+				}
 				msg := handler.BuildResponseMsg(req)
 				msg.Rcode = dns.RcodeFormatError
 				qctx.Res = msg
@@ -55,7 +57,9 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// forces OPT generation at pack time, where Rcode=16 (extended
 		// rcode) and UDPSize are folded into the OPT.
 		if req.Version != 0 {
-			log.Debugf("EDNS: unsupported EDNS version %d from %s, returning BADVERS", req.Version, qctx.ClientIP)
+			if log.IsDebug() {
+				log.Debugf("EDNS: unsupported EDNS version %d from %s, returning BADVERS", req.Version, qctx.ClientIP)
+			}
 			msg := handler.BuildResponseMsg(req)
 			msg.Rcode = dns.RcodeBadVers
 			msg.UDPSize = pool.UDPBufferSize
@@ -67,10 +71,14 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		qctx.ClientRequestedDNSSEC = req.Security
 		qctx.ECSOpt = m.edns.ParseFromDNS(req)
 		if qctx.ECSOpt != nil {
-			log.Debugf("EDNS: client ECS parsed: family=%d addr=%s/%d scope=%d",
-				qctx.ECSOpt.Family, qctx.ECSOpt.Address, qctx.ECSOpt.SourcePrefix, qctx.ECSOpt.ScopePrefix)
+			if log.IsDebug() {
+				log.Debugf("EDNS: client ECS parsed: family=%d addr=%s/%d scope=%d",
+					qctx.ECSOpt.Family, qctx.ECSOpt.Address, qctx.ECSOpt.SourcePrefix, qctx.ECSOpt.ScopePrefix)
+			}
 		} else {
-			log.Debugf("EDNS: no ECS from client")
+			if log.IsDebug() {
+				log.Debugf("EDNS: no ECS from client")
+			}
 		}
 		// RFC 7871 §6: reject malformed ECS options with FORMERR. The
 		// malformed state must be cleared and the SUBNET stripped from
@@ -78,7 +86,9 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// falls back to re-parsing req.Pseudo) for every non-BADCOOKIE
 		// response, which would echo the invalid option back to the client.
 		if qctx.ECSOpt != nil && !qctx.ECSOpt.IsValid() {
-			log.Debugf("EDNS: malformed ECS option from %s", qctx.ClientIP)
+			if log.IsDebug() {
+				log.Debugf("EDNS: malformed ECS option from %s", qctx.ClientIP)
+			}
 			qctx.ECSOpt = nil
 			pseudo := qctx.Req.Pseudo[:0]
 			for _, opt := range qctx.Req.Pseudo {
@@ -97,7 +107,9 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		if cookieMalformed {
 			// RFC 7873 §5.2.2: a malformed client cookie is rejected with
 			// FORMERR, not silently treated as absent.
-			log.Debugf("EDNS: malformed client cookie from %s", qctx.ClientIP)
+			if log.IsDebug() {
+				log.Debugf("EDNS: malformed client cookie from %s", qctx.ClientIP)
+			}
 			msg := handler.BuildResponseMsg(req)
 			msg.Rcode = dns.RcodeFormatError
 			qctx.Res = msg
@@ -114,14 +126,18 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		if cookieOpt != nil && len(cookieOpt.ServerCookie) > 0 {
 			total := edns.DefaultCookieClientLen + len(cookieOpt.ServerCookie)
 			if total < edns.DefaultCookieServerLen || total > edns.MaxCookieLen {
-				log.Debugf("EDNS: malformed cookie option length %d from %s, returning FORMERR", total, qctx.ClientIP)
+				if log.IsDebug() {
+					log.Debugf("EDNS: malformed cookie option length %d from %s, returning FORMERR", total, qctx.ClientIP)
+				}
 				msg := handler.BuildResponseMsg(req)
 				msg.Rcode = dns.RcodeFormatError
 				qctx.Res = msg
 				return nil
 			}
 			if len(cookieOpt.ServerCookie) != edns.DefaultCookieServerLen {
-				log.Debugf("EDNS: bad server cookie length %d (expected %d) from %s, returning BADCOOKIE", len(cookieOpt.ServerCookie), edns.DefaultCookieServerLen, qctx.ClientIP)
+				if log.IsDebug() {
+					log.Debugf("EDNS: bad server cookie length %d (expected %d) from %s, returning BADCOOKIE", len(cookieOpt.ServerCookie), edns.DefaultCookieServerLen, qctx.ClientIP)
+				}
 				qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt, qctx.ECSOpt)
 				return nil
 			}
@@ -132,7 +148,9 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		if cookieOpt != nil && len(cookieOpt.ServerCookie) == edns.DefaultCookieServerLen {
 			cookieStatus = m.edns.IsServerCookieValid(qctx.ClientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie)
 			if cookieStatus == edns.CookieExpired || cookieStatus == edns.CookieFuture || cookieStatus == edns.CookieInvalid {
-				log.Debugf("EDNS: bad server cookie (status=%d) from %s, returning BADCOOKIE", cookieStatus, qctx.ClientIP)
+				if log.IsDebug() {
+					log.Debugf("EDNS: bad server cookie (status=%d) from %s, returning BADCOOKIE", cookieStatus, qctx.ClientIP)
+				}
 				qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt, qctx.ECSOpt)
 				return nil
 			}
@@ -147,8 +165,10 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		if qctx.ECSOpt == nil && len(req.Question) > 0 {
 			qctx.ECSOpt = m.edns.ECSForQType(dns.RRToType(req.Question[0]))
 			if qctx.ECSOpt != nil {
-				log.Debugf("EDNS: using default ECS: family=%d addr=%s/%d",
-					qctx.ECSOpt.Family, qctx.ECSOpt.Address, qctx.ECSOpt.SourcePrefix)
+				if log.IsDebug() {
+					log.Debugf("EDNS: using default ECS: family=%d addr=%s/%d",
+						qctx.ECSOpt.Family, qctx.ECSOpt.Address, qctx.ECSOpt.SourcePrefix)
+				}
 			}
 		}
 
@@ -165,13 +185,17 @@ func (m *EDNS) buildBadCookieResponse(req *dns.Msg, clientIP net.IP, cookieOpt *
 		// RFC 7873 §5.2.2: nothing to echo — FORMERR. Kept separate from the
 		// length check: logging len(cookieOpt.ClientCookie) on the nil path
 		// would dereference a nil pointer.
-		log.Debugf("EDNS: missing client cookie from %s, returning FORMERR", clientIP)
+		if log.IsDebug() {
+			log.Debugf("EDNS: missing client cookie from %s, returning FORMERR", clientIP)
+		}
 		msg.Rcode = dns.RcodeFormatError
 		return msg
 	}
 	if len(cookieOpt.ClientCookie) != edns.DefaultCookieClientLen {
 		// RFC 7873 §5.3: the echoed client cookie must be exactly 8 octets.
-		log.Debugf("EDNS: bad cookie length %d from %s, returning FORMERR", len(cookieOpt.ClientCookie), clientIP)
+		if log.IsDebug() {
+			log.Debugf("EDNS: bad cookie length %d from %s, returning FORMERR", len(cookieOpt.ClientCookie), clientIP)
+		}
 		msg.Rcode = dns.RcodeFormatError
 		return msg
 	}
@@ -197,7 +221,9 @@ func (m *EDNS) cookieResponseStr(cookieOpt *edns.CookieOption, clientIP net.IP, 
 		clientIP = fallbackClientIP
 	}
 	if len(cookieOpt.ClientCookie) != edns.DefaultCookieClientLen {
-		log.Debugf("EDNS: invalid client cookie length %d (expected %d)", len(cookieOpt.ClientCookie), edns.DefaultCookieClientLen)
+		if log.IsDebug() {
+			log.Debugf("EDNS: invalid client cookie length %d (expected %d)", len(cookieOpt.ClientCookie), edns.DefaultCookieClientLen)
+		}
 		return ""
 	}
 

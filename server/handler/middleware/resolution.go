@@ -27,7 +27,9 @@ func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		// Guard against nil resolver.
 		if m.resolver == nil {
-			log.Debugf("RECURSION: resolver not set — returning SERVFAIL")
+			if log.IsDebug() {
+				log.Debugf("RECURSION: resolver not set — returning SERVFAIL")
+			}
 			msg := handler.BuildResponseMsg(qctx.Req)
 			msg.Rcode = dns.RcodeServerFailure
 			qctx.Res = msg
@@ -46,7 +48,9 @@ func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// Singleflight dedup: if another goroutine is already resolving the
 		// same query, wait for its result.
 		if m.pending != nil {
-			log.Debugf("RECURSION: resolving %s %s", qname, dns.TypeToString[qtype])
+			if log.IsDebug() {
+				log.Debugf("RECURSION: resolving %s %s", qname, dns.TypeToString[qtype])
+			}
 			qr := m.pending.DoJoin(qname, qtype, qclass, ecsOpt, dnssecOK, func() *resolver.QueryResult {
 				return m.resolver.Query(ctx, question, ecsOpt)
 			})
@@ -61,7 +65,9 @@ func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return nil
 		}
 
-		log.Debugf("RECURSION: resolving %s %s", qname, dns.TypeToString[qtype])
+		if log.IsDebug() {
+			log.Debugf("RECURSION: resolving %s %s", qname, dns.TypeToString[qtype])
+		}
 		qr := m.resolver.Query(ctx, question, ecsOpt)
 		if qr == nil {
 			return errors.New("recursive resolution returned no result")

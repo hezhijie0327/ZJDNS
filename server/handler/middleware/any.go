@@ -59,7 +59,9 @@ func (m *Any) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			m.store.RecordRequest(rec)
 			cache.ReleaseRequestRecord(rec)
 		}
-		log.Debugf("ANY: serving RFC 8482 minimal response for %s", qd.Header().Name)
+		if log.IsDebug() {
+			log.Debugf("ANY: serving RFC 8482 minimal response for %s", qd.Header().Name)
+		}
 		return nil
 	})
 }

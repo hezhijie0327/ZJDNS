@@ -106,7 +106,9 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			// response's AD assertion must not carry over to synthesized
 			// records (RFC 6147: synthesized data is not validated as-is).
 			qr.Validated = qr.Validated && aqr.Validated
-			log.Debugf("DNS64: synthesized %d AAAA records for %s", len(qr.Answer), qname)
+			if log.IsDebug() {
+				log.Debugf("DNS64: synthesized %d AAAA records for %s", len(qr.Answer), qname)
+			}
 		} else {
 			reason := "no A answers"
 			if aqr == nil {
@@ -114,7 +116,9 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			} else if aqr.Err != nil {
 				reason = aqr.Err.Error()
 			}
-			log.Debugf("DNS64: skipping synthesis for %s (qtype=%d): %s", qname, qtype, reason)
+			if log.IsDebug() {
+				log.Debugf("DNS64: skipping synthesis for %s (qtype=%d): %s", qname, qtype, reason)
+			}
 		}
 
 		return err

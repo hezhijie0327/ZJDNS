@@ -81,7 +81,9 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			matchedTags = m.tagMatcher(qname, qctx.ClientIP)
 		}
 
-		log.Debugf("ZONE: evaluating rules for %s qtype=%s client=%s tags=%v", qname, dns.TypeToString[qtype], qctx.ClientIP, matchedTags)
+		if log.IsDebug() {
+			log.Debugf("ZONE: evaluating rules for %s qtype=%s client=%s tags=%v", qname, dns.TypeToString[qtype], qctx.ClientIP, matchedTags)
+		}
 
 		zoneResult := m.evaluator.Evaluate(qname, qtype, qclass, matchedTags, qctx.ClientIP)
 		if !zoneResult.Matched {
@@ -104,7 +106,9 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return nil
 		}
 
-		log.Debugf("ZONE: matched rule for %s -> domain=%s rcode=%d", qname, zoneResult.Domain, zoneResult.Rcode)
+		if log.IsDebug() {
+			log.Debugf("ZONE: matched rule for %s -> domain=%s rcode=%d", qname, zoneResult.Domain, zoneResult.Rcode)
+		}
 
 		rec := cache.AcquireRequestRecord()
 		rec.Qname = qname
@@ -118,13 +122,18 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 
 		// Non-success rcode → build error response.
 		if zoneResult.Rcode != dns.RcodeSuccess {
-			log.Debugf("RESULT: %s %s | rcode=%s, blocked by zone rule", qname, dns.TypeToString[qtype], dns.RcodeToString[uint16(zoneResult.Rcode)]) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
+			if log.IsDebug() {
+				log.Debugf("RESULT: %s %s | rcode=%s, blocked by zone rule", qname, dns.TypeToString[qtype], dns.RcodeToString[uint16(zoneResult.Rcode)]) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
+			}
 			response := handler.BuildResponseMsg(qctx.Req)
 			response.Rcode = uint16(zoneResult.Rcode) //nolint:gosec // G115: DNS rcode — protocol-bounded uint16
 			if len(zoneResult.Authority) > 0 || len(zoneResult.Additional) > 0 {
+				// Freshly cloned per hit (cloneRRs) — deduct in place, no re-clone.
 				elapsed := ttl.Elapsed(zoneResult.CreatedAt)
-				response.Ns = ttl.DeductElapsedCyclical(zoneResult.Authority, elapsed)
-				response.Extra = ttl.DeductElapsedCyclical(zoneResult.Additional, elapsed)
+				response.Ns = zoneResult.Authority
+				response.Extra = zoneResult.Additional
+				ttl.DeductInPlace(response.Ns, elapsed)
+				ttl.DeductInPlace(response.Extra, elapsed)
 			}
 			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorForgedAnswer, ExtraText: ""}
 			qctx.Res = response
@@ -134,16 +143,20 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// Successful zone response with records.
 		hasRecords := len(zoneResult.Answer) > 0 || len(zoneResult.Authority) > 0 || len(zoneResult.Additional) > 0
 		if hasRecords {
-			elapsed := ttl.Elapsed(zoneResult.CreatedAt)
 			response := handler.BuildResponseMsg(qctx.Req)
 			// Zone rules are served authoritatively by this server — the AA
 			// bit is required for RESINFO responses (RFC 9606 §3: AA MUST be
 			// set on the resolver's own records) and matches the semantics
 			// of local policy data (R2 finding).
 			response.Authoritative = true
-			response.Answer = ttl.DeductElapsedCyclical(zoneResult.Answer, elapsed)
-			response.Ns = ttl.DeductElapsedCyclical(zoneResult.Authority, elapsed)
-			response.Extra = ttl.DeductElapsedCyclical(zoneResult.Additional, elapsed)
+			// Freshly cloned per hit (cloneRRs) — deduct in place, no re-clone.
+			elapsed := ttl.Elapsed(zoneResult.CreatedAt)
+			response.Answer = zoneResult.Answer
+			response.Ns = zoneResult.Authority
+			response.Extra = zoneResult.Additional
+			ttl.DeductInPlace(response.Answer, elapsed)
+			ttl.DeductInPlace(response.Ns, elapsed)
+			ttl.DeductInPlace(response.Extra, elapsed)
 			response.Rcode = dns.RcodeSuccess
 			// RFC 1034 §4.3.3: a wildcard match serves the stored records
 			// with the QUERIED name as owner — the wildcard rule's records
@@ -159,7 +172,9 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			// Operator-configured zone rules are legitimate policy, not
 			// security forgeries — omit EDE so clients don't misclassify.
 			qctx.Res = response
-			log.Debugf("RESULT: %s %s | rcode=NOERROR (zone), answer=%d", qname, dns.TypeToString[qtype], len(zoneResult.Answer))
+			if log.IsDebug() {
+				log.Debugf("RESULT: %s %s | rcode=NOERROR (zone), answer=%d", qname, dns.TypeToString[qtype], len(zoneResult.Answer))
+			}
 			return nil
 		}
 

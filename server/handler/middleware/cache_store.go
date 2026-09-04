@@ -147,7 +147,9 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 			dnssec.CapValidatedTTL(qr.Answer, qr.Authority, qr.Additional)
 		}
 
-		log.Debugf("CACHE: populating cache for %s", qname)
+		if log.IsDebug() {
+			log.Debugf("CACHE: populating cache for %s", qname)
+		}
 		m.store.Set(qname, qtype, qclass, ecsOpt, qr.Answer, qr.Authority, qr.Additional, validated, qr.Rcode)
 	}
 
@@ -176,7 +178,9 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	msg.Ns = cache.ProcessRecords(qr.Authority, 0, false, dnssecOK)
 	msg.Extra = cache.ProcessRecords(qr.Additional, 0, false, dnssecOK)
 
-	log.Debugf("RESULT: %s %s | rcode=NOERROR, answer=%d, validated=%t", qname, dns.TypeToString[qtype], len(qr.Answer), validated)
+	if log.IsDebug() {
+		log.Debugf("RESULT: %s %s | rcode=NOERROR, answer=%d, validated=%t", qname, dns.TypeToString[qtype], len(qr.Answer), validated)
+	}
 
 	// Set EDE from DNSSEC or upstream.
 	if dnssecEDECode != 0 {
@@ -184,7 +188,9 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	}
 	if qctx.EDE == nil && qr.UpstreamEDE != nil {
 		qctx.EDE = &dns.EDE{InfoCode: qr.UpstreamEDE.InfoCode, ExtraText: qr.UpstreamEDE.ExtraText}
-		log.Debugf("UPSTREAM: passing through EDE %d (%s) from upstream", qr.UpstreamEDE.InfoCode, dns.ExtendedErrorToString[qr.UpstreamEDE.InfoCode])
+		if log.IsDebug() {
+			log.Debugf("UPSTREAM: passing through EDE %d (%s) from upstream", qr.UpstreamEDE.InfoCode, dns.ExtendedErrorToString[qr.UpstreamEDE.InfoCode])
+		}
 	}
 
 	return msg
@@ -201,7 +207,9 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 	// Try cache fallback — fresh or stale.
 	if entry, found, isExpired := m.store.Get(qname, qtype, qclass, ecsOpt); found {
 		if !isExpired || entry.CanServeExpired(config.DefaultStaleMaxAge) {
-			log.Debugf("CACHE: serving cached result for %s, ttl_remaining=%d", qname, entry.RemainingTTL())
+			if log.IsDebug() {
+				log.Debugf("CACHE: serving cached result for %s, ttl_remaining=%d", qname, entry.RemainingTTL())
+			}
 			rec := cache.AcquireRequestRecord()
 			rec.Qname = qname
 			rec.Qtype = qtype
@@ -219,7 +227,9 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 		cache.ReleaseTTLOffsets(entry.TTLOffsets)
 	}
 
-	log.Debugf("RESULT: %s %s | rcode=SERVFAIL, no stale cache available", qname, dns.TypeToString[qtype])
+	if log.IsDebug() {
+		log.Debugf("RESULT: %s %s | rcode=SERVFAIL, no stale cache available", qname, dns.TypeToString[qtype])
+	}
 
 	msg := handler.BuildResponseMsg(qctx.Req)
 	msg.Rcode = dns.RcodeServerFailure
@@ -229,13 +239,17 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 	if qr.DNSSECEDE != 0 {
 		edeCode = qr.DNSSECEDE
 		dnssecStatus = config.DNSSECStatusBogus
-		log.Debugf("SECURITY: using DNSSEC EDE %d from recursive resolver", edeCode)
+		if log.IsDebug() {
+			log.Debugf("SECURITY: using DNSSEC EDE %d from recursive resolver", edeCode)
+		}
 	}
 	if dnssecStatus == "" {
 		if dnsErr, ok := errors.AsType[*resolver.DNSSECError](queryErr); ok {
 			edeCode = dnsErr.EDECode
 			dnssecStatus = config.DNSSECStatusBogus
-			log.Debugf("SECURITY: DNSSEC error mapped to EDE %d: %s", edeCode, dnsErr.Message)
+			if log.IsDebug() {
+				log.Debugf("SECURITY: DNSSEC error mapped to EDE %d: %s", edeCode, dnsErr.Message)
+			}
 		}
 	}
 
@@ -260,7 +274,9 @@ func (m *CacheStore) buildCIDRRefused(qctx *handler.QueryContext) *dns.Msg {
 	qtype := qctx.Qtype
 	qclass := qctx.Req.Question[0].Header().Class
 
-	log.Debugf("RESULT: %s %s | rcode=REFUSED, blocked by CIDR filtering", qname, dns.TypeToString[qtype])
+	if log.IsDebug() {
+		log.Debugf("RESULT: %s %s | rcode=REFUSED, blocked by CIDR filtering", qname, dns.TypeToString[qtype])
+	}
 
 	msg := handler.BuildResponseMsg(qctx.Req)
 	msg.Rcode = dns.RcodeRefused

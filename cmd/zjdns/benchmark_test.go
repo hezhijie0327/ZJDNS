@@ -207,3 +207,38 @@ func BenchmarkServerDNSRequest_MultipleTypes(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkServerCacheHit measures the full end-to-end cache-hit path:
+// miekg-free direct ServeDNS against a cache populated by a prior miss
+// (upstream = local zone instance? no — simplest: recursive-less forward
+// upstream is unavailable here, so prime the cache via Cache.Set on the
+// server's store through a real miss is impossible offline; instead this
+// benchmark uses the middleware chain via server.ServeDNS with the cache
+// pre-warmed through the Zone middleware writing CacheStore entries).
+func BenchmarkServerCacheHit(b *testing.B) {
+	srv := buildBenchServer(b)
+
+	req := new(dns.Msg)
+	dnsutil.SetQuestion(req, "bench.local.", dns.TypeA)
+	req.RecursionDesired = true
+
+	// Warm the cache: the Zone middleware answers, CacheStore stores it.
+	for range 10 {
+		if resp := srv.ServeDNS(req, net.IPv4(127, 0, 0, 1), false, "UDP"); resp != nil {
+			pool.DefaultMessage.Put(resp)
+		}
+	}
+
+	b.ResetTimer()
+	b.SetParallelism(8)
+	b.RunParallel(func(pb *testing.PB) {
+		clientIP := net.IPv4(127, 0, 0, 1)
+		for pb.Next() {
+			resp := srv.ServeDNS(req, clientIP, false, "UDP")
+			if resp == nil {
+				b.Fatal("nil response")
+			}
+			pool.DefaultMessage.Put(resp)
+		}
+	})
+}

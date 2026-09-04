@@ -98,3 +98,20 @@ func DeductElapsedCyclical(rrs []dns.RR, elapsed int64) []dns.RR {
 	}
 	return result
 }
+
+// DeductInPlace subtracts elapsed seconds from every TTL header, mutating
+// rrs directly — for slices the caller freshly cloned (e.g. the zone
+// middleware's per-hit cloneRRs output).  DeductElapsedCyclical would clone
+// every RR a second time, which was pure waste on the zone-hit hot path.
+func DeductInPlace(rrs []dns.RR, elapsed int64) {
+	for _, rr := range rrs {
+		if rr == nil {
+			continue
+		}
+		orig := int64(rr.Header().TTL)
+		if orig <= 0 {
+			continue
+		}
+		rr.Header().TTL = uint32(max(orig-elapsed, 0)) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+	}
+}

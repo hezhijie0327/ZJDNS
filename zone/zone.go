@@ -299,9 +299,13 @@ func (e *Evaluator) Evaluate(qname string, qtype, qclass uint16, matchedTags map
 	// 0. Check global bypass rules — if any matches, skip zone entirely.
 	for i, tags := range table.bypass {
 		score := matchScore(tags, matchedTags)
-		log.Debugf("ZONE: bypass[%d] tags=%v client_tags=%v score=%d", i, tags, matchedTags, score)
+		if log.IsDebug() {
+			log.Debugf("ZONE: bypass[%d] tags=%v client_tags=%v score=%d", i, tags, matchedTags, score)
+		}
 		if score > 0 {
-			log.Debugf("ZONE: bypass matched, skipping zone for %s", qname)
+			if log.IsDebug() {
+				log.Debugf("ZONE: bypass matched, skipping zone for %s", qname)
+			}
 			return Result{Rcode: dns.RcodeSuccess}
 		}
 	}

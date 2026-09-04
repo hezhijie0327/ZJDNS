@@ -64,7 +64,9 @@ func (m *MQTYPE) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// RFC 10029 §3.3: a second MQTYPE-Query or an inbound
 		// MQTYPE-Response → FORMERR, without resolving.
 		if invalid {
-			log.Debugf("MQTYPE: rejecting invalid MQTYPE option: mq=%v", mqQuery)
+			if log.IsDebug() {
+				log.Debugf("MQTYPE: rejecting invalid MQTYPE option: mq=%v", mqQuery)
+			}
 			msg := handler.BuildResponseMsg(qctx.Req)
 			msg.Rcode = dns.RcodeFormatError
 			qctx.Res = msg
@@ -74,7 +76,9 @@ func (m *MQTYPE) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return next.ServeDNS(ctx, qctx)
 		}
 		if qerr := m.validate(qctx, mqQuery); qerr != nil {
-			log.Debugf("MQTYPE: rejecting invalid MQTYPE-Query: %v", qerr)
+			if log.IsDebug() {
+				log.Debugf("MQTYPE: rejecting invalid MQTYPE-Query: %v", qerr)
+			}
 			msg := handler.BuildResponseMsg(qctx.Req)
 			msg.Rcode = dns.RcodeFormatError
 			qctx.Res = msg
@@ -164,7 +168,9 @@ func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY, qtResults <-
 		// This also makes msg.Len() report the true primary size for the
 		// merge budget below.
 		if err := msg.Unpack(); err != nil {
-			log.Debugf("MQTYPE: unpack pre-packed primary response: %v", err)
+			if log.IsDebug() {
+				log.Debugf("MQTYPE: unpack pre-packed primary response: %v", err)
+			}
 			return
 		}
 		msg.ID = qctx.Req.ID
@@ -183,7 +189,9 @@ func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY, qtResults <-
 	// the additional queries are not processed.  The MQTYPE-Response option
 	// is still returned (empty list) to signal support.
 	if msg.Truncated {
-		log.Debugf("MQTYPE: primary response truncated — skipping additional types for %s", qctx.Req.Question[0].Header().Name)
+		if log.IsDebug() {
+			log.Debugf("MQTYPE: primary response truncated — skipping additional types for %s", qctx.Req.Question[0].Header().Name)
+		}
 		msg.Pseudo = append(msg.Pseudo, &dns.MQRESPONSE{})
 		return
 	}
@@ -230,13 +238,17 @@ func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY, qtResults <-
 	for _, qt := range types {
 		qr := qtMap[qt]
 		if qr == nil || qr.Err != nil {
-			log.Debugf("MQTYPE: skipping %s %s — resolution failed", qname, dns.TypeToString[qt])
+			if log.IsDebug() {
+				log.Debugf("MQTYPE: skipping %s %s — resolution failed", qname, dns.TypeToString[qt])
+			}
 			continue
 		}
 		// §3.4: mismatching RCODE or flags — the additional response MUST
 		// NOT be included.
 		if qr.Rcode != primaryRcode || qr.Validated != primaryAD || qr.Authoritative != primaryAA {
-			log.Debugf("MQTYPE: skipping %s %s — RCODE/flags mismatch (rcode=%d validated=%t aa=%t)", qname, dns.TypeToString[qt], qr.Rcode, qr.Validated, qr.Authoritative)
+			if log.IsDebug() {
+				log.Debugf("MQTYPE: skipping %s %s — RCODE/flags mismatch (rcode=%d validated=%t aa=%t)", qname, dns.TypeToString[qt], qr.Rcode, qr.Validated, qr.Authoritative)
+			}
 			continue
 		}
 
@@ -252,7 +264,9 @@ func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY, qtResults <-
 			added += rr.Len()
 		}
 		if added > budget {
-			log.Debugf("MQTYPE: skipping %s %s — response size budget exceeded", qname, dns.TypeToString[qt])
+			if log.IsDebug() {
+				log.Debugf("MQTYPE: skipping %s %s — response size budget exceeded", qname, dns.TypeToString[qt])
+			}
 			continue
 		}
 		budget -= added
@@ -288,7 +302,9 @@ func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY, qtResults <-
 		// empty list) to signal support.
 		msg.Pseudo = append(msg.Pseudo, &dns.MQRESPONSE{Types: completed})
 	}
-	log.Debugf("MQTYPE: merged %d/%d types for %s", len(completed), len(types), qname)
+	if log.IsDebug() {
+		log.Debugf("MQTYPE: merged %d/%d types for %s", len(completed), len(types), qname)
+	}
 }
 
 // resolve performs the secondary lookup for one QTYPE: cache first, then

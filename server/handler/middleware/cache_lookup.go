@@ -297,7 +297,9 @@ func (m *CacheLookup) serveExpiredWithRefresh(qctx *handler.QueryContext, qname 
 				}
 				return nil
 			}) {
-				log.Debugf("CACHE: refresh slot saturated — cache update skipped for %s (type=%d)", qname, qtype)
+				if log.IsDebug() {
+					log.Debugf("CACHE: refresh slot saturated — cache update skipped for %s (type=%d)", qname, qtype)
+				}
 			}
 		}
 	}
@@ -327,19 +329,27 @@ func (m *CacheLookup) refreshCacheEntry(qname string, qtype, qclass uint16, ecsO
 	question := handler.Question{Name: qname, Qtype: qtype, Qclass: qclass}
 	qr := m.resolver.Query(refreshCtx, question, ecsOpt)
 	if qr.Err != nil {
-		log.Debugf("CACHE: refresh failed for %s (type=%d): %v", qname, qtype, qr.Err)
+		if log.IsDebug() {
+			log.Debugf("CACHE: refresh failed for %s (type=%d): %v", qname, qtype, qr.Err)
+		}
 		return qr.Err
 	}
 	if !qr.Cacheable {
-		log.Debugf("CACHE: refresh skipped for %s (type=%d) — response not cacheable", qname, qtype)
+		if log.IsDebug() {
+			log.Debugf("CACHE: refresh skipped for %s (type=%d) — response not cacheable", qname, qtype)
+		}
 		return nil
 	}
 	if !resolver.DNSSECCacheable(qr.Validated, qr.DNSSECEDE) {
-		log.Debugf("CACHE: refresh skipped for %s (type=%d) — bogus validation result", qname, qtype)
+		if log.IsDebug() {
+			log.Debugf("CACHE: refresh skipped for %s (type=%d) — bogus validation result", qname, qtype)
+		}
 		return nil
 	}
 	m.store.Set(qname, qtype, qclass, ecsOpt, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
-	log.Debugf("CACHE: refresh updated %s (type=%d, answer=%d)", qname, qtype, len(qr.Answer))
+	if log.IsDebug() {
+		log.Debugf("CACHE: refresh updated %s (type=%d, answer=%d)", qname, qtype, len(qr.Answer))
+	}
 	return nil
 }
 
@@ -349,7 +359,9 @@ func (m *CacheLookup) tryStartRefresh(qname string, qtype, qclass uint16, ecs *e
 	}
 	key := handler.BuildPendingKey(qname, qtype, qclass, ecs, false)
 	if !m.pendingRefreshes.Start(key) {
-		log.Debugf("CACHE: refresh skipped for %s — already in flight", qname)
+		if log.IsDebug() {
+			log.Debugf("CACHE: refresh skipped for %s — already in flight", qname)
+		}
 		return false
 	}
 	return true

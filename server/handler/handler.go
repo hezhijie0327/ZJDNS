@@ -149,9 +149,13 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 		qname := req.Question[0].Header().Name
 		qtype := dns.RRToType(req.Question[0])
 		if clientIP != nil {
-			log.Debugf("QUERY: client IP=%s query=%s type=%s", clientIP.String(), qname, dns.TypeToString[qtype])
+			if log.IsDebug() {
+				log.Debugf("QUERY: client IP=%s query=%s type=%s", clientIP.String(), qname, dns.TypeToString[qtype])
+			}
 		} else {
-			log.Debugf("QUERY: client IP=<unknown> query=%s type=%s", qname, dns.TypeToString[qtype])
+			if log.IsDebug() {
+				log.Debugf("QUERY: client IP=<unknown> query=%s type=%s", qname, dns.TypeToString[qtype])
+			}
 		}
 	}
 
@@ -206,11 +210,13 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	if qctx.Res != nil && log.IsDebug() {
 		qname := qctx.Qname
 		qtype := qctx.Qtype
-		log.Debugf("RESULT: %s %s | rcode=%s time=%v answer=%d authority=%d additional=%d ad=%t\n%s",
-			qname, dns.TypeToString[qtype], dns.RcodeToString[qctx.Res.Rcode],
-			time.Duration(log.NowUnixNano()-qctx.StartTime).Truncate(time.Microsecond), len(qctx.Res.Answer), len(qctx.Res.Ns),
-			len(qctx.Res.Extra), qctx.Res.AuthenticatedData,
-			qctx.Res.String())
+		if log.IsDebug() {
+			log.Debugf("RESULT: %s %s | rcode=%s time=%v answer=%d authority=%d additional=%d ad=%t\n%s",
+				qname, dns.TypeToString[qtype], dns.RcodeToString[qctx.Res.Rcode],
+				time.Duration(log.NowUnixNano()-qctx.StartTime).Truncate(time.Microsecond), len(qctx.Res.Answer), len(qctx.Res.Ns),
+				len(qctx.Res.Extra), qctx.Res.AuthenticatedData,
+				qctx.Res.String())
+		}
 	}
 
 	return qctx.Res

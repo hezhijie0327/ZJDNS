@@ -58,7 +58,9 @@ func wireNameLength(name string) int {
 func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
 		if qctx.Req == nil || len(qctx.Req.Question) == 0 {
-			log.Debugf("QUERY: rejecting nil/empty question with FORMERR")
+			if log.IsDebug() {
+				log.Debugf("QUERY: rejecting nil/empty question with FORMERR")
+			}
 			msg := pool.DefaultMessage.Get()
 			if qctx.Req != nil {
 				dnsutil.SetReply(msg, qctx.Req)
@@ -74,7 +76,9 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 
 		// Reject non-standard opcodes (RFC 1035 §4.1.1 — opcode field).
 		if req := qctx.Req; req.Opcode != dns.OpcodeQuery {
-			log.Debugf("QUERY: rejecting non-query opcode %d with NOTIMP", req.Opcode)
+			if log.IsDebug() {
+				log.Debugf("QUERY: rejecting non-query opcode %d with NOTIMP", req.Opcode)
+			}
 			msg := pool.DefaultMessage.Get()
 			dnsutil.SetReply(msg, req)
 			msg.Rcode = dns.RcodeNotImplemented
@@ -86,7 +90,9 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// indexing, SetReply echoing one question) — a multi-question query
 		// could smuggle an invalid name or ANY/AXFR/IXFR type past this gate.
 		if len(qctx.Req.Question) != 1 {
-			log.Debugf("QUERY: rejecting multi-question query (%d questions) with FORMERR", len(qctx.Req.Question))
+			if log.IsDebug() {
+				log.Debugf("QUERY: rejecting multi-question query (%d questions) with FORMERR", len(qctx.Req.Question))
+			}
 			msg := pool.DefaultMessage.Get()
 			dnsutil.SetReply(msg, qctx.Req)
 			msg.Rcode = dns.RcodeFormatError
@@ -101,7 +107,9 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// Allow CHAOS class for ZJDNS introspection queries (stats, etc.).
 		// Other non-IN classes are rejected per RFC 6895 §3.2.
 		if qd.Header().Class != dns.ClassINET && qd.Header().Class != dns.ClassCHAOS {
-			log.Debugf("QUERY: rejecting non-IN/CHAOS class %d for %s with REFUSED", qd.Header().Class, qname)
+			if log.IsDebug() {
+				log.Debugf("QUERY: rejecting non-IN/CHAOS class %d for %s with REFUSED", qd.Header().Class, qname)
+			}
 			msg := pool.DefaultMessage.Get()
 			dnsutil.SetReply(msg, qctx.Req)
 			msg.Rcode = dns.RcodeRefused
@@ -132,9 +140,13 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// presentation-form checks) is an invalid-domain rejection, not an
 		// unsupported-qtype one (H-L10).
 		if len(qname) > config.MaxDomainLength || !dnsutil.IsName(qname) || wireNameLength(qname) < 0 {
-			log.Debugf("QUERY: rejecting invalid domain %q (len=%d) with REFUSED", qname, len(qname))
+			if log.IsDebug() {
+				log.Debugf("QUERY: rejecting invalid domain %q (len=%d) with REFUSED", qname, len(qname))
+			}
 		} else {
-			log.Debugf("QUERY: rejecting unsupported query type %s for %s with REFUSED", dns.TypeToString[qtype], qname)
+			if log.IsDebug() {
+				log.Debugf("QUERY: rejecting unsupported query type %s for %s with REFUSED", dns.TypeToString[qtype], qname)
+			}
 		}
 		msg := pool.DefaultMessage.Get()
 		dnsutil.SetReply(msg, qctx.Req)

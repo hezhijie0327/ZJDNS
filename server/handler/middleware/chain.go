@@ -73,7 +73,9 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	// (Resolution is always configured).  Resolution is the real terminal
 	// — it ignores next and never calls this stub.
 	var h handler.QueryHandler = handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
-		log.Debugf("QUERY: terminal stub reached — not reached in normal operation (Resolution is always configured)")
+		if log.IsDebug() {
+			log.Debugf("QUERY: terminal stub reached — not reached in normal operation (Resolution is always configured)")
+		}
 		qctx.Res = handler.BuildResponseMsg(qctx.Req)
 		qctx.Res.Rcode = dns.RcodeServerFailure
 		return nil
