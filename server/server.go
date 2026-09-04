@@ -628,7 +628,10 @@ func (s *Server) Start() error {
 
 	g, ctx := errgroup.WithContext(serverCtx)
 
-	if err := s.plain.Start(g, ctx, dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) })); err != nil {
+	if err := s.plain.Start(g, ctx,
+		dns.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) { s.handleDNSRequest(w, r) }),
+		s.handler,
+	); err != nil {
 		return err
 	}
 

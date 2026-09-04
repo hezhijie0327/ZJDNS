@@ -3,7 +3,10 @@ package plain
 
 import (
 	"context"
+	"net"
+	"sync"
 	"zjdns/config"
+	"zjdns/edns"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
@@ -16,9 +19,11 @@ type Group interface {
 
 // Server manages plain UDP and TCP DNS listeners.
 type Server struct {
-	config     *config.ServerConfig
-	udpServers []*dns.Server
-	tcpServers []*dns.Server
+	config       *config.ServerConfig
+	udpServers   []*dns.Server
+	tcpMu        sync.Mutex
+	tcpListeners []net.Listener
+	tcpConns     map[net.Conn]struct{}
 }
 
 // New creates a Server for plain DNS listeners.
@@ -29,14 +34,14 @@ func New(cfg *config.ServerConfig) *Server {
 	return &Server{config: cfg}
 }
 
-// Start binds UDP and TCP sockets and starts DNS listeners.  Each listener runs
-// in its own goroutine via the provided errgroup.
-func (s *Server) Start(g Group, ctx context.Context, handler dns.Handler) error {
+// Start binds UDP and TCP sockets and starts DNS listeners.  UDP runs on the
+// miekg/dns listener; TCP uses the hand-rolled pipelining loop (tcp.go).
+func (s *Server) Start(g Group, ctx context.Context, udpHandler dns.Handler, tcpHandler edns.DNSHandler) error {
 	log.Debugf("PLAIN: starting listeners (UDP=%s TCP=%s)", s.config.Server.Protocol.UDP, s.config.Server.Protocol.TCP)
-	if err := s.startUDP(g, ctx, handler); err != nil {
+	if err := s.startUDP(g, ctx, udpHandler); err != nil {
 		return err
 	}
-	return s.startTCP(g, ctx, handler)
+	return s.startTCP(g, ctx, tcpHandler)
 }
 
 // Shutdown gracefully stops all UDP and TCP listeners.
@@ -49,12 +54,5 @@ func (s *Server) Shutdown(ctx context.Context) {
 	if len(s.udpServers) > 0 {
 		log.Infof("PLAIN: UDP server(s) shut down")
 	}
-	for _, srv := range s.tcpServers {
-		if srv != nil {
-			srv.Shutdown(ctx)
-		}
-	}
-	if len(s.tcpServers) > 0 {
-		log.Infof("PLAIN: TCP server(s) shut down")
-	}
+	s.shutdownTCP()
 }
