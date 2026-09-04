@@ -50,20 +50,14 @@ type Server struct {
 	queryClient *upstream.Client
 	dnsResolver *resolver.Resolver
 
-	tls            *tls.Server
-	tlcpServer     *servertlcp.Server
-	dnscryptServer *serverdnscrypt.Server
-	plain          *serverplain.Server
-	sharedManager  *shared.Manager
-	pprofServers   []*http.Server
-	shutdown       chan struct{}
-	shutdownOnce   sync.Once // guards close(shutdown) — a second shutdownServer call would double-close (M-3-6)
-	tcpSem         chan struct{}
-	// tcpWriteShards is the per-connection TCP write-serialization registry,
-	// sharded by client address so concurrent connections never contend on a
-	// global lock.  Each shard's mutex serializes the entry lifecycle (see
-	// tcpWriteShard in bridge.go).
-	tcpWriteShards  [tcpWriteShardCount]tcpWriteShard
+	tls             *tls.Server
+	tlcpServer      *servertlcp.Server
+	dnscryptServer  *serverdnscrypt.Server
+	plain           *serverplain.Server
+	sharedManager   *shared.Manager
+	pprofServers    []*http.Server
+	shutdown        chan struct{}
+	shutdownOnce    sync.Once // guards close(shutdown) — a second shutdownServer call would double-close (M-3-6)
 	ctx             context.Context
 	cancel          context.CancelCauseFunc
 	backgroundGroup *errgroup.Group
@@ -89,7 +83,6 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 		shutdown:        make(chan struct{}),
 		backgroundGroup: backgroundGroup,
 		backgroundCtx:   backgroundCtx,
-		tcpSem:          make(chan struct{}, config.DefaultServerGoroutineLimit),
 	}
 
 	// Two-tier cache: the spill files ARE the persistence — opened (and

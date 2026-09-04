@@ -274,9 +274,7 @@ const (
 // =============================================================================
 
 const (
-	DefaultAcceptRetryDelay      = 100 * time.Millisecond // DoT/DoQ accept retry sleep
-	DefaultSweepInterval         = 5 * time.Minute        // periodic cleanup sweep
-	DefaultTCPWriteMuStaleCutoff = 2 * time.Minute        // stale TCP write mutex cutoff
+	DefaultAcceptRetryDelay = 100 * time.Millisecond // DoT/DoQ accept retry sleep
 	// DefaultPoolReapInterval is the dead-socket reap window for all upstream
 	// connection pools.  Idle-recycled sockets keep pinning a read buffer plus
 	// an FD and stay counted against each pool's global cap until reaped — a

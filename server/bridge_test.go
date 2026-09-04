@@ -2,31 +2,14 @@ package server
 
 import (
 	"encoding/binary"
-	"net"
 	"net/netip"
 	"testing"
-	"time"
-	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
-type fakeResponseWriter struct {
-	addr net.Addr
-}
-
-func (w *fakeResponseWriter) LocalAddr() net.Addr         { return w.addr }
-func (w *fakeResponseWriter) RemoteAddr() net.Addr        { return w.addr }
-func (w *fakeResponseWriter) Conn() net.Conn              { return nil }
-func (w *fakeResponseWriter) Write(b []byte) (int, error) { return len(b), nil }
-func (w *fakeResponseWriter) Close() error                { return nil }
-func (w *fakeResponseWriter) Session() *dns.Session       { return nil }
-func (w *fakeResponseWriter) Hijack()                     {}
-
-// TestTruncateWire verifies the RFC 2181 §9 wire-level truncation: TC bit set,
-// RR counts zeroed, question preserved, OPT (when present) preserved.
 func TestTruncateWire(t *testing.T) {
 	req := dnsutil.SetQuestion(new(dns.Msg), "example.com.", dns.TypeA)
 	req.ID = 0xBEEF
@@ -133,63 +116,4 @@ func TestTruncateWire_Malformed(t *testing.T) {
 	if got := truncateWire(short); len(got) != len(short) {
 		t.Errorf("short wire changed length: %d → %d", len(short), len(got))
 	}
-}
-
-// ── TCP write registry refs balance (H3) ──────────────────────────────────────
-// Every TCP request must leave entry.refs at 0 — previously a duplicate
-// refs.Add(1) (under the shard lock AND after capacityOnce.Do) made each
-// request net +1, so the sweep's refs==0 check was dead code and the registry
-// grew per connection for the process lifetime.
-
-// waitRefsZero polls until the entry's refcount reaches zero or the deadline
-// expires.
-func waitRefsZero(t *testing.T, entry *tcpWriteEntry) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for entry.refs.Load() != 0 {
-		if time.Now().After(deadline) {
-			t.Fatalf("entry.refs = %d, want 0 (refcount must balance after the request)", entry.refs.Load())
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-// TestTCPWriteEntry_RefsBalance drives two sequential TCP requests through
-// handleDNSRequest (zone-rule short-circuit keeps the handler local) and
-// asserts the registry entry's refcount returns to zero after each.
-func TestTCPWriteEntry_RefsBalance(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Upstream: []config.UpstreamServer{{Protocol: config.ProtoRecursive}},
-		Zone: []config.ZoneRule{{
-			Name:  "refs-test.example.com.",
-			Match: []string{"refs-test.example.com."},
-			Answer: []config.ZoneRecord{{
-				Name: "refs-test.example.com.", Type: dns.TypeA, Class: dns.ClassINET, TTL: 60, Content: "192.0.2.1",
-			}},
-		}},
-	}
-	srv, err := New(cfg)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	addr := &net.TCPAddr{IP: net.ParseIP("192.0.2.55"), Port: 53000}
-	w := &fakeResponseWriter{addr: addr}
-	req := new(dns.Msg)
-	dnsutil.SetQuestion(req, "refs-test.example.com.", dns.TypeA)
-
-	shard := srv.tcpWriteShardFor(addr.String())
-	srv.handleDNSRequest(w, req)
-
-	shard.mu.Lock()
-	entry, ok := shard.entries[addr.String()]
-	shard.mu.Unlock()
-	if !ok {
-		t.Fatal("TCP request did not create a registry entry")
-	}
-	waitRefsZero(t, entry)
-
-	// A second request on the same connection must balance again.
-	srv.handleDNSRequest(w, req)
-	waitRefsZero(t, entry)
 }

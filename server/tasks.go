@@ -23,7 +23,6 @@ func (s *Server) startBackgroundTasks() {
 	s.startCookieRotation()
 	s.startECSRefresh()
 	s.startPrefetchCooldownCleanup()
-	s.startTCPWriteMuSweep()
 	s.startPoolReap()
 	s.startStateMaintenance()
 	s.setupSignalHandling()
@@ -212,38 +211,6 @@ func (s *Server) startPrefetchCooldownCleanup() {
 	s.runBackgroundTicker("prefetch cooldown cleanup", config.DefaultPrefetchThrottleInterval*10, func() {
 		s.handler.PrefetchCooldown().Cleanup(log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds())
 	})
-}
-
-// startTCPWriteMuSweep periodically removes stale tcpWriteMu entries.
-func (s *Server) startTCPWriteMuSweep() {
-	s.runBackgroundTicker("tcpWriteMu sweep", config.DefaultSweepInterval, func() {
-		s.sweepTCPWriteMu(time.Now().Add(-config.DefaultTCPWriteMuStaleCutoff).UnixNano())
-	})
-}
-
-// sweepTCPWriteMu deletes TCP write-registry entries with no in-flight
-// references whose last access predates the cutoff.
-func (s *Server) sweepTCPWriteMu(cutoff int64) {
-	// The refs==0 check and the delete are one critical section per shard
-	// (the request path lookup-or-creates + adds its in-flight ref under the
-	// same shard lock). Without this, a request arriving between check and
-	// delete would hold a writeMu detached from the map while the next
-	// request created a second one — two writers interleaving
-	// length-prefixed frames on the same TCP stream.
-	for i := range s.tcpWriteShards {
-		shard := &s.tcpWriteShards[i]
-		shard.mu.Lock()
-		for addr, entry := range shard.entries {
-			// Only delete entries with no in-flight references.
-			if entry.refs.Load() != 0 {
-				continue
-			}
-			if entry.lastAccess.Load() < cutoff {
-				delete(shard.entries, addr)
-			}
-		}
-		shard.mu.Unlock()
-	}
 }
 
 func (s *Server) setupSignalHandling() {
