@@ -20,24 +20,8 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
-	"codeberg.org/miekg/dns/dnsutil"
 	"github.com/cloudflare/circl/sign/ed25519"
 )
-
-// keyEntry holds a pair of classical and PQ certificates for one key window.
-// Window expiry is judged by the cert's NotAfter (24h validity); keyEntry
-// itself carries no timestamps.  Certificates are immutable once minted —
-// handshake marshals them on demand.
-type keyEntry struct {
-	pair *dnscryptcrypto.CertPair
-
-	// Precomputed handshake artifacts: the certificate is immutable once
-	// minted, but every cert fetch used to re-marshal (~1.3 KB PQ cert),
-	// backslash-escape and re-chunk it per query.
-	classicalTXT []string
-	pqTXT        []string
-	pqWireSize   int
-}
 
 // Server is a DNSCrypt v2 server that listens on UDP and TCP.
 type Server struct {
@@ -89,17 +73,6 @@ type Server struct {
 	// is not — occurrences beyond DefaultDNSCryptReplayAllow inside the
 	// window are dropped.
 	replayCache *lrumap.Map[string, replayEntry]
-}
-
-// newKeyEntry precomputes the pair's TXT chunks (classical and PQ) and the
-// PQ wire size — they are served on every certificate fetch.
-func newKeyEntry(pair *dnscryptcrypto.CertPair) keyEntry {
-	return keyEntry{
-		pair:         pair,
-		classicalTXT: buildCertTXTForCert(pair.Classical),
-		pqTXT:        buildCertTXTForCert(pair.PQ),
-		pqWireSize:   certTXTWireSize(pair.PQ),
-	}
 }
 
 // New creates a new DNSCrypt Server from the given configuration.
@@ -265,56 +238,6 @@ func (s *Server) HasClientMagic(data []byte) bool {
 		bytes.Equal(data[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:])
 }
 
-// ResetKeys regenerates the DNSCrypt crypto state from fresh random keys:
-// a single new cert window replaces all current windows and the state is
-// persisted immediately (CHAOS zjdns.dnscrypt.clear).  The provider identity
-// (signingSK) comes from config and is unchanged — the sdns:// stamp stays
-// valid, but clients must fetch the new certificate to reconnect.
-func (s *Server) ResetKeys() error {
-	now := dnscryptcrypto.NowUnix32()
-	// Serialized with updateKeys (renewal ticker) under s.mu — concurrent
-	// minting from the same previous produced duplicate windows (M-3-5).
-	s.mu.Lock()
-	// Passing nil previous breaks the seed chain: the reset window starts
-	// a new chain from a fresh random seed.
-	entries := s.deriveAndSign(nil, now)
-	if len(entries) == 0 {
-		s.mu.Unlock()
-		return errors.New("dnscrypt: reset: failed to generate fresh key pair")
-	}
-
-	// Clear old shared key cache before replacing to release cached keys.
-	s.sharedKeyCache.Clear()
-	s.sharedKeyCache = lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize)
-	// The PQ ticket key is fixed (derived from the signing key at startup);
-	// it is not rotated alongside cert keys.
-	serial := entries[0].pair.Classical.Serial
-	s.keys = entries
-	s.mu.Unlock()
-
-	if err := s.Save(); err != nil {
-		return fmt.Errorf("dnscrypt: persist reset state: %w", err)
-	}
-	log.Infof("DNSCRYPT: keys reset (serial=%d)", serial)
-	return nil
-}
-
-// Save persists the current identity + windows via the StateStore.
-// No-op when no store is configured.  Safe to call concurrently with queries.
-func (s *Server) Save() error {
-	if s.store == nil {
-		return nil
-	}
-	identity := encodeIdentity(s.signingSK)
-	if identity == nil {
-		return errors.New("dnscrypt: signing key is not Ed25519")
-	}
-	s.mu.RLock()
-	windows := encodeWindows(stateWindows(s.keys))
-	s.mu.RUnlock()
-	return s.store.SaveDNSCryptState(identity, windows)
-}
-
 // Start begins listening for DNSCrypt queries on UDP and TCP.
 func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 	s.mu.Lock()
@@ -386,55 +309,6 @@ func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 	return nil
 }
 
-// renewalLoop renews the resolver short-term keys on a fixed renewal
-// interval (matching the reference encrypted-dns-server's 8h ticker) and
-// purges expired windows on a short safety-net sweep.  Renewal timing is
-// deliberately NOT anchored to window boundaries: updateKeys() runs at
-// startup and walks the seed chain forward, so a missed boundary is always
-// caught up on the next call.
-func (s *Server) renewalLoop() {
-	defer zdnsutil.HandlePanic("DNSCRYPT key rotation")
-	renewal := time.NewTicker(config.DefaultDNSCryptCertificateRenewal)
-	defer renewal.Stop()
-	purge := time.NewTicker(config.DefaultDNSCryptKeyPurgeInterval)
-	defer purge.Stop()
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		case <-renewal.C:
-			s.updateKeys()
-		case <-purge.C:
-			s.purgeExpiredKeys()
-		case <-s.rotateCh:
-			return
-		}
-	}
-}
-
-// purgeExpiredKeys removes key windows whose NotAfter has passed, always
-// keeping the newest entry so the key list is never empty.  The
-// authoritative purge happens inside updateKeys(); this short-interval sweep
-// only makes removal prompt between renewals.
-func (s *Server) purgeExpiredKeys() {
-	now := dnscryptcrypto.NowUnix32()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	n := 0
-	for _, k := range s.keys {
-		if n > 0 && k.pair.Classical.NotAfter < now {
-			continue
-		}
-		s.keys[n] = k
-		n++
-	}
-	removed := len(s.keys) - n
-	if removed > 0 {
-		s.keys = s.keys[:n]
-		log.Debugf("DNSCRYPT: purged %d expired key window(s), active=%d", removed, n)
-	}
-}
-
 // Shutdown gracefully stops the DNSCrypt server.
 // The cancel and WaitGroup swap are performed under s.mu without
 // releasing the lock, so serveUDP/serveTCP always see a consistent
@@ -491,18 +365,6 @@ func (s *Server) isStarted() bool {
 	return s.started
 }
 
-// current returns the newest key pair (the one used for encrypting responses).
-// Returns nil when no window is active — updateKeys() briefly holds no keys
-// between purging expired windows and minting replacements.
-func (s *Server) current() *dnscryptcrypto.CertPair {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if len(s.keys) == 0 {
-		return nil
-	}
-	return s.keys[0].pair
-}
-
 // hasClientMagic checks whether b matches any active cert's client magic
 // (checks both classical and PQ certs in every key window).
 func (s *Server) hasClientMagic(b []byte) bool {
@@ -517,258 +379,6 @@ func (s *Server) hasClientMagic(b []byte) bool {
 		}
 	}
 	return false
-}
-
-// updateKeys renews the certificate windows, mirroring the reference
-// encrypted-dns-server update(): windows past NotAfter are purged, then the
-// seed chain is walked forward from the newest surviving window to mint every
-// window whose start falls within now+renewal.  Called on the renewal ticker
-// and once at startup to catch up on renewals missed while stopped.
-func (s *Server) updateKeys() {
-	now := dnscryptcrypto.NowUnix32()
-
-	// Window minting is serialized under s.mu: ResetKeys (CHAOS handler)
-	// and the renewal ticker can otherwise run concurrently, both deriving
-	// from the same previous and minting duplicate windows for the same
-	// tsStart (M-3-5).  deriveAndSign is ~ms-scale (signing) and runs at
-	// startup/ticker frequency — blocking decrypts briefly is acceptable.
-	s.mu.Lock()
-
-	// Purge windows past NotAfter (no overlap grace).
-	n := 0
-	for _, k := range s.keys {
-		if k.pair.Classical.NotAfter >= now {
-			s.keys[n] = k
-			n++
-		}
-	}
-	s.keys = s.keys[:n]
-	var previous *dnscryptcrypto.CertPair
-	if len(s.keys) > 0 {
-		previous = s.keys[0].pair // newest-first order
-	}
-
-	newEntries := s.deriveAndSign(previous, now)
-	if len(newEntries) == 0 && len(s.keys) == 0 {
-		// Nothing usable at all (e.g. chain generation failed): mint an
-		// emergency window from a fresh random seed.
-		newEntries = s.deriveAndSign(nil, now)
-	}
-	if len(newEntries) > 0 {
-		s.keys = append(newEntries, s.keys...)
-		// Clear old shared key cache before replacing to release cached keys.
-		s.sharedKeyCache.Clear()
-		s.sharedKeyCache = lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize)
-		// The PQ ticket key is fixed (derived from the signing key at
-		// startup); it is not rotated alongside cert keys.
-	}
-	active := len(s.keys)
-	s.mu.Unlock()
-
-	// Persist the new window set outside the lock: Save() takes RLock
-	// itself, and holding the write lock would deadlock.
-	if err := s.Save(); err != nil {
-		log.Warnf("DNSCRYPT: failed to persist rotated state: %v", err)
-	}
-
-	log.Debugf("DNSCRYPT: renewed certificates (active=%d)", active)
-}
-
-// deriveAndSign walks the seed chain forward from previous and returns every
-// window whose start falls within [now, now+renewal], newest first.  Each
-// window's X25519 resolver key is derived from the previous window's secret
-// key (ratchet: seed_0 → kp_0 → sk_0-as-seed_1 → kp_1 → …), matching the
-// reference encrypted-dns-server.  A nil previous mints a single window from
-// a fresh random seed — the start of a new chain.
-func (s *Server) deriveAndSign(previous *dnscryptcrypto.CertPair, now uint32) []keyEntry {
-	rc := dnscert.ResolverConfig{
-		ProviderName: s.providerName,
-		PublicKey:    dnscryptcrypto.HexEncodeKey(s.signingSK.Public().(ed25519.PublicKey)),
-		PrivateKey:   dnscryptcrypto.HexEncodeKey(s.signingSK),
-	}
-
-	renewalSec := uint32(config.DefaultDNSCryptCertificateRenewal / time.Second)
-	ttlSec := uint32(config.DefaultDNSCryptCertificateTTL / time.Second)
-
-	var (
-		tsStart uint32
-		seed    [32]byte
-	)
-	if previous == nil {
-		sk, _, err := dnscryptcrypto.GenerateRandomKeyPair()
-		if err != nil {
-			log.Warnf("DNSCRYPT: generating fresh resolver keys: %v", err)
-			return nil
-		}
-		seed = sk
-		tsStart = now
-	} else {
-		seed = previous.Classical.ResolverSk
-		tsStart = previous.Classical.NotBefore + renewalSec
-	}
-
-	var entries []keyEntry // newest first
-	for tsStart <= now+renewalSec {
-		sk, pk := dnscryptcrypto.X25519KeyPairFromSeed(seed)
-		seed = sk // chain: this window's SK seeds the next
-
-		if now >= tsStart {
-			rc.ResolverSk = dnscryptcrypto.HexEncodeKey(sk[:])
-			rc.ResolverPk = dnscryptcrypto.HexEncodeKey(pk[:])
-			pair, err := rc.NewCertPair(tsStart, tsStart+ttlSec)
-			if err != nil {
-				log.Warnf("DNSCRYPT: generating cert pair (ts_start=%d): %v", tsStart, err)
-				tsStart += renewalSec
-				continue
-			}
-			entries = append([]keyEntry{newKeyEntry(pair)}, entries...)
-		}
-		tsStart += renewalSec
-	}
-	return entries
-}
-
-func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
-	m := pool.DefaultMessage.Get()
-	defer func() {
-		if m != nil {
-			pool.DefaultMessage.Put(m)
-		}
-	}()
-	m.Data = b
-	err = m.Unpack()
-	if err != nil {
-		return nil, fmt.Errorf("unpacking handshake message: %w", err)
-	}
-
-	if len(m.Question) != 1 || m.Response {
-		return nil, dnscryptcrypto.ErrInvalidQuery
-	}
-
-	q := m.Question[0]
-	providerName := dnsutil.Fqdn(s.providerName)
-
-	qName := dnsutil.Fqdn(q.Header().Name)
-	if dns.RRToType(q) != dns.TypeTXT || qName != providerName {
-		// Only the configured provider's TXT query is answered.  Everything
-		// else is REFUSED explicitly, never silently dropped: a drop leaves
-		// the client waiting out its own timeout (a perceived hang), while
-		// an explicit REFUSED fails the fetch in one RTT.
-		refused := pool.DefaultMessage.Get()
-		dnsutil.SetReply(refused, m)
-		refused.Rcode = dns.RcodeRefused
-		// RA=1 like the cert path: this server is a recursive resolver, the
-		// REFUSED is policy, not lack of recursion.  AA stays 0 — a refusal is
-		// not an authoritative answer for the queried name.
-		refused.RecursionAvailable = true
-		if packErr := refused.Pack(); packErr != nil {
-			pool.DefaultMessage.Put(refused)
-			return nil, fmt.Errorf("packing refused handshake response: %w", packErr)
-		}
-		// Same copy discipline as the success path (M14): res must not alias
-		// refused.Data — the pool zeroes it on Put.
-		res = make([]byte, len(refused.Data))
-		copy(res, refused.Data)
-		pool.DefaultMessage.Put(refused)
-		log.Debugf("DNSCRYPT: refusing non-cert query %s (qtype=%s)", qName, dns.TypeToString[dns.RRToType(q)])
-		return res, nil
-	}
-
-	// Serve only the newest window's certificates (ref: serve_certificates
-	// picks the cert with the highest ts_end).  Older windows remain in
-	// s.keys only for decrypting client queries that still use them.
-	s.mu.RLock()
-	if len(s.keys) == 0 {
-		s.mu.RUnlock()
-		return nil, errors.New("dnscrypt: no active key pair")
-	}
-	newest := s.keys[0]
-	s.mu.RUnlock()
-
-	// Static TTL: the renewal interval (ref: DNSCRYPT_CERTS_RENEWAL).  The
-	// cert's NotAfter is up to 24h away, so clients re-fetch well before the
-	// certificate expires.
-	ttl := uint32(config.DefaultDNSCryptCertificateRenewal / time.Second)
-
-	// The PQ cert (~1.3 KB) is included over UDP only when the response fits
-	// within the client query size (§10.3 anti-amplification); over TCP it is
-	// always included.  When omitted, set TC so the PQ-capable client retries
-	// over TCP.  The classical cert is always included.
-	classicalTXT := newest.classicalTXT
-	pqTXT := newest.pqTXT
-
-	pqFits := true
-	if isUDP {
-		// Pack a temporary classical-only response to measure the wire size.
-		// Use m (still alive — not yet returned to the pool) for SetReply.
-		tmp := pool.DefaultMessage.Get()
-		dnsutil.SetReply(tmp, m)
-		tmp.Answer = append(tmp.Answer, &dns.TXT{
-			Hdr: dns.Header{
-				Name:  q.Header().Name,
-				TTL:   ttl,
-				Class: dns.ClassINET,
-			},
-			Txt: classicalTXT,
-		})
-		tmp.Authoritative = true
-		tmp.RecursionAvailable = true
-		if packErr := tmp.Pack(); packErr != nil {
-			pool.DefaultMessage.Put(tmp)
-			return nil, fmt.Errorf("packing handshake response: %w", packErr)
-		}
-		baseSize := len(tmp.Data)
-		pool.DefaultMessage.Put(tmp)
-		pqFits = baseSize+newest.pqWireSize <= len(b)
-	}
-
-	// Build the actual reply.
-	reply := pool.DefaultMessage.Get()
-	dnsutil.SetReply(reply, m)
-	pool.DefaultMessage.Put(m)
-	m = nil // prevent defer from double-Put
-
-	reply.Answer = append(reply.Answer, &dns.TXT{
-		Hdr: dns.Header{
-			Name:  q.Header().Name,
-			TTL:   ttl,
-			Class: dns.ClassINET,
-		},
-		Txt: classicalTXT,
-	})
-	if pqFits {
-		reply.Answer = append(reply.Answer, &dns.TXT{
-			Hdr: dns.Header{
-				Name:  q.Header().Name,
-				TTL:   ttl,
-				Class: dns.ClassINET,
-			},
-			Txt: pqTXT,
-		})
-	}
-
-	reply.Authoritative = true
-	reply.RecursionAvailable = true
-
-	if !pqFits {
-		reply.Truncated = true
-	}
-
-	log.Debugf("DNSCRYPT: handshake response — 1 cert window (%d TXT records, TC=%v)%s",
-		len(reply.Answer), reply.Truncated, map[bool]string{true: " (UDP)", false: ""}[isUDP])
-
-	err = reply.Pack()
-	if err != nil {
-		pool.DefaultMessage.Put(reply)
-		return nil, fmt.Errorf("packing handshake response: %w", err)
-	}
-	// NOTE(M14): res must be a copy of reply.Data, not an alias.  After
-	// pool.DefaultMessage.Put(reply), reply.Data's backing memory is zeroed
-	// and available for reuse by another goroutine.
-	res = make([]byte, len(reply.Data))
-	copy(res, reply.Data)
-	pool.DefaultMessage.Put(reply)
-	return res, nil
 }
 
 func (s *Server) serveDNS(ctx context.Context, rw responseWriter, m *dns.Msg, protocol string) error {
@@ -787,55 +397,4 @@ func (s *Server) serveDNS(ctx context.Context, rw responseWriter, m *dns.Msg, pr
 	}
 	defer pool.DefaultMessage.Put(resp)
 	return rw.WriteMsg(ctx, resp)
-}
-
-func buildCertTXTForCert(cert *dnscryptcrypto.Certificate) []string {
-	certBytes, err := cert.MarshalBinary()
-	if err != nil {
-		log.Warnf("DNSCRYPT: marshal cert failed: %v", err)
-		return nil
-	}
-	escaped := escapeBackslash(certBytes)
-	// Maximum length of a single DNS TXT character-string per RFC 1035 §3.3.
-	const maxChunk = 255
-	var chunks []string
-	for i := 0; i < len(escaped); i += maxChunk {
-		end := min(i+maxChunk, len(escaped))
-		chunks = append(chunks, string(escaped[i:end]))
-	}
-	return chunks
-}
-
-func certTXTWireSize(cert *dnscryptcrypto.Certificate) int {
-	certBytes, err := cert.MarshalBinary()
-	if err != nil {
-		return 0
-	}
-	escaped := escapeBackslash(certBytes)
-	nChunks := (len(escaped) + 254) / 255
-	// RR header (pointer compressed name): type(2) + class(2) + ttl(4) + rdlength(2)
-	// Rdata: 1-byte length prefix per chunk + chunk data
-	rdataLen := nChunks + len(escaped)
-	return 12 + rdataLen
-}
-
-func escapeBackslash(b []byte) []byte {
-	n := 0
-	for _, c := range b {
-		if c == '\\' {
-			n++
-		}
-	}
-	if n == 0 {
-		return b
-	}
-	out := make([]byte, 0, len(b)+n)
-	for _, c := range b {
-		if c == '\\' {
-			out = append(out, '\\', '\\')
-		} else {
-			out = append(out, c)
-		}
-	}
-	return out
 }
