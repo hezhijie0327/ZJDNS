@@ -100,16 +100,13 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 		}).Wrap(h)
 	}
 
-	// Cache lookup: short-circuits on fresh/stale hit.
+	// Cache lookup: short-circuits on fresh/stale hit.  The refresh
+	// machinery (prefetch, stale strategies, background updates) is
+	// delegated to the coordinator.
 	h = (&CacheLookup{
-		store:            deps.Cache,
-		closed:           deps.Closed,
-		prefetchCooldown: deps.PrefetchCooldown,
-		pendingRefreshes: deps.PendingRefrs,
-		refreshGroup:     deps.RefreshGroup,
-		refreshCtx:       deps.RefreshCtx,
-		preferStale:      deps.Config.Server.Features.Cache.Entries.PreferStale,
-		resolver:         deps.Resolver,
+		store:       deps.Cache,
+		refresh:     newRefreshCoordinator(deps),
+		preferStale: deps.Config.Server.Features.Cache.Entries.PreferStale,
 	}).Wrap(h)
 
 	// RFC 8482 minimal ANY response — wrapped INSIDE Zone (earlier Wrap call
