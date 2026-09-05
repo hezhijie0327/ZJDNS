@@ -10,6 +10,7 @@
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 架构参考：存储设计、中间件链、连接池（4 池 × 三层上限）、防御机制、类型参考、协议实现 | 理解系统设计 |
 | [FLOWCHARTS.md](FLOWCHARTS.md) | 核心功能/协议 mermaid 流程图 | 理解数据流与调用链 |
 | [AUDIT-METHODOLOGY.md](AUDIT-METHODOLOGY.md) | 审计框架：20 维度、并行 agent 编排、Sprint 修复流程、质量门禁、提交规范 | 做审计前必读 |
+| [DEPS-SYNC.md](DEPS-SYNC.md) | 依赖上游同步巡检：每周 pin vs HEAD 核查步骤、四档改动分类、巡检记录 | 周度依赖巡检前 |
 | [audit/](audit/) | 每轮审计的详细报告与修复计划（命名 `YYYY-MM-主题/`，结构见方法论 §7） | 查历史审计结论 |
 | [debug/DEBUG.md](debug/DEBUG.md) | 测试配置与 E2E 指南：loopback 全协议、防御场景、DNSSEC、外部工具对接 | 跑任何手动测试前 |
 | [debug/pprof-dual.sh](debug/pprof-dual.sh) | 双端压测 & pprof 采集脚本（ZJDNS 客户端 ↔ 服务端全链路） | 审计修复后的泄漏复核 |
@@ -35,6 +36,7 @@
 ## 约定
 
 - **新增 RFC**：先 `cp rfc{number}.txt docs/rfc/` 再实现（见 rfc/GUIDELINE.md）
+- **依赖巡检**：每周按 DEPS-SYNC.md 步骤核查全部直接依赖；结论以 commit 留痕，不落档
 - **审计报告**：存 `audit/YYYY-MM-<主题>/`，命名规范见 AUDIT-METHODOLOGY.md §7
 - **基线更新**：benchmark 与 loadtest 两条基线在每次性能相关改动后刷新
 - **POC**：防御机制原型与 `server/defense/` 实现对应，改动实现时同步检查；新增/修改 POC 前先读 poc/GUIDELINE.md（界面与代码约定）
