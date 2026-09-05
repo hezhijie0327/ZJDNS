@@ -161,6 +161,11 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 				WrapConn:   wrapConn,
 			}
 			if s.tlcpServer != nil {
+				if cfg.Server.Protocol.HTTPTLCP.Port == cfg.Server.Protocol.HTTPS.Port {
+					// The mux serves HTTPoverTLCP on this port — the
+					// standalone DoH-TLCP listener would EADDRINUSE.
+					s.tlcpServer.SkipDOH = true
+				}
 				g.DOHTLCP = http.HandlerFunc(s.tlcpServer.ServeDOH)
 			}
 			if s.dnscryptServer != nil && wantSharedDNSTCP {
@@ -169,6 +174,9 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 			tcpGroups = append(tcpGroups, g)
 		}
 		if wantSharedDOT {
+			// The mux serves both DoT flavors on this port — skip the
+			// standalone TLCP DoT bind (tls.Server gets SkipDOT above).
+			s.tlcpServer.SkipDOT = true
 			tcpGroups = append(tcpGroups, shared.TCPGroup{
 				Port:       cfg.Server.Protocol.TLS,
 				TLSCfg:     s.tls.ETLSConfigForDOH(),
@@ -213,6 +221,11 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 						primary.DTLSHandler = s.tls.HandleDTLSFromPacketListener
 					}
 					if s.tlcpServer != nil && cfg.Server.Protocol.DTLCP != "" {
+						if cfg.Server.Protocol.DTLCP == primaryPort {
+							// The mux serves DTLCP on this UDP port — skip
+							// the standalone DTLCP bind.
+							s.tlcpServer.SkipDTLCP = true
+						}
 						primary.ServeDTLCP = s.tlcpServer.ServeDTLCPClient
 					}
 					if dnsCryptOnPrimary {

@@ -287,6 +287,13 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn, handler
 			select {
 			case writeCh <- writeTask{data: writeBuf, pooled: poolBufOK}:
 			case <-connCtx.Done():
+				// Abnormal in every normal flow (idle closes happen after
+				// writes flush): the connection's context died with a
+				// response in hand — e.g. a server errgroup cancellation
+				// (a startup error elsewhere tears down this ctx).
+				if log.IsDebug() {
+					log.Debugf("PLAIN: TCP response for %s discarded — connection context cancelled", query.Question[0].Header().Name)
+				}
 				if poolBufOK {
 					pool.DefaultBuffer.Put(writeBuf)
 				}

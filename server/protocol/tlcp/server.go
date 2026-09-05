@@ -23,6 +23,13 @@ import (
 
 // Server manages TLCP-based secure DNS protocol listeners and their lifecycle.
 type Server struct {
+	// Skip standalone listeners when the shared-port mux owns the bind
+	// (set by the wiring in server/protocols.go at the same place the mux
+	// route is registered).
+	SkipDOT   bool
+	SkipDOH   bool
+	SkipDTLCP bool
+
 	dotPort     string
 	dohPort     string
 	dohEndpoint string
@@ -187,19 +194,25 @@ func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 	}
 	s.handler = dnsHandler
 
-	if s.dotPort != "" {
+	// The Skip* flags are set by the shared-port wiring when the mux owns
+	// the port's bind (mirrors tls.Server's Skip flags).  A standalone
+	// bind attempt on an already-owned port would fail with EADDRINUSE
+	// and the returned error tears down the whole server errgroup —
+	// which silently kills every plain-TCP connection (their per-conn
+	// contexts derive from the same errgroup context).
+	if s.dotPort != "" && !s.SkipDOT {
 		if err := s.startDOTServer(); err != nil {
 			return fmt.Errorf("TLCP DoT startup: %w", err)
 		}
 	}
 
-	if s.dohPort != "" {
+	if s.dohPort != "" && !s.SkipDOH {
 		if err := s.startDOHServer(); err != nil {
 			return fmt.Errorf("TLCP DoH startup: %w", err)
 		}
 	}
 
-	if s.dtlcpPort != "" {
+	if s.dtlcpPort != "" && !s.SkipDTLCP {
 		if err := s.startDTLCPServer(); err != nil {
 			return fmt.Errorf("TLCP DTLCP startup: %w", err)
 		}
