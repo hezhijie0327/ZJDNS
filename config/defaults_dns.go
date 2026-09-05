@@ -160,10 +160,11 @@ const (
 	// destination address (root/TLD/authoritative + forwarding upstreams);
 	// a 30s window keeps the working set small between query bursts while
 	// avoiding churn for TTL-driven re-queries of the same authorities.
-	DefaultUDPPoolIdleTimeout  = 30 * time.Second
-	DefaultTLSHandshakeTimeout = 10 * time.Second  // pre-handshake bound for DoT (an idle-connect flood must not hold shared errgroup slots)
-	DefaultTCPKeepAlivePeriod  = 30 * time.Second  // TCP keep-alive probe interval
-	DefaultTCPIdleTimeout      = 120 * time.Second // RFC 7766 §6.2.3: plain TCP server idle timeout
+	DefaultUDPPoolIdleTimeout   = 30 * time.Second
+	DefaultTLSHandshakeTimeout  = 10 * time.Second  // pre-handshake bound for DoT (an idle-connect flood must not hold shared errgroup slots)
+	DefaultDTLSHandshakeTimeout = 2 * time.Second   // DTLS/DTLCP handshake bound — pion/gotlcp handshake races must fail fast for the caller's fallback to recover
+	DefaultTCPKeepAlivePeriod   = 30 * time.Second  // TCP keep-alive probe interval
+	DefaultTCPIdleTimeout       = 120 * time.Second // RFC 7766 §6.2.3: plain TCP server idle timeout
 
 	DefaultHTTPServerIdleTimeout  = 60 * time.Second // HTTP keep-alive idle
 	DefaultHTTPServerWriteTimeout = 10 * time.Second // HTTP response write

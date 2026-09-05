@@ -44,7 +44,13 @@ func dialDTLCP(ctx context.Context, network, addr string, cfg *dtlcp.Config) (*d
 	}
 
 	conn := dtlcp.Client(pconn, remoteAddr, cfg)
-	if err := conn.HandshakeContext(ctx); err != nil {
+	// Handshake bounded by a short deadline: the gotlcp server serves one
+	// connection at a time (upstream limitation), so concurrent client
+	// handshakes queue — a queued or racing handshake must fail fast and
+	// let the caller's fallback retry, not burn the 9s query budget.
+	handshakeCtx, cancelHandshake := context.WithTimeout(ctx, config.DefaultDTLSHandshakeTimeout)
+	defer cancelHandshake()
+	if err := conn.HandshakeContext(handshakeCtx); err != nil {
 		_ = pconn.Close()
 		return nil, fmt.Errorf("dtlcp: handshake %s: %w", addr, err)
 	}

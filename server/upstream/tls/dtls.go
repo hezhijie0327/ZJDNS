@@ -205,12 +205,20 @@ func (c *Client) dialDTLSConn(ctx context.Context, addr string, server *config.U
 		}
 	}
 
-	// Run the handshake explicitly under the caller's context: pion's
-	// implicit handshake (triggered by the first write) uses
-	// context.Background and would hang far beyond the query budget on an
-	// unresponsive server.
+	// Run the handshake explicitly under the caller's context, bounded by a
+	// short handshake deadline: pion's implicit handshake (triggered by the
+	// first write) uses context.Background, and the dual-stack client's
+	// version negotiation can HANG against an unresponsive or racing server
+	// (observed on loopback at ~1 dial in 1e5 under concurrent cold-start —
+	// the client-side mirror of the dual-stack server deadlock documented in
+	// server/protocol/tls/dtls.go).  Without the bound, one hung handshake
+	// burns the whole 9s query budget; with it, the dial fails fast and the
+	// caller's existing fallback (pool re-acquire, then a fresh dial)
+	// recovers in one round.
+	handshakeCtx, cancelHandshake := context.WithTimeout(ctx, config.DefaultDTLSHandshakeTimeout)
+	defer cancelHandshake()
 	if hc, ok := conn.(interface{ HandshakeContext(context.Context) error }); ok {
-		if err := hc.HandshakeContext(ctx); err != nil {
+		if err := hc.HandshakeContext(handshakeCtx); err != nil {
 			_ = conn.Close()
 			return nil, fmt.Errorf("dtls: handshake %s: %w", serverAddr, err)
 		}
