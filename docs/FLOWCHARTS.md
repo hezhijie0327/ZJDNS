@@ -210,7 +210,8 @@ graph TD
     class BP,GATE,PATCH,UNP,SEND proc
 ```
 
-> 门条件（`middleware/response.go`）：`!shouldAddEDNS && !IsDebug && !WireHasDNSSEC(Data)`。
+> 门条件（`middleware/response.go`）：`!shouldAddEDNS && !IsDebug && !qctx.ResHasDNSSEC`
+>（`ResHasDNSSEC` 是 `Entry.HasDNSSEC` 的镜像标志，buildCacheResponse 时置位——免逐次扫描 wire）。
 > zone 合成的响应 `Data == nil`，天然不走该路径，无需显式门判断。
 
 ### TCP 写入分片（16 shard 注册表）
@@ -264,7 +265,7 @@ graph TD
     LAT -->|yes| UNPACK[Unpack → 按延迟排序<br/>→ rebuildResponseWire]
     LAT -->|no| FRESH{TTL Expired?}
     UNPACK --> FRESH
-    FRESH -->|No| HIT[Fresh Hit → Return<br/>TTLOffsets 由调用方 Release]
+    FRESH -->|No| HIT[Fresh Hit → Return<br/>TTLOffsets 幂等归还池<br/>entry.ReleaseOffsets]
     FRESH -->|Yes| STALE[Stale Hit<br/>EDE 3]
     HIT --> PF{Should Prefetch?<br/>剩余 TTL ≤ 10%<br/>+ 3s 节流}
     PF -->|Yes| BG[后台刷新<br/>Serve Fresh + Update]
@@ -976,6 +977,11 @@ graph TD
 > 检测刻意保守（错误阳性会从 DNSCrypt 回退偷走数据报——其明文证书获取首字节近乎随机）：
 > 明文 DNS 查询形状最先判定并落到底层回退；QUIC Initial 恒 ≥1200 字节（RFC 9000 §14），
 > 长度下限排除与明文 DNS 的随机 ID 碰撞。检测结果按客户端地址缓存（`peerProto`）。
+>
+> 每客户端队列与饱和语义（2026-09 修复后）：DNSCrypt/DTLCP 队列 256 包（替代 dedicated
+> 监听器本有的内核 socket 缓冲）、worker 信号量 64；饱和时在客户端自己的 drain 协程
+> **内联处理**（对齐 dedicated 的 handleSaturated，绝不丢包、绝不阻塞分发循环），丢弃
+> 带原子计数 + 采样 Warn。实测与 dedicated 端口 QPS/延迟/尾部持平。
 
 ## 协议对照：标准加密 ↔ 国密
 
