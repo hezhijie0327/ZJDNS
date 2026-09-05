@@ -4,6 +4,8 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/mldsa"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/netip"
 	"strings"
@@ -185,6 +187,80 @@ func TestVerifyDelegationDS_ZoneKeyRollover(t *testing.T) {
 	}
 	if matched.KeyTag() != current.KeyTag() {
 		t.Errorf("matched key tag %d != current key tag %d", matched.KeyTag(), current.KeyTag())
+	}
+}
+
+func TestVerifyDelegationDS_SM3(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	childZone := "child.example.com"
+	ksk, _ := genTestKey(childZone, dns.FlagSEP|dns.FlagZONE)
+
+	ds := sm3DS(ksk)
+	if ds == nil {
+		t.Fatal("sm3DS returned nil")
+	}
+
+	matchedKey, err := cv.VerifyDelegationDS([]*dns.DS{ds}, []*dns.DNSKEY{ksk})
+	if err != nil {
+		t.Errorf("matching SM3 DS (RFC 9563) should pass: %v", err)
+	}
+	if matchedKey.KeyTag() != ksk.KeyTag() {
+		t.Errorf("matched key tag %d != expected %d", matchedKey.KeyTag(), ksk.KeyTag())
+	}
+}
+
+func TestVerifyDelegationDS_SM3Mismatch(t *testing.T) {
+	cv := NewCryptoValidator(nil)
+	childZone := "child.example.com"
+	ksk, _ := genTestKey(childZone, dns.FlagSEP|dns.FlagZONE)
+
+	// Digest type 6 is computable via gmsm — a wrong digest must be a
+	// mismatch, not the unsupported-digest skip.
+	ds := sm3DS(ksk)
+	ds.Digest = "deadbeef"
+
+	_, err := cv.VerifyDelegationDS([]*dns.DS{ds}, []*dns.DNSKEY{ksk})
+	if !errors.Is(err, ErrDSMismatch) {
+		t.Errorf("tampered SM3 DS should map to ErrDSMismatch, got %v", err)
+	}
+}
+
+// TestSM3DSDigestConstruction pins the RFC 4034 §5.1.4 digest-input
+// construction. RFC 9563 §6 ships no closed example (the shown DNSKEY's
+// key tag does not match the example DS), so the construction is
+// cross-checked against the library's own ToDS(SHA-256) computation and
+// the SM3 result is frozen as a regression vector.
+func TestSM3DSDigestConstruction(t *testing.T) {
+	// Fixed ECDSA P-256 DNSKEY (frozen from a one-off generation) so
+	// digests are stable across runs.
+	dnskey := &dns.DNSKEY{
+		Hdr:   dns.Header{Name: "example.", Class: dns.ClassINET, TTL: 3600},
+		Flags: 257, Protocol: 3, Algorithm: dns.ECDSAP256SHA256,
+		PublicKey: "Ia5n5UPIQNA/r39KBXpCk5drAn+XrLdGV7MHnoHhTtBiL1eovsQ6CPRuzwjMMw5qL/45KKA3l5hpU4zPqHOayQ==",
+	}
+
+	input := dsDigestInput(dnskey)
+	if input == nil {
+		t.Fatal("dsDigestInput returned nil")
+	}
+
+	// Same input, SHA-256: must reproduce the library's ToDS digest
+	// byte-for-byte — proves owner canonicalisation and RDATA layout.
+	sum := sha256.Sum256(input)
+	if got, want := hex.EncodeToString(sum[:]), dnskey.ToDS(dns.SHA256).Digest; got != want {
+		t.Errorf("manual digest input diverges from ToDS(SHA-256): got %s want %s", got, want)
+	}
+
+	ds := sm3DS(dnskey)
+	if ds.DigestType != dns.SM3 {
+		t.Errorf("sm3DS digest type = %d, want %d (SM3)", ds.DigestType, dns.SM3)
+	}
+	if ds.KeyTag != dnskey.KeyTag() {
+		t.Errorf("sm3DS key tag = %d, want %d", ds.KeyTag, dnskey.KeyTag())
+	}
+	const wantSM3 = "bf2926ffa51421c1a6f5ac3022dc1d9ae93780842c914b7f18b6240556fcbc4d"
+	if ds.Digest != wantSM3 {
+		t.Errorf("SM3 digest regression vector changed: got %s want %s", ds.Digest, wantSM3)
 	}
 }
 

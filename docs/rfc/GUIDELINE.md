@@ -32,16 +32,16 @@ Section 标题栏位格式：`[RFC NNNN: 状态]` `合规标记`
 | Internet Standard / Standard | 3 (RFC 768, 1034, 1035) |
 | Proposed Standard | 74 |
 | Best Current Practice | 3 (RFC 2929, 6895, 8499) |
-| Informational | 10 |
+| Informational | 11 |
 | Experimental | 8 |
 | Historic | 6 |
 | Internet-Draft | 4 (DNS Stamp, DNSCrypt, DELEG, DNS 0x20) |
 | 国密标准 | 1 (TLCP/DTLCP) |
-| **总计** | **109 RFC 条目 / 97 章节**（含 2065/2537、4033/4034/4035 等合并段；90 个 RFC 编号章节 + 7 个非 RFC 章节：DELEG / DNS Stamp / DNSCrypt / DNS 0x20 / SOCKS5 / TLCP / 已知偏离） |
+| **总计** | **110 RFC 条目 / 98 章节**（含 2065/2537、4033/4034/4035 等合并段；91 个 RFC 编号章节 + 7 个非 RFC 章节：DELEG / DNS Stamp / DNSCrypt / DNS 0x20 / SOCKS5 / TLCP / 已知偏离） |
 
 | 合规 | 数量 |
 |------|------|
-| ✅ 合规 | 68 |
+| ✅ 合规 | 69 |
 | ⚠️ 部分合规 | 4 (RFC 5001, 5011/9077, 8198, 9567) |
 | ⚪ 参考 | 18 |
 
@@ -1491,6 +1491,22 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 ### 我们的实现
 
 - 已实现（`config/ddr.go`）：DoH/DoT 端点经 SVCB 公布；9606 RESINFO 计划在其上延伸
+
+---
+
+## RFC 9563 — SM3 Digest Algorithm in DS/CDS  `[RFC 9563: Informational]`  ✅
+
+**DS/CDS 记录的摘要算法 6 = SM3（GM/T 0004，256-bit），摘要构造与 RFC 4509 SHA-256 完全一致。**
+
+### 关键点
+
+- 摘要输入：canonical owner name（小写 wire 格式）| DNSKEY RDATA（Flags|Protocol|Algorithm|PublicKey）
+- digest type 6（IANA 注册，状态 OPTIONAL）；签名算法侧配套 SM2SM3 = 17
+- Independent Submission（无 IETF 共识），国内国密 DNSSEC 部署使用
+
+### 我们的实现
+
+- `dnssec/crypto.go` `VerifyDelegationDS`：`ToDS` 不能计算 SM3（库无 gmsm 依赖），DigestType=6 时经 `sm3DS` 用 gmsm 本地计算摘要比对；构造正确性经 `TestSM3DSDigestConstruction` 与 ToDS(SHA-256) 交叉验证 + 冻结回归向量
 
 ---
 

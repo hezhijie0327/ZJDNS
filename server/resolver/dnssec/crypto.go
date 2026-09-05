@@ -1,6 +1,9 @@
 package dnssec
 
 import (
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -11,6 +14,7 @@ import (
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
 	dnspool "codeberg.org/miekg/dns/pkg/pool"
+	"github.com/emmansun/gmsm/sm3"
 
 	zdnsutil "zjdns/internal/dnsutil"
 )
@@ -174,6 +178,11 @@ func (c *CryptoValidator) VerifyDelegationDS(dsRecords []*dns.DS, childDNSKEYs [
 			// referenced by a DS to have SEP set. Try every key; a digest
 			// match is exact regardless of flags.
 			computedDS := dnskey.ToDS(ds.DigestType)
+			if computedDS == nil && ds.DigestType == dns.SM3 {
+				// RFC 9563 digest type 6: ToDS computes SHA-1/256/384
+				// only — build the SM3 digest locally via gmsm.
+				computedDS = sm3DS(dnskey)
+			}
 			if computedDS == nil {
 				// ToDS returns nil for digest types it cannot compute
 				// (e.g. GOST) — remember for EDE 2 (Unsupported DS Digest
@@ -209,6 +218,55 @@ func (c *CryptoValidator) VerifyDelegationDS(dsRecords []*dns.DS, childDNSKEYs [
 		return nil, ErrUnsupportedDigest
 	}
 	return nil, fmt.Errorf("%w: no DNSKEY matches the provided DS records", ErrDSMismatch)
+}
+
+// dsDigestInput builds the RFC 4034 §5.1.4 digest input: the canonical
+// (lowercased) owner name in uncompressed wire format followed by the
+// DNSKEY RDATA (Flags | Protocol | Algorithm | Public Key). Returns nil
+// when the public key is not valid base64 — mirrors ToDS returning nil
+// on unencodable RDATA.
+func dsDigestInput(dnskey *dns.DNSKEY) []byte {
+	pub, err := base64.StdEncoding.DecodeString(dnskey.PublicKey)
+	if err != nil {
+		return nil
+	}
+	name := dnsutil.Canonical(dnskey.Header().Name)
+	size := 3 + len(pub) // label terminator + protocol + algorithm + key
+	var labels []string
+	if name != "." { // Split(".") returns the root label itself
+		labels = dnsutil.Split(name)
+		for _, l := range labels {
+			size += 1 + len(l)
+		}
+	}
+	buf := make([]byte, 0, size)
+	for _, l := range labels {
+		buf = append(buf, byte(len(l))) //nolint:gosec // G115: label length ≤ 63 per RFC 1035 §2.3.4
+		buf = append(buf, l...)
+	}
+	buf = append(buf, 0)
+	buf = binary.BigEndian.AppendUint16(buf, dnskey.Flags)
+	buf = append(buf, dnskey.Protocol, dnskey.Algorithm)
+	return append(buf, pub...)
+}
+
+// sm3DS computes the RFC 9563 DS record for a DNSKEY: the SHA-256 DS
+// construction (RFC 4509) with the digest replaced by SM3 (GM/T 0004),
+// digest type 6. miekg/dns's ToDS cannot compute SM3, so the digest is
+// built here via gmsm.
+func sm3DS(dnskey *dns.DNSKEY) *dns.DS {
+	input := dsDigestInput(dnskey)
+	if input == nil {
+		return nil
+	}
+	digest := sm3.Sum(input)
+	return &dns.DS{
+		Hdr:        dns.Header{Name: dnskey.Header().Name, Class: dnskey.Header().Class, TTL: dnskey.Header().TTL},
+		KeyTag:     dnskey.KeyTag(),
+		Algorithm:  dnskey.Algorithm,
+		DigestType: dns.SM3,
+		Digest:     hex.EncodeToString(digest[:]),
+	}
 }
 
 // SelfVerifyDNSKEY verifies that a zone's DNSKEY RRset is self-signed by the
