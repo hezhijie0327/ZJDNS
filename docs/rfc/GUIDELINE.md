@@ -32,17 +32,17 @@ Section 标题栏位格式：`[RFC NNNN: 状态]` `合规标记`
 | Internet Standard / Standard | 3 (RFC 768, 1034, 1035) |
 | Proposed Standard | 76 |
 | Best Current Practice | 4 (RFC 2929, 6895, 8499×2 双列) |
-| Informational | 11 |
+| Informational | 12 |
 | Experimental | 8 |
 | Historic | 7 |
 | Internet-Draft | 4 (DNS Stamp, DNSCrypt, DELEG, DNS 0x20) |
 | 国密标准 | 1 (TLCP/DTLCP) |
-| **总计** | **109 RFC 条目 / 98 章节**（含 2065/2537、4033/4034/4035 等合并段；条目按 RFC 号出现次数计（合并段展开；RFC 6840、8499 兼有独立章节与合并段，双列计入）；91 个 RFC 编号章节 + 7 个非 RFC 章节：DELEG / DNS Stamp / DNSCrypt / DNS 0x20 / SOCKS5 / TLCP / 已知偏离） |
+| **总计** | **110 RFC 条目 / 99 章节**（含 2065/2537、4033/4034/4035 等合并段；条目按 RFC 号出现次数计（合并段展开；RFC 6840、8499 兼有独立章节与合并段，双列计入）；92 个 RFC 编号章节 + 7 个非 RFC 章节：DELEG / DNS Stamp / DNSCrypt / DNS 0x20 / SOCKS5 / TLCP / 已知偏离） |
 
 | 合规 | 数量 |
 |------|------|
 | ✅ 合规 | 78 |
-| ⚠️ 部分合规 | 7 (RFC 5001, 5011/9077, 6761, 6975, 8198, 9567) |
+| ⚠️ 部分合规 | 8 (RFC 5001, 5011/9077, 6761, 6975, 8198, 8998, 9567) |
 | ⚪ 参考 | 24 |
 
 ---
@@ -1309,6 +1309,35 @@ Body: [DNS 线格式消息]
 ### 我们的实现
 
 - miekg/dns 类型支持；解析器不校验（权威/辅助侧特性）✓
+
+---
+
+## RFC 8998 — ShangMi (SM) Cipher Suites for TLS 1.3  `[RFC 8998: Informational]`  ⚠️
+
+**TLS 1.3 国密套件：TLS_SM4_GCM_SM3 / TLS_SM4_CCM_SM3（SM4 记录保护 + SM3 哈希/HKDF）+ CurveSM2 密钥交换 + sm2sig_sm3 签名。**
+
+### 关键常量
+
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| TLS_SM4_GCM_SM3 | 0x00C6 | SM4-GCM 128 AEAD + SM3 |
+| TLS_SM4_CCM_SM3 | 0x00C7 | SM4-CCM 128 AEAD + SM3 |
+| curveSM2 | 41 (0x0029) | GB/T 32918.5-2017 曲线（密钥交换 + 签名共用，MUST NOT 换曲线） |
+| sm2sig_sm3 | 0x0708 | SM2/SM3 签名方案（SM2 用户 ID = "1234567812345678"） |
+
+### 关键要求
+
+- 仅适用 TLS 1.3（§3.1 MUST NOT 用于更低版本）
+- 使用 SM 套件时：supported_groups/ key_share 必须含 curveSM2，signature_algorithms 必须含 sm2sig_sm3（§4）
+- 服务器证书公钥 MUST 为有效 SM2 公钥（完整国密认证链）
+
+### 我们的实现
+
+- eTLS（go-extension/tls）已实现 SM4 套件 + CurveSM2（含 CurveSM2MLKEM768 混合），但按其"扩展算法"策略默认关闭
+- 默认开启：所有 `eTLS.Config` 构造点设置 `Defaults{AllSecureCipherSuites, AllSecureCurves, AllSupportedExtensions}`——服务端 DoT/DoH（`server/protocol/tls` baseConfig，含共享端口 demux 克隆）、上游 DoT/DoH 客户端（`server/upstream/tls` eTLSClientConfig）、`--probe` 探测。`AllSupportedExtensions` 与本 RFC 无关，是为 ECH/证书压缩/委托凭证等扩展特性预解锁（eTLS 仅在对应功能配置后才真正发送）
+- 非 SM 对端不受影响：eTLS 偏好序中 SM 套件/曲线排最后，标准客户端照常协商 AES/ChaCha（`TestServerStandardClientUnchangedByRFC8998`）
+- ⚠️ 已知差距：eTLS 未实现 sm2sig_sm3（0x0708）签名方案 —— SM 套件可与 ECDSA/RSA 证书协商（记录层全 SM4/SM3），但不能以 SM2 签名完成证书认证；QUIC 路径（DoQ/DoH3 走 stdlib crypto/tls）不适用本 RFC
+- 握手回归：`rfc8998_test.go` 双向（服务端/上游客户端对 SM-only 对端各验 GCM/CCM 两套件 + CurveSM2）
 
 ---
 

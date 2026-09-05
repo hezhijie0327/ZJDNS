@@ -157,8 +157,15 @@ func (c *Client) Close() {
 // (KTLS) for TCP-based upstream protocols (DoT, DoH).
 func (c *Client) eTLSClientConfig(server *config.UpstreamServer) *eTLS.Config {
 	return &eTLS.Config{
-		KernelTX:           c.ktlsTX,
-		KernelRX:           c.ktlsRX,
+		KernelTX: c.ktlsTX,
+		KernelRX: c.ktlsRX,
+		// RFC 8998: offer SM cipher suites (TLS_SM4_GCM_SM3/CCM_SM3) and
+		// CurveSM2 by default — eTLS keeps them off unless asked. Non-SM
+		// upstreams are unaffected (SM ranks last in eTLS preference order).
+		// AllSupportedExtensions unlocks the extended TLS extensions (ECH,
+		// ALPS, cert compression, delegated credentials) — eTLS only sends
+		// them once the corresponding feature is configured.
+		Defaults:           eTLS.Defaults{AllSecureCipherSuites: true, AllSecureCurves: true, AllSupportedExtensions: true},
 		CurvePreferences:   []eTLS.CurveID{},
 		InsecureSkipVerify: server.SkipTLSVerify,
 		MinVersion:         eTLS.VersionTLS12,

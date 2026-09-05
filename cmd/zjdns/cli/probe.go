@@ -94,8 +94,11 @@ func dialProbeTarget(addr string) (net.Conn, error) {
 		host = tryAddPort(host, defaultProbeTLSPort)
 		serverName, _, _ := net.SplitHostPort(host)
 		tlsCfg := &eTLS.Config{
-			MinVersion:         eTLS.VersionTLS12,
-			ServerName:         serverName,
+			MinVersion: eTLS.VersionTLS12,
+			ServerName: serverName,
+			// RFC 8998: probe with SM cipher suites (TLS_SM4_GCM_SM3/CCM_SM3)
+			// and CurveSM2 offered, matching the upstream client's defaults.
+			Defaults:           eTLS.Defaults{AllSecureCipherSuites: true, AllSecureCurves: true, AllSupportedExtensions: true},
 			InsecureSkipVerify: true, // probe may test servers with self-signed certificates
 			CurvePreferences:   []eTLS.CurveID{},
 		}
