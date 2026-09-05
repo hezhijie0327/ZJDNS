@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"zjdns/config"
 	"zjdns/internal/demux"
@@ -17,6 +18,12 @@ import (
 
 	zdnsutil "zjdns/internal/dnsutil"
 )
+
+// dispatchDrops counts datagrams dropped by full per-client queues on the
+// shared-UDP dispatch path.  A drop costs the client a retransmission round
+// (DNSCrypt: ~1s; QUIC: its own RTT-based loss recovery), so the count is
+// the shared-port health signal.
+var dispatchDrops atomic.Uint64
 
 func (m *Mux) startUDPGroup(g *UDPGroup) error {
 	addrs, err := zdnsutil.ResolveBindAddrs("udp", g.Port)
@@ -312,7 +319,7 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 				dc = &DemuxPacketConn{
 					Shared: udpConn,
 					Remote: src,
-					Ch:     make(chan DemuxPacket, 32),
+					Ch:     make(chan DemuxPacket, demuxDispatchQueue),
 				}
 				dtlcpState.conns[key] = dc
 				dtlcpState.mu.Unlock()
@@ -357,7 +364,7 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 				dc = &DemuxPacketConn{
 					Shared: udpConn,
 					Remote: src,
-					Ch:     make(chan DemuxPacket, 32),
+					Ch:     make(chan DemuxPacket, demuxDispatchQueue),
 				}
 				dnscryptState.conns[key] = dc
 				dnscryptState.mu.Unlock()
@@ -368,8 +375,12 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 				// datagrams, so each packet goes to its own goroutine — the
 				// former synchronous drain (decrypt→resolve→respond inline in
 				// the drain loop) let one slow upstream stall every later
-				// packet of the client.  Saturated → drop (client retransmits).
-				sem := make(chan struct{}, config.DefaultMaxPipe)
+				// packet of the client.  Saturated → process INLINE (mirrors
+				// the dedicated listener's handleSaturated): a drop costs the
+				// client its full retransmit timeout, multiplying load, while
+				// inline handling blocks only this client's drain goroutine
+				// (backpressure onto its queue), never the dispatch loop.
+				sem := make(chan struct{}, demuxWorkersPerClient)
 				m.host.Go(func() error {
 					defer zdnsutil.HandlePanic("Shared DNSCrypt UDP client")
 					defer rt.release()
@@ -381,6 +392,7 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 						select {
 						case sem <- struct{}{}:
 						default:
+							capturedHandler(m.host.Ctx(), pkt.Data, pkt.Addr, capturedDC)
 							full := pkt.Data[:cap(pkt.Data)]
 							PacketBufPool.Put(&full)
 							continue
@@ -401,8 +413,17 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 			dc.lastSeen.Store(log.NowUnix())
 			if !dc.Send(DemuxPacket{Data: (*pb)[:n], Addr: src}) {
 				PacketBufPool.Put(pb)
+				noteDispatchDrop("dtlcp")
 			}
 		}
+	}
+}
+
+// noteDispatchDrop records a dispatch-queue drop with a sampled warn — an
+// attacker-rate flood must not turn this into a log-amplification vector.
+func noteDispatchDrop(proto string) {
+	if n := dispatchDrops.Add(1); n%1024 == 1 {
+		log.Warnf("PLAIN: shared-UDP dispatch queue full, dropped datagram (%s) [%dth drop] — client will retransmit", proto, n)
 	}
 }
 

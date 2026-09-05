@@ -86,6 +86,22 @@ const (
 	// QUIC packet conn wrapper (backpressure depth, C-L6).
 	quicDispatchQueue = 256
 
+	// demuxWorkersPerClient bounds concurrent per-client DNSCrypt handler
+	// goroutines on the shared port.  Measured steady state for one
+	// multiplexing client is ~16 in flight at 24k pps; 64 gives 4x headroom
+	// before the inline-saturation fallback engages.  (The former value —
+	// DefaultMaxPipe, 16 — is the TCP/DoT pipelining depth, not a UDP
+	// datagram worker bound; at sustained load it saturated and DROPPED.)
+	demuxWorkersPerClient = 64
+
+	// demuxDispatchQueue bounds the per-client DNSCrypt/DTLCP packet queue.
+	// It replaces the kernel socket buffer a dedicated listener would give
+	// the protocol stack: 32 (the old value) overflowed on legitimate
+	// bursts from a single multiplexing client (many workers behind one
+	// socket), silently dropping datagrams that only a ~1s client
+	// retransmission recovered — visible as a fixed ~1s tail latency.
+	demuxDispatchQueue = 256
+
 	// clientIdleTimeout bounds how long a silent per-client conn is kept.
 	clientIdleTimeout = 60 * time.Second
 
@@ -337,6 +353,7 @@ func (c *quicPacketConn) dispatch(src *net.UDPAddr, pb *[]byte, n int) {
 	case c.ch <- packetBuf{data: *pb, src: src, n: n}:
 	default:
 		PacketBufPool.Put(pb)
+		noteDispatchDrop("quic")
 	}
 }
 
