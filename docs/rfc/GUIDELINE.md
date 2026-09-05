@@ -30,20 +30,20 @@ Section 标题栏位格式：`[RFC NNNN: 状态]` `合规标记`
 | 状态 | 数量 |
 |------|------|
 | Internet Standard / Standard | 3 (RFC 768, 1034, 1035) |
-| Proposed Standard | 74 |
-| Best Current Practice | 3 (RFC 2929, 6895, 8499) |
+| Proposed Standard | 76 |
+| Best Current Practice | 4 (RFC 2929, 6895, 8499×2 双列) |
 | Informational | 11 |
 | Experimental | 8 |
-| Historic | 6 |
+| Historic | 7 |
 | Internet-Draft | 4 (DNS Stamp, DNSCrypt, DELEG, DNS 0x20) |
 | 国密标准 | 1 (TLCP/DTLCP) |
-| **总计** | **110 RFC 条目 / 98 章节**（含 2065/2537、4033/4034/4035 等合并段；91 个 RFC 编号章节 + 7 个非 RFC 章节：DELEG / DNS Stamp / DNSCrypt / DNS 0x20 / SOCKS5 / TLCP / 已知偏离） |
+| **总计** | **109 RFC 条目 / 98 章节**（含 2065/2537、4033/4034/4035 等合并段；条目按 RFC 号出现次数计（合并段展开；RFC 6840、8499 兼有独立章节与合并段，双列计入）；91 个 RFC 编号章节 + 7 个非 RFC 章节：DELEG / DNS Stamp / DNSCrypt / DNS 0x20 / SOCKS5 / TLCP / 已知偏离） |
 
 | 合规 | 数量 |
 |------|------|
-| ✅ 合规 | 69 |
-| ⚠️ 部分合规 | 4 (RFC 5001, 5011/9077, 8198, 9567) |
-| ⚪ 参考 | 18 |
+| ✅ 合规 | 78 |
+| ⚠️ 部分合规 | 7 (RFC 5001, 5011/9077, 6761, 6975, 8198, 9567) |
+| ⚪ 参考 | 24 |
 
 ---
 
