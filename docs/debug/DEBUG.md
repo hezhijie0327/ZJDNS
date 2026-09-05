@@ -52,15 +52,18 @@ docs/debug/
 │   ├── spoofguard-socks5.json           # forwarding UDP + spoofguard over SOCKS5 proxy
 │   ├── poisonguard.json             # recursive + poisonguard (content detection)
 │   └── recursive-defense.json       # recursive all five: poisonguard + spoofguard + splitguard + hopguard + capsguard
-└── upstream/               # ZJDNS → external upstream tests
-    ├── alidns-tls.json      # AliDNS via TLS
-    ├── alidns-https.json    # AliDNS via HTTPS
-    ├── alidns-http3.json    # AliDNS via HTTP3
-    ├── alidns-quic.json     # AliDNS via QUIC
-    ├── quad9-dnscrypt.json  # Quad9 via DNSCrypt
-    ├── dnspod-http-tlcp.json  # DNSpod via HTTP over TLCP (国密)
-    └── fallback.json        # recursive primary + 8.8.8.8 fallback (delayed adoption,
-                             #   EDE 65280, background cache fill) + pprof for leak checks
+├── upstream/               # ZJDNS → external upstream tests
+│   ├── alidns-tls.json      # AliDNS via TLS
+│   ├── alidns-https.json    # AliDNS via HTTPS
+│   ├── alidns-http3.json    # AliDNS via HTTP3
+│   ├── alidns-quic.json     # AliDNS via QUIC
+│   ├── quad9-dnscrypt.json  # Quad9 via DNSCrypt
+│   ├── dnspod-http-tlcp.json  # DNSpod via HTTP over TLCP (国密)
+│   └── fallback.json        # recursive primary + 8.8.8.8 fallback (delayed adoption,
+│                            #   EDE 65280, background cache fill) + pprof for leak checks
+└── rfc8998/                 # RFC 8998 (SM cipher suites for TLS 1.3) tests
+    └── smpeer/              # SM-only TLS peer tool: DoT/DoH client + SM-only DoT server
+                             #   (build: go build -o /tmp/smpeer ./docs/debug/rfc8998/smpeer)
 ```
 
 RouteDNS, DNSCrypt-proxy, and AdGuard DNS Proxy are external tools tested
@@ -868,6 +871,69 @@ pkill -f "dnspod-http-tlcp"
 sleep 4
 dig @127.0.0.1 -p 11853 www.baidu.com A +short +time=5
 ```
+
+## RFC 8998 SM TLS 1.3 Tests (DoT / DoH)
+
+ZJDNS enables RFC 8998 (`TLS_SM4_GCM_SM3` / `TLS_SM4_CCM_SM3` + `CurveSM2`) by
+default on every eTLS path (server DoT/DoH, upstream DoT/DoH, `--probe`).
+`smpeer` speaks **only** SM algorithms, so a completed handshake proves the
+peer has RFC 8998 enabled. Known limits: eTLS has no `sm2sig_sm3` (0x0708) —
+SM suites negotiate with ECDSA/RSA certs; DoQ/DoH3 (stdlib crypto/tls) are
+out of scope.
+
+```bash
+go build -o /tmp/zjdns ./cmd/zjdns
+go build -o /tmp/smpeer ./docs/debug/rfc8998/smpeer
+```
+
+### A. SM-only client → ZJDNS server (DoT + DoH)
+
+```bash
+/tmp/zjdns -config docs/debug/loopback/server.json &
+sleep 3
+
+/tmp/smpeer -mode client -addr 127.0.0.1:10853 -name www.baidu.com
+# 判定: negotiated ... cipher=TLS_SM4_GCM_SM3 group=CurveSM2 + 真实 A 记录
+/tmp/smpeer -mode doh -addr 127.0.0.1:10443 -name www.qq.com
+# 判定: 同上 + HTTP/1.1 200 OK
+# 服务端佐证: server 日志 "TLS: handshake from ... cipher=TLS_SM4_GCM_SM3 group=CurveSM2"
+```
+
+### B. ZJDNS upstream client → SM-only server
+
+```bash
+/tmp/smpeer -mode server -addr 127.0.0.1:11853 -forward 223.5.5.5:53 &
+sleep 1
+sed 's/10853/11853/; s/zjdns-test.local/smpeer.local/; s/10753/11053/g' \
+  docs/debug/loopback/client-tls.json > /tmp/client-sm-upstream.json
+/tmp/zjdns -config /tmp/client-sm-upstream.json &
+sleep 3
+dig @127.0.0.1 -p 11053 www.taobao.com A +short
+# 判定: 真实 A 记录; client 日志 "UPSTREAM: negotiated for 127.0.0.1:11853
+#       — cipher=TLS_SM4_GCM_SM3 group=CurveSM2"; smpeer 侧 connection 同值
+pkill -f "client-sm-upstream"; pkill -f smpeer
+```
+
+### C. Public DoT probe (informational)
+
+```bash
+# Normal interop regression (enlarged ClientHello must not break production
+# upstreams) — negotiates AES, real cert chain verified:
+/tmp/zjdns -config docs/debug/upstream/alidns-tls.json &
+sleep 3 && dig @127.0.0.1 -p 11553 www.baidu.com A +short && pkill -f alidns-tls
+
+# SM-only offer against public resolvers (expect handshake failure — no public
+# RFC 8998 DoT deployment observed as of 2026-09; AliDNS/DNSPod serve 国密 via
+# TLCP instead):
+/tmp/smpeer -mode client -addr 223.5.5.5:853 -server-name dns.alidns.com -name www.baidu.com
+/tmp/smpeer -mode client -addr 1.12.12.12:853 -server-name dot.pub -name www.baidu.com
+```
+
+> [!NOTE]
+> `smpeer` uses `-addr` for the TCP target and `-server-name` for SNI — dial by
+> IP and set SNI separately (avoids DNS chicken-and-egg, same convention as
+> the DNSpod TLCP test). Cross-library interop (Tongsuo/GmSSL clients) is not
+> covered locally; eTLS is the SM reference peer.
 
 ## AdGuard DNS Proxy DoH3 Test
 

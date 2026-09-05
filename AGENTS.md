@@ -357,7 +357,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECUR
 | [docs/benchmark/benchmark-baseline.txt](docs/benchmark/benchmark-baseline.txt) | `go test -bench` 基线（`-benchmem`，AGENTS.md 命令刷新） |
 | [docs/benchmark/loadtest-baseline.txt](docs/benchmark/loadtest-baseline.txt) | benchclient 全协议 QPS/延迟基线数据（12 协议，每轮更新） |
 | [docs/poc/README.md](docs/poc/README.md) | 防御机制概念验证程序（hopguard/spoofguard/splitguard/poisonguard/capsguard） |
-| [docs/rfc/](docs/rfc/) | Mirrored RFCs and drafts (119 txt files) |
+| [docs/rfc/](docs/rfc/) | Mirrored RFCs and drafts (123 txt files) |
 | [docs/rfc/GUIDELINE.md](docs/rfc/GUIDELINE.md) | RFC 精华指南 — 每个 RFC 的关键常量、协议流程、合规状态 |
 
 ## Commit & Pull Request Guidelines

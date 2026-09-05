@@ -140,8 +140,16 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 	// safe); enable kernel_rx only if your kernel/NIC combination
 	// does not produce "bad record MAC" errors.
 	baseConfig := &eTLS.Config{
-		KernelTX:         cfg.KTLS != nil && cfg.KTLS.KernelTX,
-		KernelRX:         cfg.KTLS != nil && cfg.KTLS.KernelRX,
+		KernelTX: cfg.KTLS != nil && cfg.KTLS.KernelTX,
+		KernelRX: cfg.KTLS != nil && cfg.KTLS.KernelRX,
+		// RFC 8998: offer the SM cipher suites (TLS_SM4_GCM_SM3/CCM_SM3) and
+		// CurveSM2 key exchange by default. eTLS gates them as "extended"
+		// algorithms, so they stay off without these switches. Standard clients
+		// keep negotiating AES/ChaCha: SM ranks last in eTLS preference order.
+		// AllSupportedExtensions unlocks the extended TLS extensions (ECH,
+		// ALPS, cert compression, delegated credentials) — eTLS only sends
+		// them once the corresponding feature is configured.
+		Defaults:         eTLS.Defaults{AllSecureCipherSuites: true, AllSecureCurves: true, AllSupportedExtensions: true},
 		Certificates:     []eTLS.Certificate{eCert},
 		CurvePreferences: []eTLS.CurveID{},
 		MinVersion:       eTLS.VersionTLS13,
