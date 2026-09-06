@@ -56,6 +56,10 @@ func validateConfig(cfg *ServerConfig) error {
 		return fmt.Errorf("features.address_family must be one of \"dual\", \"ipv4\", \"ipv6\", got %q", cfg.Server.Features.AddressFamily)
 	}
 
+	if _, err := cfg.Server.ParsedTrustedProxies(); err != nil {
+		return err
+	}
+
 	rulesetTags, err := validateRuleSets(cfg)
 	if err != nil {
 		return err

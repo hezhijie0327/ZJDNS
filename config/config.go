@@ -1,7 +1,12 @@
 // Package config provides configuration types.
 package config
 
-import "net"
+import (
+	"fmt"
+	"net"
+
+	zdnsutil "zjdns/internal/dnsutil"
+)
 
 // ServerConfig is the top-level configuration structure for the DNS server.
 type ServerConfig struct {
@@ -18,6 +23,14 @@ type ServerSettings struct {
 	Protocol    ProtocolSettings    `json:"protocol,omitzero"`
 	Certificate CertificateSettings `json:"certificate,omitzero"`
 	Features    FeatureFlags        `json:"features,omitzero"`
+	// TrustedProxies lists reverse-proxy addresses (CIDR blocks or bare
+	// IPs) for the HTTP-based listeners (DoH, DoH3, HTTPTLCP).  When the
+	// direct peer falls inside one of these networks, the client IP is
+	// taken from the CF-Connecting-IP, True-Client-IP, X-Real-IP, or
+	// X-Forwarded-For header (in that order) instead of the socket
+	// address.  Empty (default) keeps the socket address — headers are
+	// never trusted.
+	TrustedProxies []string `json:"trusted_proxies,omitzero"`
 }
 
 // ProtocolSettings holds the port and endpoint configuration for every DNS
@@ -239,6 +252,16 @@ const DNSCryptV2Prefix = "2.dnscrypt-cert."
 // CacheStateFile returns the entries store persistence path ("" = pure
 // memory).
 func (f *FeatureFlags) CacheStateFile() string { return f.Cache.Entries.StateFile }
+
+// ParsedTrustedProxies parses ServerSettings.TrustedProxies into networks.
+// Returns nil for an empty list.
+func (s *ServerSettings) ParsedTrustedProxies() ([]*net.IPNet, error) {
+	nets, err := zdnsutil.ParseTrustedProxies(s.TrustedProxies)
+	if err != nil {
+		return nil, fmt.Errorf("server.trusted_proxies: %w", err)
+	}
+	return nets, nil
+}
 
 // LatencyStateFile returns the latency store persistence path ("" = pure
 // memory).

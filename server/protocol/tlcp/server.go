@@ -35,10 +35,15 @@ type Server struct {
 	dohEndpoint string
 	dtlcpPort   string
 	handler     edns.DNSHandler
-	tlcpConfig  *tlcp.Config
-	dtlcpConfig *dtlcp.Config
-	ctx         context.Context
-	cancel      context.CancelCauseFunc
+	// trustedProxies gates proxy-header client-IP extraction on the HTTP
+	// listener (HTTPTLCP): CF-Connecting-IP / X-Forwarded-For are honoured
+	// only when the socket peer falls inside one of these networks.  Set
+	// once via SetTrustedProxies before Start; nil keeps the socket address.
+	trustedProxies []*net.IPNet
+	tlcpConfig     *tlcp.Config
+	dtlcpConfig    *dtlcp.Config
+	ctx            context.Context
+	cancel         context.CancelCauseFunc
 	// listenerMu protects the listener/server slices below. Start's start*
 	// functions append under it and Shutdown snapshots under it; the signal
 	// handler is armed before Start, so a signal during listener startup
@@ -184,6 +189,14 @@ func displayCertificateInfo(cert *tlcp.Certificate) {
 	} else if daysUntilExpiry <= config.DefaultCertExpiryWarnDays {
 		log.Warnf("TLCP: Certificate expires in %d days!", daysUntilExpiry)
 	}
+}
+
+// SetTrustedProxies enables proxy-header client-IP extraction on the HTTP
+// listener (CF-Connecting-IP / X-Forwarded-For from trusted peers).  Must be
+// called before Start — the server wiring does so; the field is read-only
+// once listeners serve.
+func (s *Server) SetTrustedProxies(trusted []*net.IPNet) {
+	s.trustedProxies = trusted
 }
 
 // Start launches all TLCP protocol listeners and blocks until all servers have

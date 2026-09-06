@@ -43,25 +43,31 @@ type Config struct {
 	KeyFile       string
 	Domain        string
 	KTLS          *KTLSSettings
-	SkipHTTPS     bool // skip standalone HTTPS listener (shared port handled by TLCP demux)
-	SkipDOT       bool // skip standalone DoT listener (shared TCP port with TLCP DoT)
-	SkipDTLS      bool // skip standalone DTLS listener (shared UDP port with DTLCP)
-	SkipDOQ       bool // skip standalone DoQ listener (shared UDP port with DTLCP)
-	SkipHTTP3     bool // skip standalone DoH3 listener (shared UDP port with DNSCrypt)
+	// TrustedProxies gates proxy-header client-IP extraction on the HTTP
+	// listeners (DoH, DoH3): CF-Connecting-IP / X-Forwarded-For are honoured
+	// only when the socket peer falls inside one of these networks.  Nil
+	// keeps the socket address (headers never trusted).
+	TrustedProxies []*net.IPNet
+	SkipHTTPS      bool // skip standalone HTTPS listener (shared port handled by TLCP demux)
+	SkipDOT        bool // skip standalone DoT listener (shared TCP port with TLCP DoT)
+	SkipDTLS       bool // skip standalone DTLS listener (shared UDP port with DTLCP)
+	SkipDOQ        bool // skip standalone DoQ listener (shared UDP port with DTLCP)
+	SkipHTTP3      bool // skip standalone DoH3 listener (shared UDP port with DNSCrypt)
 }
 
 // Server manages TLS-based secure DNS protocol listeners and their lifecycle.
 type Server struct {
-	cfg           *Config
-	handler       edns.DNSHandler
-	tlsConfig     *eTLS.Config   // TCP-based TLS (DoT, DoH) with KTLS
-	baseTLSConfig *eTLS.Config   // base config for per-listener GetConfigForClient clones
-	quicTLSConfig *stdtls.Config // QUIC-based protocols (DoQ, DoH3)
-	dohHandler    eHTTP.Handler  // shared-port DOH handler (wraps ServeHTTP for eHTTP)
-	ctx           context.Context
-	cancel        context.CancelCauseFunc
-	serverGroup   *errgroup.Group
-	quicConnSem   chan struct{} // admission cap for concurrent QUIC connections (DoQ/DoH3) — half the errgroup limit so a QUIC flood cannot starve the DoT/DTLS/DoH listeners of goroutine slots (M-low)
+	cfg            *Config
+	handler        edns.DNSHandler
+	trustedProxies []*net.IPNet   // proxy-header client-IP gate for DoH/DoH3 (nil = socket address only)
+	tlsConfig      *eTLS.Config   // TCP-based TLS (DoT, DoH) with KTLS
+	baseTLSConfig  *eTLS.Config   // base config for per-listener GetConfigForClient clones
+	quicTLSConfig  *stdtls.Config // QUIC-based protocols (DoQ, DoH3)
+	dohHandler     eHTTP.Handler  // shared-port DOH handler (wraps ServeHTTP for eHTTP)
+	ctx            context.Context
+	cancel         context.CancelCauseFunc
+	serverGroup    *errgroup.Group
+	quicConnSem    chan struct{} // admission cap for concurrent QUIC connections (DoQ/DoH3) — half the errgroup limit so a QUIC flood cannot starve the DoT/DTLS/DoH listeners of goroutine slots (M-low)
 
 	listenerMu     sync.Mutex // protects all listener/conn slice fields below
 	dotListeners   []net.Listener
@@ -188,17 +194,18 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 	serverGroup.SetLimit(config.DefaultServerGoroutineLimit)
 
 	s := &Server{
-		cfg:           cfg,
-		handler:       dnsHandler,
-		tlsConfig:     tlsConfig,
-		baseTLSConfig: baseConfig,
-		quicTLSConfig: baseQUICConfig,
-		stdCert:       sCert,
-		ctx:           ctx,
-		cancel:        cancel,
-		serverGroup:   serverGroup,
-		quicConnSem:   make(chan struct{}, config.DefaultServerGoroutineLimit/2),
-		dotConns:      make(map[net.Conn]struct{}),
+		cfg:            cfg,
+		handler:        dnsHandler,
+		trustedProxies: cfg.TrustedProxies,
+		tlsConfig:      tlsConfig,
+		baseTLSConfig:  baseConfig,
+		quicTLSConfig:  baseQUICConfig,
+		stdCert:        sCert,
+		ctx:            ctx,
+		cancel:         cancel,
+		serverGroup:    serverGroup,
+		quicConnSem:    make(chan struct{}, config.DefaultServerGoroutineLimit/2),
+		dotConns:       make(map[net.Conn]struct{}),
 	}
 
 	// Pre-build the eHTTP handler so the TLCP server can reuse it for

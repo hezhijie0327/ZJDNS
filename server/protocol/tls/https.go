@@ -124,10 +124,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var clientIP net.IP
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		clientIP = net.ParseIP(host)
-	}
+	clientIP := zdnsutil.ClientIPFromRequest(r.RemoteAddr, s.trustedProxies, r.Header)
 
 	protocol := config.ProtoHTTPS
 	if strings.HasPrefix(r.Proto, "HTTP/3") {

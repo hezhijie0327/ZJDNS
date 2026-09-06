@@ -330,6 +330,12 @@ All per-client maps (`dtlsPacketListener.clients`, `quicPacketConn`, `sharedDTLS
 
 pprof-verified: 300 queries (QUIC+DTLS+DTLCP) across the shared UDP dispatch produce zero new allocations after startup warmup.
 
+## Client IP & Reverse Proxies
+
+Every protocol listener extracts the client IP from the socket peer address (`internal/dnsutil.ClientIPFromAddr`; HTTP listeners split `r.RemoteAddr`) and passes it into `QueryContext.ClientIP` — consumed by DNS-cookie keying, zone/ruleset CIDR matching, the CHAOS loopback guard, and QUERY logs.
+
+For HTTP-based listeners (DoH, DoH3, HTTPTLCP) deployed behind a reverse proxy, `server.trusted_proxies` enables header extraction: entries are CIDR blocks or bare IPs (a bare IPv4 becomes /32, IPv6 /128). Headers are honoured only when the socket peer falls inside a trusted network — otherwise a spoofed header could forge the client IP. Priority: single-value overwrite headers first (`CF-Connecting-IP`, `True-Client-IP`, `X-Real-IP`), then `X-Forwarded-For` walked right-to-left past trusted proxies (the first untrusted entry is the client; client-injected fakes sit on the left). The header names live as constants in `internal/dnsutil/clientip.go`; resolution happens in `internal/dnsutil.ClientIPFromProxyHeaders` (HTTP callers use the `ClientIPFromRequest` wrapper). Empty config keeps the pure socket behaviour.
+
 ## Zone Rules (`zone/`)
 
 - **Zone evaluator**: in-memory maps (exact/wildcard) behind an atomic.Pointer snapshot; rules come from config at startup.

@@ -80,6 +80,16 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 	http3PortShared := (cfg.Server.Protocol.HTTP3.Port != "") &&
 		(dnsCryptReady && cfg.Server.Protocol.HTTP3.Port == cfg.Server.Protocol.DNSCrypt)
 
+	// Parse the trusted-proxy list once for all HTTP-based listeners (DoH,
+	// DoH3, HTTPTLCP).  Load-time validation already rejects bad entries.
+	trustedProxies, err := cfg.Server.ParsedTrustedProxies()
+	if err != nil {
+		return fmt.Errorf("parse trusted proxies: %w", err)
+	}
+	if len(trustedProxies) > 0 {
+		log.Infof("CONFIG: trusted proxies enabled for HTTP listeners (DoH/DoH3/HTTPTLCP): %d network(s)", len(trustedProxies))
+	}
+
 	if cfg.Server.Certificate.TLS.IsEnabled() {
 		tlsCfg := tls.Config{
 			TLSPort:       cfg.Server.Protocol.TLS,
@@ -93,6 +103,8 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 			CertFile:      cfg.Server.Certificate.TLS.CertFile,
 			KeyFile:       cfg.Server.Certificate.TLS.KeyFile,
 			Domain:        cfg.Server.Certificate.Domain,
+
+			TrustedProxies: trustedProxies,
 		}
 		if cfg.Server.Features.KTLS != nil {
 			tlsCfg.KTLS = &tls.KTLSSettings{KernelTX: cfg.Server.Features.KTLS.KernelTX, KernelRX: cfg.Server.Features.KTLS.KernelRX}
@@ -126,6 +138,7 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 		if err != nil {
 			return fmt.Errorf("TLCP server init: %w", err)
 		}
+		tlcpSrv.SetTrustedProxies(trustedProxies)
 		s.tlcpServer = tlcpSrv
 	}
 

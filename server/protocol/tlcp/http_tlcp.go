@@ -112,8 +112,7 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	host, _, _ := net.SplitHostPort(r.RemoteAddr) // _ = port, _ = error: SplitHostPort for IP extraction; empty host handled below by net.ParseIP
-	clientIP := net.ParseIP(host)
+	clientIP := zdnsutil.ClientIPFromRequest(r.RemoteAddr, s.trustedProxies, r.Header)
 
 	resp := s.handler.ServeDNS(msg, clientIP, true, config.ProtoHTTPTLCP)
 	if resp == msg { //nolint:revive // identity guard: ServeDNS must never return the request (L5)

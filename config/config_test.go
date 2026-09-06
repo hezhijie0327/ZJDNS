@@ -237,6 +237,19 @@ func TestValidateUpstreamServers_AllFallbackRejected(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_InvalidTrustedProxies(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	cfg := `{"server":{"protocol":{"udp":"53535"},"certificate":{"domain":"test.example.com"},"trusted_proxies":["10.0.0.0/8","not-a-cidr"]}}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Error("expected error for invalid trusted_proxies entry")
+	}
+}
+
 func TestValidateUpstreamServers_FallbackWithPrimaryAccepted(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")

@@ -1,13 +1,11 @@
-package tls
+package tlcp
 
 import (
 	"encoding/base64"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"testing"
-	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 
@@ -25,47 +23,7 @@ func (h *ipCaptureHandler) ServeDNS(req *dns.Msg, clientIP net.IP, _ bool, _ str
 	return resp
 }
 
-func TestDohCacheControl(t *testing.T) {
-	if got := dohCacheControl(nil); got != "max-age=0" {
-		t.Errorf("nil: got %q, want max-age=0", got)
-	}
-	empty := &dns.Msg{}
-	if got := dohCacheControl(empty); got != "max-age=0" {
-		t.Errorf("empty: got %q, want max-age=0", got)
-	}
-	msg := &dns.Msg{Answer: []dns.RR{
-		&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("1.2.3.4")},
-	}}
-	if got := dohCacheControl(msg); got != "max-age=300" {
-		t.Errorf("300s: got %q, want max-age=300", got)
-	}
-	msg2 := &dns.Msg{Answer: []dns.RR{
-		&dns.A{Hdr: dns.Header{Name: "a.example.com.", Class: dns.ClassINET, TTL: 600}},
-		&dns.A{Hdr: dns.Header{Name: "b.example.com.", Class: dns.ClassINET, TTL: 60}},
-	}}
-	if got := dohCacheControl(msg2); got != "max-age=60" {
-		t.Errorf("min TTL: got %q, want max-age=60", got)
-	}
-}
-
-func TestLeafNotAfterClampedToCA(t *testing.T) {
-	now := time.Now()
-	caNotAfter := now.Add(10 * 24 * time.Hour) // CA expires sooner than the leaf's default
-
-	// Leaf validity longer than the CA's remaining life: clamped to the CA.
-	if got := zdnsutil.LeafNotAfter(now, caNotAfter, config.DefaultServerCertValidity); !got.Equal(caNotAfter) {
-		t.Errorf("leafNotAfter = %v, want clamped to CA %v", got, caNotAfter)
-	}
-
-	// Normal case: CA outlives the leaf — leaf keeps its own validity.
-	caLong := now.Add(365 * 24 * time.Hour)
-	want := now.Add(config.DefaultServerCertValidity)
-	if got := zdnsutil.LeafNotAfter(now, caLong, config.DefaultServerCertValidity); !got.Equal(want) {
-		t.Errorf("leafNotAfter = %v, want %v", got, want)
-	}
-}
-
-func TestServeHTTPTrustedProxyClientIP(t *testing.T) {
+func TestServeDOHTrustedProxyClientIP(t *testing.T) {
 	_, proxyNet, err := net.ParseCIDR("203.0.113.0/24") // TEST-NET-3 as the reverse proxy
 	if err != nil {
 		t.Fatal(err)
@@ -118,9 +76,10 @@ func TestServeHTTPTrustedProxyClientIP(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := &ipCaptureHandler{}
-			s := &Server{cfg: &Config{}, handler: h, trustedProxies: tt.trusted}
+			s := &Server{handler: h}
+			s.SetTrustedProxies(tt.trusted)
 			rec := httptest.NewRecorder()
-			s.ServeHTTP(rec, newRequest(tt.remote, tt.cfIP))
+			s.ServeDOH(rec, newRequest(tt.remote, tt.cfIP))
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 			}
