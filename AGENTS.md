@@ -222,7 +222,7 @@ zjdns/
 ├── internal/           ← log, pool, ttl, dnsutil (incl. ProcessRecords), stats, ipdetect, latency, pending, spillfile, stamp, ...
 └── server/
     ├── handler/        ← query pipeline adapter + QueryContext
-    │   └── middleware/ ← 11 composable middleware + AssembleChain
+    │   └── middleware/ ← 12 composable middleware + AssembleChain
     ├── defense/        ← DNS anti-pollution (Detector, capsguard/hopguard/poisonguard — spoofguard lives in upstream/plain, splitguard in upstream)
     ├── protocol/       ← {plain,tls,tlcp,dnscrypt} server listeners
     ├── upstream/       ← {plain,tls,tlcp,dnscrypt} outbound client + pool + SOCKS5
@@ -263,15 +263,16 @@ Execution order (outermost → innermost):
 4. `MQTYPE` — RFC 10029 multi-QTYPE merge (recursive mode) + FORMERR (§3.3); forwarding mode also merges locally
 5. `CacheStoreMiddleware` — miss-path response building, cache write (via `handler.StoreIfCacheable`), latency probe
 6. `ValidationMiddleware` — domain / label / NXNAME-AXFR-IXFR rejection (RFC 9824 §3.5)
-7. `ZoneMiddleware` — zone rule evaluation, synthetic response (runs before Any so rules win)
-8. `AnyMiddleware` — RFC 8482 minimal ANY response (HINFO "RFC8482")
-9. `CacheLookupMiddleware` — fresh→serve, stale→serve+refresh (delegates to the refreshCoordinator), miss→delegate
-10. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147); secondary A lookup via `handler.Secondary`
-11. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive with singleflight dedup
+7. `ACL` — IP-based access control (`server.acl`): deny-wins / allowlist; REFUSED + EDE 18 Prohibited (RFC 8914 §4.19); wired only when configured
+8. `ZoneMiddleware` — zone rule evaluation, synthetic response (runs before Any so rules win)
+9. `AnyMiddleware` — RFC 8482 minimal ANY response (HINFO "RFC8482")
+10. `CacheLookupMiddleware` — fresh→serve, stale→serve+refresh (delegates to the refreshCoordinator), miss→delegate
+11. `DNS64Middleware` — AAAA synthesis from A records (RFC 6147); secondary A lookup via `handler.Secondary`
+12. `ResolutionMiddleware` — terminal: upstream (first-win) or recursive with singleflight dedup
 
 All layers share a mutable `QueryContext`. Any layer may short-circuit by setting `qctx.Res`.
 
-> **Note:** Names like `ResponseMiddleware`, `CacheStoreMiddleware`, etc. are descriptive labels for the pipeline. The actual Go types are simply `Stats`, `Response`, `CacheStore`, `MQTYPE`, `Validation`, `Zone`, `Any`, `EDNS`, `CacheLookup`, `DNS64`, and `Resolution`.
+> **Note:** Names like `ResponseMiddleware`, `CacheStoreMiddleware`, etc. are descriptive labels for the pipeline. The actual Go types are simply `Stats`, `Response`, `CacheStore`, `MQTYPE`, `Validation`, `ACL`, `Zone`, `Any`, `EDNS`, `CacheLookup`, `DNS64`, and `Resolution`.
 
 ### RFC 10029 MQTYPE (`upstream[*].mqtype`, numeric QTYPE list)
 - Client: outbound queries attach `MQQUERY{config − primary}`; merged records (with RRSIGs) warm the cache; bundled types stripped from the client response **across the whole CNAME chain** (owner-independent, `stripMQBundled`); an upstream that fails/refuses the optioned query (observed: CN resolvers SERVFAILing the unknown EDNS option) is retried once optionless on BOTH the recursive and forwarding paths (§3.5)

@@ -2,6 +2,8 @@ package dnsutil
 
 import (
 	"crypto/rand"
+	"net"
+	"net/http"
 	"net/netip"
 	"testing"
 
@@ -151,6 +153,25 @@ func BenchmarkFoldCaseMixed(b *testing.B) {
 		FoldCase(rrs)
 		if rrs[0].Header().Name != "www.example.com." {
 			b.Fatal("owner not folded")
+		}
+	}
+}
+
+// BenchmarkClientIPFromProxyHeaders measures the per-request proxy-header
+// gate on the DoH/DoH3/HTTPTLCP hot path: peer NOT in the trusted list (the
+// common direct-connection case) — one Contains scan, headers never read.
+func BenchmarkClientIPFromProxyHeaders(b *testing.B) {
+	_, trusted, err := net.ParseCIDR("173.245.48.0/20")
+	if err != nil {
+		b.Fatal(err)
+	}
+	header := http.Header{}
+	remote := net.ParseIP("127.0.0.1")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if got := ClientIPFromProxyHeaders(remote, []*net.IPNet{trusted}, header); !got.Equal(remote) {
+			b.Fatal("direct peer must keep the socket address")
 		}
 	}
 }

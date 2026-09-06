@@ -23,7 +23,7 @@ import (
 //
 // Optional fields (nil-checked before use):
 //   - ZoneEvaluator, TagMatcher, Prober, PendingReqs, PendingRefrs,
-//     DNS64, Closed, RefreshGroup, RefreshCtx, Ctx, PrefetchCooldown
+//     DNS64, ACL, Closed, RefreshGroup, RefreshCtx, Ctx, PrefetchCooldown
 type Dependencies struct {
 	// Core
 	Config        *config.ServerConfig
@@ -40,6 +40,9 @@ type Dependencies struct {
 
 	// Optional features
 	DNS64 *dns64.Synthesizer
+	// ACL is the IP-based access-control middleware (server.acl); nil
+	// (default) leaves it unwired — zero cost when unconfigured.
+	ACL *ACL
 
 	// Lifecycle
 	Closed           func() bool
@@ -60,6 +63,7 @@ type Dependencies struct {
 //	MQTYPE        — RFC 10029 multi-QTYPE merge (recursive mode)
 //	CacheStore    — cache write + request logging + latency probe
 //	Validation    — domain length / label / NXNAME-AXFR-IXFR rejection
+//	ACL           — IP access control: REFUSED + EDE 18 (when configured)
 //	Zone          — zone rule evaluation (short-circuit on match)
 //	Any           — RFC 8482 minimal ANY response (HINFO)
 //	CacheLookup   — cache lookup (short-circuit on hit)
@@ -121,6 +125,13 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 			evaluator:  deps.ZoneEvaluator,
 			tagMatcher: deps.TagMatcher,
 		}).Wrap(h)
+	}
+
+	// IP-based access control (server.acl) — inside Validation, outside
+	// Zone: policy refusals outrank zone rules and never reach the cache
+	// layers (no lookup, no stale refresh).  Wired only when configured.
+	if deps.ACL != nil {
+		h = deps.ACL.Wrap(h)
 	}
 
 	// Request validation — reject malformed queries early.

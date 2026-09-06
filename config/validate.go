@@ -60,6 +60,10 @@ func validateConfig(cfg *ServerConfig) error {
 		return err
 	}
 
+	if _, _, err := cfg.Server.ACL.Parsed(); err != nil {
+		return err
+	}
+
 	rulesetTags, err := validateRuleSets(cfg)
 	if err != nil {
 		return err

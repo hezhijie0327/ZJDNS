@@ -139,7 +139,7 @@ func (s *Server) warmUpConnections(cfg *config.ServerConfig, queryClient *upstre
 }
 
 // initHandler builds the middleware chain and returns the assembled handler.
-func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, ednsH *edns.Handler, zoneEvaluator *zone.Evaluator, dnsResolver *resolver.Resolver, rulesetEngine *ruleset.Engine, cacheRefreshGroup *errgroup.Group, cacheRefreshCtx, backgroundCtx context.Context) *handler.Handler {
+func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, ednsH *edns.Handler, zoneEvaluator *zone.Evaluator, dnsResolver *resolver.Resolver, rulesetEngine *ruleset.Engine, cacheRefreshGroup *errgroup.Group, cacheRefreshCtx, backgroundCtx context.Context) (*handler.Handler, error) {
 	var prober handler.LatencyProber
 	if len(cfg.Server.Features.LatencyProbe) > 0 {
 		prober = probe.New(
@@ -206,10 +206,22 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 		}
 	}
 
+	// IP-based access control (server.acl).  Load-time validation makes
+	// the parse error unreachable for file configs; failing New() instead
+	// of warn-and-skip keeps a broken ACL from silently failing open.
+	if !cfg.Server.ACL.IsEmpty() {
+		allow, deny, err := cfg.Server.ACL.Parsed()
+		if err != nil {
+			return nil, fmt.Errorf("ACL parse: %w", err)
+		}
+		deps.ACL = middleware.NewACL(allow, deny)
+		log.Infof("CONFIG: ACL enabled: %d allow network(s), %d deny network(s)", len(allow), len(deny))
+	}
+
 	chain := middleware.AssembleChain(deps)
 
 	h := handler.NewHandler(chain, ctx)
 	isClosed = h.IsClosed
 
-	return h
+	return h, nil
 }

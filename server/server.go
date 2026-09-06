@@ -118,7 +118,11 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 
 	s.warmUpConnections(cfg, queryClient)
 
-	h := s.initHandler(cfg, cacheStore, ednsH, zoneEvaluator, dnsResolver, rulesetEngine, cacheRefreshGroup, cacheRefreshCtx, backgroundCtx)
+	h, err := s.initHandler(cfg, cacheStore, ednsH, zoneEvaluator, dnsResolver, rulesetEngine, cacheRefreshGroup, cacheRefreshCtx, backgroundCtx)
+	if err != nil {
+		cancel(err)
+		return nil, fmt.Errorf("handler init: %w", err)
+	}
 
 	s.handler = h
 

@@ -162,7 +162,7 @@ func TestClientIPFromProxyHeaders(t *testing.T) {
 	}
 }
 
-func TestParseTrustedProxies(t *testing.T) {
+func TestParseIPNets(t *testing.T) {
 	tests := []struct {
 		name    string
 		entries []string
@@ -203,15 +203,15 @@ func TestParseTrustedProxies(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseTrustedProxies(tt.entries)
+			got, err := ParseIPNets(tt.entries)
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("ParseTrustedProxies(%v) error = nil, want error", tt.entries)
+					t.Fatalf("ParseIPNets(%v) error = nil, want error", tt.entries)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("ParseTrustedProxies(%v) error = %v", tt.entries, err)
+				t.Fatalf("ParseIPNets(%v) error = %v", tt.entries, err)
 			}
 			if len(got) != len(tt.want) {
 				t.Fatalf("got %d networks, want %d", len(got), len(tt.want))

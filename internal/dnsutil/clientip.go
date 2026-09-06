@@ -56,10 +56,10 @@ func ClientIPFromAddr(addr net.Addr) net.IP {
 	}
 }
 
-// ParseTrustedProxies parses trusted-proxy entries (CIDR blocks or bare IPs)
-// into networks.  A bare IPv4 becomes /32, a bare IPv6 /128.  Empty entries
-// are skipped.
-func ParseTrustedProxies(entries []string) ([]*net.IPNet, error) {
+// ParseIPNets parses network entries (CIDR blocks or bare IPs) into
+// networks.  A bare IPv4 becomes /32, a bare IPv6 /128.  Empty entries
+// are skipped.  Shared by trusted_proxies and ACL list parsing.
+func ParseIPNets(entries []string) ([]*net.IPNet, error) {
 	nets := make([]*net.IPNet, 0, len(entries))
 	for i, entry := range entries {
 		entry = strings.TrimSpace(entry)

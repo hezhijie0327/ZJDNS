@@ -1277,7 +1277,7 @@ Body: [DNS 线格式消息]
 | 9   | DNSKEY Missing               | 缺少密钥                       |
 | 15  | Blocked                      | 被策略阻止                     |
 | 17  | Filtered                     | 被过滤                         |
-| 18  | Prohibited                   | 被禁止（如未授权 XFR）         |
+| 18  | Prohibited                   | 被禁止（ACL 未授权客户端拒绝、未授权 XFR） |
 | 20  | Not Authoritative            | 非权威回答                     |
 | 21  | Not Supported                | 不支持（如 XoT 上非 XFR 查询） |
 | 22  | No Reachable Authority       | 权威不可达                     |

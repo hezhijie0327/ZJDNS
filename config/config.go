@@ -31,6 +31,10 @@ type ServerSettings struct {
 	// address.  Empty (default) keeps the socket address — headers are
 	// never trusted.
 	TrustedProxies []string `json:"trusted_proxies,omitzero"`
+	// ACL is the IP-based access control list for the query pipeline; see
+	// ACLSettings for the deny/allowlist semantics.  Empty (default)
+	// allows everything.
+	ACL ACLSettings `json:"acl,omitzero"`
 }
 
 // ProtocolSettings holds the port and endpoint configuration for every DNS
@@ -256,7 +260,7 @@ func (f *FeatureFlags) CacheStateFile() string { return f.Cache.Entries.StateFil
 // ParsedTrustedProxies parses ServerSettings.TrustedProxies into networks.
 // Returns nil for an empty list.
 func (s *ServerSettings) ParsedTrustedProxies() ([]*net.IPNet, error) {
-	nets, err := zdnsutil.ParseTrustedProxies(s.TrustedProxies)
+	nets, err := zdnsutil.ParseIPNets(s.TrustedProxies)
 	if err != nil {
 		return nil, fmt.Errorf("server.trusted_proxies: %w", err)
 	}

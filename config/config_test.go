@@ -250,6 +250,37 @@ func TestLoadConfig_InvalidTrustedProxies(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_InvalidACL(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	cfg := `{"server":{"protocol":{"udp":"53535"},"certificate":{"domain":"test.example.com"},"acl":{"allow":["10.0.0.0/8"],"deny":["bad-cidr"]}}}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Error("expected error for invalid acl entry")
+	}
+}
+
+func TestACLSettings_Parsed(t *testing.T) {
+	a := ACLSettings{Allow: []string{"10.0.0.0/8", "192.0.2.1"}, Deny: []string{"198.51.100.0/24"}}
+	allow, deny, err := a.Parsed()
+	if err != nil {
+		t.Fatalf("Parsed() error = %v", err)
+	}
+	if len(allow) != 2 || len(deny) != 1 {
+		t.Errorf("got %d allow / %d deny networks, want 2/1", len(allow), len(deny))
+	}
+	if a.IsEmpty() {
+		t.Error("IsEmpty() = true for configured ACL")
+	}
+	var zero ACLSettings
+	if zero.IsEmpty() == false {
+		t.Error("IsEmpty() = false for zero ACL")
+	}
+}
+
 func TestValidateUpstreamServers_FallbackWithPrimaryAccepted(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")

@@ -336,6 +336,8 @@ Every protocol listener extracts the client IP from the socket peer address (`in
 
 For HTTP-based listeners (DoH, DoH3, HTTPTLCP) deployed behind a reverse proxy, `server.trusted_proxies` enables header extraction: entries are CIDR blocks or bare IPs (a bare IPv4 becomes /32, IPv6 /128). Headers are honoured only when the socket peer falls inside a trusted network — otherwise a spoofed header could forge the client IP. Priority: single-value overwrite headers first (`CF-Connecting-IP`, `True-Client-IP`, `X-Real-IP`), then `X-Forwarded-For` walked right-to-left past trusted proxies (the first untrusted entry is the client; client-injected fakes sit on the left). The header names live as constants in `internal/dnsutil/clientip.go`; resolution happens in `internal/dnsutil.ClientIPFromProxyHeaders` (HTTP callers use the `ClientIPFromRequest` wrapper). Empty config keeps the pure socket behaviour.
 
+`server.acl` (`middleware.ACL`) consumes the same real client IP for entry-level access control: entries are CIDR blocks or bare IPs in `deny` / `allow` lists; a deny match always refuses, a non-empty `allow` switches to default-deny, and a nil client IP passes only without an allowlist. Denied queries return REFUSED annotated with EDE 18 (Prohibited, RFC 8914 §4.19 — the code reserved for "unauthorized client" refusals) and journal as Result `acl`. The middleware sits between Validation and Zone — policy refusals outrank zone rules and never touch the cache layers — and is only wired when configured, so the default hot path pays nothing.
+
 ## Zone Rules (`zone/`)
 
 - **Zone evaluator**: in-memory maps (exact/wildcard) behind an atomic.Pointer snapshot; rules come from config at startup.

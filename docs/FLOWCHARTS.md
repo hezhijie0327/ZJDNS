@@ -18,6 +18,7 @@
 - [DNS 污染检测（防御机制）](#dns-污染检测防御机制)
 - [TC→TCP 自动回退](#tctcp-自动回退)
 - [Zone 规则评估](#zone-规则评估)
+- [ACL 访问控制](#acl-访问控制)
 - [Singleflight 查询去重](#singleflight-查询去重)
 - [DNS64 合成](#dns64-合成)
 - [规则集引擎](#规则集引擎)
@@ -119,18 +120,19 @@ graph LR
     E --> MQ[MQTYPE<br/>RFC 10029 合并 · FORMERR<br/>所有模式]
     MQ --> CS[CacheStore<br/>Miss 响应构建 · Cache 写<br/>延迟探测]
     CS --> V[Validation<br/>Domain · Label · Type<br/>Opcode · QCLASS · NXNAME/XFR]
-    V --> Z[Zone<br/>Rules · Wildcard<br/>Bypass · Loopback Gate]
+    V --> AC[ACL<br/>IP deny/allow<br/>REFUSED + EDE 18 · 未配置不挂载]
+    AC --> Z[Zone<br/>Rules · Wildcard<br/>Bypass · Loopback Gate]
     Z --> A[Any<br/>RFC 8482 HINFO]
     A --> CL[CacheLookup<br/>Fresh → Serve<br/>Stale → Refresh]
     CL --> D64[DNS64<br/>AAAA Synthesis]
     D64 --> RE[Resolution<br/>Upstream · Recursive<br/>Singleflight]
     classDef mw fill:#fef3c7,stroke:#f59e0b,color:#78350f
     class Q mw
-    class ST,R,E,MQ,CS,V,Z,A,CL,D64,RE mw
+    class ST,R,E,MQ,CS,V,AC,Z,A,CL,D64,RE mw
 ```
 
 > 执行顺序（外层→内层）：`Stats → Response → EDNS → MQTYPE → CacheStore → Validation →
-> Zone → Any → CacheLookup → DNS64 → Resolution`（`middleware/chain.go`）。`Zone` 仅当配置了
+> ACL → Zone → Any → CacheLookup → DNS64 → Resolution`（`middleware/chain.go`）。`ACL` 仅当配置了 server.acl、`Zone` 仅当配置了
 > zone 规则、`DNS64` 仅当配置了 DNS64 时挂载。`MQTYPE` 位于 CacheStore 外侧（post 阶段在
 > CacheStore 构建主响应之后合并）、EDNS 内侧（pre 阶段可见已解析的 Pseudo 选项）。各层通过
 > 设置 `qctx.Result` 分类结果，由最外层 `Stats` 统一记录请求日志（`internal/stats.Journal`）。
@@ -718,6 +720,34 @@ graph TD
 
 > 无记录规则（Rcode=0 且无 RR）为**纯透传**——旧的 QNAME 重写分支是死代码，已移除。
 > 破坏性 CHAOS 端点（`zjdns.cache.clear` 等）仅限回环地址。
+
+## ACL 访问控制
+
+`middleware.ACL`（`server.acl`）—— 判定输入是 `qctx.ClientIP`（真实客户端 IP：socket 对端，或对端命中 `trusted_proxies` 时从代理 header 提取）。
+
+```mermaid
+graph TD
+    Q[Query 进入 ACL<br/>qctx.ClientIP] --> DENY{命中 deny CIDR?<br/>nil IP 跳过}
+    DENY -->|是| REFUSE[REFUSED<br/>+ EDE 18 Prohibited<br/>RFC 8914 §4.19<br/>qctx.Result = acl]
+    DENY -->|否| ALLOW{allow 列表非空?}
+    ALLOW -->|空 · 默认放行| NEXT[放行 → Zone / 后续链]
+    ALLOW -->|非空 · 白名单模式| HIT{IP 命中 allow CIDR?}
+    HIT -->|命中| NEXT
+    HIT -->|未命中 / nil IP| REFUSE
+    classDef start fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef proc fill:#fef3c7,stroke:#f59e0b,color:#78350f
+    classDef refuse fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    classDef pass fill:#d1fae5,stroke:#10b981,color:#064e3b
+    class Q start
+    class DENY,ALLOW,HIT proc
+    class REFUSE refuse
+    class NEXT pass
+```
+
+> 语义：deny 命中必拒（压过 allow）> allow 非空则默认拒 > 放行；nil IP 仅在无白名单时放行。
+> 链位置在 Validation 与 Zone 之间——策略拒绝压过 zone 规则、不触碰缓存层（无 lookup、无 stale
+> refresh）。`server.acl` 未配置时中间件完全不挂载（零开销）。Stats 以 `Result=acl` 记账，与上游
+> 返回的 REFUSED 可区分。
 
 ## Singleflight 查询去重
 
