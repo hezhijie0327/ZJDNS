@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	_ "net/http/pprof" //nolint:gosec // G108: pprof is off unless configured
+	"strings"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -215,7 +216,11 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 			return nil, fmt.Errorf("ACL parse: %w", err)
 		}
 		deps.ACL = middleware.NewACL(allow, deny)
-		log.Infof("CONFIG: ACL enabled: %d allow network(s), %d deny network(s)", len(allow), len(deny))
+		if overlaps := config.OverlapEntries(allow, deny); len(overlaps) > 0 {
+			log.Warnf("CONFIG: ACL allow entries override deny (exception model): %s", strings.Join(overlaps, ", "))
+		}
+		log.Infof("CONFIG: ACL enabled: %d allow network(s)/name(s), %d deny network(s)/name(s)",
+			len(allow.Nets)+len(allow.Names), len(deny.Nets)+len(deny.Names))
 	}
 
 	chain := middleware.AssembleChain(deps)

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 	"zjdns/config"
+	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -245,6 +246,8 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 				clientIP = tcpAddr.IP
 			}
 		}
+		// Client-name credential: "{name}.{domain}" SNI ("" when absent).
+		clientName := zdnsutil.ClientNameFromSNI(tlsConn.ConnectionState().ServerName, s.cfg.Domain)
 
 		select {
 		case workerCap <- struct{}{}:
@@ -257,7 +260,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		}
 
 		wg.Add(1)
-		go func(query *dns.Msg, ip net.IP, pooledBuf []byte, isPooled bool) {
+		go func(query *dns.Msg, meta edns.RequestMeta, pooledBuf []byte, isPooled bool) {
 			defer func() { <-workerCap }()
 			defer zdnsutil.HandlePanic("DoT query worker")
 			defer wg.Done()
@@ -268,7 +271,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 				}
 			}()
 
-			response := s.handler.ServeDNS(query, ip, true, config.ProtoTLS)
+			response := s.handler.ServeDNS(query, meta)
 			if response == query { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
 				response = nil
 			}
@@ -317,6 +320,6 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 				// else: poolBuf was already returned, and writeBuf is a
 				// separately allocated slice that will be GC'd.
 			}
-		}(req, clientIP, pooledBuf, isPooled)
+		}(req, edns.RequestMeta{ClientIP: clientIP, ClientName: clientName, IsSecure: true, Protocol: config.ProtoTLS}, pooledBuf, isPooled)
 	}
 }

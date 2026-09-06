@@ -5,7 +5,6 @@ package handler
 
 import (
 	"context"
-	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -72,7 +71,7 @@ func (h *Handler) MarkClosed() { h.closed.Store(1) }
 
 // ServeDNS handles an incoming DNS query from any protocol listener.
 // It creates a QueryContext and delegates to the middleware chain.
-func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg {
+func (h *Handler) ServeDNS(req *dns.Msg, meta edns.RequestMeta) *dns.Msg {
 	if h.closed.Load() != 0 {
 		msg := BuildResponseMsg(req)
 		msg.Rcode = dns.RcodeServerFailure
@@ -115,13 +114,11 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	if log.IsDebug() {
 		qname := req.Question[0].Header().Name
 		qtype := dns.RRToType(req.Question[0])
-		if clientIP != nil {
-			if log.IsDebug() {
-				log.Debugf("QUERY: client IP=%s query=%s type=%s", clientIP.String(), qname, dns.TypeToString[qtype])
-			}
-		} else {
-			if log.IsDebug() {
-				log.Debugf("QUERY: client IP=<unknown> query=%s type=%s", qname, dns.TypeToString[qtype])
+		if log.IsDebug() {
+			if meta.ClientName != "" {
+				log.Debugf("QUERY: client IP=%s name=%s query=%s type=%s", meta.ClientIP, meta.ClientName, qname, dns.TypeToString[qtype])
+			} else {
+				log.Debugf("QUERY: client IP=%s query=%s type=%s", meta.ClientIP, qname, dns.TypeToString[qtype])
 			}
 		}
 	}
@@ -132,14 +129,15 @@ func (h *Handler) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protoco
 	// Qname is an already-FQDN unpacked name, so strings.ToLower is exactly
 	// dnsutil.Canonical minus the always-allocating strings.Map.
 	*qctx = QueryContext{
-		Req:       req,
-		ClientIP:  clientIP,
-		IsSecure:  isSecure,
-		Protocol:  protocol,
-		StartTime: log.NowUnixNano(),
-		Qname:     strings.ToLower(qd.Header().Name),
-		Qtype:     dns.RRToType(qd),
-		Qclass:    qd.Header().Class,
+		Req:        req,
+		ClientIP:   meta.ClientIP,
+		ClientName: meta.ClientName,
+		IsSecure:   meta.IsSecure,
+		Protocol:   meta.Protocol,
+		StartTime:  log.NowUnixNano(),
+		Qname:      strings.ToLower(qd.Header().Name),
+		Qtype:      dns.RRToType(qd),
+		Qclass:     qd.Header().Class,
 	}
 	defer qctxPool.Put(qctx)
 

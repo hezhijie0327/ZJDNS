@@ -3,41 +3,50 @@ package middleware
 import (
 	"context"
 	"net"
+	"slices"
+	"zjdns/config"
 	"zjdns/internal/log"
 	"zjdns/server/handler"
 
 	"codeberg.org/miekg/dns"
 )
 
-// ACL enforces the IP-based access control list (server.acl) on the real
-// client address in qctx.ClientIP — the socket peer, or the proxy-header
-// address when the peer is a trusted proxy.  Semantics: a deny match always
-// refuses; a non-empty allow list switches to default-deny.  A nil client IP
-// (no address available) passes only when no allow list is configured.
+// ACL enforces the access control list (server.acl) on the client identity
+// in qctx — the real client address (socket peer, or the proxy-header
+// address when the peer is a trusted proxy) and the presented client-name
+// credential (DoH path segment or TLS/QUIC SNI).  Entries are CIDR blocks,
+// bare IPs, or client names.
+//
+// Semantics (allow-wins, the exception model Pi-hole/AdGuard use): an allow
+// match — by name or IP — always grants; deny then refuses on a match; a
+// non-empty allow list switches to default-deny.  The explicit grant is the
+// point: "alice" in allow lifts her out of a denied IP range (her name is
+// the credential she presents deliberately; the range block holds for the
+// anonymous traffic around her).  config.OverlapEntries warns at startup
+// when an allow entry silently overrides a deny entry.
 //
 // Denied queries get REFUSED annotated with EDE 18 (Prohibited) — RFC 8914
-// §4.19 reserves exactly this code for "unauthorized client" refusals
-// (queries from outside the network, blocklisted IPs, local policy).  The
+// §4.19 reserves exactly this code for "unauthorized client" refusals.  The
 // outcome is journaled as Result "acl" so Stats distinguishes policy
 // refusals from upstream REFUSED answers.
 //
 // Positioned between Validation and Zone: policy refusals outrank zone
 // rules and never reach the cache layers (no lookup, no stale refresh).
 type ACL struct {
-	allow []*net.IPNet
-	deny  []*net.IPNet
+	allow config.ACLList
+	deny  config.ACLList
 }
 
-// NewACL builds the middleware from pre-parsed networks
+// NewACL builds the middleware from the pre-parsed lists
 // (config.ACLSettings.Parsed).
-func NewACL(allow, deny []*net.IPNet) *ACL {
+func NewACL(allow, deny config.ACLList) *ACL {
 	return &ACL{allow: allow, deny: deny}
 }
 
 // Wrap implements Wrapper.
 func (m *ACL) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	return handler.QueryHandlerFunc(func(ctx context.Context, qctx *handler.QueryContext) error {
-		if m.permits(qctx.ClientIP) {
+		if m.permits(qctx.ClientIP, qctx.ClientName) {
 			return next.ServeDNS(ctx, qctx)
 		}
 		msg := handler.BuildResponseMsg(qctx.Req)
@@ -46,31 +55,36 @@ func (m *ACL) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		qctx.Result = "acl"
 		qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorProhibited}
 		if log.IsDebug() {
-			log.Debugf("SECURITY: ACL refused %s query for %s from %s",
-				dns.TypeToString[qctx.Qtype], qctx.Qname, qctx.ClientIP)
+			log.Debugf("SECURITY: ACL refused %s query for %s from %s (name=%q)",
+				dns.TypeToString[qctx.Qtype], qctx.Qname, qctx.ClientIP, qctx.ClientName)
 		}
 		return nil
 	})
 }
 
-// permits reports whether ip passes the list: deny is checked first (it
-// wins over allow), then the allowlist gate.  In allowlist mode a nil IP is
-// refused — an unverifiable client is not trusted.
-func (m *ACL) permits(ip net.IP) bool {
-	if ip != nil {
-		for _, n := range m.deny {
-			if n.Contains(ip) {
-				return false
-			}
-		}
-	}
-	if len(m.allow) == 0 {
+// permits reports whether the identity passes: allow match (name or IP)
+// first — the explicit grant overrides deny; then deny match refuses;
+// otherwise the default, which is deny whenever any allow entry exists
+// (allowlist mode).  A nil IP never matches a network; an empty name never
+// matches a name entry.
+func (m *ACL) permits(ip net.IP, name string) bool {
+	if name != "" && slices.Contains(m.allow.Names, name) {
 		return true
 	}
-	if ip == nil {
+	if ip != nil && ipInNetworks(ip, m.allow.Nets) {
+		return true
+	}
+	if name != "" && slices.Contains(m.deny.Names, name) {
 		return false
 	}
-	for _, n := range m.allow {
+	if ip != nil && ipInNetworks(ip, m.deny.Nets) {
+		return false
+	}
+	return len(m.allow.Nets) == 0 && len(m.allow.Names) == 0
+}
+
+func ipInNetworks(ip net.IP, networks []*net.IPNet) bool {
+	for _, n := range networks {
 		if n.Contains(ip) {
 			return true
 		}

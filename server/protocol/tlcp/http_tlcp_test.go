@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 	"zjdns/config"
+	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
@@ -14,10 +15,14 @@ import (
 )
 
 // ipCaptureHandler records the client IP the pipeline entry received.
-type ipCaptureHandler struct{ got net.IP }
+type ipCaptureHandler struct {
+	got  net.IP
+	name string
+}
 
-func (h *ipCaptureHandler) ServeDNS(req *dns.Msg, clientIP net.IP, _ bool, _ string) *dns.Msg {
-	h.got = clientIP
+func (h *ipCaptureHandler) ServeDNS(req *dns.Msg, meta edns.RequestMeta) *dns.Msg {
+	h.got = meta.ClientIP
+	h.name = meta.ClientName
 	resp := new(dns.Msg)
 	dnsutil.SetReply(resp, req)
 	return resp

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"zjdns/config"
+	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -26,7 +27,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 
 	clientIP := net.ParseIP(dnsutil.RemoteIP(w))
 
-	response := s.handler.ServeDNS(req, clientIP, false, config.ProtoUDP)
+	response := s.handler.ServeDNS(req, edns.RequestMeta{ClientIP: clientIP, Protocol: config.ProtoUDP})
 	if response == req { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
 		response = nil
 	}

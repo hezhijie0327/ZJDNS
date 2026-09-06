@@ -4,49 +4,52 @@ import (
 	"context"
 	"net"
 	"testing"
-	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/config"
 	"zjdns/server/handler"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
-// aclNets parses a CIDR list for test fixtures (fails the test on bad input).
-func aclNets(t *testing.T, entries ...string) []*net.IPNet {
+// aclLists builds config.ACLList values from raw entries via the production
+// parser (fails the test on bad input).
+func aclLists(t *testing.T, entries ...string) config.ACLList {
 	t.Helper()
-	nets, err := zdnsutil.ParseIPNets(entries)
+	settings := config.ACLSettings{Allow: entries}
+	allow, _, err := settings.Parsed()
 	if err != nil {
-		t.Fatalf("bad test CIDRs %v: %v", entries, err)
+		t.Fatalf("bad test ACL entries %v: %v", entries, err)
 	}
-	return nets
+	return allow
 }
 
 func TestACL_Permits(t *testing.T) {
-	inAllow := net.ParseIP("10.1.0.1")
-	inDeny := net.ParseIP("192.0.2.9")
+	inAllowNet := net.ParseIP("10.1.0.1")
+	inDenyNet := net.ParseIP("192.0.2.9")
 	other := net.ParseIP("203.0.113.5")
 
 	tests := []struct {
-		name  string
-		allow []string
-		deny  []string
-		ip    net.IP
-		want  bool
+		name   string
+		allow  []string
+		deny   []string
+		ip     net.IP
+		client string
+		want   bool
 	}{
 		{name: "both empty permits everything", ip: other, want: true},
-		{name: "deny match refuses", deny: []string{"192.0.2.0/24"}, ip: inDeny, want: false},
+		{name: "deny match refuses", deny: []string{"192.0.2.0/24"}, ip: inDenyNet, want: false},
 		{name: "deny miss passes", deny: []string{"192.0.2.0/24"}, ip: other, want: true},
 		{
-			name:  "deny wins over allow",
+			name:  "allow net overrides deny net (exception model)",
 			allow: []string{"10.0.0.0/8"},
 			deny:  []string{"10.1.0.0/16"},
-			ip:    inAllow,
-			want:  false,
+			ip:    inAllowNet,
+			want:  true,
 		},
 		{
 			name:  "allowlist passes member",
 			allow: []string{"10.0.0.0/8"},
-			ip:    inAllow,
+			ip:    inAllowNet,
 			want:  true,
 		},
 		{
@@ -62,27 +65,69 @@ func TestACL_Permits(t *testing.T) {
 			ip:    nil,
 			want:  false,
 		},
+		{
+			name:   "allow name overrides IP deny (alice case)",
+			allow:  []string{"alice"},
+			deny:   []string{"203.0.113.0/24"},
+			ip:     other,
+			client: "alice",
+			want:   true,
+		},
+		{
+			name:   "deny name refuses unlisted client",
+			deny:   []string{"badclient"},
+			ip:     other,
+			client: "badclient",
+			want:   false,
+		},
+		{
+			name:   "unknown name in allowlist mode refused",
+			allow:  []string{"alice", "10.0.0.0/8"},
+			ip:     other,
+			client: "charlie",
+			want:   false,
+		},
+		{
+			name:   "name-only allowlist admits named client",
+			allow:  []string{"alice"},
+			ip:     other,
+			client: "alice",
+			want:   true,
+		},
+		{
+			name:  "name-only allowlist refuses anonymous client",
+			allow: []string{"alice"},
+			ip:    other,
+			want:  false,
+		},
+		{
+			name:   "name in both lists: allow wins",
+			allow:  []string{"alice"},
+			deny:   []string{"alice"},
+			client: "alice",
+			want:   true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := NewACL(aclNets(t, tt.allow...), aclNets(t, tt.deny...))
-			if got := m.permits(tt.ip); got != tt.want {
-				t.Errorf("permits(%v) = %v, want %v", tt.ip, got, tt.want)
+			m := NewACL(aclLists(t, tt.allow...), aclLists(t, tt.deny...))
+			if got := m.permits(tt.ip, tt.client); got != tt.want {
+				t.Errorf("permits(%v, %q) = %v, want %v", tt.ip, tt.client, got, tt.want)
 			}
 		})
 	}
 }
 
 func TestACL_ChainRefusal(t *testing.T) {
-	m := NewACL(nil, aclNets(t, "192.0.2.0/24"))
+	m := NewACL(config.ACLList{}, aclLists(t, "192.0.2.0/24", "badclient"))
 	nextCalled := false
 	h := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, _ *handler.QueryContext) error {
 		nextCalled = true
 		return nil
 	}))
 
-	// Denied client: REFUSED + EDE 18 Prohibited + Result "acl", next not reached.
+	// Denied by IP: REFUSED + EDE 18 Prohibited + Result "acl", next not reached.
 	req := dnsutil.SetQuestion(new(dns.Msg), "example.com.", dns.TypeA)
 	qctx := (&handler.QueryContext{Req: req, ClientIP: net.ParseIP("192.0.2.9"), Qname: "example.com.", Qtype: dns.TypeA}).InitQuestion()
 	if err := h.ServeDNS(context.Background(), qctx); err != nil {
@@ -99,6 +144,15 @@ func TestACL_ChainRefusal(t *testing.T) {
 	}
 	if qctx.Result != "acl" {
 		t.Errorf("Result = %q, want \"acl\"", qctx.Result)
+	}
+
+	// Denied by name while the IP itself is unlisted.
+	qctxN := (&handler.QueryContext{Req: req, ClientIP: net.ParseIP("198.51.100.1"), ClientName: "badclient", Qname: "example.com.", Qtype: dns.TypeA}).InitQuestion()
+	if err := h.ServeDNS(context.Background(), qctxN); err != nil {
+		t.Fatalf("ServeDNS error = %v", err)
+	}
+	if qctxN.Res == nil || qctxN.Res.Rcode != dns.RcodeRefused {
+		t.Errorf("name-denied rcode = %v, want REFUSED", qctxN.Res)
 	}
 
 	// Permitted client reaches next untouched.

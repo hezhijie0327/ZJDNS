@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"zjdns/config"
+	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -77,10 +78,21 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 	if endpoint == "" {
 		endpoint = config.DefaultQueryPath
 	}
+	if !strings.HasPrefix(endpoint, "/") {
+		endpoint = "/" + endpoint
+	}
 
-	if r.URL.Path != endpoint {
+	// Path forms: the endpoint itself, or "{endpoint}/{name}" carrying a
+	// client-name credential (mirrors tls/https.go).  Unknown extra
+	// segments 404.
+	clientName, pathOK := zdnsutil.ClientNameFromPath(r.URL.Path, endpoint)
+	if !pathOK {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
+	}
+	// SNI fallback: "https://{name}.{domain}{endpoint}" (path form wins).
+	if clientName == "" && r.TLS != nil {
+		clientName = zdnsutil.ClientNameFromSNI(r.TLS.ServerName, s.domain)
 	}
 
 	// Validate GET request size before delegation — the base64url parameter
@@ -114,7 +126,7 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 
 	clientIP := zdnsutil.ClientIPFromRequest(r.RemoteAddr, s.trustedProxies, r.Header)
 
-	resp := s.handler.ServeDNS(msg, clientIP, true, config.ProtoHTTPTLCP)
+	resp := s.handler.ServeDNS(msg, edns.RequestMeta{ClientIP: clientIP, ClientName: clientName, IsSecure: true, Protocol: config.ProtoHTTPTLCP})
 	if resp == msg { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
 		resp = nil
 	}

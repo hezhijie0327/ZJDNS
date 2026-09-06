@@ -15,11 +15,23 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
+// RequestMeta carries the per-request client identity from a protocol
+// listener into the query pipeline.
+type RequestMeta struct {
+	ClientIP net.IP
+	// ClientName is the client-name credential ("" = not presented):
+	// the "{endpoint}/{name}" path segment on HTTP-based listeners or the
+	// "{name}.{domain}" SNI on TLS/QUIC listeners.
+	ClientName string
+	IsSecure   bool
+	Protocol   string
+}
+
 // DNSHandler is the interface protocol listeners use to dispatch incoming
 // DNS queries. Defined in the producer package (edns) to avoid import cycles;
 // consumers accept this via dependency injection.
 type DNSHandler interface {
-	ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg
+	ServeDNS(req *dns.Msg, meta RequestMeta) *dns.Msg
 }
 
 // Handler manages EDNS(0) options for outgoing DNS queries and response

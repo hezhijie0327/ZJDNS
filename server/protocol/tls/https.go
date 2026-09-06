@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"zjdns/config"
+	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -113,9 +114,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		expectedPath3 = "/" + expectedPath3
 	}
 
-	if r.URL.Path != expectedPath && r.URL.Path != expectedPath3 {
+	// Path forms: the endpoint itself, or "{endpoint}/{name}" carrying a
+	// client-name credential (NextDNS-style).  Unknown extra segments 404.
+	clientName, pathOK := zdnsutil.ClientNameFromPath(r.URL.Path, expectedPath)
+	if !pathOK {
+		if name3, ok3 := zdnsutil.ClientNameFromPath(r.URL.Path, expectedPath3); ok3 {
+			clientName, pathOK = name3, true
+		}
+	}
+	if !pathOK {
 		http.NotFound(w, r)
 		return
+	}
+	// SNI fallback: "https://{name}.{domain}{endpoint}" names the client
+	// without a path segment (only when the path form didn't carry one).
+	if clientName == "" && r.TLS != nil {
+		clientName = zdnsutil.ClientNameFromSNI(r.TLS.ServerName, s.cfg.Domain)
 	}
 
 	req, statusCode := s.parseDOHRequest(r, w)
@@ -130,7 +144,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.Proto, "HTTP/3") {
 		protocol = config.ProtoHTTP3
 	}
-	response := s.handler.ServeDNS(req, clientIP, true, protocol)
+	response := s.handler.ServeDNS(req, edns.RequestMeta{ClientIP: clientIP, ClientName: clientName, IsSecure: true, Protocol: protocol})
 	if response == req { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
 		response = nil
 	}

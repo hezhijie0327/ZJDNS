@@ -10,6 +10,7 @@ import (
 	"net"
 	"time"
 	"zjdns/config"
+	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/doq"
 	"zjdns/internal/log"
@@ -263,6 +264,8 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	}
 
 	clientIP := zdnsutil.ClientIPFromAddr(conn.RemoteAddr())
+	// Client-name credential: "{name}.{domain}" SNI ("" when absent).
+	clientName := zdnsutil.ClientNameFromSNI(conn.ConnectionState().TLS.ServerName, s.cfg.Domain)
 	// RFC 9250 §4.3.1: abort on client STOP_SENDING / RESET_STREAM.  The
 	// pooled request must be returned before the early exit (R3-L17).
 	select {
@@ -271,7 +274,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		return
 	default:
 	}
-	response := s.handler.ServeDNS(req, clientIP, true, config.ProtoQUIC)
+	response := s.handler.ServeDNS(req, edns.RequestMeta{ClientIP: clientIP, ClientName: clientName, IsSecure: true, Protocol: config.ProtoQUIC})
 	if response == req { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
 		response = nil
 	}

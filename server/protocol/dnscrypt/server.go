@@ -388,7 +388,7 @@ func (s *Server) serveDNS(ctx context.Context, rw responseWriter, m *dns.Msg, pr
 	log.Debugf("DNSCRYPT: handling query for %s from %s", m.Question[0].Header().Name, rw.RemoteAddr())
 
 	clientIP := zdnsutil.ClientIPFromAddr(rw.RemoteAddr())
-	resp := s.handler.ServeDNS(m, clientIP, false, protocol)
+	resp := s.handler.ServeDNS(m, edns.RequestMeta{ClientIP: clientIP, Protocol: protocol})
 	if resp == m { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
 		resp = nil
 	}

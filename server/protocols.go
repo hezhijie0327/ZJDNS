@@ -134,11 +134,19 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 	// Create the TLCP server before the shared Manager so that TLCP-side
 	// handlers can be wired into the shared config.
 	if cfg.Server.Certificate.TLCP.IsEnabled() && (cfg.Server.Protocol.TLCP != "" || cfg.Server.Protocol.HTTPTLCP.Port != "" || cfg.Server.Protocol.DTLCP != "") {
-		tlcpSrv, err := servertlcp.New(&cfg.Server.Certificate.TLCP, cfg.Server.Protocol.TLCP, cfg.Server.Protocol.HTTPTLCP.Port, cfg.Server.Protocol.HTTPTLCP.Endpoint, cfg.Server.Protocol.DTLCP)
+		tlcpSrv, err := servertlcp.New(&servertlcp.Options{
+			Certificate: &cfg.Server.Certificate.TLCP,
+			Domain:      cfg.Server.Certificate.Domain,
+			DOTPort:     cfg.Server.Protocol.TLCP,
+			DOHPort:     cfg.Server.Protocol.HTTPTLCP.Port,
+			DOHEndpoint: cfg.Server.Protocol.HTTPTLCP.Endpoint,
+			DTLCPPort:   cfg.Server.Protocol.DTLCP,
+		})
 		if err != nil {
 			return fmt.Errorf("TLCP server init: %w", err)
 		}
 		tlcpSrv.SetTrustedProxies(trustedProxies)
+		tlcpSrv.SetDomain(cfg.Server.Certificate.Domain)
 		s.tlcpServer = tlcpSrv
 	}
 

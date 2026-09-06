@@ -18,7 +18,7 @@ import (
 
 // generateSelfSignedSMCerts creates a self-signed SM2 CA and two server
 // certificates (signing + encryption) for both TLCP (TCP) and DTLCP (UDP) use.
-func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignCert, dtlcpEncCert dtlcp.Certificate, err error) {
+func generateSelfSignedSMCerts(domain string) (signCert, encCert tlcp.Certificate, dtlcpSignCert, dtlcpEncCert dtlcp.Certificate, err error) {
 	caKey, err := sm2.GenerateKey(rand.Reader)
 	if err != nil {
 		err = fmt.Errorf("generate CA SM2 key: %w", err)
@@ -68,6 +68,9 @@ func generateSelfSignedSMCerts() (signCert, encCert tlcp.Certificate, dtlcpSignC
 	}
 	serverTemplate := func(caNotAfter time.Time) *smx509.Certificate {
 		return &smx509.Certificate{
+			// "*.domain" covers the "{name}.{domain}" SNI client-name form
+			// (one extra label) on TLCP DoT/DTLCP.
+			DNSNames:     []string{domain, "*." + domain},
 			SerialNumber: new(big.Int),
 			Subject:      pkix.Name{CommonName: config.DefaultProjectName + " TLCP"},
 			NotBefore:    time.Now(),

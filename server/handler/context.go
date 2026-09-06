@@ -17,10 +17,11 @@ import (
 type QueryContext struct {
 	// ── Immutable: set by the protocol listener, never modified ──
 
-	Req      *dns.Msg // incoming DNS request (never nil after validation)
-	ClientIP net.IP   // client address (nil for unix-domain / internal)
-	IsSecure bool     // true for encrypted transports (DoT, DoQ, DoH, DNSCrypt, TLCP, DTLS)
-	Protocol string   // config.ProtoUDP, config.ProtoTCP, config.ProtoTLS, etc.
+	Req        *dns.Msg // incoming DNS request (never nil after validation)
+	ClientIP   net.IP   // client address (nil for unix-domain / internal)
+	ClientName string   // client-name credential from path/SNI ("" = not presented)
+	IsSecure   bool     // true for encrypted transports (DoT, DoQ, DoH, DNSCrypt, TLCP, DTLS)
+	Protocol   string   // config.ProtoUDP, config.ProtoTCP, config.ProtoTLS, etc.
 
 	// ── EDNS state: populated by EDNS ──
 

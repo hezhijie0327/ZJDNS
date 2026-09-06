@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 	"zjdns/config"
+	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -223,6 +224,11 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 	if addr, ok := conn.RemoteAddr().(*net.UDPAddr); ok {
 		clientIP = addr.IP
 	}
+	// Client-name credential: "{name}.{domain}" SNI ("" when absent).
+	clientName := ""
+	if dc, ok := conn.(*dtlcp.Conn); ok {
+		clientName = zdnsutil.ClientNameFromSNI(dc.ConnectionState().ServerName, s.domain)
+	}
 
 	idleTimeout := config.DefaultDTLSIdleTimeout
 	workerCap := make(chan struct{}, config.DefaultMaxPipe)
@@ -294,7 +300,7 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 			defer pool.DefaultMessage.Put(query)
 			defer pool.DefaultBuffer.Put(buf)
 
-			response := s.handler.ServeDNS(query, clientIP, true, config.ProtoDTLCP)
+			response := s.handler.ServeDNS(query, edns.RequestMeta{ClientIP: clientIP, ClientName: clientName, IsSecure: true, Protocol: config.ProtoDTLCP})
 			if response == query { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
 				response = nil
 			}

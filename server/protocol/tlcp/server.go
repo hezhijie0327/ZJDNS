@@ -34,7 +34,10 @@ type Server struct {
 	dohPort     string
 	dohEndpoint string
 	dtlcpPort   string
-	handler     edns.DNSHandler
+	// domain is the certificate domain used to extract "{name}.{domain}"
+	// SNI client names; empty disables SNI extraction.
+	domain  string
+	handler edns.DNSHandler
 	// trustedProxies gates proxy-header client-IP extraction on the HTTP
 	// listener (HTTPTLCP): CF-Connecting-IP / X-Forwarded-For are honoured
 	// only when the socket peer falls inside one of these networks.  Set
@@ -60,34 +63,46 @@ type Server struct {
 
 // New creates a TLCP Server, loading or generating SM2 certificate pairs.
 // dotPort, dohPort, dohEndpoint, and dtlcpPort come from the protocol config section.
-func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, dtlcpPort string) (*Server, error) {
-	if certificateCfg == nil {
-		return nil, errors.New("tlcp: nil certificate config")
+// Options groups the TLCP server construction inputs.
+type Options struct {
+	Certificate *config.TLCPCertificate
+	// Domain is the certificate domain — the "{name}.{domain}" SNI
+	// client-name suffix and the self-signed SAN base.
+	Domain      string
+	DOTPort     string
+	DOHPort     string
+	DOHEndpoint string
+	DTLCPPort   string
+}
+
+func New(opts *Options) (*Server, error) {
+	if opts == nil || opts.Certificate == nil {
+		return nil, errors.New("tlcp: nil options or certificate config")
 	}
 	var signCert, encCert tlcp.Certificate
 	var dtlcpSignCert, dtlcpEncCert dtlcp.Certificate
 	var err error
 
-	if certificateCfg.SelfSigned {
-		signCert, encCert, dtlcpSignCert, dtlcpEncCert, err = generateSelfSignedSMCerts()
+	if opts.Certificate.SelfSigned {
+		signCert, encCert, dtlcpSignCert, dtlcpEncCert, err = generateSelfSignedSMCerts(opts.Domain)
 		if err != nil {
 			return nil, fmt.Errorf("generate self-signed SM2 certificates: %w", err)
 		}
 		log.Infof("TLCP: Using self-signed SM2 certificates")
 	} else {
-		signCert, err = tlcp.LoadX509KeyPair(certificateCfg.SignCertFile, certificateCfg.SignKeyFile)
+		signCert, err = tlcp.LoadX509KeyPair(opts.Certificate.SignCertFile, opts.Certificate.SignKeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("load tlcp sign certificate: %w", err)
 		}
-		encCert, err = tlcp.LoadX509KeyPair(certificateCfg.EncCertFile, certificateCfg.EncKeyFile)
+		encCert, err = tlcp.LoadX509KeyPair(opts.Certificate.EncCertFile, opts.Certificate.EncKeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("load tlcp enc certificate: %w", err)
 		}
-		dtlcpSignCert, err = dtlcp.LoadX509KeyPair(certificateCfg.SignCertFile, certificateCfg.SignKeyFile)
+		dtlcpSignCert, err = dtlcp.LoadX509KeyPair(opts.Certificate.SignCertFile, opts.Certificate.SignKeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("load dtlcp sign certificate: %w", err)
 		}
-		dtlcpEncCert, err = dtlcp.LoadX509KeyPair(certificateCfg.EncCertFile, certificateCfg.EncKeyFile)
+		dtlcpEncCert, err = dtlcp.LoadX509KeyPair(opts.Certificate.EncCertFile, opts.Certificate.EncKeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("load dtlcp enc certificate: %w", err)
 		}
@@ -137,10 +152,11 @@ func New(certificateCfg *config.TLCPCertificate, dotPort, dohPort, dohEndpoint, 
 	serverGroup.SetLimit(config.DefaultServerGoroutineLimit)
 
 	s := &Server{
-		dotPort:     dotPort,
-		dohPort:     dohPort,
-		dohEndpoint: dohEndpoint,
-		dtlcpPort:   dtlcpPort,
+		dotPort:     opts.DOTPort,
+		dohPort:     opts.DOHPort,
+		dohEndpoint: opts.DOHEndpoint,
+		dtlcpPort:   opts.DTLCPPort,
+		domain:      opts.Domain,
 		tlcpConfig:  tlcpConfig,
 		dtlcpConfig: dtlcpConfig,
 		ctx:         ctx,
@@ -197,6 +213,13 @@ func displayCertificateInfo(cert *tlcp.Certificate) {
 // once listeners serve.
 func (s *Server) SetTrustedProxies(trusted []*net.IPNet) {
 	s.trustedProxies = trusted
+}
+
+// SetDomain sets the certificate domain used for "{name}.{domain}" SNI
+// client-name extraction.  Must be called before Start — the server wiring
+// does so.
+func (s *Server) SetDomain(domain string) {
+	s.domain = domain
 }
 
 // Start launches all TLCP protocol listeners and blocks until all servers have

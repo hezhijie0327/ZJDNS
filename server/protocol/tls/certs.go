@@ -79,7 +79,9 @@ func generateSelfSignedCert(domain string) (eTLS.Certificate, error) {
 	if ip := net.ParseIP(domain); ip != nil {
 		serverTemplate.IPAddresses = []net.IP{ip}
 	} else {
-		serverTemplate.DNSNames = []string{domain}
+		// "*.domain" covers the "{name}.{domain}" SNI client-name form
+		// (one extra label) on DoT/DoQ.
+		serverTemplate.DNSNames = []string{domain, "*." + domain}
 	}
 
 	caCertDER, err := x509.CreateCertificate(rand.Reader, &caTemplate, &caTemplate, &caPrivKey.PublicKey, caPrivKey)

@@ -7,7 +7,6 @@ import (
 	"errors"
 	_ "expvar" // /debug/vars: runtime MemStats for RSS diagnosis (served only when pprof is enabled)
 	"fmt"
-	"net"
 	"net/http"
 	_ "net/http/pprof" //nolint:gosec // G108: pprof is off unless configured
 	"os"
@@ -138,8 +137,8 @@ func New(cfg *config.ServerConfig) (*Server, error) {
 	return s, nil
 }
 
-func (s *Server) ServeDNS(req *dns.Msg, clientIP net.IP, isSecure bool, protocol string) *dns.Msg {
-	return s.handler.ServeDNS(req, clientIP, isSecure, protocol)
+func (s *Server) ServeDNS(req *dns.Msg, meta edns.RequestMeta) *dns.Msg {
+	return s.handler.ServeDNS(req, meta)
 }
 
 // Start runs the DNS server and blocks until shutdown is triggered.

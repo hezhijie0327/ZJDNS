@@ -263,7 +263,7 @@ Execution order (outermost → innermost):
 4. `MQTYPE` — RFC 10029 multi-QTYPE merge (recursive mode) + FORMERR (§3.3); forwarding mode also merges locally
 5. `CacheStoreMiddleware` — miss-path response building, cache write (via `handler.StoreIfCacheable`), latency probe
 6. `ValidationMiddleware` — domain / label / NXNAME-AXFR-IXFR rejection (RFC 9824 §3.5)
-7. `ACL` — IP-based access control (`server.acl`): deny-wins / allowlist; REFUSED + EDE 18 Prohibited (RFC 8914 §4.19); wired only when configured
+7. `ACL` — access control (`server.acl`): entries are CIDR / bare IP / client-name; allow-wins (exception model) / allowlist default-deny; REFUSED + EDE 18 Prohibited (RFC 8914 §4.19); wired only when configured
 8. `ZoneMiddleware` — zone rule evaluation, synthetic response (runs before Any so rules win)
 9. `AnyMiddleware` — RFC 8482 minimal ANY response (HINFO "RFC8482")
 10. `CacheLookupMiddleware` — fresh→serve, stale→serve+refresh (delegates to the refreshCoordinator), miss→delegate

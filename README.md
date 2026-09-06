@@ -9,7 +9,7 @@
 ╚══════╝ ╚════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-[![Version](https://img.shields.io/badge/Version-4.6.0-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
+[![Version](https://img.shields.io/badge/Version-4.7.0-informational)](https://github.com/hezhijie0327/ZJDNS/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0--Commons%20Clause-blue)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.27-00ADD8?logo=go)](https://go.dev/)
 [![Lint](https://img.shields.io/badge/golangci--lint-0%20issues-success)](https://golangci-lint.run/)
@@ -80,7 +80,8 @@ dig @127.0.0.1 -p 443 2.dnscrypt-cert.example.com TXT
 - **DNS64**：[RFC 6147](docs/rfc/rfc6147.txt)，AAAA 无记录时从 A 合成（默认前缀 `64:ff9b::/96`）
 - **SOCKS5 代理**：每上游可选（TCP CONNECT + UDP ASSOCIATE，[RFC 1928](docs/rfc/rfc1928.txt)/[RFC 1929](docs/rfc/rfc1929.txt)）
 - **TLS 隐私 Profile**：[RFC 8310](docs/rfc/rfc8310.txt) Strict/Opportunistic 模式可配
-- **IP ACL**：`server.acl` deny/allow CIDR 列表（deny 优先、allow 非空即白名单模式），拒绝回 REFUSED + EDE 18 Prohibited（[RFC 8914](docs/rfc/rfc8914.txt) §4.19），全 12 协议统一生效
+- **ACL**：`server.acl` 条目为 CIDR、裸 IP 或**客户端名**（allow 命中即放行的豁免模型，Pi-hole/AdGuard 风格；allow 非空即白名单模式），拒绝回 REFUSED + EDE 18 Prohibited（[RFC 8914](docs/rfc/rfc8914.txt) §4.19），全 12 协议统一生效
+- **客户端命名（NextDNS 风格）**：默认启用——DoH/DoH3/HTTPTLCP 走 `{endpoint}/{name}` 路径段或 `{name}.{domain}` SNI；DoT/DoQ/TLCP/DTLCP 走 `{name}.{domain}` SNI。名字即凭证，直接作为 ACL 条目使用；自签证书默认含 `*.{domain}` 泛域名 SAN
 - **反代真实客户端 IP**：`server.trusted_proxies` 配置后，DoH/DoH3/HTTPTLCP 在可信代理后从 `CF-Connecting-IP`/`True-Client-IP`/`X-Real-IP`/`X-Forwarded-For` 提取真实客户端 IP（对端不在列表内则 header 永不采信）
 
 ### 解析器信息与发现
@@ -160,7 +161,7 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
     "protocol": { "udp": "53", "tcp": "53", "tls": "853", "quic": "853", "https": { "port": "443", "endpoint": "/dns-query" } },
     "certificate": { "domain": "dns.example.com", "tls": { "self_signed": true } },
     "trusted_proxies": ["173.245.48.0/20", "10.0.0.0/8"],
-    "acl": { "deny": ["192.0.2.0/24"], "allow": ["10.0.0.0/8", "127.0.0.1"] },
+    "acl": { "deny": ["192.0.2.0/24", "bob"], "allow": ["alice", "10.0.0.0/8", "127.0.0.1"] },
     "features": {
       "ecs_subnet": { "ipv4": "1.2.3.0/24", "ipv6": "2001:db8::/56" },
       "dns64": { "prefix": "64:ff9b::/96" },
@@ -180,7 +181,7 @@ TLS 加解密卸载至 Linux 内核（`af_alg` + `setsockopt(TCP_ULP)`）。仅�
 - **state_file**：默认**为空 = 不持久化**（纯内存，重启冷启动）；设置路径后启用快照持久化 —— 缓存/延迟/委派三个 store 各自独立开关，配置示例见上（`./zjdns.cache` 等）。DNSCrypt 的 `certificate.dnscrypt.state_file` 同理，默认空则每次重启更换证书窗口
 - **self_signed**：自动生成自签名证书，跳过 `cert_file`/`key_file`
 - **trusted_proxies**：反代部署（DoH/DoH3/HTTPTLCP）时提取真实客户端 IP；条目为 CIDR 或裸 IP，仅当 socket 对端命中列表才读 header（优先级 `CF-Connecting-IP` > `True-Client-IP` > `X-Real-IP` > `X-Forwarded-For` 右往左），未配置则始终用 socket 地址
-- **acl**：`deny` 命中必拒；`allow` 非空进入白名单模式（未命中即拒）；条目同为 CIDR/裸 IP。拒绝响应 REFUSED + EDE 18（Prohibited），统计中以 `acl` 分类与上游 REFUSED 区分；未配置零开销
+- **acl**：条目为 CIDR/裸 IP/**客户端名**（`[a-z0-9][a-z0-9-]{0,62}`，非 IP 即名）。allow 命中（名字或 IP 任一）即放行——显式授予豁免 deny（如 alice 的名字在 allow、她所在网段在 deny，alice 仍放行）；allow 非空进入白名单模式（匿名客户端未命中即拒）；重叠条目启动时告警。拒绝响应 REFUSED + EDE 18（Prohibited），统计中以 `acl` 分类与上游 REFUSED 区分；未配置零开销
 
 ### 协议监听示例
 

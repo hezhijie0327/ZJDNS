@@ -3,11 +3,11 @@ package dnscrypt
 import (
 	"context"
 	"math"
-	"net"
 	"sync"
 	"testing"
 	"time"
 	"zjdns/config"
+	"zjdns/edns"
 
 	"codeberg.org/miekg/dns"
 )
@@ -151,14 +151,14 @@ func cachedState(t *testing.T, c *Client) *State {
 	return st
 }
 
-func (h *toggleHandler) ServeDNS(req *dns.Msg, _ net.IP, _ bool, _ string) *dns.Msg {
+func (h *toggleHandler) ServeDNS(req *dns.Msg, _ edns.RequestMeta) *dns.Msg {
 	h.mu.Lock()
 	big := h.big
 	h.mu.Unlock()
 	if big {
-		return (&bigResponseHandler{n: 40}).ServeDNS(req, nil, false, "")
+		return (&bigResponseHandler{n: 40}).ServeDNS(req, edns.RequestMeta{})
 	}
-	return (&testDNSHandler{}).ServeDNS(req, nil, false, "")
+	return (&testDNSHandler{}).ServeDNS(req, edns.RequestMeta{})
 }
 
 // TestDNSCrypt_EstimatorShrink_E2E drives the full client pipeline through

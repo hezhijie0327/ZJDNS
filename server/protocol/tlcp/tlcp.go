@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 	"zjdns/config"
+	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
@@ -128,6 +129,11 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 
 	clientIP := zdnsutil.ClientIPFromAddr(conn.RemoteAddr())
+	// Client-name credential: "{name}.{domain}" SNI ("" when absent).
+	clientName := ""
+	if tc, ok := conn.(*tlcp.Conn); ok {
+		clientName = zdnsutil.ClientNameFromSNI(tc.ConnectionState().ServerName, s.domain)
+	}
 
 	// Short pre-handshake deadline for the first read: a flood of idle TLCP
 	// connections must not hold a shared serverGroup slot for the full 60s
@@ -262,7 +268,7 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 				}
 			}()
 
-			resp := s.handler.ServeDNS(query, clientIP, true, config.ProtoTLCP)
+			resp := s.handler.ServeDNS(query, edns.RequestMeta{ClientIP: clientIP, ClientName: clientName, IsSecure: true, Protocol: config.ProtoTLCP})
 			if resp == query { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
 				resp = nil
 			}

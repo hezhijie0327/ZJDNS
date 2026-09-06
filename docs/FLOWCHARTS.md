@@ -723,28 +723,31 @@ graph TD
 
 ## ACL 访问控制
 
-`middleware.ACL`（`server.acl`）—— 判定输入是 `qctx.ClientIP`（真实客户端 IP：socket 对端，或对端命中 `trusted_proxies` 时从代理 header 提取）。
+`middleware.ACL`（`server.acl`）—— 判定输入是 `qctx.ClientIP` + `qctx.ClientName`（真实客户端 IP：socket 对端，或对端命中 `trusted_proxies` 时从代理 header 提取；名字：path 段或 SNI）。
 
 ```mermaid
 graph TD
-    Q[Query 进入 ACL<br/>qctx.ClientIP] --> DENY{命中 deny CIDR?<br/>nil IP 跳过}
+    Q[Query 进入 ACL<br/>qctx.ClientIP + ClientName] --> ALLOWED{allow 命中?<br/>名字或 IP 任一}
+    ALLOWED -->|是 · 显式授予豁免 deny| NEXT[放行 → Zone / 后续链]
+    ALLOWED -->|否| DENY{deny 命中?<br/>名字或 IP 任一}
     DENY -->|是| REFUSE[REFUSED<br/>+ EDE 18 Prohibited<br/>RFC 8914 §4.19<br/>qctx.Result = acl]
-    DENY -->|否| ALLOW{allow 列表非空?}
-    ALLOW -->|空 · 默认放行| NEXT[放行 → Zone / 后续链]
-    ALLOW -->|非空 · 白名单模式| HIT{IP 命中 allow CIDR?}
-    HIT -->|命中| NEXT
-    HIT -->|未命中 / nil IP| REFUSE
+    DENY -->|否| DEFAULT{allow 列表非空?}
+    DEFAULT -->|空 · 默认放行| NEXT
+    DEFAULT -->|非空 · 白名单默认拒| REFUSE
     classDef start fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     classDef proc fill:#fef3c7,stroke:#f59e0b,color:#78350f
     classDef refuse fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
     classDef pass fill:#d1fae5,stroke:#10b981,color:#064e3b
     class Q start
-    class DENY,ALLOW,HIT proc
+    class ALLOWED,DENY,DEFAULT proc
     class REFUSE refuse
     class NEXT pass
 ```
 
-> 语义：deny 命中必拒（压过 allow）> allow 非空则默认拒 > 放行；nil IP 仅在无白名单时放行。
+> 语义（allow-wins 豁免模型，Pi-hole/AdGuard 惯例）：allow 命中（名字或 IP 任一）即放行——显式授予
+> 豁免 deny（如 alice 在 allow、她所在网段在 deny，alice 仍放行，网段封禁对其余匿名流量生效）；
+> 否则 deny 命中拒绝；否则 allow 非空即白名单默认拒。条目为 CIDR/裸 IP/客户端名（非 IP 即名，
+> 名字来自 path 段或 SNI）；重叠条目启动时告警。nil IP 仅在无白名单时放行。
 > 链位置在 Validation 与 Zone 之间——策略拒绝压过 zone 规则、不触碰缓存层（无 lookup、无 stale
 > refresh）。`server.acl` 未配置时中间件完全不挂载（零开销）。Stats 以 `Result=acl` 记账，与上游
 > 返回的 REFUSED 可区分。

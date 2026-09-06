@@ -133,14 +133,14 @@ func BenchmarkResponseServeLargeWire(b *testing.B) {
 // scan over small lists (3 networks total) — the E2E load-test configuration.
 func BenchmarkACLPermits(b *testing.B) {
 	m := NewACL(
-		[]*net.IPNet{mustBenchCIDR(b, "127.0.0.0/8"), mustBenchCIDR(b, "203.0.113.0/24")},
-		[]*net.IPNet{mustBenchCIDR(b, "198.51.100.0/24")},
+		config.ACLList{Nets: []*net.IPNet{mustBenchCIDR(b, "127.0.0.0/8"), mustBenchCIDR(b, "203.0.113.0/24")}},
+		config.ACLList{Nets: []*net.IPNet{mustBenchCIDR(b, "198.51.100.0/24")}},
 	)
 	ip := net.ParseIP("127.0.0.1")
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		if !m.permits(ip) {
+		if !m.permits(ip, "") {
 			b.Fatal("benchmark IP must be permitted")
 		}
 	}

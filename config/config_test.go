@@ -253,7 +253,7 @@ func TestLoadConfig_InvalidTrustedProxies(t *testing.T) {
 func TestLoadConfig_InvalidACL(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")
-	cfg := `{"server":{"protocol":{"udp":"53535"},"certificate":{"domain":"test.example.com"},"acl":{"allow":["10.0.0.0/8"],"deny":["bad-cidr"]}}}`
+	cfg := `{"server":{"protocol":{"udp":"53535"},"certificate":{"domain":"test.example.com"},"acl":{"allow":["10.0.0.0/8"],"deny":["10.0.0.0/244"]}}}`
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -264,13 +264,16 @@ func TestLoadConfig_InvalidACL(t *testing.T) {
 }
 
 func TestACLSettings_Parsed(t *testing.T) {
-	a := ACLSettings{Allow: []string{"10.0.0.0/8", "192.0.2.1"}, Deny: []string{"198.51.100.0/24"}}
+	a := ACLSettings{Allow: []string{"10.0.0.0/8", "192.0.2.1", "Alice"}, Deny: []string{"198.51.100.0/24", "badclient"}}
 	allow, deny, err := a.Parsed()
 	if err != nil {
 		t.Fatalf("Parsed() error = %v", err)
 	}
-	if len(allow) != 2 || len(deny) != 1 {
-		t.Errorf("got %d allow / %d deny networks, want 2/1", len(allow), len(deny))
+	if len(allow.Nets) != 2 || len(allow.Names) != 1 || allow.Names[0] != "alice" {
+		t.Errorf("allow = %d nets / %v names, want 2 nets / [alice]", len(allow.Nets), allow.Names)
+	}
+	if len(deny.Nets) != 1 || len(deny.Names) != 1 {
+		t.Errorf("deny = %d nets / %d names, want 1/1", len(deny.Nets), len(deny.Names))
 	}
 	if a.IsEmpty() {
 		t.Error("IsEmpty() = true for configured ACL")
@@ -640,5 +643,23 @@ func TestResolveStamp_DoQ_ProtocolQUIC(t *testing.T) {
 	}
 	if server.Protocol != ProtoQUIC {
 		t.Errorf("DoQ stamp protocol = %q, want %q", server.Protocol, ProtoQUIC)
+	}
+}
+
+func TestOverlapEntries(t *testing.T) {
+	allow := ACLSettings{Allow: []string{"alice", "10.0.0.0/8", "203.0.113.7"}}
+	deny := ACLSettings{Deny: []string{"alice", "badclient", "10.1.0.0/16", "10.0.0.0/8", "198.51.100.0/24"}}
+	allowList, _, err := allow.Parsed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, denyParsed, err := deny.Parsed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlaps := OverlapEntries(allowList, denyParsed)
+	// Expect: "alice" + both nested CIDR pairs (10.0.0.0/8 ⊃ 10.1.0.0/16, 10.0.0.0/8 == 10.0.0.0/8).
+	if len(overlaps) != 3 {
+		t.Errorf("got %d overlaps (%v), want 3", len(overlaps), overlaps)
 	}
 }

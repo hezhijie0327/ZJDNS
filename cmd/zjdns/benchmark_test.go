@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 	"zjdns/config"
+	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/server"
@@ -119,7 +120,7 @@ func BenchmarkServerProcessQuery(b *testing.B) {
 
 	// Warm up cache.
 	for range 100 {
-		if resp := srv.ServeDNS(req, net.IPv4(127, 0, 0, 1), false, "UDP"); resp != nil {
+		if resp := srv.ServeDNS(req, edns.RequestMeta{ClientIP: net.IPv4(127, 0, 0, 1), Protocol: "UDP"}); resp != nil {
 			pool.DefaultMessage.Put(resp)
 		}
 	}
@@ -129,7 +130,7 @@ func BenchmarkServerProcessQuery(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		clientIP := net.IPv4(127, 0, 0, 1)
 		for pb.Next() {
-			resp := srv.ServeDNS(req.Copy(), clientIP, false, "UDP")
+			resp := srv.ServeDNS(req.Copy(), edns.RequestMeta{ClientIP: clientIP, Protocol: "UDP"})
 			if resp != nil {
 				pool.DefaultMessage.Put(resp)
 			}
@@ -151,7 +152,7 @@ func BenchmarkServerProcessQuery_Cold(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		clientIP := net.IPv4(127, 0, 0, 1)
 		for pb.Next() {
-			resp := srv.ServeDNS(req.Copy(), clientIP, false, "UDP")
+			resp := srv.ServeDNS(req.Copy(), edns.RequestMeta{ClientIP: clientIP, Protocol: "UDP"})
 			if resp != nil {
 				pool.DefaultMessage.Put(resp)
 			}
@@ -195,14 +196,14 @@ func BenchmarkServerDNSRequest_MultipleTypes(b *testing.B) {
 
 	// Warm cache.
 	for range 10 {
-		if resp := srv.ServeDNS(reqs[0], net.IPv4(127, 0, 0, 1), false, "UDP"); resp != nil {
+		if resp := srv.ServeDNS(reqs[0], edns.RequestMeta{ClientIP: net.IPv4(127, 0, 0, 1), Protocol: "UDP"}); resp != nil {
 			pool.DefaultMessage.Put(resp)
 		}
 	}
 
 	b.ResetTimer()
 	for b.Loop() {
-		if resp := srv.ServeDNS(reqs[b.N%len(reqs)].Copy(), net.IPv4(127, 0, 0, 1), false, "UDP"); resp != nil {
+		if resp := srv.ServeDNS(reqs[b.N%len(reqs)].Copy(), edns.RequestMeta{ClientIP: net.IPv4(127, 0, 0, 1), Protocol: "UDP"}); resp != nil {
 			pool.DefaultMessage.Put(resp)
 		}
 	}
@@ -224,7 +225,7 @@ func BenchmarkServerCacheHit(b *testing.B) {
 
 	// Warm the cache: the Zone middleware answers, CacheStore stores it.
 	for range 10 {
-		if resp := srv.ServeDNS(req, net.IPv4(127, 0, 0, 1), false, "UDP"); resp != nil {
+		if resp := srv.ServeDNS(req, edns.RequestMeta{ClientIP: net.IPv4(127, 0, 0, 1), Protocol: "UDP"}); resp != nil {
 			pool.DefaultMessage.Put(resp)
 		}
 	}
@@ -234,7 +235,7 @@ func BenchmarkServerCacheHit(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		clientIP := net.IPv4(127, 0, 0, 1)
 		for pb.Next() {
-			resp := srv.ServeDNS(req, clientIP, false, "UDP")
+			resp := srv.ServeDNS(req, edns.RequestMeta{ClientIP: clientIP, IsSecure: false, Protocol: "UDP"})
 			if resp == nil {
 				b.Fatal("nil response")
 			}

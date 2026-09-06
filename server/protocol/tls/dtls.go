@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 	"zjdns/config"
+	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
@@ -219,7 +220,7 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 			defer pool.DefaultMessage.Put(query)
 			defer pool.DefaultBuffer.Put(buf)
 
-			response := s.handler.ServeDNS(query, clientIP, true, config.ProtoDTLS)
+			response := s.handler.ServeDNS(query, edns.RequestMeta{ClientIP: clientIP, IsSecure: true, Protocol: config.ProtoDTLS})
 			if response == query { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
 				response = nil
 			}

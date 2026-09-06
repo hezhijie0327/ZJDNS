@@ -3,6 +3,7 @@ package tls
 import (
 	"net"
 	"testing"
+	"zjdns/edns"
 
 	"codeberg.org/miekg/dns"
 	eTLS "gitlab.com/go-extension/tls"
@@ -12,7 +13,7 @@ import (
 // DNS processing.
 type rfc8998TestHandler struct{}
 
-func (rfc8998TestHandler) ServeDNS(*dns.Msg, net.IP, bool, string) *dns.Msg { return nil }
+func (rfc8998TestHandler) ServeDNS(*dns.Msg, edns.RequestMeta) *dns.Msg { return nil }
 
 // dialHandshake serves serverCfg on a loopback listener (production wrapping:
 // eTLS.NewListener) and connects with clientCfg, returning both sides'

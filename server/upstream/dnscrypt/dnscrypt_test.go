@@ -11,6 +11,7 @@ import (
 	"time"
 	"zjdns/config"
 	"zjdns/dnscert"
+	"zjdns/edns"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	serverdnscrypt "zjdns/server/protocol/dnscrypt"
 
@@ -23,7 +24,7 @@ type testDNSHandler struct{}
 // bigResponseHandler returns many A records to force TC truncation.
 type bigResponseHandler struct{ n int }
 
-func (h *testDNSHandler) ServeDNS(req *dns.Msg, _ net.IP, _ bool, _ string) *dns.Msg {
+func (h *testDNSHandler) ServeDNS(req *dns.Msg, _ edns.RequestMeta) *dns.Msg {
 	reply := dnsutil.SetReply(new(dns.Msg), req)
 	reply.Authoritative = true
 	q := req.Question[0]
@@ -438,7 +439,7 @@ func TestCertCacheRetainedOnTimeout(t *testing.T) {
 	}
 }
 
-func (h *bigResponseHandler) ServeDNS(req *dns.Msg, _ net.IP, _ bool, _ string) *dns.Msg {
+func (h *bigResponseHandler) ServeDNS(req *dns.Msg, _ edns.RequestMeta) *dns.Msg {
 	reply := dnsutil.SetReply(new(dns.Msg), req)
 	reply.Authoritative = true
 	qname := req.Question[0].Header().Name
@@ -454,7 +455,7 @@ func (h *bigResponseHandler) ServeDNS(req *dns.Msg, _ net.IP, _ bool, _ string) 
 }
 
 func startTestDNSCryptServerWithHandler(t *testing.T, handler interface {
-	ServeDNS(*dns.Msg, net.IP, bool, string) *dns.Msg
+	ServeDNS(*dns.Msg, edns.RequestMeta) *dns.Msg
 },
 ) (addr, stamp string) {
 	t.Helper()
