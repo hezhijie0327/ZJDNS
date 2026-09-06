@@ -110,7 +110,7 @@ func TestQueryNameservers_NXDOMAINEarlyReturn(t *testing.T) {
 	start := time.Now()
 	resp, _, err := r.queryNameserversConcurrent(ctx, []string{"10.0.0.1:53", "10.0.0.2:53"},
 		Question{Name: "nonexistent.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET},
-		nil, false, "example.com.", defense.Detector{})
+		nil, false, "example.com.", defense.Detector{}, false)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -139,7 +139,7 @@ func TestQueryNameservers_FastNOERRORNotDelayed(t *testing.T) {
 	start := time.Now()
 	resp, _, err := r.queryNameserversConcurrent(ctx, []string{"10.0.0.1:53", "10.0.0.2:53"},
 		Question{Name: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET},
-		nil, false, "example.com.", defense.Detector{})
+		nil, false, "example.com.", defense.Detector{}, false)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -179,7 +179,7 @@ func TestQueryNameservers_SemaphoreDoesNotBlockLaunch(t *testing.T) {
 	start := time.Now()
 	resp, _, err := r.queryNameserversConcurrent(ctx, nameservers,
 		Question{Name: "ias.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET},
-		nil, false, "example.com.", defense.Detector{})
+		nil, false, "example.com.", defense.Detector{}, false)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -291,7 +291,7 @@ func TestQueryNameservers_StragglerCanceled(t *testing.T) {
 	defer cancel()
 	resp, _, err := r.queryNameserversConcurrent(ctx, []string{"10.0.0.1:53", "10.0.0.2:53"},
 		Question{Name: "nonexistent.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET},
-		nil, false, "example.com.", defense.Detector{})
+		nil, false, "example.com.", defense.Detector{}, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestQueryNameserversConcurrent_WidenBeyondFirstBatch(t *testing.T) {
 
 	start := time.Now()
 	resp, _, err := r.queryNameserversConcurrent(t.Context(), servers,
-		Question{Name: "widen.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false, "test.", defense.Detector{})
+		Question{Name: "widen.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false, "test.", defense.Detector{}, false)
 	if err != nil {
 		t.Fatalf("query failed: %v", err)
 	}

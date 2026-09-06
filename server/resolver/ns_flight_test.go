@@ -150,7 +150,7 @@ func TestQueryNameservers_InflightCapDropsQueries(t *testing.T) {
 	defer cancel()
 	_, _, err := r.queryNameserversConcurrent(ctx, []string{"10.0.0.1:53"},
 		Question{Name: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET},
-		nil, false, "example.com.", defense.Detector{})
+		nil, false, "example.com.", defense.Detector{}, false)
 
 	if err == nil {
 		t.Fatal("expected an error when the in-flight cap drops every query")

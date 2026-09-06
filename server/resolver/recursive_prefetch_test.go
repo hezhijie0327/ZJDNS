@@ -116,7 +116,7 @@ func TestResolve_FirstIterationDNSKEYPrefetch(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
-			qr := r.resolve(ctx, Question{Name: "example.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, 0, false)
+			qr := r.resolve(ctx, Question{Name: "example.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, 0, false, false)
 			if qr.Err != nil {
 				t.Fatalf("resolve failed: %v (without the root-start prefetch the data query deadlocks waiting for the DNSKEY query)", qr.Err)
 			}

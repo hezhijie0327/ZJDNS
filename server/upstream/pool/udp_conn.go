@@ -56,6 +56,28 @@ type UDPConn struct {
 // acquirePacketBuf returns a payload buffer of at least n bytes and the
 // release func that must be called exactly once after the payload has been
 // consumed (read, decrypted, unpacked).
+// retransmitTimerPool recycles the per-exchange retransmit timer — see
+// Exchange.  Timers are returned stopped; Go 1.23+ guarantees a stopped
+// timer's channel never carries a stale value, so pooling needs no drain.
+var retransmitTimerPool = sync.Pool{
+	New: func() any {
+		t := time.NewTimer(config.DefaultUDPRetransmitInterval)
+		t.Stop()
+		return t
+	},
+}
+
+func acquireRetransmitTimer() *time.Timer {
+	t := retransmitTimerPool.Get().(*time.Timer)
+	t.Reset(config.DefaultUDPRetransmitInterval)
+	return t
+}
+
+func releaseRetransmitTimer(t *time.Timer) {
+	t.Stop()
+	retransmitTimerPool.Put(t)
+}
+
 func acquirePacketBuf(n int) (packet []byte, release func()) {
 	switch {
 	case n <= packetBufSmall:
@@ -113,6 +135,9 @@ func (c *UDPConn) NextID() uint16 {
 	return id
 }
 
+// retransmitTimerPool recycles the per-exchange retransmit timer — see
+// Exchange.  Timers are returned stopped; Go 1.23+ guarantees a stopped
+// timer's channel never carries a stale value, so pooling needs no drain.
 // Exchange sends payload and waits for the response whose extracted match key
 // equals matchKey.  The returned slice is owned by the caller.
 func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string) ([]byte, error) {
@@ -179,9 +204,13 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 	// response — a single lost packet otherwise stalls the query until the
 	// full context deadline (RFC 1035 §4.2.1).  The retransmit reuses the
 	// same tracking ID, so the (possibly duplicate) response still matches
-	// the registered in-flight key.
-	retransmitTimer := time.NewTimer(config.DefaultUDPRetransmitInterval)
-	defer retransmitTimer.Stop()
+	// the registered in-flight key.  The timer comes from a pool: one
+	// NewTimer per exchange was a measured allocation hotspot under
+	// recursive load (pprof alloc_space, 2026-09); Go 1.23+ timer semantics
+	// (unbuffered channel, no stale-value race) make Reset-after-Stop safe
+	// without draining.
+	retransmitTimer := acquireRetransmitTimer()
+	defer releaseRetransmitTimer(retransmitTimer)
 	retransmits := 0
 	for {
 		select {

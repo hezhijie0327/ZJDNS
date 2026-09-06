@@ -120,7 +120,7 @@ func TestResolve_PoisonProbeOverlapsDataQuery(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 			start := time.Now()
-			qr := r.resolve(ctx, Question{Name: qname, Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, 0, false)
+			qr := r.resolve(ctx, Question{Name: qname, Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, 0, false, false)
 			elapsed := time.Since(start)
 
 			if qr.Err != nil {

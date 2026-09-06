@@ -191,6 +191,7 @@ func New(cfg *Config) (*Resolver, error) {
 		resolver:      r,
 		cache:         cfg.Cache,
 		delegations:   lrumap.NewSharded[string, *delegationEntry](delegationMax),
+		nsAddrFmt:     lrumap.New[string, *nsAddrFmtEntry](config.DefaultNSAddrFmtCacheSize),
 		ctx:           cfg.Ctx,
 		addressFamily: cfg.AddressFamily,
 	}

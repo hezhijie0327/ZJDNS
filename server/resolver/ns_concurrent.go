@@ -22,7 +22,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector defense.Detector) (*dns.Msg, defense.Verdict, error) {
+func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector defense.Detector, narrow bool) (*dns.Msg, defense.Verdict, error) {
 	if len(nameservers) == 0 {
 		return nil, defense.VerdictClean, errors.New("no nameservers")
 	}
@@ -71,21 +71,29 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	baseMsg.UDPSize = pool.RecursiveUDPBufferSize
 	// RFC 10029: bundle the configured types (minus the primary QTYPE).
 	attachMQType(baseMsg, r.mqtype, question.Qtype)
-	launchNS := func(nsAddr string) {
+	// Per-server UpstreamServer structs share one backing array per launch
+	// group: the guards/protocol are identical across servers, only Address
+	// varies, and a separate heap object per launch was a measured
+	// allocation hotspot under recursive load (pprof alloc_space, 2026-09).
+	// The array is sized to the group actually launched — the widen group
+	// allocates its own only when it fires (the first win usually lands
+	// inside the first batch and widening never happens).
+	fillServer := func(srvs []config.UpstreamServer, i int, nsAddr string) *config.UpstreamServer {
 		protocol := config.ProtoUDP
 		if forceTCP {
 			protocol = config.ProtoTCP
 		}
-		server := &config.UpstreamServer{
-			Address:    nsAddr,
-			Protocol:   protocol,
-			Proxy:      r.resolver.recursiveProxyURL,
-			Spoofguard: r.spoofguard && protocol == config.ProtoUDP,
-			Splitguard: r.splitguard && protocol == config.ProtoTCP,
-			HopGuard:   r.hopguard && protocol == config.ProtoUDP,
-			CapsGuard:  r.capsguard, // protocol-agnostic (DNS 0x20 echo check)
-		}
-
+		server := &srvs[i]
+		server.Address = nsAddr
+		server.Protocol = protocol
+		server.Proxy = r.resolver.recursiveProxyURL
+		server.Spoofguard = r.spoofguard && protocol == config.ProtoUDP
+		server.Splitguard = r.splitguard && protocol == config.ProtoTCP
+		server.HopGuard = r.hopguard && protocol == config.ProtoUDP
+		server.CapsGuard = r.capsguard // protocol-agnostic (DNS 0x20 echo check)
+		return server
+	}
+	launchNS := func(server *config.UpstreamServer) {
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("Query nameserver")
 
@@ -102,7 +110,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			// join the storm.
 			if r.inFlightQueries.Add(1) > config.DefaultMaxRecursiveInflightQueries {
 				r.inFlightQueries.Add(-1)
-				log.Debugf("RECURSION: in-flight query cap (%d) reached — skipping %s for %s", config.DefaultMaxRecursiveInflightQueries, nsAddr, question.Name)
+				log.Debugf("RECURSION: in-flight query cap (%d) reached — skipping %s for %s", config.DefaultMaxRecursiveInflightQueries, server.Address, question.Name)
 				return nil
 			}
 			defer r.inFlightQueries.Add(-1)
@@ -161,7 +169,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 				// in the same zone would otherwise validate and poison the
 				// cache (R3-H1).
 				if !responseEchoesQuestion(result.Response, question) {
-					log.Debugf("RECURSION: ns=%s question echo mismatch for %s %s", nsAddr, question.Name, dns.TypeToString[question.Qtype])
+					log.Debugf("RECURSION: ns=%s question echo mismatch for %s %s", server.Address, question.Name, dns.TypeToString[question.Qtype])
 					pool.DefaultMessage.Put(result.Response)
 					return nil
 				}
@@ -187,7 +195,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 						}
 					}
 					if hasNonAlias {
-						log.Debugf("RECURSION: rejecting malformed NXDOMAIN+answer — poison from %s", nsAddr)
+						log.Debugf("RECURSION: rejecting malformed NXDOMAIN+answer — poison from %s", server.Address)
 						poisonRejected.Store(true)
 						pool.DefaultMessage.Put(result.Response)
 						return nil
@@ -198,11 +206,11 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 					// the authoritative server could not deliver a complete
 					// answer even over a stream transport (RFC 1035 §4.2.2).
 					if result.Response.Truncated {
-						log.Debugf("RECURSION: ns=%s truncated response for %s %s — skipping", nsAddr, question.Name, dns.TypeToString[question.Qtype])
+						log.Debugf("RECURSION: ns=%s truncated response for %s %s — skipping", server.Address, question.Name, dns.TypeToString[question.Qtype])
 						pool.DefaultMessage.Put(result.Response)
 						return nil
 					}
-					if r.poisonguard && protocol == config.ProtoUDP {
+					if r.poisonguard && server.Protocol == config.ProtoUDP {
 						// UDP-only heuristic: GFW injection is spoofed UDP
 						// datagrams; a response that arrived over TCP passed
 						// the handshake + sequence checks and cannot be
@@ -212,7 +220,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 						// answers A for cnnic.cn).
 						v := detector.Validate(currentDomain, normalizedQname, result.Response)
 						if v == defense.VerdictPoisoned {
-							log.Debugf("RECURSION: rejecting poisoned response from %s", nsAddr)
+							log.Debugf("RECURSION: rejecting poisoned response from %s", server.Address)
 							poisonRejected.Store(true)
 							pool.DefaultMessage.Put(result.Response)
 							return nil
@@ -236,11 +244,11 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 					// stored via CAS so the first one wins, and the wait
 					// loop below serves it immediately or after the
 					// optional deferral window.
-					if r.poisonguard && protocol == config.ProtoUDP {
+					if r.poisonguard && server.Protocol == config.ProtoUDP {
 						// UDP-only heuristic — see the NOERROR branch.
 						v := detector.Validate(currentDomain, normalizedQname, result.Response)
 						if v == defense.VerdictPoisoned {
-							log.Debugf("RECURSION: rejecting poisoned response from %s", nsAddr)
+							log.Debugf("RECURSION: rejecting poisoned response from %s", server.Address)
 							poisonRejected.Store(true)
 							pool.DefaultMessage.Put(result.Response)
 							return nil
@@ -262,14 +270,14 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 
 				if rcode == dns.RcodeFormatError {
 					pool.DefaultMessage.Put(result.Response)
-					r.retryWithoutEDNS(queryCtx, resultChan, cancel, server, question, nsAddr, detector, currentDomain, normalizedQname, &poisonRejected)
+					r.retryWithoutEDNS(queryCtx, resultChan, cancel, server, question, server.Address, detector, currentDomain, normalizedQname, &poisonRejected)
 					return nil
 				}
 
-				log.Debugf("RECURSION: ns=%s rcode=%s for %s %s", nsAddr, dns.RcodeToString[rcode], question.Name, dns.TypeToString[question.Qtype])
+				log.Debugf("RECURSION: ns=%s rcode=%s for %s %s", server.Address, dns.RcodeToString[rcode], question.Name, dns.TypeToString[question.Qtype])
 				pool.DefaultMessage.Put(result.Response)
 			} else if result.Error != nil {
-				log.Debugf("RECURSION: ns=%s error=%v for %s %s", nsAddr, result.Error, question.Name, dns.TypeToString[question.Qtype])
+				log.Debugf("RECURSION: ns=%s error=%v for %s %s", server.Address, result.Error, question.Name, dns.TypeToString[question.Qtype])
 			}
 			return nil
 		})
@@ -280,28 +288,37 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	// the same errgroup — g.Wait() covers its late g.Go launches, so the
 	// pooled baseMsg is never returned while a widened worker still reads
 	// it, and a first-win cancel() aborts the widen before it fires.
-	if len(nameservers) > config.DefaultFanoutFirstBatch {
-		for _, ns := range nameservers[:config.DefaultFanoutFirstBatch] {
-			launchNS(ns)
-		}
-		rest := nameservers[config.DefaultFanoutFirstBatch:]
+	//
+	// narrow (infrastructure walks — NS-address resolution): race a smaller
+	// first batch and never widen.  These queries hit root/TLD servers that
+	// answer from any racer; the extra candidates were almost pure
+	// cancel-and-dial churn, the dominant syscall volume under recursive
+	// load (pprof, 2026-09).
+	firstBatch := config.DefaultFanoutFirstBatch
+	if narrow {
+		firstBatch = config.DefaultInfraFanoutFirstBatch
+	}
+	batchSize := min(len(nameservers), firstBatch)
+	batch := make([]config.UpstreamServer, batchSize)
+	for i, ns := range nameservers[:batchSize] {
+		launchNS(fillServer(batch, i, ns))
+	}
+	if !narrow && len(nameservers) > firstBatch {
+		rest := nameservers[firstBatch:]
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("Fan-out widen")
 			t := time.NewTimer(config.DefaultFanoutWidenDelay)
 			defer t.Stop()
 			select {
 			case <-t.C:
-				for _, ns := range rest {
-					launchNS(ns)
+				widen := make([]config.UpstreamServer, len(rest))
+				for i, ns := range rest {
+					launchNS(fillServer(widen, i, ns))
 				}
 			case <-queryCtx.Done():
 			}
 			return nil
 		})
-	} else {
-		for _, ns := range nameservers {
-			launchNS(ns)
-		}
 	}
 
 	// Wait for first successful response, or until all goroutines complete.

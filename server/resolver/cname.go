@@ -173,7 +173,7 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 		// detection can't distinguish real from spoofed answers).
 		forceTCP := poisonOccurred
 
-		qr := c.resolver.recursive.resolve(ctx, currentQuestion, ecs, 0, forceTCP)
+		qr := c.resolver.recursive.resolve(ctx, currentQuestion, ecs, 0, forceTCP, false)
 		if qr.Err != nil {
 			return QueryResult{Cacheable: true, Err: qr.Err}
 		}

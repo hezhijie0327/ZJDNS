@@ -12,6 +12,7 @@ import (
 	"zjdns/server/resolver/probe"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // ── Latency-sorted NS address cache ──────────────────────────────────────────
@@ -233,6 +234,17 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) [
 		return nil
 	}
 
+	// Memoized strings first: a fresh hit skips the GetTypes wire copy +
+	// Unpack + per-record String/JoinHostPort entirely (the RR.String()
+	// allocation hotspot under recursive load).  nil-guarded — bare test
+	// harnesses construct Recursive without the map.
+	if r.nsAddrFmt != nil {
+		key := zdnsutil.Canonical(dnsutil.Fqdn(nsName))
+		if e, ok := r.nsAddrFmt.Get(key); ok && log.NowUnix()-e.ts < int64(config.DefaultNSAddrFmtTTL.Seconds()) {
+			return e.addrs
+		}
+	}
+
 	// One query fetches both the A and AAAA entries (NS address lookups
 	// never carry ECS).
 	entries, found, expired := r.cache.GetTypes(nsName, dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA})
@@ -274,6 +286,10 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) [
 		if probe.TryProbeNSAddrs(r.cache, addrs) {
 			go func() { defer zdnsutil.HandlePanic("NS addr probe"); probe.ProbeNSAddrs(r.ctx, r.cache, addrs) }()
 		}
+	}
+
+	if r.nsAddrFmt != nil && len(addrs) > 0 {
+		r.nsAddrFmt.Set(zdnsutil.Canonical(dnsutil.Fqdn(nsName)), &nsAddrFmtEntry{ts: log.NowUnix(), addrs: addrs})
 	}
 
 	return addrs

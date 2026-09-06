@@ -70,7 +70,7 @@ func (r *Recursive) resolveNSAddrFlight(ctx context.Context, nsName string, qtyp
 // nsAddrWalk runs the actual walk for one NS name/qtype pair and reduces the
 // response to addresses + answer records.
 func (r *Recursive) nsAddrWalk(ctx context.Context, nsName string, qtype uint16, depth int, forceTCP bool) nsAddrFlightResult {
-	qr := r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP)
+	qr := r.resolve(ctx, Question{Name: nsName, Qtype: qtype, Qclass: dns.ClassINET}, nil, depth, forceTCP, true)
 	if qr.Err != nil {
 		return nsAddrFlightResult{}
 	}

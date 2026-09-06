@@ -101,6 +101,14 @@ type Recursive struct {
 	nsAddrFlightOnce sync.Once
 	nsAddrFlight     *pending.ResultGroup[string, nsAddrFlightResult]
 
+	// nsAddrFmt memoizes the formatted "ip:port" address strings per NS
+	// name.  lookupNSAddrsFromCache otherwise re-runs GetTypes + Unpack +
+	// netip.String + JoinHostPort for every cached NS-name hit on every
+	// walk level — the RR.String() allocation hotspot under recursive load
+	// (pprof alloc_space, 2026-09).  Entries are trusted for
+	// DefaultNSAddrFmtTTL, far inside the underlying records' stale window.
+	nsAddrFmt *lrumap.Map[string, *nsAddrFmtEntry]
+
 	// inFlightQueries counts recursive fan-out queries currently in flight
 	// across all walks.  queryNameserversConcurrent drops new queries above
 	// config.DefaultMaxRecursiveInflightQueries — the last-line amplifier
@@ -108,8 +116,18 @@ type Recursive struct {
 	inFlightQueries atomic.Int64
 }
 
+// nsAddrFmtEntry is one memoized NS-address string set.
+type nsAddrFmtEntry struct {
+	ts    int64 // log.NowUnix() at memoization
+	addrs []string
+}
+
 // resolve walks the root→TLD→authoritative hierarchy for a single question.
-func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.ECSOption, depth int, forceTCP bool) QueryResult {
+// resolve walks the root→TLD→authoritative hierarchy for one question.
+// infra marks an infrastructure walk (NS-address resolution): its fan-outs
+// race a smaller first batch and never widen — root/TLD servers answer from
+// any racer and the extra candidates were pure cancel churn.
+func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.ECSOption, depth int, forceTCP, infra bool) QueryResult {
 	if depth > config.DefaultMaxRecursionDepth {
 		log.Debugf("RECURSION: depth exceeded (depth=%d, max=%d) for %s", depth, config.DefaultMaxRecursionDepth, question.Name)
 		return QueryResult{Cacheable: true, Err: fmt.Errorf("recursion depth exceeded: %d", depth)}
@@ -157,7 +175,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 	// Root-domain query (normalizedQname is empty for the root zone ".").
 	if normalizedQname == "." {
-		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard, infra)
 		if verdict == defense.VerdictPoisoned {
 			poisonSeen = true
 			// A successful-but-poisoned UDP response for the root zone must
@@ -168,7 +186,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 				if response != nil {
 					pool.DefaultMessage.Put(response)
 				}
-				qr := r.resolve(ctx, question, ecs, depth, true)
+				qr := r.resolve(ctx, question, ecs, depth, true, infra)
 				qr.Poisoned = true
 				return qr
 			}
@@ -176,7 +194,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		if err != nil {
 			if verdict == defense.VerdictPoisoned && !forceTCP {
 				log.Debugf("RECURSION: poisonguard triggered TCP fallback for %s (zone=.)", question.Name)
-				qr := r.resolve(ctx, question, ecs, depth, true)
+				qr := r.resolve(ctx, question, ecs, depth, true, infra)
 				qr.Poisoned = true
 				return qr
 			}
@@ -260,7 +278,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			}()
 		}
 
-		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard, infra)
 
 		// Join the level's DNSKEY prefetch before anything touches chain —
 		// from here on the main goroutine owns chain again.  The wait is
@@ -291,7 +309,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 				if response != nil {
 					pool.DefaultMessage.Put(response)
 				}
-				qr := r.resolve(ctx, question, ecs, depth, true)
+				qr := r.resolve(ctx, question, ecs, depth, true, infra)
 				qr.Poisoned = true
 				return qr
 			}
@@ -310,7 +328,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 				if response != nil {
 					pool.DefaultMessage.Put(response)
 				}
-				qr := r.resolve(ctx, question, ecs, depth, true)
+				qr := r.resolve(ctx, question, ecs, depth, true, infra)
 				qr.Poisoned = true
 				return qr
 			}

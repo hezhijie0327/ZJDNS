@@ -251,7 +251,7 @@ func (r *Recursive) validateOrRetry(ctx context.Context, response *dns.Msg, name
 func (r *Recursive) tryRRSIGRetry(ctx context.Context, response *dns.Msg, nameservers []string, question Question, currentDomain string, ecs *edns.ECSOption, forceTCP bool, verifiedKeys []*dns.DNSKEY) bool {
 	retryCtx, retryCancel := context.WithTimeout(ctx, config.DefaultDNSQueryTimeout)
 	defer retryCancel()
-	retryResp, _, retryErr := r.queryNameserversConcurrent(retryCtx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard)
+	retryResp, _, retryErr := r.queryNameserversConcurrent(retryCtx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard, false)
 	if retryErr != nil || retryResp == nil {
 		log.Debugf("SECURITY: RRSIG retry failed for %s", question.Name)
 		return false

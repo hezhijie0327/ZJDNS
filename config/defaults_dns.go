@@ -67,6 +67,13 @@ const (
 	// walk waited out the full timeout.  3s fails fast and moves on.
 	DefaultRecursiveQueryTimeout = 3 * time.Second
 
+	// DefaultNSAddrFmtTTL and DefaultNSAddrFmtCacheSize bound the resolver's
+	// memoized NS-address "ip:port" strings (Recursive.nsAddrFmt).  30s is
+	// far inside the underlying records' stale window, so a memoized set is
+	// never staler than what serve-stale would legitimately hand out.
+	DefaultNSAddrFmtTTL       = 30 * time.Second
+	DefaultNSAddrFmtCacheSize = 4096
+
 	// DefaultNSAddrFlightTimeout is the intrinsic wall-clock budget of every
 	// NS-address flight leader (resolveNSAddrFlight).  Leadership is sticky
 	// and runs under the FIRST caller's context, so a leader started by a
@@ -86,6 +93,14 @@ const (
 	// SetLimit cap, widening is timer-driven: slow batch members never
 	// hold slots the rest queue behind.
 	DefaultFanoutFirstBatch = 6
+
+	// DefaultInfraFanoutFirstBatch is the first-batch size for narrow
+	// (infrastructure-walk) fan-outs: NS-address resolution queries against
+	// root/TLD servers, which answer from any racer — extra candidates were
+	// measured as cancel-and-dial churn dominating syscall volume under
+	// recursive load (2026-09).  Narrow fan-outs never widen.
+	DefaultInfraFanoutFirstBatch = 3
+
 	DefaultFanoutWidenDelay = 75 * time.Millisecond
 
 	// DefaultPoisonProbeTimeout bounds the TLD hijack probe query.
