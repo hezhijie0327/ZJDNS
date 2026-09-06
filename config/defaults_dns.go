@@ -67,6 +67,28 @@ const (
 	// walk waited out the full timeout.  3s fails fast and moves on.
 	DefaultRecursiveQueryTimeout = 3 * time.Second
 
+	// DefaultCoveredNSAddrTimeout bounds the independent resolution of
+	// delegation NS names NOT covered by glue/cache when glue or cache
+	// already addresses enough (≥2) of the delegation's nameservers.  The
+	// walk can proceed on those addresses now; a slow out-of-bailiwick NS
+	// subtree (nested delegations, e.g. the huaweicloud-dns fleet behind
+	// cdnhwc2.com) must not stall the cold walk for the full
+	// DefaultRecursiveQueryTimeout — observed as a 3s cold-walk tail
+	// (www.douyin.com, 2026-09).  One RTT territory: healthy NS-name
+	// resolutions settle well inside it, and the result still populates the
+	// NS-address cache for subsequent queries.
+	DefaultCoveredNSAddrTimeout = 500 * time.Millisecond
+
+	// DefaultNSAddrFlightTimeout is the intrinsic wall-clock budget of every
+	// NS-address flight leader (resolveNSAddrFlight).  Leadership is sticky
+	// and runs under the FIRST caller's context, so a leader started by a
+	// long-budget caller keeps walking after every follower moved on —
+	// through cross-zone NS cycles (huaweicloud-dns.cn ↔
+	// hwclouds-dns.net/.com) that wedge until the leader's own ctx expires.
+	// Composes with the caller's budget (whichever deadline is earlier) so a
+	// shorter caller budget still cuts the flight.
+	DefaultNSAddrFlightTimeout = 1 * time.Second
+
 	// Recursive fan-out batching: the walk races the latency-ranked first
 	// DefaultFanoutFirstBatch authorities immediately and widens to every
 	// remaining one DefaultFanoutWidenDelay later if none answered — the

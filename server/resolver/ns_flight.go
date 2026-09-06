@@ -32,6 +32,17 @@ type nsAddrFlightResult struct {
 // leader walks; concurrent callers with the same key wait for and share the
 // result, bounded by their own ctx.
 //
+// The leader runs under an intrinsic DefaultNSAddrFlightTimeout budget: a
+// leader started by a long-budget caller (an earlier CNAME hop's fan-out
+// carrying the full DefaultRecursiveQueryTimeout) keeps walking through
+// cross-zone NS cycles (huaweicloud-dns.cn → hwclouds-dns.net/.com
+// referring to each other) that wedge until the leader's own ctx expires.
+// The nested WithTimeout composes — the flight ends at whichever deadline
+// is earlier, so the leader still respects a shorter caller budget (the
+// covered-glue fan-out's DefaultCoveredNSAddrTimeout) while never running
+// longer than 1s regardless of who started the flight.  The result still
+// populates the NS-address cache for later queries.
+//
 // Cross-name cycles (A's NS addresses need B's walk and vice versa) degrade
 // into bounded waits: the nested join becomes a follower, its level ctx
 // expires, and the walk continues without those addresses — never a storm.
@@ -45,8 +56,10 @@ func (r *Recursive) resolveNSAddrFlight(ctx context.Context, nsName string, qtyp
 	key := zdnsutil.Canonical(dnsutil.Fqdn(nsName)) + "|" + dns.TypeToString[qtype]
 	// _ = error/leader: a follower whose ctx expired gets the zero value;
 	// the len(res.addrs) checks below treat it as a miss.
-	res, _, _ := r.nsAddrFlight.Do(ctx, key, func(ctx context.Context) (nsAddrFlightResult, error) {
-		out := r.nsAddrWalk(ctx, nsName, qtype, depth, forceTCP)
+	res, _, _ := r.nsAddrFlight.Do(ctx, key, func(leaderCtx context.Context) (nsAddrFlightResult, error) {
+		flightCtx, flightCancel := context.WithTimeout(leaderCtx, config.DefaultNSAddrFlightTimeout)
+		defer flightCancel()
+		out := r.nsAddrWalk(flightCtx, nsName, qtype, depth, forceTCP)
 		if len(out.addrs) == 0 && len(out.answer) == 0 {
 			return nsAddrFlightResult{}, errors.New("ns address walk failed")
 		}

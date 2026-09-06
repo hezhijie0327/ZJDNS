@@ -126,7 +126,24 @@ func (r *Recursive) resolveNextNameservers(
 		uncovered = append(uncovered, ns)
 	}
 	if len(uncovered) > 0 {
-		resolved := r.resolveNSAddressesConcurrent(ctx, uncovered, qname, depth, forceTCP)
+		// When glue/cache already addresses enough (≥2, the same threshold
+		// as resolveNSAddressesConcurrent's early exit) of the delegation's
+		// nameservers, bound the independent resolution of the remaining
+		// names to DefaultCoveredNSAddrTimeout instead of the fan-out's
+		// full DefaultRecursiveQueryTimeout: the walk can proceed on the
+		// covered addresses now, and a slow out-of-bailiwick NS subtree
+		// (nested delegations) otherwise stalls the whole cold walk —
+		// observed as a 3s tail on www.douyin.com (huaweicloud-dns.net/.com
+		// NS fleet behind cdnhwc2.com, 2026-09).  The nested WithTimeout
+		// composes: the fan-out's own budget applies whichever deadline is
+		// earlier.
+		resolveCtx := ctx
+		if coveredNames := len(cachedNSNames) + len(result.glue); coveredNames >= 2 {
+			var coveredCancel context.CancelFunc
+			resolveCtx, coveredCancel = context.WithTimeout(ctx, config.DefaultCoveredNSAddrTimeout)
+			defer coveredCancel()
+		}
+		resolved := r.resolveNSAddressesConcurrent(resolveCtx, uncovered, qname, depth, forceTCP)
 		if len(resolved) > 0 {
 			result.addrs = append(result.addrs, resolved...)
 			if result.source == "" {

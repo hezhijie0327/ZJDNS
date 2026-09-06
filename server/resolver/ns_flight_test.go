@@ -5,7 +5,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"zjdns/cache"
 	"zjdns/config"
+	"zjdns/internal/log"
 	"zjdns/server/defense"
 	"zjdns/server/upstream"
 
@@ -94,6 +96,39 @@ func TestNSAddrsFromResult(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestResolveNSAddrFlight_LeaderIntrinsicBudget verifies the leader's
+// intrinsic DefaultNSAddrFlightTimeout budget: leadership is sticky and runs
+// under the FIRST caller's context, so a leader started by a long-budget
+// caller would otherwise keep walking after every follower moved on —
+// through cross-zone NS cycles that wedge until the leader's own ctx expires
+// (observed as the 3s cold-walk tail on www.douyin.com via the
+// huaweicloud-dns fleet, 2026-09).  A hanging authority set under a 5s
+// first-caller budget must end the flight at ~1s, not at the caller's
+// deadline.
+func TestResolveNSAddrFlight_LeaderIntrinsicBudget(t *testing.T) {
+	client := &fakeNSClient{handlers: map[string]nsScriptHandler{
+		"10.0.0.1:53": nsReplyAfter(10*time.Second, dns.RcodeSuccess), // never answers within any budget
+	}}
+	r := newTestRecursive()
+	r.resolver.queryClient = client
+	r.cache = cache.New(config.LimitSettings{}, config.LimitSettings{}, "", "")
+	r.rootCache = []string{"10.0.0.1:53"}
+	r.rootCacheTime = log.NowUnix()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second) // long first-caller budget
+	defer cancel()
+	start := time.Now()
+	res := r.resolveNSAddrFlight(ctx, "ns1.slow-fleet.example.net.", dns.TypeA, 0, false)
+	elapsed := time.Since(start)
+
+	if len(res.addrs) != 0 {
+		t.Fatalf("expected no addresses from a hanging authority, got %v", res.addrs)
+	}
+	if elapsed > 1500*time.Millisecond {
+		t.Fatalf("flight leader ran %v under a 5s first-caller ctx — intrinsic budget not applied (want ≤ %v)", elapsed, config.DefaultNSAddrFlightTimeout)
 	}
 }
 

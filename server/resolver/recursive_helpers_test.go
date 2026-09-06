@@ -5,7 +5,11 @@ import (
 	"net"
 	"net/netip"
 	"testing"
+	"time"
+	"zjdns/cache"
+	"zjdns/config"
 	"zjdns/edns"
+	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
 
 	"codeberg.org/miekg/dns"
@@ -182,6 +186,52 @@ func TestResolveNextNameservers_UsesInBailiwickGlue(t *testing.T) {
 	}
 	if res.source != "glue" {
 		t.Fatalf("expected source=glue, got %q", res.source)
+	}
+}
+
+// TestResolveNextNameservers_CoveredGlueBoundsUncoveredStall guards the
+// cold-walk tail this fix addresses: when glue already addresses ≥2 of the
+// delegation's nameservers, the independent resolution of an uncovered
+// out-of-bailiwick NS name is bounded by DefaultCoveredNSAddrTimeout, not
+// the fan-out's full DefaultRecursiveQueryTimeout — a hanging authority set
+// must not stretch resolveNextNameservers into a 3s stall (observed on cold
+// www.douyin.com walks via the huaweicloud-dns NS fleet behind cdnhwc2.com,
+// 2026-09).
+func TestResolveNextNameservers_CoveredGlueBoundsUncoveredStall(t *testing.T) {
+	client := &fakeNSClient{handlers: map[string]nsScriptHandler{
+		"10.0.0.1:53": nsReplyAfter(10*time.Second, dns.RcodeSuccess), // never answers within any budget
+	}}
+	r := newTestRecursive()
+	r.resolver.queryClient = client
+	// A real (empty) cache is required: with cache nil, getRootServers
+	// bypasses rootCache and returns the real root hints — the fake would
+	// reject them instantly instead of hanging.
+	r.cache = cache.New(config.LimitSettings{}, config.LimitSettings{}, "", "")
+	// The fake is the sole root server — every NS-address walk hangs on it.
+	r.rootCache = []string{"10.0.0.1:53"}
+	r.rootCacheTime = log.NowUnix()
+
+	nsRecords := []*dns.NS{
+		{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, Ns: "ns1.example.com."},
+		{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, Ns: "ns2.example.com."},
+		{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, Ns: "ns3.slow-zone.net."},
+	}
+	resp := &dns.Msg{Extra: []dns.RR{
+		aRec("ns1.example.com", "192.0.2.1"),
+		aRec("ns2.example.com", "192.0.2.2"),
+	}}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	res := r.resolveNextNameservers(ctx, nsRecords, resp, "www.example.com.", "com.", 0, false)
+	elapsed := time.Since(start)
+
+	if len(res.addrs) < 2 {
+		t.Fatalf("expected the 2 glue addresses, got %v", res.addrs)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("covered delegation waited %v for the uncovered NS name — short budget not applied (want ≤ %v)", elapsed, config.DefaultCoveredNSAddrTimeout)
 	}
 }
 
