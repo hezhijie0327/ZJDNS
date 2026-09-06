@@ -23,8 +23,11 @@ type resolvedNSAddrs struct {
 
 // resolveNextNameservers resolves addresses for the nameservers at the next
 // delegation level.  It tries cache first (latency-sorted), then glue
-// records from the referral response, then falls back to independent NS
-// resolution.  Glue records are cached and probed asynchronously.
+// records from the referral response; when either yields a usable address
+// the uncovered NS names resolve in the BACKGROUND (glue-first — the walk
+// proceeds on the covered addresses, results land in the NS-address cache),
+// and only a delegation with nothing covered resolves synchronously.
+// Glue records are cached and probed asynchronously.
 func (r *Recursive) resolveNextNameservers(
 	ctx context.Context,
 	bestNSRecords []*dns.NS,
@@ -126,28 +129,33 @@ func (r *Recursive) resolveNextNameservers(
 		uncovered = append(uncovered, ns)
 	}
 	if len(uncovered) > 0 {
-		// When glue/cache already addresses enough (≥2, the same threshold
-		// as resolveNSAddressesConcurrent's early exit) of the delegation's
-		// nameservers, bound the independent resolution of the remaining
-		// names to DefaultCoveredNSAddrTimeout instead of the fan-out's
-		// full DefaultRecursiveQueryTimeout: the walk can proceed on the
-		// covered addresses now, and a slow out-of-bailiwick NS subtree
-		// (nested delegations) otherwise stalls the whole cold walk —
-		// observed as a 3s tail on www.douyin.com (huaweicloud-dns.net/.com
-		// NS fleet behind cdnhwc2.com, 2026-09).  The nested WithTimeout
-		// composes: the fan-out's own budget applies whichever deadline is
-		// earlier.
-		resolveCtx := ctx
-		if coveredNames := len(cachedNSNames) + len(result.glue); coveredNames >= 2 {
-			var coveredCancel context.CancelFunc
-			resolveCtx, coveredCancel = context.WithTimeout(ctx, config.DefaultCoveredNSAddrTimeout)
-			defer coveredCancel()
-		}
-		resolved := r.resolveNSAddressesConcurrent(resolveCtx, uncovered, qname, depth, forceTCP)
-		if len(resolved) > 0 {
-			result.addrs = append(result.addrs, resolved...)
-			if result.source == "" {
-				result.source = "resolution"
+		// Glue-first (unbound-style): when cache or glue already addresses at
+		// least one usable nameserver — usable after the address-family
+		// filter, so a v6-glue-only delegation on an IPv4-only host still
+		// resolves in the foreground — return immediately.  The walk
+		// proceeds on those addresses while the uncovered names resolve in
+		// the background under the full query budget: off the critical path,
+		// deduped by the NS-address flight, and the results land in the
+		// NS-address cache for subsequent queries.  A blocking wait — even
+		// the bounded one this replaced — let a slow out-of-bailiwick NS
+		// subtree (the huaweicloud-dns fleet cycle behind cdnhwc2.com)
+		// dominate the cold-walk tail (2026-09).  With nothing addressed at
+		// all, the independent resolution is the only source of addresses
+		// and stays in the foreground.
+		if usable := filterByFamily(result.addrs, r.addressFamily); len(usable) > 0 {
+			go func() {
+				defer zdnsutil.HandlePanic("Background NS refinement")
+				bgCtx, bgCancel := context.WithTimeout(context.WithoutCancel(ctx), config.DefaultRecursiveQueryTimeout)
+				defer bgCancel()
+				r.resolveNSAddressesConcurrent(bgCtx, uncovered, qname, depth, forceTCP)
+			}()
+		} else {
+			resolved := r.resolveNSAddressesConcurrent(ctx, uncovered, qname, depth, forceTCP)
+			if len(resolved) > 0 {
+				result.addrs = append(result.addrs, resolved...)
+				if result.source == "" {
+					result.source = "resolution"
+				}
 			}
 		}
 	}

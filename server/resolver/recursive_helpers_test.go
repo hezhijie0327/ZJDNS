@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 	"zjdns/cache"
@@ -11,6 +12,7 @@ import (
 	"zjdns/edns"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
+	"zjdns/server/upstream"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -189,17 +191,21 @@ func TestResolveNextNameservers_UsesInBailiwickGlue(t *testing.T) {
 	}
 }
 
-// TestResolveNextNameservers_CoveredGlueBoundsUncoveredStall guards the
-// cold-walk tail this fix addresses: when glue already addresses ≥2 of the
-// delegation's nameservers, the independent resolution of an uncovered
-// out-of-bailiwick NS name is bounded by DefaultCoveredNSAddrTimeout, not
-// the fan-out's full DefaultRecursiveQueryTimeout — a hanging authority set
-// must not stretch resolveNextNameservers into a 3s stall (observed on cold
-// www.douyin.com walks via the huaweicloud-dns NS fleet behind cdnhwc2.com,
-// 2026-09).
-func TestResolveNextNameservers_CoveredGlueBoundsUncoveredStall(t *testing.T) {
+// TestResolveNextNameservers_CoveredGlueProceedsInBackground pins the
+// glue-first behaviour: with cache/glue already addressing part of the
+// delegation, resolveNextNameservers returns immediately and the uncovered
+// NS names resolve in the background — a hanging authority set must never
+// hold the walk (the pre-fix code blocked up to DefaultRecursiveQueryTimeout
+// through the huaweicloud-dns fleet cycle; observed as the cold-walk tail on
+// www.douyin.com, 2026-09).
+func TestResolveNextNameservers_CoveredGlueProceedsInBackground(t *testing.T) {
+	var calls atomic.Int64
 	client := &fakeNSClient{handlers: map[string]nsScriptHandler{
-		"10.0.0.1:53": nsReplyAfter(10*time.Second, dns.RcodeSuccess), // never answers within any budget
+		"10.0.0.1:53": func(ctx context.Context, msg *dns.Msg) *upstream.Result {
+			calls.Add(1)
+			// never answers within any budget
+			return nsReplyAfter(10*time.Second, dns.RcodeSuccess)(ctx, msg)
+		},
 	}}
 	r := newTestRecursive()
 	r.resolver.queryClient = client
@@ -230,8 +236,16 @@ func TestResolveNextNameservers_CoveredGlueBoundsUncoveredStall(t *testing.T) {
 	if len(res.addrs) < 2 {
 		t.Fatalf("expected the 2 glue addresses, got %v", res.addrs)
 	}
-	if elapsed > time.Second {
-		t.Fatalf("covered delegation waited %v for the uncovered NS name — short budget not applied (want ≤ %v)", elapsed, config.DefaultCoveredNSAddrTimeout)
+	if elapsed > 150*time.Millisecond {
+		t.Fatalf("covered delegation blocked %v on the uncovered NS name — glue-first not applied", elapsed)
+	}
+	// The uncovered name must still resolve in the background.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for calls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if calls.Load() == 0 {
+		t.Fatal("background refinement of the uncovered NS name never fired an upstream query")
 	}
 }
 

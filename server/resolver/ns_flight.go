@@ -38,10 +38,9 @@ type nsAddrFlightResult struct {
 // cross-zone NS cycles (huaweicloud-dns.cn → hwclouds-dns.net/.com
 // referring to each other) that wedge until the leader's own ctx expires.
 // The nested WithTimeout composes — the flight ends at whichever deadline
-// is earlier, so the leader still respects a shorter caller budget (the
-// covered-glue fan-out's DefaultCoveredNSAddrTimeout) while never running
-// longer than 1s regardless of who started the flight.  The result still
-// populates the NS-address cache for later queries.
+// is earlier, so the leader still respects a shorter caller budget while
+// never running longer than 1s regardless of who started the flight.  The
+// result still populates the NS-address cache for later queries.
 //
 // Cross-name cycles (A's NS addresses need B's walk and vice versa) degrade
 // into bounded waits: the nested join becomes a follower, its level ctx
