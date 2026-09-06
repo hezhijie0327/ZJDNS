@@ -22,6 +22,19 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// withEarlierTimeout derives a timeout context only when it tightens the
+// parent's deadline.  Nested walk levels already carry tighter budgets
+// (fan-out → flight → walk), and the redundant cancelCtx+timer per level
+// was a measured allocation tax (context.propagateCancel/cancelCtx.Done,
+// pprof alloc_space 2026-09).  The returned cancel is a no-op when no
+// derivation happened — the parent's deadline applies unchanged.
+func withEarlierTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= d {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, d)
+}
+
 func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector defense.Detector, narrow bool) (*dns.Msg, defense.Verdict, error) {
 	if len(nameservers) == 0 {
 		return nil, defense.VerdictClean, errors.New("no nameservers")
@@ -36,7 +49,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		return nil, defense.VerdictClean, errors.New("no nameservers")
 	}
 
-	deadlineCtx, deadlineCancel := context.WithTimeout(ctx, config.DefaultRecursiveQueryTimeout)
+	deadlineCtx, deadlineCancel := withEarlierTimeout(ctx, config.DefaultRecursiveQueryTimeout)
 	defer deadlineCancel()
 	queryCtx, cancel := context.WithCancel(deadlineCtx)
 	defer cancel()

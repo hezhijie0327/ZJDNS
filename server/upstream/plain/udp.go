@@ -51,8 +51,23 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 	// Pooled path: reuse connected UDP sockets, proxied ASSOCIATE relays
 	// included (see pool/udp.go).
 	if c.udpPool != nil {
-		if resp, err := c.executeUDPPooled(ctx, msg, server); err == nil {
+		resp, err := c.executeUDPPooled(ctx, msg, server)
+		if err == nil {
 			return resp, nil
+		}
+		// A canceled/expired context can never succeed past this point,
+		// and the pool's saturation errors exist precisely to bound
+		// concurrent dials — falling through to a per-query dial either
+		// re-dials on a dead context or bypasses the caps.  Both were the
+		// dominant dns.Transport dial churn under recursive race load
+		// (pprof alloc_space, 2026-09); fall through only for pool
+		// failures a fresh socket could still fix (write errors, closed
+		// connections).
+		if ctx.Err() != nil ||
+			errors.Is(err, zpool.ErrNoAvailableSocket) ||
+			errors.Is(err, zpool.ErrMaxConnsReached) ||
+			errors.Is(err, zpool.ErrPoolShutdown) {
+			return nil, err
 		}
 	}
 

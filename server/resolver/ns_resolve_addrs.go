@@ -28,7 +28,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 	// queryNameserversConcurrent (slow NS names held the slots while fast
 	// ones queued behind the launch loop).
 
-	resolveCtx, resolveCancel := context.WithTimeout(ctx, config.DefaultRecursiveQueryTimeout)
+	resolveCtx, resolveCancel := withEarlierTimeout(ctx, config.DefaultRecursiveQueryTimeout)
 	defer resolveCancel()
 
 	g, queryCtx := errgroup.WithContext(resolveCtx)
