@@ -43,10 +43,11 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		if qr.Err != nil {
 			return err
 		}
-		for _, rr := range qr.Answer {
-			if _, ok := rr.(*dns.AAAA); ok {
-				return err
-			}
+		// RFC 6147 §5.1.4: the default exclude list treats IPv4-mapped
+		// AAAA (::ffff:0:0/96) as excluded — an answer consisting solely of
+		// them must be treated as empty so synthesis proceeds.
+		if hasUsableAAAA(qr.Answer) {
+			return err
 		}
 
 		// qctx.Qname is canonical (the form cache keys require) — cache.Get
@@ -86,4 +87,16 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 
 		return err
 	})
+}
+
+// hasUsableAAAA reports whether the answer carries at least one non-excluded
+// AAAA record (RFC 6147 §5.1.4: IPv4-mapped ::ffff:0:0/96 is the default
+// exclude entry — unusable placeholders that must not stop synthesis).
+func hasUsableAAAA(answer []dns.RR) bool {
+	for _, rr := range answer {
+		if aaaa, ok := rr.(*dns.AAAA); ok && !aaaa.Addr.Is4In6() {
+			return true
+		}
+	}
+	return false
 }

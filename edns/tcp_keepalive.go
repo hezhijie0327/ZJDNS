@@ -38,6 +38,17 @@ func TCPKeepaliveTimeout(protocol string) uint16 {
 	return 0
 }
 
+// IsStreamTransport reports whether the protocol runs over a connection-
+// oriented stream (TCP-style), where transport already authenticates the
+// peer — the basis for RFC 7873 §5.2.3's process-normally guidance.
+func IsStreamTransport(protocol string) bool {
+	switch protocol {
+	case config.ProtoTCP, config.ProtoTLS, config.ProtoTLCP:
+		return true
+	}
+	return false
+}
+
 func keepaliveUnits(d time.Duration) uint16 {
 	return uint16(d / (100 * time.Millisecond)) //nolint:gosec // G115: bounded by config constants
 }

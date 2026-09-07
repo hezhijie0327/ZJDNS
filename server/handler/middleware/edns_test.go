@@ -115,3 +115,46 @@ func TestEDNSMiddleware_BadVers(t *testing.T) {
 		t.Error("BADVERS response missing OPT (UDPSize unset)")
 	}
 }
+
+// TestEDNSMiddleware_BadCookieStreamExempt pins RFC 7873 §5.2.3: an invalid
+// server cookie over a stream transport is processed normally instead of
+// BADCOOKIE (the transport already authenticates the peer; a BADCOOKIE over
+// the same stream would retry-loop).
+func TestEDNSMiddleware_BadCookieStreamExempt(t *testing.T) {
+	for _, tc := range []struct {
+		protocol string
+		wantBAD  bool
+	}{
+		{"udp", true},
+		{"tcp", false},
+		{"tls", false},
+		{"tlcp", false},
+	} {
+		t.Run(tc.protocol, func(t *testing.T) {
+			// Over streams the query flows through to the resolver — the
+			// stub next stands in for it and produces a plain response.
+			next := handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
+				qctx.Res = handler.BuildResponseMsg(qctx.Req)
+				return nil
+			})
+			ednsH, err := edns.NewHandler(config.ECSConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			chain := (&Response{edns: ednsH}).Wrap((&EDNS{edns: ednsH}).Wrap(next))
+			// 8-byte client + 15-byte server cookie: the length alone is
+			// invalid, forcing the failure path.
+			req := queryMsg(t, &dns.COOKIE{Cookie: "0123456789abcdef0123456789abcde0"})
+			qctx := (&handler.QueryContext{Req: req, ClientIP: net.IPv4(192, 0, 2, 1), Protocol: tc.protocol}).InitQuestion()
+			if err := chain.ServeDNS(context.Background(), qctx); err != nil {
+				t.Fatal(err)
+			}
+			if qctx.Res == nil {
+				t.Fatal("no response built")
+			}
+			if bad := qctx.Res.Rcode == dns.RcodeBadCookie; bad != tc.wantBAD {
+				t.Fatalf("rcode = %s over %s, want BADCOOKIE=%t", dns.RcodeToString[qctx.Res.Rcode], tc.protocol, tc.wantBAD)
+			}
+		})
+	}
+}

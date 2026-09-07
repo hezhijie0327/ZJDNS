@@ -129,3 +129,35 @@ func TestZone_MatchNegation_TwoIPs(t *testing.T) {
 		t.Errorf("10.192.39.1: rcode = %d, want NXDOMAIN", qctx.Res.Rcode)
 	}
 }
+
+// TestZone_RecordsLessNODATA pins the records-less rule semantics: a
+// registered zone rule with Rcode=0 and no records now serves authoritative
+// NODATA (RFC 9462 §6.4 resolver.arpa depends on it) instead of passing
+// through to resolution.
+func TestZone_RecordsLessNODATA(t *testing.T) {
+	evaluator := zone.New()
+	if err := evaluator.LoadRules([]config.ZoneRule{{Name: "resolver.arpa"}}); err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+	z := &Zone{evaluator: evaluator}
+	nextCalled := false
+	h := z.Wrap(handler.QueryHandlerFunc(func(_ context.Context, _ *handler.QueryContext) error {
+		nextCalled = true
+		return nil
+	}))
+	qctx := (&handler.QueryContext{
+		Req: newMsg("resolver.arpa.", &dns.A{Hdr: dns.Header{Name: "resolver.arpa.", Class: dns.ClassINET}}),
+	}).InitQuestion()
+	if err := h.ServeDNS(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+	if nextCalled {
+		t.Error("records-less rule must short-circuit, not pass through")
+	}
+	if qctx.Res == nil || qctx.Res.Rcode != dns.RcodeSuccess || len(qctx.Res.Answer) != 0 {
+		t.Fatalf("want NOERROR with no records (NODATA), got %+v", qctx.Res)
+	}
+	if !qctx.Res.Authoritative {
+		t.Error("locally served NODATA must set AA (RFC 9462 §6.4)")
+	}
+}

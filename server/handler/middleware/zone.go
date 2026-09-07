@@ -124,7 +124,10 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				ttl.DeductInPlace(response.Ns, elapsed)
 				ttl.DeductInPlace(response.Extra, elapsed)
 			}
-			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorForgedAnswer, ExtraText: ""}
+			// EDE 15 Blocked: operator policy refusal — EDE 4 (Forged
+			// Answer) is reserved for tampered-answer detection and would
+			// mislead clients and monitoring (RFC 8914 §4.5).
+			qctx.EDE = &dns.EDE{InfoCode: dns.ExtendedErrorBlocked, ExtraText: ""}
 			qctx.Res = response
 			return nil
 		}
@@ -167,9 +170,11 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return nil
 		}
 
-		// Records-less rule (Rcode=0): pass through to normal resolution.
-		// The question is never rewritten here — records-less rules are pure
-		// pass-through (C3).
-		return next.ServeDNS(ctx, qctx)
+		// Records-less rule (Rcode=0): authoritative NODATA (RFC 9462 §6.4
+		// resolver.arpa is served this way). The question is never rewritten.
+		response := handler.BuildResponseMsg(qctx.Req)
+		response.Authoritative = true
+		qctx.Res = response
+		return nil
 	})
 }

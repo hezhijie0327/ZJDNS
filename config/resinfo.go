@@ -80,11 +80,11 @@ func addResolverInfoRecords(cfg *ServerConfig) {
 		})
 	}
 
-	// RFC 9462 §4/§6.4: clients MUST NOT query A/AAAA for resolver.arpa —
-	// serve NODATA locally instead of forwarding the SUDN upstream (R3-M13).
-	// Added AFTER the RESINFO rules: a same-name sentinel would otherwise
-	// make the hasZoneRule guard above skip the RESINFO records (live-test
-	// catch — resolver.arpa TYPE261 returned empty).
+	// RFC 9462 §6.4: resolver.arpa itself MUST be treated as a locally
+	// served zone — the records-less rule serves authoritative NODATA for
+	// A/AAAA instead of forwarding the SUDN upstream (R3-M13; the sentinel
+	// previously never registered — the loader dropped records-less
+	// rcode-0 rules).
 	if !hasZoneRule(cfg, "resolver.arpa") {
 		cfg.Zone = append(cfg.Zone, ZoneRule{Name: "resolver.arpa"})
 	}

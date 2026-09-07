@@ -124,7 +124,8 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				qctx.Res = msg
 				return nil
 			}
-			if len(cookieOpt.ServerCookie) != edns.DefaultCookieServerLen {
+			if len(cookieOpt.ServerCookie) != edns.DefaultCookieServerLen && !edns.IsStreamTransport(qctx.Protocol) {
+				// RFC 7873 §5.2.3: process normally over stream transports.
 				if log.IsDebug() {
 					log.Debugf("EDNS: bad server cookie length %d (expected %d) from %s, returning BADCOOKIE", len(cookieOpt.ServerCookie), edns.DefaultCookieServerLen, qctx.ClientIP)
 				}
@@ -139,12 +140,23 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		if cookieOpt != nil && len(cookieOpt.ServerCookie) == edns.DefaultCookieServerLen {
 			cookieStatus = m.edns.IsServerCookieValid(qctx.ClientIP, cookieOpt.ClientCookie, cookieOpt.ServerCookie)
 			if cookieStatus == edns.CookieExpired || cookieStatus == edns.CookieFuture || cookieStatus == edns.CookieInvalid {
-				if log.IsDebug() {
-					log.Debugf("EDNS: bad server cookie (status=%d) from %s, returning BADCOOKIE", cookieStatus, qctx.ClientIP)
+				// RFC 7873 §5.2.3/§5.2.4: over a stream transport the
+				// server SHOULD choose to process the query normally — the
+				// connection is already authenticated at the transport
+				// layer, and BADCOOKIE over TCP would set up a retry loop
+				// with clients that retry over the same stream.
+				if edns.IsStreamTransport(qctx.Protocol) {
+					if log.IsDebug() {
+						log.Debugf("EDNS: bad server cookie (status=%d) from %s over %s — processed normally per RFC 7873 §5.2.3", cookieStatus, qctx.ClientIP, qctx.Protocol)
+					}
+				} else {
+					if log.IsDebug() {
+						log.Debugf("EDNS: bad server cookie (status=%d) from %s, returning BADCOOKIE", cookieStatus, qctx.ClientIP)
+					}
+					qctx.Result = "badcookie"
+					qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt, qctx.ECSOpt, m.keepaliveFor(qctx))
+					return nil
 				}
-				qctx.Result = "badcookie"
-				qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt, qctx.ECSOpt, m.keepaliveFor(qctx))
-				return nil
 			}
 		}
 
