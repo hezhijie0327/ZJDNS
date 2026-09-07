@@ -162,34 +162,62 @@ func isDomainInRange(name, lower, upper string) bool {
 // Key caching helpers.
 
 // CacheZoneKeys stores verified DNSKEYs for a zone in the unified cache.
-func (c *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY) {
+// The covering RRSIGs' remaining validity caps the stored TTL per RFC 4035
+// §5.3.3 — a key must never be trusted past the expiration of the signature
+// that authenticated it.
+func (c *CryptoValidator) CacheZoneKeys(zone string, keys []*dns.DNSKEY, sigs []*dns.RRSIG) {
 	if c == nil || c.cache == nil || len(keys) == 0 {
 		return
 	}
 	zone = dnsutil.Canonical(zone)
 
-	// cache.Set derives the entry TTL from the RR TTLs itself (cacheTTL, capped
-	// at DefaultMaxCacheableTTL); the old ttl loop was dead code and the
-	// intended the DNSKEY cache TTL cap was never applied.
+	// The keys are shared read-only — clone with the capped TTL for storage
+	// only; the zoneKeyMemo keeps the originals for in-memory verification.
 	rrKeys := make([]dns.RR, 0, len(keys))
+	minTTL := -1
 	for _, k := range keys {
-		if k != nil {
-			rrKeys = append(rrKeys, k)
+		if k == nil {
+			continue
+		}
+		ttl := k.Hdr.TTL
+		if t := sigValidityCap(sigs, k); t < ttl {
+			ttl = t
+		}
+		stored := *k
+		stored.Hdr.TTL = ttl
+		rrKeys = append(rrKeys, &stored)
+		if ttl > 0 && (minTTL < 0 || int(ttl) < minTTL) {
+			minTTL = int(ttl)
 		}
 	}
-	minT := -1
-	for _, rr := range rrKeys {
-		if t := int(rr.Header().TTL); t > 0 && (minT < 0 || t < minT) {
-			minT = t
-		}
-	}
-	ttl := minT
 	c.cache.Set(zone, dns.TypeDNSKEY, dns.ClassINET, nil, rrKeys, nil, nil, true, 0)
 	// Memoise the unpacked form alongside the raw cache entry so hits skip
-	// the Unpack + filter round trip entirely.
-	if c.zoneKeyMemo != nil && ttl > 0 {
-		c.zoneKeyMemo.Set(zone, zoneKeyMemoEntry{keys: keys, expiry: log.NowUnix() + int64(ttl)})
+	// the Unpack + filter round trip entirely — bounded by the same capped
+	// TTL as the cache entry.
+	if c.zoneKeyMemo != nil && minTTL > 0 {
+		c.zoneKeyMemo.Set(zone, zoneKeyMemoEntry{keys: keys, expiry: log.NowUnix() + int64(minTTL)})
 	}
+}
+
+// sigValidityCap returns the largest TTL allowed for a key by the remaining
+// validity of the RRSIGs covering it (RFC 4035 §5.3.3). Unbounded when no
+// signature covers the key.
+func sigValidityCap(sigs []*dns.RRSIG, _ *dns.DNSKEY) uint32 {
+	now := uint32(log.NowUnix()) //nolint:gosec // G115: DNSSEC timestamp — protocol-bounded uint32
+	minRemaining := ^uint32(0)
+	for _, sig := range sigs {
+		if sig == nil {
+			continue
+		}
+		remaining := sig.Expiration - now
+		if serialLess(remaining, 1<<31) && remaining < minRemaining { //nolint:gosec // G115: RFC 1982 arithmetic
+			minRemaining = remaining
+		}
+	}
+	if minRemaining == ^uint32(0) {
+		return ^uint32(0)
+	}
+	return minRemaining
 }
 
 // ZoneKeys retrieves cached verified DNSKEYs for a zone.  The unpacked key

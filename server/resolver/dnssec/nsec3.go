@@ -42,6 +42,11 @@ func (c *CryptoValidator) verifyNSEC3(authSigs []*dns.RRSIG, nsec3s []*dns.NSEC3
 func (c *CryptoValidator) filterVerifiedNSEC3(authSigs []*dns.RRSIG, nsec3s []*dns.NSEC3, verifiedDNSKEYs []*dns.DNSKEY, qtype uint16) []*dns.NSEC3 {
 	var verified []*dns.NSEC3
 	for _, nsec3 := range nsec3s {
+		// RFC 5155 §8.2: NSEC3 RRs with flags other than 0 and the Opt-Out
+		// bit (0x01) MUST be ignored.
+		if nsec3.Flags&^nsec3OptOutFlag != 0 {
+			continue
+		}
 		if qtype != dns.TypeDS && isAncestorDelegationNSEC3(nsec3) {
 			continue
 		}

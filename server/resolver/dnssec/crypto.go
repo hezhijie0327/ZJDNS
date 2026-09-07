@@ -429,11 +429,15 @@ func (c *CryptoValidator) SelfVerifyDNSKEY(dnskeys []*dns.DNSKEY, dnskeyRRSIGs [
 // IsResponseValid performs full cryptographic DNSSEC validation of a
 // response. It expects the zone's verified DNSKEY to be provided.
 //
-// Returns (validated bool, error). If error is non-nil, validation failed.
-// If validated is true, the AuthenticatedData flag may be set.
-func (c *CryptoValidator) IsResponseValid(response *dns.Msg, zonename string, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
+// Returns (validated, adSuppressed, error). If error is non-nil, validation
+// failed. validated=true means the proof cryptographically holds (trust
+// chains may rely on it); adSuppressed=true means the response is NOT
+// eligible for the AD bit despite that — an NSEC3 Opt-Out proof (RFC 5155
+// §9.2) or a skipped cross-zone RRset (RFC 4035 §3.2.3) — so a response
+// builder MUST NOT assert AD.
+func (c *CryptoValidator) IsResponseValid(response *dns.Msg, zonename string, verifiedDNSKEYs []*dns.DNSKEY) (validated, adSuppressed bool, err error) {
 	if response == nil || len(verifiedDNSKEYs) == 0 {
-		return false, nil
+		return false, false, nil
 	}
 
 	// For NOERROR/NXDOMAIN responses, validate the RRSIGs on answer records
@@ -460,10 +464,10 @@ func (c *CryptoValidator) IsResponseValid(response *dns.Msg, zonename string, ve
 		return c.isNODATAValid(response, qname, qtype, verifiedDNSKEYs)
 	}
 
-	return false, nil
+	return false, false, nil
 }
 
-func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
+func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedDNSKEYs []*dns.DNSKEY) (validated, adSuppressed bool, err error) {
 	// Group records by owner name and type
 	groups := groupRRset(answer)
 	allRRSIGs := CollectRRSIGs(answer, extra)
@@ -481,7 +485,7 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 		}
 	}
 	if signedCount == 0 {
-		return false, ErrMissingRRSIG
+		return false, false, ErrMissingRRSIG
 	}
 
 	// Key tags are memoised once per validation: miekg's KeyTag() computes
@@ -494,7 +498,7 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 		keyTagIdx[key.KeyTag()] = i
 	}
 
-	var anyValidated bool
+	var anyValidated, crossZoneSkipped bool
 	for _, group := range groups {
 		if len(group) == 0 {
 			continue
@@ -506,7 +510,7 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 		sigs := FindRRSIGs(allRRSIGs, header.Name, dns.RRToType(group[0]))
 		if len(sigs) == 0 {
 			log.Debugf("SECURITY: unsigned RRset %s/%s in signed response", header.Name, dns.TypeToString[dns.RRToType(group[0])])
-			return false, fmt.Errorf("%w: unsigned RRset %s/%s in signed response", ErrBogusSignature, header.Name, dns.TypeToString[dns.RRToType(group[0])])
+			return false, false, fmt.Errorf("%w: unsigned RRset %s/%s in signed response", ErrBogusSignature, header.Name, dns.TypeToString[dns.RRToType(group[0])])
 		}
 
 		var groupValidated bool
@@ -556,23 +560,27 @@ func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedD
 				}
 			}
 			if crossZone {
+				// RFC 4035 §3.2.3: AD may only be asserted when EVERY answer
+				// RRset is authenticated — a skipped cross-zone RRset
+				// keeps the response servable but suppresses AD.
+				crossZoneSkipped = true
 				log.Debugf("SECURITY: skipping %s/%s — RRSIG signer is not in verified zone", header.Name, dns.TypeToString[dns.RRToType(group[0])])
 				continue
 			}
 			// EDE 1: every attempted verification failed on an unsupported
 			// algorithm — report that rather than the generic bogus.
 			if unsupportedAlgErr != nil {
-				return false, unsupportedAlgErr
+				return false, false, unsupportedAlgErr
 			}
-			return false, fmt.Errorf("%w: no matching DNSKEY for RRSIG over %s/%s (key tags in RRSIGs do not match verified zone keys)",
+			return false, false, fmt.Errorf("%w: no matching DNSKEY for RRSIG over %s/%s (key tags in RRSIGs do not match verified zone keys)",
 				ErrBogusSignature, header.Name, dns.TypeToString[dns.RRToType(group[0])])
 		}
 	}
 
 	if !anyValidated {
-		return false, fmt.Errorf("%w: no answer RRset could be cryptographically verified", ErrBogusSignature)
+		return false, false, fmt.Errorf("%w: no answer RRset could be cryptographically verified", ErrBogusSignature)
 	}
-	return true, nil
+	return true, crossZoneSkipped, nil
 }
 
 // serialLess reports whether a precedes b in RFC 1982 §2 serial-number

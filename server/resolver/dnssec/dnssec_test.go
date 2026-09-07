@@ -373,7 +373,7 @@ func TestAnswerSection_UnsupportedAlgOrderIndependent(t *testing.T) {
 	bogusSig := signRRset(rrset, zone, wrongPriv, ecdsaKey.KeyTag(), dns.ECDSAP256SHA256)
 
 	answer := []dns.RR{aRec(zone, "192.0.2.1"), dsaSig, bogusSig}
-	_, err := cv.isAnswerSectionValid(answer, nil, []*dns.DNSKEY{ecdsaKey, dsaKey})
+	_, _, err := cv.isAnswerSectionValid(answer, nil, []*dns.DNSKEY{ecdsaKey, dsaKey})
 	if !errors.Is(err, ErrUnsupportedAlgorithm) {
 		t.Errorf("unsupported algorithm should win regardless of RRSIG order, got %v", err)
 	}
@@ -390,7 +390,7 @@ func TestDenialOfExistence_MissingNSEC(t *testing.T) {
 	resp.Response = true
 	resp.Rcode = dns.RcodeSuccess
 
-	_, err := cv.isNODATAValid(resp, "www.example.com.", dns.TypeA, []*dns.DNSKEY{ksk})
+	_, _, err := cv.isNODATAValid(resp, "www.example.com.", dns.TypeA, []*dns.DNSKEY{ksk})
 	if !errors.Is(err, ErrMissingNSEC) {
 		t.Errorf("missing NSEC proof should map to ErrMissingNSEC, got %v", err)
 	}
@@ -503,7 +503,7 @@ func TestIsResponseValid_SignedAnswer(t *testing.T) {
 		Rcode:  dns.RcodeSuccess,
 		Answer: []dns.RR{aRec, rrsig},
 	}
-	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk, ksk})
+	verified, _, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk, ksk})
 	if err != nil {
 		t.Errorf("IsResponseValid should pass: %v", err)
 	}
@@ -526,7 +526,7 @@ func TestIsResponseValid_UnsignedAnswer(t *testing.T) {
 		Rcode:  dns.RcodeSuccess,
 		Answer: []dns.RR{aRec},
 	}
-	verified, _ := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
+	verified, _, _ := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
 	if verified {
 		t.Error("unsigned answer should not be verified")
 	}
@@ -538,7 +538,7 @@ func TestIsResponseValid_NoDNSKEYs(t *testing.T) {
 		Rcode:  dns.RcodeSuccess,
 		Answer: []dns.RR{aRec("test.example.com", "192.0.2.1")},
 	}
-	verified, _ := cv.IsResponseValid(response, "test.example.com", nil)
+	verified, _, _ := cv.IsResponseValid(response, "test.example.com", nil)
 	if verified {
 		t.Error("should return false with no DNSKEYs")
 	}
@@ -617,7 +617,7 @@ func TestIsResponseValid_NXDOMAIN(t *testing.T) {
 		Ns:    []dns.RR{nsec, rrsig, wildcardNSEC, wildcardRRSIG},
 	}
 	dnsutil.SetQuestion(response, dnsutil.Fqdn(qname), qtype)
-	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
+	verified, _, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
 	if err != nil {
 		t.Errorf("NXDOMAIN with signed NSEC should pass: %v", err)
 	}
@@ -632,7 +632,7 @@ func TestIsResponseValid_NXDOMAIN(t *testing.T) {
 		Ns:    []dns.RR{nsec, rrsig},
 	}
 	dnsutil.SetQuestion(noWildcard, dnsutil.Fqdn(qname), qtype)
-	if verified, err := cv.IsResponseValid(noWildcard, zone, []*dns.DNSKEY{zsk}); err == nil || verified {
+	if verified, _, err := cv.IsResponseValid(noWildcard, zone, []*dns.DNSKEY{zsk}); err == nil || verified {
 		t.Errorf("NXDOMAIN without wildcard NSEC accepted: verified=%t err=%v", verified, err)
 	}
 }
@@ -687,7 +687,7 @@ func TestFullDNSSECChain(t *testing.T) {
 	if matchedKey.KeyTag() != childKSK.KeyTag() {
 		t.Fatalf("matched wrong key: tag %d != %d", matchedKey.KeyTag(), childKSK.KeyTag())
 	}
-	cv.CacheZoneKeys(childZone, []*dns.DNSKEY{childKSK, childZSK})
+	cv.CacheZoneKeys(childZone, []*dns.DNSKEY{childKSK, childZSK}, nil)
 
 	// Step 2: verify a signed A record against child's verified DNSKEYs
 	aRec := &dns.A{
@@ -704,7 +704,7 @@ func TestFullDNSSECChain(t *testing.T) {
 	if len(verifiedKeys) == 0 {
 		t.Fatal("zone keys not cached")
 	}
-	validated, err := cv.IsResponseValid(response, childZone, verifiedKeys)
+	validated, _, err := cv.IsResponseValid(response, childZone, verifiedKeys)
 	if err != nil {
 		t.Errorf("full chain validation should pass: %v", err)
 	}
@@ -767,7 +767,7 @@ func TestIsResponseValid_MixedRRsetWithForeignRRSIG(t *testing.T) {
 	// Validate with ONLY parent zone keys.
 	// The CNAME RRSIG should validate, but the A RRSIG comes from child zone
 	// whose key is NOT in the verified set.
-	verified, err := cv.IsResponseValid(response, parentZone, []*dns.DNSKEY{parentZSK})
+	verified, _, err := cv.IsResponseValid(response, parentZone, []*dns.DNSKEY{parentZSK})
 	if err == nil {
 		t.Error("IsResponseValid should return error when an RRset has RRSIGs that don't match any verified DNSKEY")
 	}
@@ -795,19 +795,33 @@ func TestMatchesNSECDenial_CNAMEBitSet(t *testing.T) {
 // ── RFC 6840 §4.1: ancestor delegation ──────────────────────────────────────
 
 func TestIsAncestorDelegation(t *testing.T) {
+	parentSig := []*dns.RRSIG{{SignerName: "com."}}
 	ancestor := &dns.NSEC{
-		Hdr:        dns.Header{Name: "com.", Class: dns.ClassINET, TTL: 300},
+		Hdr:        dns.Header{Name: "www.com.", Class: dns.ClassINET, TTL: 300},
 		NextDomain: "other.com.", TypeBitMap: []uint16{dns.TypeNS},
 	}
-	if !isAncestorDelegation(ancestor) {
-		t.Fatal("NS=1 SOA=0: should be ancestor delegation")
+	if !isAncestorDelegation(ancestor, parentSig) {
+		t.Fatal("NS=1 SOA=0, signer above owner: should be ancestor delegation")
 	}
 	apex := &dns.NSEC{
 		Hdr:        dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
 		NextDomain: "www.example.com.", TypeBitMap: []uint16{dns.TypeNS, dns.TypeSOA, dns.TypeRRSIG, dns.TypeNSEC},
 	}
-	if isAncestorDelegation(apex) {
+	if isAncestorDelegation(apex, parentSig) {
 		t.Fatal("NS=1 SOA=1: should NOT be ancestor delegation")
+	}
+	// RFC 6840 §4.1 third condition: NS-without-SOA signed by its own zone
+	// (signer == owner) is not an ancestor delegation — it may prove
+	// non-existence (availability).
+	ownZone := &dns.NSEC{
+		Hdr:        dns.Header{Name: "deleg.example.com.", Class: dns.ClassINET, TTL: 300},
+		NextDomain: "z.example.com.", TypeBitMap: []uint16{dns.TypeNS},
+	}
+	if isAncestorDelegation(ownZone, []*dns.RRSIG{{SignerName: "deleg.example.com."}}) {
+		t.Fatal("signer == owner: should NOT be ancestor delegation (RFC 6840 §4.1)")
+	}
+	if isAncestorDelegation(ancestor, nil) {
+		t.Fatal("no signatures to inspect: conservative false, record fails verification anyway")
 	}
 }
 
@@ -1207,7 +1221,7 @@ func TestIsResponseValid_NSEC3NXDOMAIN(t *testing.T) {
 	}
 	dnsutil.SetQuestion(response, qname, dns.TypeA)
 
-	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
+	verified, _, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
 	if err != nil {
 		t.Errorf("NSEC3 NXDOMAIN should pass: %v", err)
 	}
@@ -1234,7 +1248,7 @@ func TestIsResponseValid_NSEC3NODATA(t *testing.T) {
 	}
 	dnsutil.SetQuestion(response, qname, dns.TypeA)
 
-	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
+	verified, _, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
 	if err != nil {
 		t.Errorf("NSEC3 NODATA should pass: %v", err)
 	}
@@ -1268,7 +1282,7 @@ func TestIsResponseValid_NSEC3OptOut(t *testing.T) {
 	}
 	dnsutil.SetQuestion(response, qname, dns.TypeA)
 
-	_, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
+	_, _, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
 	if err == nil {
 		t.Error("Opt-Out proof should suppress AD (return error)")
 	}
@@ -1397,7 +1411,7 @@ func TestCompactNODATA_ValidatesAsDenial(t *testing.T) {
 		Ns:    []dns.RR{nsec, rrsig},
 	}
 	dnsutil.SetQuestion(response, dnsutil.Fqdn(qname), dns.TypeA)
-	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
+	verified, _, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
 	if err != nil {
 		t.Errorf("compact NODATA with signed NSEC should validate: %v", err)
 	}
@@ -1425,7 +1439,7 @@ func TestZoneKeysMemoHit(t *testing.T) {
 		Algorithm: dns.ECDSAP256SHA256,
 		PublicKey: "aGVsbG8=",
 	}
-	cv.CacheZoneKeys(zone, []*dns.DNSKEY{ksk})
+	cv.CacheZoneKeys(zone, []*dns.DNSKEY{ksk}, nil)
 
 	first := cv.ZoneKeys(zone)
 	if len(first) != 1 {

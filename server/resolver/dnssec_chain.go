@@ -83,12 +83,15 @@ func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, c
 		if len(chain.childDS) > 0 {
 			if matchedKey, err := verifyDNSKEYWithDS(crypto, chain.childDS, dnskeyRecords, dnskeyRRSIGs); err == nil && matchedKey != nil {
 				chain.zoneDNSKEYs = dnskeyRecords
-				crypto.CacheZoneKeys(currentDomain, dnskeyRecords)
+				crypto.CacheZoneKeys(currentDomain, dnskeyRecords, dnskeyRRSIGs)
 				log.Debugf("SECURITY: verified zone DNSKEY for %s via DS match (key_tag=%d)", currentDomain, matchedKey.KeyTag())
 
 				// Now verify the answer with the newly verified keys
 				if len(response.Answer) > 0 {
-					validated, valErr := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
+					validated, adSuppressed, valErr := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
+					if adSuppressed {
+						validated = false // RFC 5155 §9.2 / RFC 4035 §3.2.3: proof holds, AD does not
+					}
 					if valErr != nil {
 						log.Debugf("SECURITY: response validation error for %s: %v", currentDomain, valErr)
 					}
@@ -115,11 +118,14 @@ func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, c
 				return false
 			}
 			chain.zoneDNSKEYs = dnskeyRecords
-			crypto.CacheZoneKeys(currentDomain, dnskeyRecords)
+			crypto.CacheZoneKeys(currentDomain, dnskeyRecords, dnskeyRRSIGs)
 
 			// Now verify the answer with the newly verified keys
 			if len(response.Answer) > 0 {
-				validated, valErr := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
+				validated, adSuppressed, valErr := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
+				if adSuppressed {
+					validated = false // RFC 5155 §9.2 / RFC 4035 §3.2.3: proof holds, AD does not
+				}
 				if valErr != nil {
 					log.Debugf("SECURITY: response validation error for %s: %v", currentDomain, valErr)
 				}
@@ -187,7 +193,12 @@ func (r *Recursive) verifyResponseOnce(chain *dnssecChain, response *dns.Msg, cu
 	if m := chain.verifyMemo; m.response == response && sameKeySlice(m.keys, keys) {
 		return m.valid, m.err
 	}
-	valid, err := r.resolver.validator.Crypto.IsResponseValid(response, currentDomain, keys)
+	valid, adSuppressed, err := r.resolver.validator.Crypto.IsResponseValid(response, currentDomain, keys)
+	if adSuppressed {
+		// RFC 5155 §9.2 / RFC 4035 §3.2.3: the proof holds but the response
+		// is not eligible for the AD bit.
+		valid = false
+	}
 	chain.verifyMemo = dnssecVerifyMemo{response: response, keys: keys, valid: valid, err: err}
 	return valid, err
 }
@@ -258,7 +269,10 @@ func (r *Recursive) tryRRSIGRetry(ctx context.Context, response *dns.Msg, namese
 	}
 	defer pool.DefaultMessage.Put(retryResp)
 
-	retryValidated, retryValErr := r.resolver.validator.Crypto.IsResponseValid(retryResp, currentDomain, verifiedKeys)
+	retryValidated, retryADSuppressed, retryValErr := r.resolver.validator.Crypto.IsResponseValid(retryResp, currentDomain, verifiedKeys)
+	if retryADSuppressed {
+		retryValidated = false // RFC 5155 §9.2 / RFC 4035 §3.2.3
+	}
 	if retryValErr != nil || !retryValidated {
 		log.Debugf("SECURITY: RRSIG retry failed for %s", question.Name)
 		return false

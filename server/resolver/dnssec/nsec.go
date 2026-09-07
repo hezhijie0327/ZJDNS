@@ -33,7 +33,7 @@ func (c *CryptoValidator) verifyNSEC(authSigs []*dns.RRSIG, nsecs []*dns.NSEC, v
 		// that may store mixed case (legal per RFC 4343), while
 		// normalizedQname is lowercased — a byte compare would wrongly
 		// filter the ancestor delegation NSEC or fail the NODATA match.
-		if isAncestorDelegation(nsec) && !dns.EqualName(nsec.Header().Name, normalizedQname) {
+		if isAncestorDelegation(nsec, authSigs) && !dns.EqualName(nsec.Header().Name, normalizedQname) {
 			continue
 		}
 		rrsigs := FindRRSIGs(authSigs, nsec.Header().Name, dns.TypeNSEC)
@@ -119,6 +119,43 @@ func (c *CryptoValidator) verifyNSECsig(nsec *dns.NSEC, rrsigs []*dns.RRSIG, ver
 				continue
 			}
 			if err := c.VerifyRRset(rrset, sig, key); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ProvesNoDSAtDelegation checks the shape an authenticated no-DS denial
+// must have at a delegation point: the NSEC/NSEC3 at the child name shows
+// the NS bit (the delegation exists) without DS (RFC 4035 §5.2), or — in
+// Opt-Out space — an Opt-Out NSEC3 covers the child hash (RFC 5155 §9).
+// Signature validity is the caller's concern (IsResponseValid ran first);
+// this only re-reads the already-verified records.
+func ProvesNoDSAtDelegation(response *dns.Msg, child string) bool {
+	child = strings.ToLower(dnsutil.Fqdn(child))
+	for _, rr := range response.Ns {
+		switch n := rr.(type) {
+		case *dns.NSEC:
+			if dns.EqualName(n.Header().Name, child) &&
+				slices.Contains(n.TypeBitMap, dns.TypeNS) &&
+				!slices.Contains(n.TypeBitMap, dns.TypeDS) {
+				return true
+			}
+		case *dns.NSEC3:
+			if slices.Contains(n.TypeBitMap, dns.TypeDS) {
+				continue
+			}
+			hash := nsec3HashName(child, n.Hash, n.Iterations, n.Salt)
+			if hash == "" {
+				continue
+			}
+			hash = strings.ToLower(hash)
+			if nsec3HashLabel(n.Header().Name) == hash {
+				return slices.Contains(n.TypeBitMap, dns.TypeNS)
+			}
+			if n.Flags&nsec3OptOutFlag != 0 &&
+				isDomainInRange(hash, nsec3HashLabel(n.Header().Name), strings.ToLower(n.NextDomain)) {
 				return true
 			}
 		}
@@ -225,37 +262,39 @@ func nsec3CoveringHasOptOut(verified []*dns.NSEC3, hash string) bool {
 // of the queried name (NXDOMAIN) or type (NODATA). This prevents an attacker
 // from satisfying validation with a validly-signed NSEC from the same zone
 // that covers a different name. (RFC 4035 section 5.4, RFC 6840 section 4.1)
-func (c *CryptoValidator) isDenialOfExistenceValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY, denialType string) (bool, error) {
+func (c *CryptoValidator) isDenialOfExistenceValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY, denialType string) (validated, adSuppressed bool, err error) {
 	authSigs := CollectRRSIGs(response.Ns, response.Extra)
 	normalizedQname := strings.ToLower(qname)
 
 	if valid := c.verifyNSEC(authSigs, findNSEC(response.Ns), verifiedDNSKEYs, normalizedQname, qtype, denialType); valid {
-		return true, nil
+		return true, false, nil
 	}
 
 	nsec3s := findNSEC3(response.Ns)
 	if valid, verified := c.verifyNSEC3(authSigs, nsec3s, verifiedDNSKEYs, normalizedQname, qtype, denialType); valid {
-		// RFC 5155 §9.2: an Opt-Out proof is cryptographically valid — it
-		// only suppresses the AD bit. The decision is based on exactly the
-		// records the proof relied upon (the RRSIG-verified subset), not on
-		// unrelated Opt-Out NSEC3s in the response.
+		// RFC 5155 §9.2: an Opt-Out proof is cryptographically valid — the
+		// validator SHOULD NOT set the AD bit for such a response. The
+		// decision is based on exactly the records the proof relied upon
+		// (the RRSIG-verified subset), not on unrelated Opt-Out NSEC3s in
+		// the response.
 		if hasOptOutInProof(verified) {
-			log.Debugf("SECURITY: NSEC3 Opt-Out proof for %s of %s — AD bit suppressed (RFC 5155 §9.2)", denialType, qname)
+			log.Debugf("SECURITY: NSEC3 Opt-Out proof for %s of %s — AD suppressed (RFC 5155 §9.2)", denialType, qname)
+			return true, true, nil
 		}
-		return true, nil
+		return true, false, nil
 	}
 	if len(nsec3s) > 0 {
-		return false, fmt.Errorf("%w: NSEC3 records present but do not prove %s of %s (type=%s)", ErrMissingNSEC, denialType, qname, dns.TypeToString[qtype])
+		return false, false, fmt.Errorf("%w: NSEC3 records present but do not prove %s of %s (type=%s)", ErrMissingNSEC, denialType, qname, dns.TypeToString[qtype])
 	}
 
-	return false, fmt.Errorf("%w: no signed NSEC/NSEC3 for %s", ErrMissingNSEC, denialType)
+	return false, false, fmt.Errorf("%w: no signed NSEC/NSEC3 for %s", ErrMissingNSEC, denialType)
 }
 
-func (c *CryptoValidator) isNXDOMAINValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
+func (c *CryptoValidator) isNXDOMAINValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (validated, adSuppressed bool, err error) {
 	return c.isDenialOfExistenceValid(response, qname, qtype, verifiedDNSKEYs, "NXDOMAIN")
 }
 
-func (c *CryptoValidator) isNODATAValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (bool, error) {
+func (c *CryptoValidator) isNODATAValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (validated, adSuppressed bool, err error) {
 	return c.isDenialOfExistenceValid(response, qname, qtype, verifiedDNSKEYs, "NODATA")
 }
 
@@ -266,7 +305,29 @@ func (c *CryptoValidator) isNODATAValid(response *dns.Msg, qname string, qtype u
 // signer shorter than the owner name represents a delegation point from
 // an ancestor zone — it MUST NOT be used to prove non-existence below
 // that zone cut.
-func isAncestorDelegation(nsec *dns.NSEC) bool {
+func isAncestorDelegation(nsec *dns.NSEC, authSigs []*dns.RRSIG) bool {
+	if !isAncestorDelegationBitmap(nsec) {
+		return false
+	}
+	// RFC 6840 §4.1 third condition: an NSEC is an ancestor-delegation NSEC
+	// only when its RRSIG was signed ABOVE the owner (signer strictly
+	// shorter). An NS-without-SOA NSEC signed by its own zone is not an
+	// ancestor delegation and may still prove non-existence — without this
+	// condition the filter is over-aggressive and turns valid proofs into
+	// false bogus.
+	owner := dnsutil.Fqdn(nsec.Header().Name)
+	for _, sig := range authSigs {
+		if dns.EqualName(sig.SignerName, owner) {
+			return false
+		}
+		if dnsutil.IsBelow(dnsutil.Fqdn(sig.SignerName), owner) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAncestorDelegationBitmap(nsec *dns.NSEC) bool {
 	hasNS := slices.Contains(nsec.TypeBitMap, dns.TypeNS)
 	hasSOA := slices.Contains(nsec.TypeBitMap, dns.TypeSOA)
 	return hasNS && !hasSOA

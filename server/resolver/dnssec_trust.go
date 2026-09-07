@@ -180,9 +180,17 @@ func (r *Recursive) verifyNoDSInParent(ctx context.Context, nameservers []string
 		return false, true
 	}
 
-	validated, valErr := crypto.IsResponseValid(resp, childZone, chain.zoneDNSKEYs)
+	validated, _, valErr := crypto.IsResponseValid(resp, childZone, chain.zoneDNSKEYs) // trust decision: AD suppression is irrelevant here
 	if valErr != nil {
 		log.Debugf("SECURITY: no-DS denial verification error for %s: %v", childZone, valErr)
+	}
+	// RFC 4035 §5.2: the denial must also show the delegation point itself
+	// exists — an NSEC/NSEC3 at the child name with the NS bit (or Opt-Out
+	// coverage). Without it, a validly-signed NODATA for an ordinary name
+	// would wrongly mark the delegation insecure.
+	if validated && !dnssec.ProvesNoDSAtDelegation(resp, childZone) {
+		log.Debugf("SECURITY: no-DS denial for %s lacks the delegation NS bit — not an insecure-delegation proof", childZone)
+		return false, false
 	}
 	return validated, false
 }
@@ -270,7 +278,7 @@ func (r *Recursive) fetchZoneDNSKEYs(ctx context.Context, nameservers []string, 
 	if len(chain.childDS) > 0 {
 		if matchedKey, err := verifyDNSKEYWithDS(crypto, chain.childDS, dnskeyRecords, dnskeyRRSIGs); err == nil && matchedKey != nil {
 			chain.zoneDNSKEYs = dnskeyRecords
-			crypto.CacheZoneKeys(zone, dnskeyRecords)
+			crypto.CacheZoneKeys(zone, dnskeyRecords, dnskeyRRSIGs)
 			log.Debugf("SECURITY: verified zone DNSKEY for %s via DS match (key_tag=%d)", zone, matchedKey.KeyTag())
 			return
 		}
@@ -289,12 +297,21 @@ func (r *Recursive) fetchZoneDNSKEYs(ctx context.Context, nameservers []string, 
 		// is intentionally kept as a defense-in-depth measure for true offline
 		// KSK deployments.  This is NOT dead code — do not remove.
 		if matchedDS := r.verifyOfflineKSK(ctx, nameservers, zone, chain); matchedDS != nil {
-			if _, err := crypto.VerifyDelegationDS([]*dns.DS{matchedDS}, dnskeyRecords); err != nil {
+			matchedKey, err := crypto.VerifyDelegationDS([]*dns.DS{matchedDS}, dnskeyRecords)
+			if err != nil || matchedKey == nil {
 				log.Debugf("SECURITY: offline KSK matched for %s but DNSKEY set lacks the key: %v", zone, err)
 				return
 			}
+			// Bind the WHOLE accepted set: the DNSKEY RRset signature made
+			// by the matched KSK covers every member — a rogue key injected
+			// into the DNSKEY response breaks the set signature and is
+			// rejected here (RFC 4035 §5.2), instead of riding along.
+			if !dnskeySetSignedBy(crypto, matchedKey, dnskeyRecords, dnskeyRRSIGs) {
+				log.Debugf("SECURITY: offline KSK matched for %s but the DNSKEY RRset is not signed by it — set not trusted", zone)
+				return
+			}
 			chain.zoneDNSKEYs = dnskeyRecords
-			crypto.CacheZoneKeys(zone, dnskeyRecords)
+			crypto.CacheZoneKeys(zone, dnskeyRecords, dnskeyRRSIGs)
 			log.Debugf("SECURITY: verified zone DNSKEY for %s via offline KSK (CDS/CDNSKEY match)", zone)
 			return
 		}
@@ -317,7 +334,7 @@ func (r *Recursive) fetchZoneDNSKEYs(ctx context.Context, nameservers []string, 
 			return
 		}
 		chain.zoneDNSKEYs = dnskeyRecords
-		crypto.CacheZoneKeys(zone, dnskeyRecords)
+		crypto.CacheZoneKeys(zone, dnskeyRecords, dnskeyRRSIGs)
 		log.Debugf("SECURITY: self-verified root DNSKEY (matches trust anchors)")
 		return
 	}
@@ -383,6 +400,26 @@ func (r *Recursive) verifyDelegationDSRRSIG(response *dns.Msg, childZone string,
 // The match requires the FULL digest (not just key tag) to equal the parent DS
 // — an attacker who can forge a SHA-256 preimage already owns the child zone's
 // keys, so this is cryptographically equivalent to standard DS validation.
+// dnskeySetSignedBy reports whether any RRSIG over the DNSKEY RRset
+// verifies with the matched key — binding the entire set.
+func dnskeySetSignedBy(crypto *dnssec.CryptoValidator, key *dns.DNSKEY, keys []*dns.DNSKEY, sigs []*dns.RRSIG) bool {
+	if crypto == nil || key == nil || len(sigs) == 0 {
+		return false
+	}
+	rrset := make([]dns.RR, len(keys))
+	for i, k := range keys {
+		rrset[i] = k
+	}
+	for _, sig := range sigs {
+		if sig.KeyTag == key.KeyTag() {
+			if err := crypto.VerifyRRset(rrset, sig, key); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (r *Recursive) verifyOfflineKSK(ctx context.Context, nameservers []string, zone string, chain *dnssecChain) *dns.DS {
 	if ds := r.verifyViaCDS(ctx, nameservers, zone, chain); ds != nil {
 		return ds

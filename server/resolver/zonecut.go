@@ -280,9 +280,9 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 
 	log.Debugf("SECURITY: zone cut — verified DNSKEY for %s (key_tag=%d)", childZone, matchedKey.KeyTag())
 
-	crypto.CacheZoneKeys(childZone, dnskeyRecords)
+	crypto.CacheZoneKeys(childZone, dnskeyRecords, dnskeyRRSIGs)
 
-	validated, valErr := crypto.IsResponseValid(response, childZone, dnskeyRecords)
+	validated, _, valErr := crypto.IsResponseValid(response, childZone, dnskeyRecords) // trust decision: AD suppression is irrelevant here
 	if valErr != nil {
 		log.Debugf("SECURITY: zone cut — answer RRSIG verification failed for %s: %v", question.Name, valErr)
 		chain.lastEDECode = dns.ExtendedErrorDNSBogus
