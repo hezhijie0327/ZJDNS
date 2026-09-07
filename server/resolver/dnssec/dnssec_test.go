@@ -601,9 +601,20 @@ func TestIsResponseValid_NXDOMAIN(t *testing.T) {
 	}
 	rrsig := signRRset([]dns.RR{nsec}, zone, zskPriv, zsk.KeyTag(), dns.ECDSAP256SHA256)
 
+	// RFC 4035 §5.4 item 2: the wildcard non-existence proof. The wrap NSEC
+	// (zzzz → aaaa, canonical zzzz > aaaa) covers everything outside
+	// (aaaa, zzzz) — including *.signed.example.com ("*" sorts before
+	// "aaaa"). Without it, a replayed covering NSEC could deny a name that
+	// a wildcard would have answered.
+	wildcardNSEC := &dns.NSEC{
+		Hdr:        dns.Header{Name: "zzzz.signed.example.com.", Class: dns.ClassINET, TTL: 300},
+		NextDomain: "aaaa.signed.example.com.", TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG, dns.TypeNSEC},
+	}
+	wildcardRRSIG := signRRset([]dns.RR{wildcardNSEC}, zone, zskPriv, zsk.KeyTag(), dns.ECDSAP256SHA256)
+
 	response := &dns.Msg{
 		Rcode: dns.RcodeNameError,
-		Ns:    []dns.RR{nsec, rrsig},
+		Ns:    []dns.RR{nsec, rrsig, wildcardNSEC, wildcardRRSIG},
 	}
 	dnsutil.SetQuestion(response, dnsutil.Fqdn(qname), qtype)
 	verified, err := cv.IsResponseValid(response, zone, []*dns.DNSKEY{zsk})
@@ -612,6 +623,43 @@ func TestIsResponseValid_NXDOMAIN(t *testing.T) {
 	}
 	if !verified {
 		t.Error("signed NSEC for NXDOMAIN should be verified")
+	}
+
+	// Without the wildcard proof the same response must be rejected
+	// (RFC 4035 §5.4 — the covering NSEC alone is insufficient).
+	noWildcard := &dns.Msg{
+		Rcode: dns.RcodeNameError,
+		Ns:    []dns.RR{nsec, rrsig},
+	}
+	dnsutil.SetQuestion(noWildcard, dnsutil.Fqdn(qname), qtype)
+	if verified, err := cv.IsResponseValid(noWildcard, zone, []*dns.DNSKEY{zsk}); err == nil || verified {
+		t.Errorf("NXDOMAIN without wildcard NSEC accepted: verified=%t err=%v", verified, err)
+	}
+}
+
+// TestNSECProvesNXDOMAIN pins the set-level RFC 4035 §5.4 logic without the
+// cryptographic machinery: qname coverage plus wildcard non-existence.
+func TestNSECProvesNXDOMAIN(t *testing.T) {
+	nsec := func(owner, next string) *dns.NSEC {
+		return &dns.NSEC{Hdr: dns.Header{Name: owner, Class: dns.ClassINET, TTL: 300}, NextDomain: next}
+	}
+	cover := nsec("aaaa.example.com.", "zzzz.example.com.")
+	wrap := nsec("zzzz.example.com.", "aaaa.example.com.")
+
+	if nsecProvesNXDOMAIN([]*dns.NSEC{cover}, "foo.example.com.") {
+		t.Error("covering NSEC alone must not prove NXDOMAIN (missing wildcard proof)")
+	}
+	if !nsecProvesNXDOMAIN([]*dns.NSEC{cover, wrap}, "foo.example.com.") {
+		t.Error("coverage + wildcard-covering wrap NSEC should prove NXDOMAIN")
+	}
+	// The wrap interval (zzzz → aaaa) covers everything outside (aaaa, zzzz):
+	// both zzzzz.example.com (after zzzz) and *.example.com (before aaaa) —
+	// one NSEC carries the whole §5.4 proof.
+	if !nsecProvesNXDOMAIN([]*dns.NSEC{wrap}, "zzzzz.example.com.") {
+		t.Error("single wrap NSEC covering both qname and wildcard should prove NXDOMAIN")
+	}
+	if nsecProvesNXDOMAIN([]*dns.NSEC{cover, wrap}, "zzzz.example.com.") {
+		t.Error("an NSEC owner name exists — coverage is exclusive of the owner")
 	}
 }
 

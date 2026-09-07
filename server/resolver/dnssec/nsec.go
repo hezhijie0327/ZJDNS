@@ -18,6 +18,10 @@ const nsec3OptOutFlag = 0x01
 // verifyNSEC checks whether any NSEC record in the slice cryptographically
 // proves the non-existence of the queried name or type.
 func (c *CryptoValidator) verifyNSEC(authSigs []*dns.RRSIG, nsecs []*dns.NSEC, verifiedDNSKEYs []*dns.DNSKEY, normalizedQname string, qtype uint16, denialType string) bool {
+	// Verify signatures once and collect the whole verified set — the
+	// NXDOMAIN verdict is set-level: RFC 4035 §5.4's wildcard proof may be
+	// carried by a different NSEC than the one covering the qname.
+	verified := make([]*dns.NSEC, 0, len(nsecs))
 	for _, nsec := range nsecs {
 		// RFC 6840 §4.1: ancestor delegation NSEC MUST NOT prove non-existence
 		// below that zone cut.  However, an NSEC whose owner matches the
@@ -33,17 +37,77 @@ func (c *CryptoValidator) verifyNSEC(authSigs []*dns.RRSIG, nsecs []*dns.NSEC, v
 			continue
 		}
 		rrsigs := FindRRSIGs(authSigs, nsec.Header().Name, dns.TypeNSEC)
-		if !c.verifyNSECRecord(nsec, rrsigs, verifiedDNSKEYs, normalizedQname, qtype, denialType) {
+		if !c.verifyNSECsig(nsec, rrsigs, verifiedDNSKEYs) {
 			continue
 		}
-		return true
+		verified = append(verified, nsec)
+	}
+	if denialType == "NXDOMAIN" {
+		return nsecProvesNXDOMAIN(verified, normalizedQname)
+	}
+	for _, nsec := range verified {
+		if matchesNSECDenial(nsec, normalizedQname, qtype, denialType) {
+			return true
+		}
 	}
 	return false
 }
 
-// verifyNSECRecord verifies a single NSEC record's RRSIG and checks that it
-// proves the denial.
-func (c *CryptoValidator) verifyNSECRecord(nsec *dns.NSEC, rrsigs []*dns.RRSIG, verifiedDNSKEYs []*dns.DNSKEY, normalizedQname string, qtype uint16, denialType string) bool {
+// nsecProvesNXDOMAIN implements RFC 4035 §5.4 over the whole verified NSEC
+// set: (1) an NSEC covering the qname proves it does not exist, and (2) an
+// NSEC covering "*."+closest-encloser proves no wildcard could have matched
+// — without (2), a replayed covering NSEC from a zone that DOES have a
+// matching wildcard would wrongly validate NXDOMAIN. The closest encloser
+// is the longest common ancestor of the covering interval's endpoints; when
+// the covering NSEC also spans the wildcard it serves as its own proof.
+func nsecProvesNXDOMAIN(verified []*dns.NSEC, qname string) bool {
+	for _, nsec := range verified {
+		owner, next := nsec.Header().Name, nsec.NextDomain
+		if !isDomainInRange(qname, owner, next) {
+			continue
+		}
+		wildcard := "*." + commonAncestor(owner, next)
+		if isDomainInRange(wildcard, owner, next) {
+			return true
+		}
+		for _, other := range verified {
+			if isDomainInRange(wildcard, other.Header().Name, other.NextDomain) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// commonAncestor returns the longest common suffix (label-wise) of two
+// domain names, canonicalized — for a covering NSEC interval this is the
+// closest encloser of everything inside the gap.
+func commonAncestor(a, b string) string {
+	la := dnsutil.Split(dnsutil.Canonical(a))
+	lb := dnsutil.Split(dnsutil.Canonical(b))
+	i, j := len(la)-1, len(lb)-1
+	for i >= 0 && j >= 0 && la[i] == lb[j] {
+		i--
+		j--
+	}
+	// No shared label at all (cross-zone garbage) — the root.
+	suffix := la[i+1:]
+	if len(suffix) == 0 {
+		return "."
+	}
+	var sb strings.Builder
+	for _, l := range suffix {
+		sb.WriteString(l)
+		sb.WriteByte('.')
+	}
+	return sb.String()
+}
+
+// verifyNSECsig cryptographically verifies a single NSEC RRset against the
+// zone keys — deliberately match-free: for NXDOMAIN the covering record and
+// the wildcard proof may be different NSECs, so membership in the verified
+// set must not depend on matching the queried name.
+func (c *CryptoValidator) verifyNSECsig(nsec *dns.NSEC, rrsigs []*dns.RRSIG, verifiedDNSKEYs []*dns.DNSKEY) bool {
 	if len(rrsigs) == 0 {
 		return false
 	}
@@ -54,10 +118,7 @@ func (c *CryptoValidator) verifyNSECRecord(nsec *dns.NSEC, rrsigs []*dns.RRSIG, 
 			if keyTags[i] != sig.KeyTag {
 				continue
 			}
-			if err := c.VerifyRRset(rrset, sig, key); err != nil {
-				continue
-			}
-			if matchesNSECDenial(nsec, normalizedQname, qtype, denialType) {
+			if err := c.VerifyRRset(rrset, sig, key); err == nil {
 				return true
 			}
 		}
