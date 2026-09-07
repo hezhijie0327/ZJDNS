@@ -162,9 +162,11 @@ func (c *Client) eTLSClientConfig(server *config.UpstreamServer) *eTLS.Config {
 		// RFC 8998: offer SM cipher suites (TLS_SM4_GCM_SM3/CCM_SM3) and
 		// CurveSM2 by default — eTLS keeps them off unless asked. Non-SM
 		// upstreams are unaffected (SM ranks last in eTLS preference order).
-		// AllSupportedExtensions unlocks the extended TLS extensions (ECH,
-		// ALPS, cert compression, delegated credentials) — eTLS only sends
-		// them once the corresponding feature is configured.
+		// AllSupportedExtensions puts every extended TLS extension on the wire:
+		// ECH/ALPS/delegated credentials stay dormant until their feature
+		// config is set, while compress_certificate is default-on — the
+		// ClientHello advertises zlib/brotli/zstd (RFC 8879), letting capable
+		// upstreams shrink their certificate flights (TestUpstreamClientOffersCertCompression).
 		Defaults:           eTLS.Defaults{AllSecureCipherSuites: true, AllSecureCurves: true, AllSupportedExtensions: true},
 		CurvePreferences:   []eTLS.CurveID{},
 		InsecureSkipVerify: server.SkipTLSVerify,

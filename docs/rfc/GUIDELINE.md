@@ -30,18 +30,18 @@ Section 标题栏位格式：`[RFC NNNN: 状态]` `合规标记`
 | 状态 | 数量 |
 |------|------|
 | Internet Standard / Standard | 3 (RFC 768, 1034, 1035) |
-| Proposed Standard | 76 |
+| Proposed Standard | 77 |
 | Best Current Practice | 4 (RFC 2929, 6895, 8499×2 双列) |
 | Informational | 12 |
 | Experimental | 8 |
 | Historic | 7 |
 | Internet-Draft | 4 (DNS Stamp, DNSCrypt, DELEG, DNS 0x20) |
 | 国密标准 | 1 (TLCP/DTLCP) |
-| **总计** | **110 RFC 条目 / 99 章节**（含 2065/2537、4033/4034/4035 等合并段；条目按 RFC 号出现次数计（合并段展开；RFC 6840、8499 兼有独立章节与合并段，双列计入）；92 个 RFC 编号章节 + 7 个非 RFC 章节：DELEG / DNS Stamp / DNSCrypt / DNS 0x20 / SOCKS5 / TLCP / 已知偏离） |
+| **总计** | **111 RFC 条目 / 100 章节**（含 2065/2537、4033/4034/4035 等合并段；条目按 RFC 号出现次数计（合并段展开；RFC 6840、8499 兼有独立章节与合并段，双列计入）；93 个 RFC 编号章节 + 7 个非 RFC 章节：DELEG / DNS Stamp / DNSCrypt / DNS 0x20 / SOCKS5 / TLCP / 已知偏离） |
 
 | 合规 | 数量 |
 |------|------|
-| ✅ 合规 | 78 |
+| ✅ 合规 | 79 |
 | ⚠️ 部分合规 | 8 (RFC 5001, 5011/9077, 6761, 6975, 8198, 8998, 9567) |
 | ⚪ 参考 | 24 |
 
@@ -1258,6 +1258,24 @@ Body: [DNS 线格式消息]
 ### 我们的实现
 
 - miekg/dns 类型声明（未实现 pack/unpack）；ZJDNS 仅透传 ✓
+
+---
+
+## RFC 8879 — Certificate Compression in TLS  `[RFC 8879: Proposed Standard]`  ✅
+
+**TLS 握手证书链压缩：ClientHello `compress_certificate` 扩展协商 zlib/brotli/zstd，服务端以 CompressedCertificate 消息（类型 25）回传压缩链。**
+
+### 关键点
+
+- 扩展号 27（0x001B）；算法 zlib=1 / brotli=2 / zstd=3；扩展数据 = 1 字节**字节长度**前缀 + 算法列表（每项 2 字节）
+- 压缩对象是 Certificate 消息全文（含整条链）；仅 TLS 1.3；解压输出长度上限防炸弹
+- 压缩的是公开证书数据、不含密钥材料，无 CRIME 类压缩侧信道
+
+### 我们的实现
+
+- eTLS 默认开启：`AllSupportedExtensions` 把 `CompressedCertificateExtension` 放上线（默认扩展表不含它）；未设 `CertificateCompressionPreferences` 时 eTLS 兜底宣告全部三种算法——服务端 DoT/DoH（`baseTLSConfig`）与上游 DoT/DoH 客户端（`eTLSClientConfig`）双向生效
+- 服务端方向回归：`TestServerCompressesCertificateRFC8879`（96-SAN 证书 server flight 3936→2053 B）；客户端方向字节级：`TestUpstreamClientOffersCertCompression`（ClientHello 含 zlib/brotli/zstd）
+- 不适用路径：DoQ/DoH3（stdlib crypto/tls 经 quic-go，无 RFC 8879）、TLCP/DTLCP（gotlcp 无此扩展）
 
 ---
 

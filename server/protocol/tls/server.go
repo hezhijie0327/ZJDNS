@@ -152,9 +152,11 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 		// CurveSM2 key exchange by default. eTLS gates them as "extended"
 		// algorithms, so they stay off without these switches. Standard clients
 		// keep negotiating AES/ChaCha: SM ranks last in eTLS preference order.
-		// AllSupportedExtensions unlocks the extended TLS extensions (ECH,
-		// ALPS, cert compression, delegated credentials) — eTLS only sends
-		// them once the corresponding feature is configured.
+		// AllSupportedExtensions puts every extended TLS extension on the wire:
+		// ECH/ALPS/delegated credentials stay dormant until their feature
+		// config is set, while compress_certificate is default-on — eTLS then
+		// advertises zlib/brotli/zstd (RFC 8879) and compresses the
+		// certificate for clients that offer it (TestServerCompressesCertificateRFC8879).
 		Defaults:         eTLS.Defaults{AllSecureCipherSuites: true, AllSecureCurves: true, AllSupportedExtensions: true},
 		Certificates:     []eTLS.Certificate{eCert},
 		CurvePreferences: []eTLS.CurveID{},
