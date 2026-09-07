@@ -8,6 +8,7 @@ import (
 	"zjdns/config"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 func mqTestMsg() *dns.Msg {
@@ -243,5 +244,33 @@ func TestWarmFromMQResponse_Truncated(t *testing.T) {
 	r.warmFromMQResponse(resp, "example.com.", dns.ClassINET, mqr, nil, true)
 	if _, found, _ := r.cache.Get("example.com.", dns.TypeAAAA, dns.ClassINET, nil); found {
 		t.Fatal("truncated response warmed the cache")
+	}
+}
+
+// TestMQResponseInvalid pins the RFC 10029 §3.5 invalid shapes that the
+// optionless-retry wiring consumes via mqResponseInvalid.
+func TestMQResponseInvalid(t *testing.T) {
+	if mqResponseInvalid(nil) {
+		t.Error("nil response is never invalid")
+	}
+	plain := new(dns.Msg)
+	if mqResponseInvalid(plain) {
+		t.Error("option-free response is never invalid")
+	}
+	valid := new(dns.Msg)
+	valid.Pseudo = append(valid.Pseudo, &dns.MQRESPONSE{Types: []uint16{dns.TypeAAAA}})
+	if mqResponseInvalid(valid) {
+		t.Error("single MQRESPONSE with distinct types is valid")
+	}
+	dup := new(dns.Msg)
+	dup.Pseudo = append(dup.Pseudo, &dns.MQRESPONSE{Types: []uint16{dns.TypeAAAA}}, &dns.MQRESPONSE{Types: []uint16{dns.TypeMX}})
+	if !mqResponseInvalid(dup) {
+		t.Error("duplicated MQTYPE-Response option must be invalid (§3.5)")
+	}
+	dupQTx := new(dns.Msg)
+	dnsutil.SetQuestion(dupQTx, "example.com.", dns.TypeA)
+	dupQTx.Pseudo = append(dupQTx.Pseudo, &dns.MQRESPONSE{Types: []uint16{dns.TypeA}})
+	if !mqResponseInvalid(dupQTx) {
+		t.Error("QTx duplicating the primary QTYPE must be invalid (§3.5)")
 	}
 }

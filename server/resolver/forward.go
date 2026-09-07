@@ -204,7 +204,7 @@ func (r *Resolver) queryUpstream(ctx context.Context, question Question, ecs *ed
 				// exhausted execCtx cannot block it.
 				if hasMQQUERY(msg.Pseudo) &&
 					!errors.Is(queryResult.Error, context.Canceled) &&
-					(queryResult.Error != nil || (queryResult.Response != nil &&
+					(queryResult.Error != nil || mqResponseInvalid(queryResult.Response) || (queryResult.Response != nil &&
 						queryResult.Response.Rcode != dns.RcodeSuccess && queryResult.Response.Rcode != dns.RcodeNameError)) {
 					if queryResult.Response != nil {
 						pool.DefaultMessage.Put(queryResult.Response)

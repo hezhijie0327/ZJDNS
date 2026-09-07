@@ -32,6 +32,18 @@ func attachMQType(msg *dns.Msg, mqtype []uint16, primary uint16) {
 	msg.Pseudo = append(msg.Pseudo, &dns.MQQUERY{Types: attach})
 }
 
+// mqResponseInvalid reports whether the response carries a malformed
+// MQTYPE-Response (RFC 10029 §3.5: duplicated option, duplicated QTx, or a
+// QTx duplicating the primary QTYPE). Such an answer MUST be treated as
+// invalid — the callers discard it and retry the query optionless.
+func mqResponseInvalid(resp *dns.Msg) bool {
+	if resp == nil {
+		return false
+	}
+	_, invalid := parseMQResponse(resp)
+	return invalid
+}
+
 // parseMQResponse validates a response's MQTYPE options per §3.5:
 // MQTYPE-Query in a response → unsupported (nil, false); duplicated
 // MQTYPE-Response or a QTx duplicating another QTx/primary → invalid (true).

@@ -155,6 +155,9 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			// some deployments).  Retry once without the option whenever the
 			// query did not succeed (NOERROR or NXDOMAIN); the merge benefit
 			// is lost but resolution must not fail because of it.
+			// RFC 10029 §3.5: an invalid MQTYPE-Response (duplicated
+			// option/QTx) makes the answer invalid — discarded and retried
+			// optionless below with the failure rcodes.
 			// Fallback for genuinely failed queries: "operation was
 			// canceled" is a normal first-success race (skip — the walk
 			// already has a winner), but timeouts and fast failures
@@ -164,7 +167,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			// block it.
 			if hasMQQUERY(msg.Pseudo) &&
 				!errors.Is(result.Error, context.Canceled) &&
-				(result.Error != nil || (result.Response != nil &&
+				(result.Error != nil || mqResponseInvalid(result.Response) || (result.Response != nil &&
 					result.Response.Rcode != dns.RcodeSuccess && result.Response.Rcode != dns.RcodeNameError)) {
 				if result.Response != nil {
 					pool.DefaultMessage.Put(result.Response)
