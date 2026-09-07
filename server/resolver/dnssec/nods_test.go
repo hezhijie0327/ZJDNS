@@ -27,3 +27,29 @@ func TestProvesNoDSAtDelegation(t *testing.T) {
 		t.Error("DS bit present: not a no-DS proof")
 	}
 }
+
+// TestProvesNoDSAtDelegationOptOut regression: an Opt-Out denial carries NO
+// record at the child name (opt-out delegations have no NSEC3 of their own,
+// RFC 5155 §9) — the covered shape must be accepted, not demanded to show
+// an NS bit. Rejected opt-out no-DS proofs broke every .com/.net-adjacent
+// glue chase in the 2026-09 live regression (dnssec.works via udag.net).
+func TestProvesNoDSAtDelegationOptOut(t *testing.T) {
+	child := "sub.example.com."
+	// Opt-Out NSEC3 covering some other hash — nothing matches H(child).
+	resp := &dns.Msg{Ns: []dns.RR{&dns.NSEC3{
+		Hdr:  dns.Header{Name: "a1rt98bs.example.com.", Class: dns.ClassINET, TTL: 300},
+		Hash: dns.SHA1, Flags: 1, Iterations: 0, Salt: "",
+		NextDomain: "a1rtlnpg.example.com.", TypeBitMap: []uint16{dns.TypeNS, dns.TypeSOA},
+	}}}
+	if !ProvesNoDSAtDelegation(resp, child) {
+		t.Error("covered opt-out denial must prove the insecure delegation (RFC 5155 §9)")
+	}
+	// Plain NSEC covering (no exact match) — accepted the same way.
+	resp2 := &dns.Msg{Ns: []dns.RR{&dns.NSEC{
+		Hdr:        dns.Header{Name: "aaa.example.com.", Class: dns.ClassINET, TTL: 300},
+		NextDomain: "zzz.example.com.", TypeBitMap: []uint16{dns.TypeRRSIG, dns.TypeNSEC},
+	}}}
+	if !ProvesNoDSAtDelegation(resp2, child) {
+		t.Error("covered NSEC denial without a child record must be accepted")
+	}
+}

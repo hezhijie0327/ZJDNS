@@ -3,13 +3,13 @@ module zjdns
 go 1.27.0
 
 require (
-	codeberg.org/miekg/dns v0.6.110-0.20260905133928-a6a0d94ec6bd
+	codeberg.org/miekg/dns v0.6.110-0.20260906142836-a838437b1950
 	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033
-	github.com/cloudflare/circl v1.6.6-0.20260824140020-352600b0a4b2
+	github.com/cloudflare/circl v1.6.6-0.20260907123956-9ca6fed4e669
 	github.com/emmansun/gmsm v0.44.1
 	github.com/klauspost/compress v1.20.1-0.20260904115809-75489f96c542
 	github.com/pion/dtls/v3 v3.1.3-0.20260904044347-59f4c33b90c5
-	github.com/quic-go/quic-go v0.62.1-0.20260905101404-80ff6f69e441
+	github.com/quic-go/quic-go v0.62.1-0.20260907022535-908f9b5fe261
 	gitlab.com/go-extension/http v0.0.0-20260817192224-f5762b77a66a
 	gitlab.com/go-extension/tls v0.0.0-20260817191915-d8b98b0d31de
 	golang.org/x/crypto v0.56.0

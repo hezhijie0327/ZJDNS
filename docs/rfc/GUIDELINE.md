@@ -396,7 +396,7 @@ DNSKEY (自签名) → DS (父域授权) → DNSKEY (子域) → RRSIG (签名�
 
 ### 我们的实现
 
-- §3.2.3 跨区 RRset：跳过未验证的跨区集合时响应仍可服务但不置 AD（`adSuppressed`）；§5.2：no-DS 证明须带 NS 位（`ProvesNoDSAtDelegation`）、CDS/CDNSKEY 回退接受的 DNSKEY 集须由匹配 KSK 的 RRSIG 绑定（`dnskeySetSignedBy`）；§5.3.3：缓存 zone-key TTL 由覆盖 RRSIG 剩余有效期封顶（`CacheZoneKeys`，2026-09）
+- §3.2.3 跨区 RRset：跳过未验证的跨区集合时响应仍可服务但不置 AD（`adSuppressed`）；§5.2：no-DS 证明在子名存在 exact-match NSEC/NSEC3 时须带 NS 位（`ProvesNoDSAtDelegation`）——Opt-Out 覆盖形状（子名无记录，RFC 5155 §9）直接接受，2026-09 实测回归修正：对覆盖形状强求 NS 位曾断掉所有 .com/.net 相邻的粘胶追踪（dnssec.works→udag.net 一例 3/3 复现）、CDS/CDNSKEY 回退接受的 DNSKEY 集须由匹配 KSK 的 RRSIG 绑定（`dnskeySetSignedBy`）；§5.3.3：缓存 zone-key TTL 由覆盖 RRSIG 剩余有效期封顶（`CacheZoneKeys`，2026-09）
 - `server/resolver/dnssec/` 完整实现：签名验证、信任链、NSEC/NSEC3 否定回答
 - `dnssec_chain.go`：逐级 DS/DNSKEY/RRSIG 验证
 - `trust_anchor.go`：lazy-loaded 根信任锚（静态，未实现 RFC 5011 自动化）

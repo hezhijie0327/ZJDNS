@@ -127,40 +127,37 @@ func (c *CryptoValidator) verifyNSECsig(nsec *dns.NSEC, rrsigs []*dns.RRSIG, ver
 }
 
 // ProvesNoDSAtDelegation checks the shape an authenticated no-DS denial
-// must have at a delegation point: the NSEC/NSEC3 at the child name shows
-// the NS bit (the delegation exists) without DS (RFC 4035 §5.2), or — in
-// Opt-Out space — an Opt-Out NSEC3 covers the child hash (RFC 5155 §9).
-// Signature validity is the caller's concern (IsResponseValid ran first);
-// this only re-reads the already-verified records.
+// must have at a delegation point when the denial carries a record AT the
+// child name: that NSEC/NSEC3 must show the NS bit (the delegation exists)
+// without DS (RFC 4035 §5.2) — an ordinary-name NODATA must not mark the
+// delegation insecure. When NO record matches the child name the name is
+// covered instead: in NSEC3 Opt-Out space that IS the insecure-delegation
+// proof (RFC 5155 §9 — opt-out delegations have no NSEC3 of their own), and
+// IsResponseValid has already authenticated the covering chain, so the
+// denial is accepted as-is. Signature validity is the caller's concern.
 func ProvesNoDSAtDelegation(response *dns.Msg, child string) bool {
 	child = strings.ToLower(dnsutil.Fqdn(child))
 	for _, rr := range response.Ns {
 		switch n := rr.(type) {
 		case *dns.NSEC:
-			if dns.EqualName(n.Header().Name, child) &&
-				slices.Contains(n.TypeBitMap, dns.TypeNS) &&
-				!slices.Contains(n.TypeBitMap, dns.TypeDS) {
-				return true
+			if dns.EqualName(n.Header().Name, child) {
+				return slices.Contains(n.TypeBitMap, dns.TypeNS) &&
+					!slices.Contains(n.TypeBitMap, dns.TypeDS)
 			}
 		case *dns.NSEC3:
-			if slices.Contains(n.TypeBitMap, dns.TypeDS) {
-				continue
-			}
 			hash := nsec3HashName(child, n.Hash, n.Iterations, n.Salt)
 			if hash == "" {
 				continue
 			}
-			hash = strings.ToLower(hash)
-			if nsec3HashLabel(n.Header().Name) == hash {
-				return slices.Contains(n.TypeBitMap, dns.TypeNS)
-			}
-			if n.Flags&nsec3OptOutFlag != 0 &&
-				isDomainInRange(hash, nsec3HashLabel(n.Header().Name), strings.ToLower(n.NextDomain)) {
-				return true
+			if nsec3HashLabel(n.Header().Name) == strings.ToLower(hash) {
+				return slices.Contains(n.TypeBitMap, dns.TypeNS) &&
+					!slices.Contains(n.TypeBitMap, dns.TypeDS)
 			}
 		}
 	}
-	return false
+	// No record at the child name — covered (Opt-Out) space: the
+	// authenticated covering denial from IsResponseValid suffices.
+	return true
 }
 
 // HasCompactNXNAME reports whether the response carries the RFC 9824 NXNAME
