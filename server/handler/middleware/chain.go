@@ -145,8 +145,9 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	}).Wrap(h)
 
 	// RFC 10029 MQTYPE-Query: merges additional QTYPE responses into the
-	// primary reply (recursive mode).  In forwarding mode the option is
-	// passed through to the upstream by Resolution.
+	// primary reply (recursive mode).  In forwarding mode Resolution
+	// attaches the MQQUERY option itself; this middleware still merges
+	// locally.
 	//
 	// Positioned outside CacheStore so its post-phase runs after CacheStore
 	// has built qctx.Res from ResolutionResult (miss path), and inside EDNS

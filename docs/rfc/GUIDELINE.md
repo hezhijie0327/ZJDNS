@@ -153,7 +153,7 @@ Section 标题栏位格式：`[RFC NNNN: 状态]` `合规标记`
 
 ### 我们的实现
 
-- ⚪ 参考：ZJDNS 不做区域传输（非权威）；ANY/AXFR/IXFR 查询被拒绝（REFUSED）✓
+- ⚪ 参考：ZJDNS 不做区域传输（非权威）；AXFR/IXFR 查询被拒绝（REFUSED + EDE 30）✓；ANY 不拒绝——按 RFC 8482 以 HINFO "RFC8482" 最小应答 ✓
 
 ---
 
@@ -635,7 +635,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ### 我们的实现
 
-- `config.DefaultDNS64Prefix = "64:ff9b::/96"` ✓
+- `config.DefaultDNS64Prefix = "64:ff9b::/96"` ✓；§3.1：WKP 下非全球 IPv4（RFC1918/CGNAT/保留段）不合成，自定义前缀不受限（2026-09 修复）
 - `middleware/dns64.go`：AAAA 合成逻辑
 
 ---
@@ -663,7 +663,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 | RFC      | 关键点                      | 引用位置             |
 | -------- | --------------------------- | -------------------- |
-| RFC 6604 | NXDOMAIN 可包含 CNAME/DNAME | `nameserver.go:124`   |
+| RFC 6604 | NXDOMAIN 可包含 CNAME/DNAME | `ns_concurrent.go`（CNAME/DNAME-in-NXDOMAIN 处理，191-216）   |
 | RFC 6840 | §4.1 祖先委托排除           | `dnssec/nsec.go:139`  |
 | RFC 7344 | CDS/CDNSKEY 自动化信任锚    | `dnssec_chain.go`    |
 
@@ -692,7 +692,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ### 我们的实现
 
-- `nameserver.go:91`：在 NXDOMAIN 响应中处理 `*dns.CNAME` 和 `*dns.DNAME` 记录 ✓
+- `ns_concurrent.go`（CNAME/DNAME-in-NXDOMAIN 处理，191-216）：在 NXDOMAIN 响应中处理 `*dns.CNAME` 和 `*dns.DNAME` 记录 ✓
 
 ---
 
@@ -776,6 +776,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 - 祖先委托限制：`dnssec/nsec.go` 检查 NS/SOA 位
 - CNAME 位检查：验证逻辑中包含
+- §5.8 AD 位门控：仅当请求方设置 DO 或 AD 位时响应才置 AD（`handler.ClientUnderstandsAD`；缓存 wire 不再烘焙 AD——2026-09 修复，此前 DO=0 客户端也能看到 AD）
 
 ---
 
@@ -926,7 +927,7 @@ Client ← [2字节长度][DNS响应] ← Server  (按序)
 
 ### 我们的实现
 
-- ⚠️ `edns/edns.go:ApplyToMessage()` 支持 tcpKeepaliveTimeout 参数，但 `qctx.TCPKeepalive` 从未被赋值——实际从不发出该选项
+- ⚠️ `edns/edns.go:ApplyToMessage()` 支持 tcpKeepaliveTimeout 参数，但所有调用点固定传 0——实际从不发出该选项
 
 ---
 
@@ -970,13 +971,13 @@ Client ⇄ [2字节长度][DNS消息] ⇄ Server  (TLS 加密通道内)
 
 ### 关键要求
 
-- **MUST**: ECS 选项仅用于递归→权威方向（不发送给客户端）
+- **MUST**: 递归→权威方向的查询携带 ECS（源前缀取客户端与 /24、/56 的较小者，§7.1.1）；响应向客户端回显 ECS（SCOPE 指示适用网络，§7.3）
 - **SHOULD**: IPv6 使用 /56（允许站点内子网聚合）
 - SCOPE=0 表示"响应未应用 ECS"
 
 ### 我们的实现
 
-- `edns/ecs.go`: `DefaultECSv4Len=24`, `DefaultECSv6Len=56`, `DefaultECSScope=0`
+- `edns/ecs.go`: `DefaultECSv4Len=24`, `DefaultECSv6Len=56`, `DefaultECSScope=0`；§7.1.1 出站源前缀取 min(客户端前缀, /24、/56) 且地址截断（2026-09 修复，此前 /32//128 原样转发）
 - ECS 选项格式: FAMILY(2) + SOURCE PREFIX-LENGTH(1) + SCOPE PREFIX-LENGTH(1) + ADDRESS(变长)
 - 缓存按 ECS 地址最长前缀匹配分桶；Additional/Authority Section 记录不绑定网络
 - Birthday Attack 缓解：响应 ECS 必须回显查询的 FAMILY/ADDRESS/SOURCE PREFIX（`VerifyECSResponse`，不匹配 → SERVFAIL，防投毒）
@@ -1086,7 +1087,8 @@ Client ⇄ DTLS 记录 [DNS消息] ⇄ Server  (UDP 数据报)
 
 **利用缓存的 NSEC/NSEC3 范围推导否定回答。**
 
-- ⚠ **已知差距**：miekg/dns 提供 NSEC/NSEC3 数据但不提供覆盖判断。需自行实现范围比较 + RRSIG 附带 + 通配符处理。之前尝试过但边界条件问题多，暂不实现
+- 范围覆盖/通配符证明已在 `dnssec/nsec.go`/`nsec3.go` 实现并用于响应验证（含 RFC 4035 §5.4 通配符不存在证明，2026-09 补齐 NSEC 侧）
+- ⚠ **已知差距**：缓存侧不做否定回答合成（从缓存的 NSEC 范围直接推导 NXDOMAIN/NODATA，免去上游往返）——仅验证不推导
 
 ---
 
@@ -1315,14 +1317,11 @@ Body: [DNS 线格式消息]
 | 6   | DNSSEC Bogus                 | 签名验证失败                   |
 | 7   | Signature Expired            | RRSIG 过期                     |
 | 9   | DNSKEY Missing               | 缺少密钥                       |
-| 15  | Blocked                      | 被策略阻止                     |
-| 17  | Filtered                     | 被过滤                         |
-| 18  | Prohibited                   | 被禁止（ACL 未授权客户端拒绝、未授权 XFR） |
-| 20  | Not Authoritative            | 非权威回答                     |
-| 21  | Not Supported                | 不支持（如 XoT 上非 XFR 查询） |
+| 15  | Blocked                      | 被策略阻止（CIDR 规则拒绝）    |
+| 18  | Prohibited                   | 被禁止（ACL 未授权客户端拒绝） |
 | 22  | No Reachable Authority       | 权威不可达                     |
 | 23  | Network Error                | 网络错误                       |
-| 24  | Invalid Data                 | 无效数据                       |
+| 30  | Invalid Query Type           | NXNAME/AXFR/IXFR 拒绝          |
 
 ### 协议要求
 
@@ -1396,7 +1395,7 @@ Body: [DNS 线格式消息]
 - `DefaultQUICServerIdleTimeout = 30s` ✓
 - `DefaultQUICClientIdleTimeout = 60s`
 - `DefaultQUICKeepAlive = 20s` ✓
-- `DefaultQUICAddrCacheTTL = 30min`
+- Retry 白名单缓存 128 项（`DefaultQUICAddrCacheSize`），已验证地址 5 分钟内免 Retry（私有 `addrCacheTTL`）；地址仅在握手完成（DoQ Accept）/ 首个 h3 请求后入列，回调极性 = true 触发 Retry（quic-go 语义，2026-09 修正反转）
 - 地址验证器：`server/protocol/tls/addr_validator.go` — LRU cache, 128 entries ✓
 
 ---
@@ -1728,7 +1727,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 ### 我们的实现
 
 - **客户端（出站）**：查询 qtype Q 时附加 `MQQUERY{配置 − Q}`（零分配，栈数组）。响应按 §3.5 验证（重复 MQRESPONSE / QTx 重复主类型 → 无效；MQQUERY 出现在响应 → 视为不支持）；完成的 QTx 记录（含 RRSIG）warm cache（正记录按 owner==qname 提取，负记录带 SOA 证明），并从客户端响应中**剥离**（客户端只问了主类型）；权威不支持 → fallback 独立查询（§3.5 义务，现有并发 walk 天然满足）
-- **服务端（合并）**：`middleware/mqtype.go` —— §3.3 八条 FORMERR（opcode/QDCOUNT=0/主类型非 data/空列表/元类型/重复/重复主类型/入站 MQRESPONSE）；§3.4 合并（RCODE/AA/AD 与主响应一致才并入、RR 去重、预算 ≤ client UDP size 且**合并本身不触发 TC**、完整 QTx 必入列表、空列表也必返以宣告支持）；每个 QTx 解析带 5s 超时（§4 DoS 防护）
+- **服务端（合并）**：`middleware/mqtype.go` —— §3.3 八条 FORMERR（opcode/QDCOUNT=0/主类型非 data/空列表/元类型/重复/重复主类型/入站 MQRESPONSE）；§3.4 合并（RCODE/AA/AD 与主响应一致才并入、RR 去重、预算 ≤ client UDP size 且**合并本身不触发 TC**、完整 QTx 必入列表、空列表也必返以宣告支持）；每个 QTx 解析带 3s 超时（`DefaultMQTypeResolveTimeout`，§4 DoS 防护）
 - **本地合并（所有模式）**：客户端 MQQUERY 由 ZJDNS 本地合并（forward 也如此——ZJDNS 是完整解析器，QTx 走自己的上游解析），不透传；链上任一节点不支持 MQTYPE 也不影响响应支持性
 
 ### 明确不做
@@ -1788,9 +1787,9 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 | 0x02 | DoH                | HTTPS   |
 | 0x03 | DoT                | TLS     |
 | 0x04 | DoQ                | QUIC    |
-| 0x05 | Plain DNS (DNSSEC) | UDP/TCP |
-| 0x06 | DoH (no ECS)       | HTTPS   |
-| 0x07 | DoH3               | HTTP/3  |
+| 0x05 | ODoH Target        | HTTPS   |
+| 0x81 | DNSCrypt Relay     | -       |
+| 0x85 | ODoH Relay         | HTTPS   |
 
 ### Stamp 格式
 
@@ -1858,7 +1857,7 @@ BinaryStamp = [protocol:1][props:8][addr_len:1][addr:N][hashes...][path...]
 
 - **UDP**: 加密响应 ≤ 查询大小（反放大）。超预算 → 截断 DNS 响应 + TC，禁止静默丢弃
 - **TCP**: 无 UDP 反放大限制，但加密响应 < 4096 字节
-- TCP 每次连接只处理一个查询后关闭（§5.4.4）
+- TCP 连接按 RFC 7766 语义复用（多查询流水线）；§5.4.4 的单查询关闭不适用（与上方"连接复用"一致）
 
 ### 防放大（§5.5 / §11.3）
 
