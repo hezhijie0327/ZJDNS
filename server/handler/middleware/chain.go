@@ -108,9 +108,11 @@ func AssembleChain(deps *Dependencies) handler.QueryHandler {
 	// machinery (prefetch, stale strategies, background updates) is
 	// delegated to the coordinator.
 	h = (&CacheLookup{
-		store:       deps.Cache,
-		refresh:     newRefreshCoordinator(deps),
-		preferStale: deps.Config.Server.Features.Cache.Entries.PreferStale,
+		store:          deps.Cache,
+		refresh:        newRefreshCoordinator(deps),
+		preferStale:    deps.Config.Server.Features.Cache.Entries.PreferStale,
+		aggressiveNSEC: deps.Config.Server.Features.Cache.AggressiveNSECEnabled(),
+		dns64:          deps.DNS64 != nil,
 	}).Wrap(h)
 
 	// RFC 8482 minimal ANY response — wrapped INSIDE Zone (earlier Wrap call

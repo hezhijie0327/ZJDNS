@@ -463,6 +463,31 @@ dig @127.0.0.1 -p 10533 big.test A +bufsize=4096           # TCP retry, full ans
 dig @127.0.0.1 -p 10533 nonexistent-xyz12345.com A +short  # NXDOMAIN (repeat → hit)
 ```
 
+### RFC 8198 Aggressive NSEC Caching (recursive mode)
+
+递归 + DNSSEC 验证实例上，验证过的 NXDOMAIN 会把 RRSIG 验证过的 NSEC/NSEC3 喂入
+区间索引（`cache/nsec.go`）；同区间内的其他名字直接本地合成 NXDOMAIN/NODATA，
+不再发上游查询。转发的 AD 启发式不参与；NSEC3 Opt-Out 区域（如 .com/.de）不合成。
+
+```bash
+/tmp/zjdns -config <(jq '.server.log_level="debug:CACHE"' docs/debug/loopback/server-dnssec.json) &
+sleep 3
+
+# 1) prime: validated NXDOMAIN indexes the zone's NSEC ranges
+dig @127.0.0.1 -p 12733 no-such-probe.ippacket.stream A +short
+# 2) a fresh name inside the cached NSEC range (data→ns1) synthesizes without
+#    an upstream round trip — server log shows:
+#    "CACHE: RFC 8198 synthesized NXDOMAIN for mail-test.ippacket.stream. (type=A)"
+dig @127.0.0.1 -p 12733 mail-test.ippacket.stream A +noall +comments   # NXDOMAIN, Query time: 0ms
+grep "RFC 8198 synthesized" /tmp/zjdns-dnssec.log
+
+# Opt-Out zones must NOT synthesize (each query resolves upstream):
+dig @127.0.0.1 -p 12733 probe-one-test.de A +noall +comments           # NXDOMAIN
+grep -c "RFC 8198 synthesized.*\.de\." /tmp/zjdns-dnssec.log           # expect 0
+
+pkill -f "server-dnssec"
+```
+
 ## DNSSEC Test
 
 Verifies DNSSEC enforcement (bogus → SERVFAIL, valid → NOERROR):

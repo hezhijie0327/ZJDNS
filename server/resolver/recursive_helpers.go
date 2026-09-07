@@ -181,9 +181,11 @@ func (r *Recursive) checkLameDelegation(response *dns.Msg, currentDomain, bestMa
 
 // validateNODATAWithNSEC verifies NSEC/NSEC3 denial-of-existence records
 // for NODATA/NXDOMAIN responses against the zone's verified DNSKEYs (RFC 4035).
-func (r *Recursive) validateNODATAWithNSEC(ctx context.Context, response *dns.Msg, nameservers []string, currentDomain string, chain *dnssecChain, validated bool) bool {
+// The RRSIG-verified proof records are returned alongside the verdict for
+// RFC 8198 aggressive negative caching (nil unless cryptographically valid).
+func (r *Recursive) validateNODATAWithNSEC(ctx context.Context, response *dns.Msg, nameservers []string, currentDomain string, chain *dnssecChain, validated bool) (bool, []dns.RR) {
 	if len(response.Answer) > 0 {
-		return validated
+		return validated, nil
 	}
 	if len(chain.childDS) == 0 {
 		// Unsigned delegation (no DS at the cut): the zone has no verifiable
@@ -191,13 +193,13 @@ func (r *Recursive) validateNODATAWithNSEC(ctx context.Context, response *dns.Ms
 		// DNSKEY prefetch, which would cost one query per unsigned NODATA
 		// level for nothing.  Signed zones keep the fetch and validation
 		// below.
-		return validated
+		return validated, nil
 	}
 	if len(chain.zoneDNSKEYs) == 0 {
 		r.ensureZoneDNSKEYs(ctx, nameservers, currentDomain, chain)
 	}
 	if len(chain.zoneDNSKEYs) > 0 {
-		nsecValidated, nsecADSuppressed, valErr := r.resolver.validator.Crypto.IsResponseValid(response, currentDomain, chain.zoneDNSKEYs)
+		nsecValidated, nsecADSuppressed, proof, valErr := r.resolver.validator.Crypto.IsResponseValid(response, currentDomain, chain.zoneDNSKEYs)
 		if nsecADSuppressed {
 			nsecValidated = false // RFC 5155 §9.2 / RFC 4035 §3.2.3: proof holds, AD does not
 		}
@@ -205,10 +207,10 @@ func (r *Recursive) validateNODATAWithNSEC(ctx context.Context, response *dns.Ms
 			log.Debugf("SECURITY: NSEC validation error for %s: %v", currentDomain, valErr)
 		}
 		if nsecValidated {
-			return true
+			return true, proof
 		}
 	}
-	return validated
+	return validated, nil
 }
 
 // shouldRetryMinimisedQname checks RFC 9156 §2.3: if a minimised QNAME query

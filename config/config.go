@@ -142,13 +142,20 @@ type DDRSettings struct {
 }
 
 // CacheSettings configures the cache subsystem's three stores (entries,
-// latency, delegation), each with its own limit and persistence.
+// latency, delegation), each with its own limit and persistence, plus the
+// RFC 8198 aggressive negative cache.
 type CacheSettings struct {
 	Entries    CacheStoreSettings `json:"entries,omitzero"`
 	Latency    CacheStoreSettings `json:"latency,omitzero"`
 	Delegation CacheStoreSettings `json:"delegation,omitzero"`
+	// AggressiveNSEC enables RFC 8198 synthesis of NXDOMAIN/NODATA from
+	// cached, signature-verified NSEC/NSEC3 ranges (default true).  Only
+	// cryptographically validated denials participate — forwarding upstreams
+	// whose answers are merely AD-flagged never feed the index.
+	AggressiveNSEC *bool `json:"aggressive_nsec,omitzero"`
 }
 
+// AggressiveNSECEnabled resolves the RFC 8198 toggle (default true).
 // CacheStoreSettings bounds and persists one cache-store: a two-tier limit
 // (in-memory + disk spill) and state_file (empty = not persisted, no spill
 // tier).  PreferStale is entries-only — it is ignored by latency/delegation.
@@ -252,6 +259,11 @@ type LatencyProbeStep struct {
 
 // DNSCryptV2Prefix is the provider name prefix for DNSCrypt v2 certificates.
 const DNSCryptV2Prefix = "2.dnscrypt-cert."
+
+// AggressiveNSECEnabled resolves the RFC 8198 toggle (default true).
+func (c *CacheSettings) AggressiveNSECEnabled() bool {
+	return c.AggressiveNSEC == nil || *c.AggressiveNSEC
+}
 
 // CacheStateFile returns the entries store persistence path ("" = pure
 // memory).

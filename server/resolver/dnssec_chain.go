@@ -88,7 +88,7 @@ func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, c
 
 				// Now verify the answer with the newly verified keys
 				if len(response.Answer) > 0 {
-					validated, adSuppressed, valErr := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
+					validated, adSuppressed, _, valErr := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
 					if adSuppressed {
 						validated = false // RFC 5155 §9.2 / RFC 4035 §3.2.3: proof holds, AD does not
 					}
@@ -122,7 +122,7 @@ func (r *Recursive) isValidWithDNSSEC(response *dns.Msg, currentDomain string, c
 
 			// Now verify the answer with the newly verified keys
 			if len(response.Answer) > 0 {
-				validated, adSuppressed, valErr := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
+				validated, adSuppressed, _, valErr := crypto.IsResponseValid(response, currentDomain, dnskeyRecords)
 				if adSuppressed {
 					validated = false // RFC 5155 §9.2 / RFC 4035 §3.2.3: proof holds, AD does not
 				}
@@ -193,7 +193,7 @@ func (r *Recursive) verifyResponseOnce(chain *dnssecChain, response *dns.Msg, cu
 	if m := chain.verifyMemo; m.response == response && sameKeySlice(m.keys, keys) {
 		return m.valid, m.err
 	}
-	valid, adSuppressed, err := r.resolver.validator.Crypto.IsResponseValid(response, currentDomain, keys)
+	valid, adSuppressed, _, err := r.resolver.validator.Crypto.IsResponseValid(response, currentDomain, keys)
 	if adSuppressed {
 		// RFC 5155 §9.2 / RFC 4035 §3.2.3: the proof holds but the response
 		// is not eligible for the AD bit.
@@ -269,7 +269,7 @@ func (r *Recursive) tryRRSIGRetry(ctx context.Context, response *dns.Msg, namese
 	}
 	defer pool.DefaultMessage.Put(retryResp)
 
-	retryValidated, retryADSuppressed, retryValErr := r.resolver.validator.Crypto.IsResponseValid(retryResp, currentDomain, verifiedKeys)
+	retryValidated, retryADSuppressed, _, retryValErr := r.resolver.validator.Crypto.IsResponseValid(retryResp, currentDomain, verifiedKeys)
 	if retryADSuppressed {
 		retryValidated = false // RFC 5155 §9.2 / RFC 4035 §3.2.3
 	}

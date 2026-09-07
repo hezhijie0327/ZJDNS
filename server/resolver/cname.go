@@ -145,6 +145,7 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 	var finalRcode uint16
 	var allDNSSECEDE uint16
 	truncated := false
+	var finalDenialProof []dns.RR
 
 	currentQuestion := question
 	var visitedCNAMEs [config.DefaultMaxCNAMEChain]string
@@ -234,6 +235,10 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 		}
 		finalAuthority = qr.Authority
 		finalAdditional = qr.Additional
+		// RFC 8198: the terminal hop's verified denial proof feeds the
+		// aggressive-negative index — only the hop that produced the
+		// negative answer carries it.
+		finalDenialProof = qr.DenialProof
 
 		nextCNAME, hasTargetType := findChainStep(qr.Answer, currentQuestion)
 
@@ -253,5 +258,5 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 	if chainExhausted {
 		log.Debugf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, zdnsutil.Canonical(question.Name))
 	}
-	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Rcode: finalRcode, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Poisoned: poisonOccurred, DNSSECEDE: allDNSSECEDE, Truncated: truncated}
+	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Rcode: finalRcode, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Poisoned: poisonOccurred, DNSSECEDE: allDNSSECEDE, Truncated: truncated, DenialProof: finalDenialProof}
 }

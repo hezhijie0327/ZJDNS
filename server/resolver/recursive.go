@@ -376,7 +376,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			return *termRes
 		}
 
-		validated = r.validateNODATAWithNSEC(ctx, response, nameservers, currentDomain, chain, validated)
+		validated, denialProof := r.validateNODATAWithNSEC(ctx, response, nameservers, currentDomain, chain, validated)
 
 		// RFC 9824 §5.1: a cryptographically valid compact NODATA proof
 		// (NSEC/NSEC3 carrying the NXNAME bit) signals a nonexistent name —
@@ -400,6 +400,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 		bestMatch, bestNSRecords, cont, termRes := r.collectBestNSMatch(response, normalizedQname, queryQuestion.Name, qname, qnameMinimise, validated, ecsResponse)
 		if termRes != nil {
+			termRes.DenialProof = denialProof
 			return *termRes
 		}
 		if cont {

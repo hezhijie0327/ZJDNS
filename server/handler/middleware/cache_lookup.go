@@ -20,6 +20,13 @@ type CacheLookup struct {
 	store       cache.Store
 	refresh     *refreshCoordinator
 	preferStale bool
+	// aggressiveNSEC enables RFC 8198 synthesis of NXDOMAIN/NODATA from the
+	// cached, signature-verified NSEC/NSEC3 index on a cache miss.
+	aggressiveNSEC bool
+	// dns64 disables that synthesis for AAAA queries when DNS64 is wired:
+	// a synthesized AAAA-NODATA would bypass the DNS64 middleware's A-based
+	// synthesis (RFC 6147 §5.1.2).
+	dns64 bool
 }
 
 // Wrap implements Wrapper.
@@ -32,7 +39,7 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 
 		entry, found, isExpired := m.store.Get(qname, qtype, qclass, ecsOpt)
 		if !found {
-			return next.ServeDNS(ctx, qctx)
+			return m.synthesizeNegative(ctx, qctx, next)
 		}
 
 		// Fresh hit — serve immediately.
@@ -82,6 +89,35 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		entry.ReleaseOffsets()
 		return next.ServeDNS(ctx, qctx)
 	})
+}
+
+// synthesizeNegative answers a cache miss from the RFC 8198 aggressive-negative
+// index when a cached, signature-verified NSEC/NSEC3 range already denies the
+// name.  The synthesized denial is written through the normal cache path so
+// repeat queries take the plain hit path; any gap (feature off, CD bit, DNS64
+// AAAA, index miss, store race) falls back to normal resolution — RFC 8198
+// App. A: "If errors happen in an aggressive negative caching algorithm,
+// resolvers MUST fall back to resolve the query as usual."
+func (m *CacheLookup) synthesizeNegative(ctx context.Context, qctx *handler.QueryContext, next handler.QueryHandler) error {
+	if m.aggressiveNSEC &&
+		!qctx.Req.CheckingDisabled && // RFC 8198 App. A: CD-set queries resolve normally
+		qctx.Qclass == dns.ClassINET &&
+		(!m.dns64 || qctx.Qtype != dns.TypeAAAA) {
+		if rcode, authority, ok := m.store.SynthesizeNegative(qctx.Qname, qctx.Qtype, qctx.Qclass); ok {
+			// Persist as a regular validated negative entry (the SOA carries
+			// the RFC 2308 §5 negative TTL) so the next identical query serves
+			// from the plain cache without re-synthesizing.
+			m.store.Set(qctx.Qname, qctx.Qtype, qctx.Qclass, qctx.ECSOpt,
+				nil, authority, nil, true, rcode)
+			if entry, found, expired := m.store.Get(qctx.Qname, qctx.Qtype, qctx.Qclass, qctx.ECSOpt); found && !expired {
+				qctx.Res = buildCacheResponse(qctx, entry, false)
+				qctx.Result = "hit"
+				return nil
+			}
+			// Store race (eviction, ECS key collision) — resolve as usual.
+		}
+	}
+	return next.ServeDNS(ctx, qctx)
 }
 
 // buildCacheResponse builds a response from a cached entry, marking the

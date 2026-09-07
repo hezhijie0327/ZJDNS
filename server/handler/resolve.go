@@ -68,5 +68,12 @@ func StoreIfCacheable(store cache.Store, qname string, qtype, qclass uint16, ecs
 		dnssec.CapValidatedTTL(qr.Answer, qr.Authority, qr.Additional)
 	}
 	store.Set(qname, qtype, qclass, ecsOpt, qr.Answer, qr.Authority, qr.Additional, qr.Validated, qr.Rcode)
+	// RFC 8198: a validated denial's signature-verified NSEC/NSEC3 records
+	// feed the aggressive-negative index (memory-only, no spill).  DenialProof
+	// is only populated on the recursive path, where validation is
+	// cryptographic — an AD-flagged forwarding answer never qualifies.
+	if qr.DenialProof != nil {
+		store.IndexNegative(qname, qclass, qr.DenialProof, qr.Authority)
+	}
 	return true
 }

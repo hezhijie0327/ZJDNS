@@ -16,8 +16,10 @@ const nsec3OptOutFlag = 0x01
 // ── NSEC denial-of-existence ─────────────────────────────────────────────────
 
 // verifyNSEC checks whether any NSEC record in the slice cryptographically
-// proves the non-existence of the queried name or type.
-func (c *CryptoValidator) verifyNSEC(authSigs []*dns.RRSIG, nsecs []*dns.NSEC, verifiedDNSKEYs []*dns.DNSKEY, normalizedQname string, qtype uint16, denialType string) bool {
+// proves the non-existence of the queried name or type.  The RRSIG-verified
+// subset is returned alongside the verdict — RFC 8198 aggressive negative
+// caching may only index individually verified NSEC records.
+func (c *CryptoValidator) verifyNSEC(authSigs []*dns.RRSIG, nsecs []*dns.NSEC, verifiedDNSKEYs []*dns.DNSKEY, normalizedQname string, qtype uint16, denialType string) ([]*dns.NSEC, bool) {
 	// Verify signatures once and collect the whole verified set — the
 	// NXDOMAIN verdict is set-level: RFC 4035 §5.4's wildcard proof may be
 	// carried by a different NSEC than the one covering the qname.
@@ -43,14 +45,14 @@ func (c *CryptoValidator) verifyNSEC(authSigs []*dns.RRSIG, nsecs []*dns.NSEC, v
 		verified = append(verified, nsec)
 	}
 	if denialType == "NXDOMAIN" {
-		return nsecProvesNXDOMAIN(verified, normalizedQname)
+		return verified, nsecProvesNXDOMAIN(verified, normalizedQname)
 	}
 	for _, nsec := range verified {
 		if matchesNSECDenial(nsec, normalizedQname, qtype, denialType) {
-			return true
+			return verified, true
 		}
 	}
-	return false
+	return verified, false
 }
 
 // nsecProvesNXDOMAIN implements RFC 4035 §5.4 over the whole verified NSEC
@@ -259,40 +261,59 @@ func nsec3CoveringHasOptOut(verified []*dns.NSEC3, hash string) bool {
 // of the queried name (NXDOMAIN) or type (NODATA). This prevents an attacker
 // from satisfying validation with a validly-signed NSEC from the same zone
 // that covers a different name. (RFC 4035 section 5.4, RFC 6840 section 4.1)
-func (c *CryptoValidator) isDenialOfExistenceValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY, denialType string) (validated, adSuppressed bool, err error) {
+//
+// proof carries the RRSIG-verified NSEC/NSEC3 records the denial rests on —
+// RFC 8198 aggressive negative caching indexes only these, never the raw
+// authority section (which may hold unverified extras).
+func (c *CryptoValidator) isDenialOfExistenceValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY, denialType string) (validated, adSuppressed bool, proof []dns.RR, err error) {
 	authSigs := CollectRRSIGs(response.Ns, response.Extra)
 	normalizedQname := strings.ToLower(qname)
 
-	if valid := c.verifyNSEC(authSigs, findNSEC(response.Ns), verifiedDNSKEYs, normalizedQname, qtype, denialType); valid {
-		return true, false, nil
+	verifiedNSEC, valid := c.verifyNSEC(authSigs, findNSEC(response.Ns), verifiedDNSKEYs, normalizedQname, qtype, denialType)
+	if valid {
+		return true, false, asProofRRs(verifiedNSEC), nil
 	}
 
 	nsec3s := findNSEC3(response.Ns)
-	if valid, verified := c.verifyNSEC3(authSigs, nsec3s, verifiedDNSKEYs, normalizedQname, qtype, denialType); valid {
+	verifiedNSEC3, valid := c.verifyNSEC3(authSigs, nsec3s, verifiedDNSKEYs, normalizedQname, qtype, denialType)
+	if valid {
 		// RFC 5155 §9.2: an Opt-Out proof is cryptographically valid — the
 		// validator SHOULD NOT set the AD bit for such a response. The
 		// decision is based on exactly the records the proof relied upon
 		// (the RRSIG-verified subset), not on unrelated Opt-Out NSEC3s in
 		// the response.
-		if hasOptOutInProof(verified) {
+		if hasOptOutInProof(verifiedNSEC3) {
 			log.Debugf("SECURITY: NSEC3 Opt-Out proof for %s of %s — AD suppressed (RFC 5155 §9.2)", denialType, qname)
-			return true, true, nil
+			return true, true, asProofRRs(verifiedNSEC3), nil
 		}
-		return true, false, nil
+		return true, false, asProofRRs(verifiedNSEC3), nil
 	}
 	if len(nsec3s) > 0 {
-		return false, false, fmt.Errorf("%w: NSEC3 records present but do not prove %s of %s (type=%s)", ErrMissingNSEC, denialType, qname, dns.TypeToString[qtype])
+		return false, false, nil, fmt.Errorf("%w: NSEC3 records present but do not prove %s of %s (type=%s)", ErrMissingNSEC, denialType, qname, dns.TypeToString[qtype])
 	}
 
-	return false, false, fmt.Errorf("%w: no signed NSEC/NSEC3 for %s", ErrMissingNSEC, denialType)
+	return false, false, nil, fmt.Errorf("%w: no signed NSEC/NSEC3 for %s", ErrMissingNSEC, denialType)
 }
 
-func (c *CryptoValidator) isNXDOMAINValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (validated, adSuppressed bool, err error) {
+func (c *CryptoValidator) isNXDOMAINValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (validated, adSuppressed bool, proof []dns.RR, err error) {
 	return c.isDenialOfExistenceValid(response, qname, qtype, verifiedDNSKEYs, "NXDOMAIN")
 }
 
-func (c *CryptoValidator) isNODATAValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (validated, adSuppressed bool, err error) {
+func (c *CryptoValidator) isNODATAValid(response *dns.Msg, qname string, qtype uint16, verifiedDNSKEYs []*dns.DNSKEY) (validated, adSuppressed bool, proof []dns.RR, err error) {
 	return c.isDenialOfExistenceValid(response, qname, qtype, verifiedDNSKEYs, "NODATA")
+}
+
+// asProofRRs widens a typed verified NSEC/NSEC3 slice to the record-slice
+// form carried on QueryResult.DenialProof.
+func asProofRRs[T dns.RR](verified []T) []dns.RR {
+	if len(verified) == 0 {
+		return nil
+	}
+	proof := make([]dns.RR, len(verified))
+	for i, rr := range verified {
+		proof[i] = rr
+	}
+	return proof
 }
 
 // ── Delegation / opt-out helpers ─────────────────────────────────────────────

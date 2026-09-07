@@ -56,6 +56,14 @@ type Cache struct {
 	// spillLatW drains latency-tier eviction writes (same reason as spillW).
 	spillLatW *spillfile.AsyncWriter
 
+	// nsecZones is the RFC 8198 aggressive-negative index: per-zone tables of
+	// RRSIG-verified NSEC/NSEC3 denial intervals (nsec.go).  Memory-only — a
+	// restart re-learns ranges as fresh validated negatives resolve.  Reads
+	// take nsecMu.RLock and work on copy-on-written, immutable interval
+	// slices; writes replace tables under the write lock.
+	nsecMu    sync.RWMutex
+	nsecZones map[nsecZoneKey]*nsecZone
+
 	closeOnce sync.Once
 }
 

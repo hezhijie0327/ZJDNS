@@ -50,7 +50,12 @@ type QueryResult struct {
 	UpstreamEDE   *dns.EDE // EDE code captured from upstream response (per-query, no data race)
 	DNSSECEDE     uint16   // DNSSEC EDE from recursive validation (per-query, no cross-query race)
 	Truncated     bool     // TC bit from upstream response
-	Err           error
+	// DenialProof carries the RRSIG-verified NSEC/NSEC3 records behind a
+	// validated negative answer (recursive mode only).  RFC 8198 aggressive
+	// negative caching indexes exactly these records — the raw authority
+	// section may hold unverified extras that must never drive synthesis.
+	DenialProof []dns.RR
+	Err         error
 }
 
 // BuildQueryFunc is a function type that constructs a DNS query message from a

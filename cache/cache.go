@@ -20,6 +20,11 @@ type StoreReader interface {
 	// carry it); entries are matched on the empty ECS candidate.  Returns
 	// parallel slices of entry / found / expired.
 	GetTypes(qname string, qclass uint16, qtypes [2]uint16) (entries [2]*Entry, found, expired [2]bool)
+	// SynthesizeNegative answers from the RFC 8198 aggressive-negative index
+	// when a cached, signature-verified NSEC/NSEC3 range already denies the
+	// name.  Returns the rcode plus authority records (SOA + proof) for a
+	// synthesizable denial; ok=false means "not covered — resolve normally".
+	SynthesizeNegative(qname string, qtype, qclass uint16) (rcode uint16, authority []dns.RR, ok bool)
 	LatencyLastProbe(ip string) (int64, bool)
 }
 
@@ -28,6 +33,9 @@ type StoreReader interface {
 type StoreWriter interface {
 	Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 		answer, authority, additional []dns.RR, validated bool, rcode uint16)
+	// IndexNegative feeds one validated negative answer's RRSIG-verified
+	// NSEC/NSEC3 proof records into the RFC 8198 aggressive-negative index.
+	IndexNegative(qname string, qclass uint16, proof, authority []dns.RR)
 	RecordRequest(r *stats.RequestRecord)
 	UpdateLatency(ip string, latencyMS int)
 	UpdateLatencyBatch(values map[string]int)

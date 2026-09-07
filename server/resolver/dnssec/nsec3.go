@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -18,17 +19,18 @@ import (
 // consistent NSEC3 parameters (§7.2).  If the proof passes, the denial is
 // cryptographically valid.  The verified subset is returned so callers can
 // base the RFC 5155 §9.2 Opt-Out AD-suppression decision on exactly the
-// records relied upon, not on unrelated NSEC3s in the response.
-func (c *CryptoValidator) verifyNSEC3(authSigs []*dns.RRSIG, nsec3s []*dns.NSEC3, verifiedDNSKEYs []*dns.DNSKEY, normalizedQname string, qtype uint16, denialType string) (bool, []*dns.NSEC3) {
+// records relied upon, not on unrelated NSEC3s in the response — and so RFC
+// 8198 aggressive negative caching indexes only individually verified records.
+func (c *CryptoValidator) verifyNSEC3(authSigs []*dns.RRSIG, nsec3s []*dns.NSEC3, verifiedDNSKEYs []*dns.DNSKEY, normalizedQname string, qtype uint16, denialType string) ([]*dns.NSEC3, bool) {
 	verified := c.filterVerifiedNSEC3(authSigs, nsec3s, verifiedDNSKEYs, qtype)
 	if len(verified) == 0 {
-		return false, verified
+		return verified, false
 	}
 	if !nsec3ParamsConsistent(verified) {
-		return false, verified
+		return verified, false
 	}
 	params := verified[0]
-	return matchesNSEC3Denial(verified, normalizedQname, qtype, denialType, params.Hash, params.Iterations, params.Salt), verified
+	return verified, matchesNSEC3Denial(verified, normalizedQname, qtype, denialType, params.Hash, params.Iterations, params.Salt)
 }
 
 // filterVerifiedNSEC3 returns the subset of NSEC3 records whose RRSIGs verify
@@ -211,11 +213,7 @@ func findClosestEncloser(verified []*dns.NSEC3, qname string, hashAlg uint8, ite
 // lowercased for comparison.  Also works on bare NextDomain hashes — if there
 // is no dot, the whole string is returned lowercased.
 func nsec3HashLabel(owner string) string {
-	before, _, ok := strings.Cut(owner, ".")
-	if !ok {
-		return strings.ToLower(owner)
-	}
-	return strings.ToLower(before)
+	return zdnsutil.NSEC3HashLabel(owner)
 }
 
 // nsec3ParamsConsistent checks that all NSEC3 records share the same hash

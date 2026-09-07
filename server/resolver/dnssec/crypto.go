@@ -429,21 +429,25 @@ func (c *CryptoValidator) SelfVerifyDNSKEY(dnskeys []*dns.DNSKEY, dnskeyRRSIGs [
 // IsResponseValid performs full cryptographic DNSSEC validation of a
 // response. It expects the zone's verified DNSKEY to be provided.
 //
-// Returns (validated, adSuppressed, error). If error is non-nil, validation
+// Returns (validated, adSuppressed, proof, error). If error is non-nil, validation
 // failed. validated=true means the proof cryptographically holds (trust
 // chains may rely on it); adSuppressed=true means the response is NOT
 // eligible for the AD bit despite that — an NSEC3 Opt-Out proof (RFC 5155
 // §9.2) or a skipped cross-zone RRset (RFC 4035 §3.2.3) — so a response
-// builder MUST NOT assert AD.
-func (c *CryptoValidator) IsResponseValid(response *dns.Msg, zonename string, verifiedDNSKEYs []*dns.DNSKEY) (validated, adSuppressed bool, err error) {
+// builder MUST NOT assert AD. proof carries the RRSIG-verified NSEC/NSEC3
+// records behind a validated denial (nil for positive answers) — the input
+// RFC 8198 aggressive negative caching needs, since the raw authority section
+// may hold unverified extras.
+func (c *CryptoValidator) IsResponseValid(response *dns.Msg, zonename string, verifiedDNSKEYs []*dns.DNSKEY) (validated, adSuppressed bool, proof []dns.RR, err error) {
 	if response == nil || len(verifiedDNSKEYs) == 0 {
-		return false, false, nil
+		return false, false, nil, nil
 	}
 
 	// For NOERROR/NXDOMAIN responses, validate the RRSIGs on answer records
 	rcode := response.Rcode
 	if rcode == dns.RcodeSuccess && len(response.Answer) > 0 {
-		return c.isAnswerSectionValid(response.Answer, response.Extra, verifiedDNSKEYs)
+		v, s, err := c.isAnswerSectionValid(response.Answer, response.Extra, verifiedDNSKEYs)
+		return v, s, nil, err
 	}
 
 	// Extract the queried name and type for denial-of-existence validation.
@@ -464,7 +468,7 @@ func (c *CryptoValidator) IsResponseValid(response *dns.Msg, zonename string, ve
 		return c.isNODATAValid(response, qname, qtype, verifiedDNSKEYs)
 	}
 
-	return false, false, nil
+	return false, false, nil, nil
 }
 
 func (c *CryptoValidator) isAnswerSectionValid(answer, extra []dns.RR, verifiedDNSKEYs []*dns.DNSKEY) (validated, adSuppressed bool, err error) {

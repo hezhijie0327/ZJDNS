@@ -118,45 +118,9 @@ func findNSEC3(rrs []dns.RR) []*dns.NSEC3 {
 
 // DNS canonical ordering (RFC 4034 §6.1).
 
-// canonicalCompare compares two domain names per DNS canonical ordering
-// (RFC 4034 §6.1). Returns -1 if a < b, 0 if equal, 1 if a > b.
-func canonicalCompare(a, b string) int {
-	a = dnsutil.Canonical(a)
-	b = dnsutil.Canonical(b)
-
-	// dns.CompareName panics on the root zone "." — handle explicitly.
-	if a == "." || b == "." {
-		if a == b {
-			return 0
-		}
-		if a == "." {
-			return -1
-		}
-		return 1
-	}
-	return dns.CompareName(a, b)
-}
-
 // isDomainInRange checks whether a domain falls within an NSEC coverage range.
 func isDomainInRange(name, lower, upper string) bool {
-	loName := canonicalCompare(lower, name)
-	naUp := canonicalCompare(name, upper)
-	loUp := canonicalCompare(lower, upper)
-
-	if loName < 0 && naUp < 0 {
-		return true
-	}
-
-	if loUp > 0 {
-		return loName < 0 || naUp < 0
-	}
-	if loUp == 0 {
-		// RFC 4034 §4.1: Next Domain == owner — the NSEC covers the entire
-		// namespace except the owner name itself.
-		return loName != 0
-	}
-
-	return false
+	return zdnsutil.DomainInRange(name, lower, upper)
 }
 
 // Key caching helpers.

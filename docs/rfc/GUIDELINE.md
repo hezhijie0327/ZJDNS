@@ -1092,12 +1092,17 @@ Client ⇄ DTLS 记录 [DNS消息] ⇄ Server  (UDP 数据报)
 
 ---
 
-## RFC 8198 — Aggressive NSEC Caching  `[RFC 8198: Proposed Standard]`  ⚠️
+## RFC 8198 — Aggressive NSEC Caching  `[RFC 8198: Proposed Standard]`  ✅
 
-**利用缓存的 NSEC/NSEC3 范围推导否定回答。**
+**利用缓存的 NSEC/NSEC3 范围推导否定回答（2026-09 实现缓存侧合成）。**
 
 - 范围覆盖/通配符证明已在 `dnssec/nsec.go`/`nsec3.go` 实现并用于响应验证（含 RFC 4035 §5.4 通配符不存在证明，2026-09 补齐 NSEC 侧）
-- ⚠ **已知差距**：缓存侧不做否定回答合成（从缓存的 NSEC 范围直接推导 NXDOMAIN/NODATA，免去上游往返）——仅验证不推导
+- **缓存侧合成**（`cache/nsec.go`）：递归验证过的否定应答把 RRSIG 验证过的 NSEC/NSEC3 记录（`QueryResult.DenialProof`，经 CNAME 链 `cname.go` 透传）喂入 per-zone 区间索引（copy-on-write 排序表，RLock 读）；CacheLookup miss 命中区间直接合成 NXDOMAIN/NODATA（authority = SOA + 证明 RRset），并写入普通负缓存使后续同查询走快路径
+- **安全门控**：仅递归路径的加密验证结果参与（转发的 AD 启发式不算，§9）；NSEC3 Opt-Out 区间一律不合成（§5.2）；NSEC 按附录 B 判定 NXDOMAIN vs ENT（parent-zone NS-bit 丢弃）；NXDOMAIN 需通配符不存在证明（`*.closest-encloser` 被覆盖）；CD 位查询不合成（附录 A）；RFC 9824 NXNAME 压缩形式（exact-match NSEC 带 TYPE128）合成 NXDOMAIN
+- **TTL**（§5.4）：合成/索引 TTL = min(SOA TTL, MINIMUM, 10800, 配对 RRSIG 剩余有效期)，响应 TTL 随时间扣减
+- **已知限制**：通配符正向合成（§5.3 SHOULD）未实现——命中通配符区间的名字回退正常解析；索引仅内存不持久化，重启后随查询重建
+- **配置**：`features.cache.aggressive_nsec`（默认 true）；DNS64 启用时 AAAA 查询跳过合成（保 RFC 6147 §5.1.2 的 A 兜底合成）
+- 回归：`TestSynthesizeNegative_*`（`cache/nsec_test.go`）、`TestCacheLookup_SynthesizesNegative` / `TestCacheLookup_AggressiveNSECGates`（middleware）
 
 ---
 

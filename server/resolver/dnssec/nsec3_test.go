@@ -30,11 +30,11 @@ func TestNSEC3OptOutSuppressesAD(t *testing.T) {
 		return resp
 	}
 
-	validated, suppressed, err := cv.isNODATAValid(build(0), qname, dns.TypeA, []*dns.DNSKEY{zsk})
+	validated, suppressed, _, err := cv.isNODATAValid(build(0), qname, dns.TypeA, []*dns.DNSKEY{zsk})
 	if err != nil || !validated || suppressed {
 		t.Fatalf("non-Opt-Out: (%t, %t, %v), want (true, false, nil)", validated, suppressed, err)
 	}
-	validated, suppressed, err = cv.isNODATAValid(build(1), qname, dns.TypeA, []*dns.DNSKEY{zsk})
+	validated, suppressed, _, err = cv.isNODATAValid(build(1), qname, dns.TypeA, []*dns.DNSKEY{zsk})
 	if err != nil || !validated || !suppressed {
 		t.Fatalf("Opt-Out: (%t, %t, %v), want (true, true, nil) — proof holds, AD suppressed", validated, suppressed, err)
 	}
@@ -56,7 +56,7 @@ func TestNSEC3ForeignFlagsIgnored(t *testing.T) {
 	}
 	sig := signRRset([]dns.RR{nsec3}, zone, zskPriv, zsk.KeyTag(), dns.ECDSAP256SHA256)
 	resp := &dns.Msg{Rcode: dns.RcodeSuccess, Ns: []dns.RR{nsec3, sig}}
-	if validated, _, _ := cv.isNODATAValid(resp, qname, dns.TypeA, []*dns.DNSKEY{zsk}); validated {
+	if validated, _, _, _ := cv.isNODATAValid(resp, qname, dns.TypeA, []*dns.DNSKEY{zsk}); validated {
 		t.Fatal("NSEC3 with flags=0x02 must be ignored (RFC 5155 §8.2)")
 	}
 }

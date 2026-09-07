@@ -49,6 +49,19 @@ const (
 	// DefaultCacheSnapshotInterval is the periodic cache snapshot ticker
 	// (used only when features.cache.state_file is configured).
 	DefaultCacheSnapshotInterval = 5 * time.Minute
+
+	// RFC 8198 aggressive negative caching (validated NSEC/NSEC3 synthesis).
+	// DefaultAggressiveNegativeTTL caps how long a denial range may answer
+	// without an upstream round trip — §5.4 recommends the RFC 2308 §5
+	// 3-hour suggestion, because a name registered inside an aggressively
+	// served range only becomes resolvable after the negative TTL expires.
+	DefaultAggressiveNegativeTTL = 10800
+	// DefaultAggressiveNSECZones bounds the number of per-zone denial tables
+	// (LRU-style eviction of the least recently fed zone).
+	DefaultAggressiveNSECZones = 512
+	// DefaultAggressiveNSECRangePerZone bounds the indexed intervals per zone
+	// table (oldest-canonical trim on overflow).
+	DefaultAggressiveNSECRangePerZone = 1024
 )
 
 // =============================================================================

@@ -180,7 +180,7 @@ func (r *Recursive) verifyNoDSInParent(ctx context.Context, nameservers []string
 		return false, true
 	}
 
-	validated, _, valErr := crypto.IsResponseValid(resp, childZone, chain.zoneDNSKEYs) // trust decision: AD suppression is irrelevant here
+	validated, _, _, valErr := crypto.IsResponseValid(resp, childZone, chain.zoneDNSKEYs) // trust decision: AD suppression is irrelevant here
 	if valErr != nil {
 		log.Debugf("SECURITY: no-DS denial verification error for %s: %v", childZone, valErr)
 	}
