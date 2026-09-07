@@ -64,7 +64,7 @@ func parentSideType(qtype uint16) bool {
 
 // minDelegationTTL returns the minimum positive TTL across NS and DS records,
 // floored at DefaultTTL and capped at DefaultMaxCacheableTTL.  Mirrors
-// cache.minTTL (cache/store.go).
+// cache.cacheTTL (cache/wire.go).
 func minDelegationTTL(nsRecords []*dns.NS, dsRecords []*dns.DS) int {
 	ttl := config.DefaultMaxCacheableTTL
 	check := func(rrTTL uint32) {

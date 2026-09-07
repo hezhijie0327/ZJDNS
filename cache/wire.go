@@ -116,29 +116,41 @@ func WireHasDNSSEC(wire []byte) bool {
 // entries (by store timestamp) are loaded into memory, up to the mem cap;
 // the rest stay on disk and are promoted back on a memory miss.
 
-// minTTL returns the smallest positive TTL across all RR sections, falling
-// back to DefaultTTL when no TTLs are found.  The result is capped at
-// config.DefaultMaxCacheableTTL to prevent unbounded caching (RFC 8767 §4).
-func minTTL(sections ...[]dns.RR) int {
+// cacheTTL returns the TTL for a cache entry, or 0 when the response must
+// not be cached at all.
+//
+// Positive responses use the smallest TTL across all RR sections (RFC 2181
+// §8: an RRset with inconsistent TTLs is treated as if every record had the
+// lowest — a single zero-TTL record therefore clamps the whole entry to 0;
+// MSB-set TTLs count as zero, an attacker-controlled huge TTL must not be
+// cached for its raw value). Negative responses (empty Answer section)
+// use min(SOA MINIMUM field, SOA TTL) per RFC 2308 §5, and are not cached
+// without an SOA (RFC 2308 §6.1). The result is capped at
+// DefaultMaxCacheableTTL (RFC 8767 §4).
+func cacheTTL(answer, authority, additional []dns.RR) int {
+	if len(answer) == 0 {
+		for _, rr := range authority {
+			if soa, ok := rr.(*dns.SOA); ok {
+				neg := min(min(soa.Hdr.TTL, soa.Minttl), config.DefaultMaxCacheableTTL)
+				return int(neg) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+			}
+		}
+		// RFC 2308 §6.1: a negative response without an SOA SHOULD NOT be
+		// cached.
+		return 0
+	}
 	minT := -1
-	for _, rrs := range sections {
+	for _, rrs := range [][]dns.RR{answer, authority, additional} {
 		for _, rr := range rrs {
 			if rr == nil {
 				continue
 			}
-			if t := rr.Header().TTL; t&0x80000000 != 0 {
-				// RFC 2181 §8: TTL values with the most significant bit set
-				// are treated as if the entire value were zero — an
-				// attacker-controlled huge TTL must not be cached for its
-				// raw value (previously capped at 7 days).
+			if t := rr.Header().TTL; t == 0 || t&0x80000000 != 0 {
 				return 0
-			} else if t > 0 && (minT < 0 || int(t) < minT) {
+			} else if minT < 0 || int(t) < minT {
 				minT = int(t)
 			}
 		}
-	}
-	if minT <= 0 {
-		return config.DefaultTTL
 	}
 	if minT > config.DefaultMaxCacheableTTL {
 		return config.DefaultMaxCacheableTTL

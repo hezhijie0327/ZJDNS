@@ -30,18 +30,18 @@ Section 标题栏位格式：`[RFC NNNN: 状态]` `合规标记`
 | 状态 | 数量 |
 |------|------|
 | Internet Standard / Standard | 3 (RFC 768, 1034, 1035) |
-| Proposed Standard | 77 |
+| Proposed Standard | 78 |
 | Best Current Practice | 4 (RFC 2929, 6895, 8499×2 双列) |
 | Informational | 12 |
 | Experimental | 8 |
 | Historic | 7 |
 | Internet-Draft | 4 (DNS Stamp, DNSCrypt, DELEG, DNS 0x20) |
 | 国密标准 | 1 (TLCP/DTLCP) |
-| **总计** | **111 RFC 条目 / 100 章节**（含 2065/2537、4033/4034/4035 等合并段；条目按 RFC 号出现次数计（合并段展开；RFC 6840、8499 兼有独立章节与合并段，双列计入）；93 个 RFC 编号章节 + 7 个非 RFC 章节：DELEG / DNS Stamp / DNSCrypt / DNS 0x20 / SOCKS5 / TLCP / 已知偏离） |
+| **总计** | **112 RFC 条目 / 101 章节**（含 2065/2537、4033/4034/4035 等合并段；条目按 RFC 号出现次数计（合并段展开；RFC 6840、8499 兼有独立章节与合并段，双列计入）；94 个 RFC 编号章节 + 7 个非 RFC 章节：DELEG / DNS Stamp / DNSCrypt / DNS 0x20 / SOCKS5 / TLCP / 已知偏离） |
 
 | 合规 | 数量 |
 |------|------|
-| ✅ 合规 | 79 |
+| ✅ 合规 | 80 |
 | ⚠️ 部分合规 | 8 (RFC 5001, 5011/9077, 6761, 6975, 8198, 8998, 9567) |
 | ⚪ 参考 | 24 |
 
@@ -237,6 +237,24 @@ Section 标题栏位格式：`[RFC NNNN: 状态]` `合规标记`
 - TC 语义：`server/bridge.go:153` 严格遵循 §9
 - RRSet 验证：`dnssec/crypto.go` 遵循 §5
 - 源地址选择：Go `net` 包默认行为
+- §8 混合 TTL：`cache.cacheTTL` 取全段最低 TTL——任一零 TTL 记录（含 MSB 置位）钳制整条为 0、不缓存（`TestSet_ZeroTTLNotCached`）
+
+## RFC 2308 — Negative Caching of DNS Queries (DNS NCACHE)  `[RFC 2308: Proposed Standard]`  ✅
+
+**负缓存：NXDOMAIN/NODATA 响应的缓存规则——TTL = min(SOA 的 MINIMUM 字段, SOA 自身 TTL)，无 SOA 不缓存。**
+
+### 关键要求
+
+- §5: 负响应的缓存 TTL 是 SOA MINIMUM 字段与 SOA 记录 TTL 的**较小值**（并非 Authority 段各记录的最小 TTL）
+- §6.1: 不含 SOA 的负响应 **SHOULD NOT** 缓存；TTL 0 的负响应同理
+- 负缓存条目到期前，权威方可能的"名称已创建"事件无法通知解析方——TTL 上限即为此权衡
+- 取代 RFC 2308 之前的旧实现（旧 NSCD 行为把 MINIMUM 当作整个 SOA 的 TTL）
+
+### 我们的实现
+
+- `cache/wire.go cacheTTL`：空 Answer（NXDOMAIN/NODATA）→ 扫 Authority 取首个 SOA，TTL = min(Minttl, SOA.TTL)，封顶 `DefaultMaxCacheableTTL`；无 SOA / MINIMUM=0 → 不缓存
+- 回归：`TestSet_NegativeTTL`（5 例：minimum 优先/soa ttl 优先/无 SOA/零 minimum/封顶）
+- （此前实现取全段最小正 TTL——典型为 SOA 自身 TTL，负缓存超存数倍；2026-09 修复）
 
 ## RFC 2671 — Extension Mechanisms for DNS (EDNS0)  `[RFC 2671: Historic (Obsoleted by RFC 6891)]`  ⚪
 

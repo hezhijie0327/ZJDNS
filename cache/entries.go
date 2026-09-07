@@ -257,9 +257,10 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 ) {
 	// ── Prep work ────────────────────────────────────────────────────────
 	now := log.NowUnix()
-	entryTTL := minTTL(answer, authority, additional)
+	entryTTL := cacheTTL(answer, authority, additional)
 	if entryTTL <= 0 {
-		// Zero TTL (incl. RFC 2181 §8 MSB-set values) — nothing to cache.
+		// Zero TTL (incl. RFC 2181 §8 MSB-set values) or a negative
+		// response without an SOA (RFC 2308 §6.1) — nothing to cache.
 		return
 	}
 

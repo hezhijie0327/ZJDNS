@@ -205,7 +205,7 @@ func TestWarmFromMQResponse_Negative(t *testing.T) {
 	r := &Resolver{cache: cache.New(config.LimitSettings{}, config.LimitSettings{}, "", "")}
 	resp := mqTestMsg()
 	resp.Authoritative = true
-	resp.Ns = append(resp.Ns, &dns.SOA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}})
+	resp.Ns = append(resp.Ns, &dns.SOA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Ns: "ns1.example.com.", Mbox: "hostmaster.example.com.", Serial: 1, Minttl: 300})
 	mqr := &dns.MQRESPONSE{Types: []uint16{dns.TypeAAAA}}
 	r.warmFromMQResponse(resp, "example.com.", dns.ClassINET, mqr, nil, true)
 	entry, found, expired := r.cache.Get("example.com.", dns.TypeAAAA, dns.ClassINET, nil)

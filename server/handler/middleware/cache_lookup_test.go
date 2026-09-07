@@ -20,8 +20,14 @@ func TestCacheLookup_HitRecordsCachedRcode(t *testing.T) {
 	store := testStore(t)
 	defer func() { _ = store.Close() }()
 
-	// Store an NXDOMAIN (negative) entry: no answers, rcode=3.
-	store.Set("example.com.", dns.TypeA, dns.ClassINET, nil, nil, nil, nil, false, dns.RcodeNameError)
+	// Store an NXDOMAIN (negative) entry: no answers, rcode=3, with the
+	// SOA RFC 2308 §5 requires for negative caching (without it the entry
+	// is no longer stored, §6.1).
+	soa := &dns.SOA{
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600},
+		Ns:  "ns1.example.com.", Mbox: "hostmaster.example.com.", Serial: 1, Minttl: 900,
+	}
+	store.Set("example.com.", dns.TypeA, dns.ClassINET, nil, nil, []dns.RR{soa}, nil, false, dns.RcodeNameError)
 
 	// Fresh hit path: CacheLookup.Wrap builds the response from the entry.
 	// Stats is the single journal recording site — exercise it around the

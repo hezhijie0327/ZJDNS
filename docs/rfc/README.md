@@ -29,6 +29,7 @@ The DNSCrypt and DNS Stamps drafts were downloaded from the IETF archive.
 | rfc2065.txt | Domain Name System Security Extensions (DNSSEC, obsoleted by 2535) |
 | rfc2136.txt | Dynamic Updates in the Domain Name System (DNS UPDATE) |
 | rfc2181.txt | Clarifications to the DNS Specification |
+| rfc2308.txt | Negative Caching of DNS Queries (DNS NCACHE) |
 | rfc2537.txt | RSA/MD5 KEYs and SIGs in the Domain Name System (DNS) |
 | rfc2671.txt | Extension Mechanisms for DNS (EDNS0, obsoleted by 6891) |
 | rfc2782.txt | A DNS RR for specifying the location of services (DNS SRV) |

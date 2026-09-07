@@ -575,19 +575,71 @@ func TestProcessRecords_ElapsedTTL(t *testing.T) {
 
 // ── Cache TTL floor ──────────────────────────────────────────────────────────
 
-func TestSet_ZeroTTLFloored(t *testing.T) {
+func TestSet_ZeroTTLNotCached(t *testing.T) {
 	mc := testStore()
 	defer func() { _ = mc.Close() }()
 
+	// RFC 2181 §8 / RFC 1035: TTL 0 means the data must not be cached.
 	rr := &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 0}, Addr: netParseIP("192.0.2.1")}
 	mc.Set("example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{rr}, nil, nil, false, 0)
 
-	entry, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil)
-	if !found {
-		t.Fatal("entry not found")
+	if _, found, _ := mc.Get("example.com.", dns.TypeA, dns.ClassINET, nil); found {
+		t.Error("zero-TTL response was cached")
 	}
-	if entry.TTL != config.DefaultTTL {
-		t.Errorf("TTL = %d, want %d (zero TTL floored to default)", entry.TTL, config.DefaultTTL)
+
+	// A single zero-TTL record clamps the whole entry (lowest-TTL rule).
+	mixed := []dns.RR{
+		&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netParseIP("192.0.2.1")},
+		&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 0}, Addr: netParseIP("192.0.2.2")},
+	}
+	mc.Set("mixed.example.com.", dns.TypeA, dns.ClassINET, nil, mixed, nil, nil, false, 0)
+	if _, found, _ := mc.Get("mixed.example.com.", dns.TypeA, dns.ClassINET, nil); found {
+		t.Error("RRset containing a zero-TTL record was cached")
+	}
+}
+
+// TestSet_NegativeTTL pins the RFC 2308 §5 rule: a negative response (empty
+// Answer) is cached for min(SOA MINIMUM field, SOA TTL), and not at all
+// without an SOA (§6.1).
+func TestSet_NegativeTTL(t *testing.T) {
+	soa := func(ttl, minttl uint32) *dns.SOA {
+		return &dns.SOA{
+			Hdr:    dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: ttl},
+			Ns:     "ns1.example.com.",
+			Mbox:   "hostmaster.example.com.",
+			Serial: 1, Minttl: minttl,
+		}
+	}
+	tests := []struct {
+		name      string
+		authority []dns.RR
+		want      int // 0 = must not be cached
+	}{
+		{"minimum wins", []dns.RR{soa(3600, 900)}, 900},
+		{"soa ttl wins", []dns.RR{soa(300, 3600)}, 300},
+		{"no soa", []dns.RR{&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600}, Ns: "ns1.example.com."}}, 0},
+		{"zero minimum", []dns.RR{soa(3600, 0)}, 0},
+		{"cap", []dns.RR{soa(config.DefaultMaxCacheableTTL*2, config.DefaultMaxCacheableTTL*2)}, config.DefaultMaxCacheableTTL},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mc := testStore()
+			defer func() { _ = mc.Close() }()
+			mc.Set("neg.example.com.", dns.TypeA, dns.ClassINET, nil, nil, tc.authority, nil, false, dns.RcodeNameError)
+			entry, found, _ := mc.Get("neg.example.com.", dns.TypeA, dns.ClassINET, nil)
+			if tc.want == 0 {
+				if found {
+					t.Fatalf("cached with TTL %d, want not cached", entry.TTL)
+				}
+				return
+			}
+			if !found {
+				t.Fatal("entry not found")
+			}
+			if entry.TTL != tc.want {
+				t.Errorf("negative TTL = %d, want %d", entry.TTL, tc.want)
+			}
+		})
 	}
 }
 
@@ -1308,8 +1360,9 @@ func TestSet_Get_NXDOMAINRcode(t *testing.T) {
 	defer func() { _ = mc.Close() }()
 
 	soa := &dns.SOA{
-		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 900},
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600},
 		Ns:  "ns1.example.com.", Mbox: "admin.example.com.",
+		Serial: 1, Minttl: 900,
 	}
 	mc.Set("nonexist.example.com.", dns.TypeA, dns.ClassINET, nil, nil, []dns.RR{soa}, nil, false, dns.RcodeNameError)
 
