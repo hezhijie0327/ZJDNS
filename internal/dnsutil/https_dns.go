@@ -76,18 +76,21 @@ func ExecuteDoHRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient
 	}
 
 	msg.ID = originalID
-	// RFC 8484 §5.1: subtract Age header from DNS TTLs.
+	// RFC 8484 §5.1: subtract Age header from DNS TTLs. This fork's Unpack
+	// strips the OPT RR from Extra and promotes its flags to message fields
+	// (Security/Rcode/UDPSize), so no section TTL can corrupt EDNS metadata.
 	if ageStr := httpResp.Header.Get("Age"); ageStr != "" {
 		if age, err := strconv.Atoi(ageStr); err == nil && age > 0 {
 			age32 := uint32(age) //nolint:gosec // G115: Age header — HTTP protocol value
 			for _, section := range [][]dns.RR{response.Answer, response.Ns, response.Extra} {
 				for _, rr := range section {
-					if rr != nil {
-						if rr.Header().TTL > age32 {
-							rr.Header().TTL -= age32
-						} else {
-							rr.Header().TTL = 0
-						}
+					if rr == nil {
+						continue
+					}
+					if rr.Header().TTL > age32 {
+						rr.Header().TTL -= age32
+					} else {
+						rr.Header().TTL = 0
 					}
 				}
 			}
@@ -96,6 +99,39 @@ func ExecuteDoHRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient
 	response.ID = originalID
 
 	return response, nil
+}
+
+// DOHCacheControl computes the RFC 8484 §5.1 Cache-Control value for a DNS
+// response. The freshness lifetime MUST NOT exceed the smallest TTL in the
+// Answer section (equal is RECOMMENDED — a zero-TTL record therefore clamps
+// to max-age=0). With an empty Answer section (NXDOMAIN/NODATA), it MUST
+// NOT exceed the MINIMUM field of an Authority-section SOA (RFC 2308
+// negative caching); without one, max-age=0.
+func DOHCacheControl(response *dns.Msg) string {
+	if response == nil {
+		return "max-age=0"
+	}
+	if len(response.Answer) > 0 {
+		minTTL := -1
+		for _, rr := range response.Answer {
+			if rr == nil {
+				continue
+			}
+			if t := int(rr.Header().TTL); minTTL < 0 || t < minTTL { //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+				minTTL = t
+			}
+		}
+		if minTTL <= 0 {
+			return "max-age=0"
+		}
+		return "max-age=" + strconv.Itoa(minTTL)
+	}
+	for _, rr := range response.Ns {
+		if soa, ok := rr.(*dns.SOA); ok && soa.Minttl > 0 {
+			return "max-age=" + strconv.Itoa(int(soa.Minttl)) //nolint:gosec // G115: SOA MINIMUM — protocol-bounded uint32
+		}
+	}
+	return "max-age=0"
 }
 
 // ServerDOHMsgAccept is a drop-in for dnshttp.MsgAcceptFunc that accepts

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"zjdns/config"
 	"zjdns/edns"
@@ -15,7 +14,6 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 
-	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnshttp"
 	"gitee.com/Trisia/gotlcp/tlcp"
 )
@@ -143,31 +141,11 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", dnshttp.MimeType)
-	// RFC 8484 §5.1 (SHOULD): mirror the TLS DoH handler's Cache-Control —
-	// the smallest answer TTL (2026-09 P-L7).
-	w.Header().Set("Cache-Control", dohCacheControl(resp))
+	// RFC 8484 §5.1 (SHOULD): the smallest answer TTL (SOA MINIMUM for
+	// negative responses) — shared with the TLS DoH handler via
+	// dnsutil.DOHCacheControl (2026-09 P-L7).
+	w.Header().Set("Cache-Control", zdnsutil.DOHCacheControl(resp))
 	// NOTE(M12): Write error is intentionally ignored — partial response cannot be
 	// recovered. Client will detect truncation via connection close.
 	_, _ = w.Write(resp.Data) //nolint:gosec // G705: DNS wire format bytes, not HTML
-}
-
-// dohCacheControl computes the Cache-Control max-age from the smallest
-// TTL in the Answer section, per RFC 8484 §5.1 RECOMMENDED (same shape as
-// the TLS DoH handler's helper).
-func dohCacheControl(response *dns.Msg) string {
-	if response == nil {
-		return "max-age=0"
-	}
-	minTTL := -1
-	for _, rr := range response.Answer {
-		if rr != nil {
-			if t := int(rr.Header().TTL); t > 0 && (minTTL < 0 || t < minTTL) {
-				minTTL = t
-			}
-		}
-	}
-	if minTTL <= 0 {
-		return "max-age=0"
-	}
-	return "max-age=" + strconv.Itoa(minTTL)
 }

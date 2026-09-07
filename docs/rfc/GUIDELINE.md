@@ -1213,6 +1213,8 @@ Body: [DNS 线格式消息]
 
 - `DefaultHTTPSPort = "443"`，`DefaultHTTP3Port = "443"`
 - `DefaultQueryPath = "/dns-query"`
+- **§5.1 缓存双向**：服务端 `Cache-Control: max-age` 由 `dnsutil.DOHCacheControl` 计算（TLS/TLCP DoH 共用）——Answer 最小 TTL（含 0，零 TTL 记录钳制 max-age=0，满足 §5.1 MUST），空 Answer 时取 Authority SOA 的 MINIMUM（RFC 2308 负缓存），否则 0；上游客户端（DoH/DoH3/TLCP DoH 共用 `ExecuteDoHRequest`）从 TTL 扣减 `Age` 头——本 fork 的 Unpack 会剥除 OPT RR 并把标志提升为消息字段（Security/Rcode），EDNS 元数据结构上不受扣减影响
+- 回归：`TestDOHCacheControl`（8 例含零 TTL 混合与 SOA MINIMUM）、`TestExecuteDoHRequestAgeTTL`（300−60=240 + DO 位存活）
 - `DefaultDOHMaxRequestSize = 8192`
 - 服务端：`server/protocol/tls/https.go`（HTTP/2+HTTP/3）
 - 客户端：`server/upstream/tls/https.go`（连接池 + 会话复用）
