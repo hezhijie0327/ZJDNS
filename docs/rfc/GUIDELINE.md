@@ -1536,6 +1536,8 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 ### 我们的实现
 
 - `dnssec/crypto.go` `VerifyDelegationDS`：`ToDS` 不能计算 SM3（库无 gmsm 依赖），DigestType=6 时经 `sm3DS` 用 gmsm 本地计算摘要比对；构造正确性经 `TestSM3DSDigestConstruction` 与 ToDS(SHA-256) 交叉验证 + 冻结回归向量
+- `VerifyRRset` → `SignOption.VerifyFunc` → `verifySM2SM3`：算法 17 的 RRSIG 经 gmsm 按标准 SM2（GM/T 0003.2 §6，默认 UID）验签——DNSKEY 公钥 64 字节 "x|y"（补 SEC 1 0x04 前缀构造点）、RRSIG 签名 64 字节 "r|s"（转 ASN.1 DER）；`nativelyVerified` 保持库原生算法外的 GOST/未知算法仍报 EDE 1（Unsupported DNSKEY Algorithm）
+- RFC §6 示例 zone 自身不一致（私钥与 DNSKEY 公钥不配对、DS key tag 27215≠65042、NSEC3PARAM 的 RRSIG 截断），无法作冻结向量；回归改用"捕获签名数据 + 签名 + 验签"往返（`TestVerifyRRsetSM2SM3`、`TestVerifyRRsetSM2SM3DNSKEYSelfSignature`）
 
 ---
 

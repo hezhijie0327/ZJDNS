@@ -1,11 +1,13 @@
 package dnssec
 
 import (
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"time"
 	"zjdns/cache"
 	"zjdns/internal/log"
@@ -14,6 +16,7 @@ import (
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
 	dnspool "codeberg.org/miekg/dns/pkg/pool"
+	"github.com/emmansun/gmsm/sm2"
 	"github.com/emmansun/gmsm/sm3"
 
 	zdnsutil "zjdns/internal/dnsutil"
@@ -46,6 +49,21 @@ type rrsetKey struct {
 	name   string
 	rrtype uint16
 }
+
+// sm2SigASN1 is the ASN.1 SEQUENCE{r, s} signature form gmsm verifies; the
+// DNSSEC wire form is the fixed-width "r | s" concatenation (RFC 9563 §4.2).
+type sm2SigASN1 struct {
+	R, S *big.Int
+}
+
+// RFC 9563 §4 fixed sizes: the DNSKEY public key is "x | y" and the RRSIG
+// signature "r | s", each half exactly 32 octets, plus the SEC 1 §2.3.3
+// uncompressed-point prefix gmsm's parser expects.
+const (
+	sm2PublicKeyLen  = 64
+	sm2SignatureLen  = 64
+	sec1Uncompressed = 4
+)
 
 // Common DNSSEC-related errors.
 var (
@@ -146,12 +164,18 @@ func (c *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey *
 	// Verify the cryptographic signature.  Legacy SHA-1 (RRSIG algorithms
 	// 5/7, DS digest 1) is deliberately accepted for VERIFICATION: RFC 8624
 	// §3.1 deprecates SHA-1 for signers, not validators — existing zones
-	// signed before the transition must still validate.
-	if err := rrsig.Verify(dnskey, rrset, &dns.SignOption{Pooler: sigBufPool}); err != nil {
-		if errors.Is(err, dns.ErrAlg) {
-			// EDE 1: the RRSIG uses an algorithm the library cannot verify
-			// (e.g. DSA, GOST, or an unknown algorithm) — report precisely
-			// instead of a generic bogus.
+	// signed before the transition must still validate.  SM2SM3 (RFC 9563)
+	// has no native path in miekg/dns — SignOption.VerifyFunc delegates it
+	// to verifySM2SM3 below.
+	if err := rrsig.Verify(dnskey, rrset, &dns.SignOption{Pooler: sigBufPool, VerifyFunc: verifySM2SM3}); err != nil {
+		if errors.Is(err, dns.ErrAlg) ||
+			(errors.Is(err, dns.ErrSig) && rrsig.Algorithm != dns.SM2SM3 && !nativelyVerified(rrsig.Algorithm)) {
+			// EDE 1: the RRSIG uses an algorithm the validator cannot verify
+			// (e.g. DSA, GOST, ED448, or an unknown algorithm) — report
+			// precisely instead of a generic bogus.  With VerifyFunc set the
+			// library folds every delegated algorithm into ErrSig; only a
+			// bad signature of a natively verified algorithm (or SM2SM3)
+			// genuinely means bogus.
 			return fmt.Errorf("%w: algorithm %d", ErrUnsupportedAlgorithm, rrsig.Algorithm)
 		}
 		return fmt.Errorf("%w: %w", ErrBogusSignature, err)
@@ -267,6 +291,52 @@ func sm3DS(dnskey *dns.DNSKEY) *dns.DS {
 		DigestType: dns.SM3,
 		Digest:     hex.EncodeToString(digest[:]),
 	}
+}
+
+// nativelyVerified reports whether miekg/dns verifies the algorithm inside
+// RRSIG.Verify.  Everything else falls through to SignOption.VerifyFunc, of
+// which only SM2SM3 has a validator here.
+func nativelyVerified(alg uint8) bool {
+	switch alg {
+	case dns.RSASHA1, dns.RSASHA1NSEC3SHA1, dns.RSASHA256, dns.RSASHA512,
+		dns.ECDSAP256SHA256, dns.ECDSAP384SHA384, dns.ED25519, dns.MLDSA44:
+		return true
+	}
+	return false
+}
+
+// verifySM2SM3 verifies an RFC 9563 (algorithm 17) RRSIG: the standard
+// GM/T 0003.2 §6 SM2 signature with the default user ID over the DNSSEC
+// signed data.  The DNSKEY carries the bare "x | y" point (§4.1) and the
+// RRSIG the fixed-width "r | s" (§4.2); gmsm parses the SEC 1 prefixed
+// point and verifies the ASN.1 DER form, so both are converted here.
+//
+// The RFC 9563 §6 example zone is internally inconsistent (private key does
+// not match the DNSKEY, the DS key tag disagrees, one RRSIG is truncated),
+// so the regression coverage in sm2sm3_test.go is roundtrip-based.
+func verifySM2SM3(k *dns.DNSKEY, message, sig []byte) bool {
+	if k.Algorithm != dns.SM2SM3 || len(sig) != sm2SignatureLen {
+		return false
+	}
+	pub, err := base64.StdEncoding.DecodeString(k.PublicKey)
+	if err != nil || len(pub) != sm2PublicKeyLen {
+		return false
+	}
+	point := make([]byte, sm2PublicKeyLen+1)
+	point[0] = sec1Uncompressed
+	copy(point[1:], pub)
+	pk, err := sm2.NewPublicKey(point)
+	if err != nil {
+		return false
+	}
+	der, err := asn1.Marshal(sm2SigASN1{
+		R: new(big.Int).SetBytes(sig[:sm2SignatureLen/2]),
+		S: new(big.Int).SetBytes(sig[sm2SignatureLen/2:]),
+	})
+	if err != nil {
+		return false
+	}
+	return sm2.VerifyASN1WithSM2(pk, nil, message, der)
 }
 
 // SelfVerifyDNSKEY verifies that a zone's DNSKEY RRset is self-signed by the
