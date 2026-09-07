@@ -1023,7 +1023,9 @@ Client ⇄ [2字节长度][DNS消息] ⇄ Server  (TLS 加密通道内)
 
 ### 我们的实现
 
-- 验证器支持 ED25519(15)/ED448(16) ✓
+- ED25519(15)：miekg/dns 原生验证
+- ED448(16)：miekg 无原生路径（其 VerifyFunc 文档恰以 Ed448 为示例钩子），经 `SignOption.VerifyFunc` → `verifyDelegated` → `verifyED448` 用 circl/sign/ed448 验证——PureEdDSA、空 context；DNSKEY 公钥 57 字节、RRSIG 签名 114 字节裸线格式。circl 本就是 DNSCrypt X-Wing 的既有依赖，零新增
+- 冻结向量：勘误 4935（Verified，Tom Thorogood 2017）修正后的 §6.2 双向量（key tag 9713/38353）——原文 §6 的 RRSIG 缺算法字段且 labels 把根标签计入（3≠2），勘误以 Labels=2 重算了签名，修正向量并经 miekg/dns 独立实现交叉验证。往返回归：`TestVerifyRRsetED448Roundtrip`（含过期 → ErrSignatureExpired、篡改 → ErrBogusSignature 分类）
 
 ---
 

@@ -16,6 +16,7 @@ import (
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
 	dnspool "codeberg.org/miekg/dns/pkg/pool"
+	"github.com/cloudflare/circl/sign/ed448"
 	"github.com/emmansun/gmsm/sm2"
 	"github.com/emmansun/gmsm/sm3"
 
@@ -63,6 +64,13 @@ const (
 	sm2PublicKeyLen  = 64
 	sm2SignatureLen  = 64
 	sec1Uncompressed = 4
+)
+
+// RFC 8080 §3 fixed sizes: the Ed448 DNSKEY public key and RRSIG signature
+// are the raw 57- and 114-octet wire blobs.
+const (
+	ed448PublicKeyLen = 57
+	ed448SignatureLen = 114
 )
 
 // Common DNSSEC-related errors.
@@ -165,16 +173,16 @@ func (c *CryptoValidator) VerifyRRset(rrset []dns.RR, rrsig *dns.RRSIG, dnskey *
 	// 5/7, DS digest 1) is deliberately accepted for VERIFICATION: RFC 8624
 	// §3.1 deprecates SHA-1 for signers, not validators — existing zones
 	// signed before the transition must still validate.  SM2SM3 (RFC 9563)
-	// has no native path in miekg/dns — SignOption.VerifyFunc delegates it
-	// to verifySM2SM3 below.
-	if err := rrsig.Verify(dnskey, rrset, &dns.SignOption{Pooler: sigBufPool, VerifyFunc: verifySM2SM3}); err != nil {
+	// and ED448 (RFC 8080) have no native path in miekg/dns —
+	// SignOption.VerifyFunc delegates them to verifyDelegated below.
+	if err := rrsig.Verify(dnskey, rrset, &dns.SignOption{Pooler: sigBufPool, VerifyFunc: verifyDelegated}); err != nil {
 		if errors.Is(err, dns.ErrAlg) ||
-			(errors.Is(err, dns.ErrSig) && rrsig.Algorithm != dns.SM2SM3 && !nativelyVerified(rrsig.Algorithm)) {
+			(errors.Is(err, dns.ErrSig) && !nativelyVerified(rrsig.Algorithm) && !delegatedVerified(rrsig.Algorithm)) {
 			// EDE 1: the RRSIG uses an algorithm the validator cannot verify
-			// (e.g. DSA, GOST, ED448, or an unknown algorithm) — report
-			// precisely instead of a generic bogus.  With VerifyFunc set the
-			// library folds every delegated algorithm into ErrSig; only a
-			// bad signature of a natively verified algorithm (or SM2SM3)
+			// (e.g. DSA, GOST, or an unknown algorithm) — report precisely
+			// instead of a generic bogus.  With VerifyFunc set the library
+			// folds every delegated algorithm into ErrSig; only a bad
+			// signature of a natively or delegated verified algorithm
 			// genuinely means bogus.
 			return fmt.Errorf("%w: algorithm %d", ErrUnsupportedAlgorithm, rrsig.Algorithm)
 		}
@@ -337,6 +345,46 @@ func verifySM2SM3(k *dns.DNSKEY, message, sig []byte) bool {
 		return false
 	}
 	return sm2.VerifyASN1WithSM2(pk, nil, message, der)
+}
+
+// delegatedVerified reports whether SignOption.VerifyFunc verifies the
+// algorithm (see verifyDelegated); combined with nativelyVerified it fixes
+// the EDE classification of every DNSSEC algorithm number.
+func delegatedVerified(alg uint8) bool {
+	switch alg {
+	case dns.SM2SM3, dns.ED448:
+		return true
+	}
+	return false
+}
+
+// verifyDelegated routes the algorithms miekg/dns cannot verify natively to
+// their validators: SM2SM3 (RFC 9563, via gmsm) and ED448 (RFC 8080, via
+// circl — the library's own VerifyFunc documentation sketches exactly this
+// hook for Ed448).  Every other algorithm returns false and surfaces as
+// EDE 1 (Unsupported DNSKEY Algorithm).
+func verifyDelegated(k *dns.DNSKEY, message, sig []byte) bool {
+	switch k.Algorithm {
+	case dns.SM2SM3:
+		return verifySM2SM3(k, message, sig)
+	case dns.ED448:
+		return verifyED448(k, message, sig)
+	}
+	return false
+}
+
+// verifyED448 verifies an RFC 8080 §3 RRSIG: PureEdDSA over the signed data
+// with an empty context; the DNSKEY public key and the RRSIG signature are
+// the raw 57- and 114-octet wire blobs.
+func verifyED448(k *dns.DNSKEY, message, sig []byte) bool {
+	if k.Algorithm != dns.ED448 || len(sig) != ed448SignatureLen {
+		return false
+	}
+	pub, err := base64.StdEncoding.DecodeString(k.PublicKey)
+	if err != nil || len(pub) != ed448PublicKeyLen {
+		return false
+	}
+	return ed448.Verify(pub, message, sig, "")
 }
 
 // SelfVerifyDNSKEY verifies that a zone's DNSKEY RRset is self-signed by the
