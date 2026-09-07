@@ -109,6 +109,7 @@ The DNSCrypt and DNS Stamps drafts were downloaded from the IETF archive.
 | rfc8659.txt | DNS Certification Authority Authorization (CAA) Resource Record |
 | rfc8767.txt | Serving Stale Data to Improve DNS Resiliency |
 | rfc8777.txt | DNS Reverse IP Automatic Multicast Tunneling (AMT) Discovery |
+| rfc8879.txt | Certificate Compression in TLS |
 | rfc8914.txt | Extended DNS Errors |
 | rfc8976.txt | Message Digest for DNS Zones |
 | rfc9000.txt | QUIC: A UDP-Based Multiplexed and Secure Transport |
