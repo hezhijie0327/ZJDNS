@@ -56,8 +56,10 @@ func runProbe(probeType, addr string) error {
 		return probeIdleTimeout(addr)
 	case "mqtype":
 		return probeMQType(addr)
+	case "keepalive":
+		return probeKeepalive(addr)
 	default:
-		return fmt.Errorf("unknown probe type %q (supported: pipeline, conn-reuse, idle-timeout, mqtype)", probeType)
+		return fmt.Errorf("unknown probe type %q (supported: pipeline, conn-reuse, idle-timeout, mqtype, keepalive)", probeType)
 	}
 }
 
@@ -463,4 +465,65 @@ func probeIdleTimeout(addr string) error {
 			return nil
 		}
 	}
+}
+
+// probeKeepalive verifies RFC 7828 EDNS TCP Keepalive support: a TCP query
+// carrying the option must be answered with the option and the server's
+// session idle timeout (100ms units); a control query without the option
+// shows the server does not advertise unsolicited.
+func probeKeepalive(addr string) error {
+	fmt.Printf("Probing %s for RFC 7828 EDNS TCP keepalive support...\n\n", addr)
+
+	ask := func(withOption bool) (*dns.Msg, error) {
+		conn, err := dialProbeTarget(addr)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = conn.Close() }() // _ = error: best-effort cleanup close
+
+		_ = conn.SetDeadline(time.Now().Add(probeDefaultReadTimeout)) // _ = error: deadline advisory
+		q := newQuery("www.cloudflare.com.", 0)
+		q.UDPSize = 1232
+		if withOption {
+			q.Pseudo = append(q.Pseudo, &dns.TCPKEEPALIVE{})
+		}
+		if err := writeDNSMsg(conn, q); err != nil {
+			return nil, fmt.Errorf("write query: %w", err)
+		}
+		fmt.Printf("  → sent query: www.cloudflare.com A (keepalive option: %t)\n", withOption)
+		return readDNSMsg(conn)
+	}
+
+	timeoutOf := func(resp *dns.Msg) (uint16, bool) {
+		for _, rr := range resp.Pseudo {
+			if k, ok := rr.(*dns.TCPKEEPALIVE); ok {
+				return k.Timeout, true
+			}
+		}
+		return 0, false
+	}
+
+	negotiated, err := ask(true)
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+	timeout, ok := timeoutOf(negotiated)
+	fmt.Printf("  ← response: rcode=%s", dns.RcodeToString[negotiated.Rcode])
+	if !ok {
+		fmt.Printf(", no keepalive option\n\n")
+		fmt.Println("⚠️  Server does not negotiate EDNS TCP keepalive (RFC 7828 §3.2)")
+		return nil
+	}
+	fmt.Printf(", TCP-KEEPALIVE timeout=%d (%.0fs)\n\n", timeout, float64(timeout)/10)
+
+	control, err := ask(false)
+	if err == nil {
+		if _, unsolicited := timeoutOf(control); unsolicited {
+			fmt.Println("  note: server also advertises unsolicited (RFC 7828 §3.3.2 MAY)")
+		} else {
+			fmt.Println("  ✓ negotiation-only advertisement (conservative, RFC 7828 §3.2)")
+		}
+	}
+	fmt.Println("✓ Server supports EDNS TCP keepalive (RFC 7828)")
+	return nil
 }

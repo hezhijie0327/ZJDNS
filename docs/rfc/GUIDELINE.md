@@ -396,6 +396,7 @@ DNSKEY (自签名) → DS (父域授权) → DNSKEY (子域) → RRSIG (签名�
 
 ### 我们的实现
 
+- §3.2.3 跨区 RRset：跳过未验证的跨区集合时响应仍可服务但不置 AD（`adSuppressed`）；§5.2：no-DS 证明须带 NS 位（`ProvesNoDSAtDelegation`）、CDS/CDNSKEY 回退接受的 DNSKEY 集须由匹配 KSK 的 RRSIG 绑定（`dnskeySetSignedBy`）；§5.3.3：缓存 zone-key TTL 由覆盖 RRSIG 剩余有效期封顶（`CacheZoneKeys`，2026-09）
 - `server/resolver/dnssec/` 完整实现：签名验证、信任链、NSEC/NSEC3 否定回答
 - `dnssec_chain.go`：逐级 DS/DNSKEY/RRSIG 验证
 - `trust_anchor.go`：lazy-loaded 根信任锚（静态，未实现 RFC 5011 自动化）
@@ -567,6 +568,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ### 我们的实现
 
+- §8.2：flags 非 0/1 的 NSEC3 一律忽略（`filterVerifiedNSEC3`）；§9.2：Opt-Out 证明有效但不置 AD——`IsResponseValid` 第三返回值 `adSuppressed` 贯穿到响应层（2026-09，`TestNSEC3OptOutSuppressesAD`/`TestNSEC3ForeignFlagsIgnored`）
 - `DefaultMaxNSEC3Iterations = 150`（对应 1024 位密钥）
 - `dnssec/nsec.go`：NSEC3 验证逻辑
 
@@ -635,6 +637,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ### 我们的实现
 
+- §5.1.4：默认排除表将 IPv4-mapped AAAA（::ffff:0:0/96）视为"无 AAAA"，仅含映射地址的答案继续走合成（`hasUsableAAAA`，2026-09；可配置排除表未做——无配置面需求）
 - `config.DefaultDNS64Prefix = "64:ff9b::/96"` ✓；§3.1：WKP 下非全球 IPv4（RFC1918/CGNAT/保留段）不合成，自定义前缀不受限（2026-09 修复）
 - `middleware/dns64.go`：AAAA 合成逻辑
 
@@ -774,6 +777,7 @@ Owner Name = Base32(IH(salt, canonical_name, iterations)).zone
 
 ### 我们的实现
 
+- §4.1 祖先委托过滤补第三条件：RRSIG signer 严格高于 owner 才算祖先委托 NSEC（可用性修复，避免有效证明被误判 bogus，`TestIsAncestorDelegation`）
 - 祖先委托限制：`dnssec/nsec.go` 检查 NS/SOA 位
 - CNAME 位检查：验证逻辑中包含
 - §5.8 AD 位门控：仅当请求方设置 DO 或 AD 位时响应才置 AD（`handler.ClientUnderstandsAD`；缓存 wire 不再烘焙 AD——2026-09 修复，此前 DO=0 客户端也能看到 AD）
@@ -931,6 +935,7 @@ Client ← [2字节长度][DNS响应] ← Server  (按序)
 - 非 TCP 传输（UDP/DoQ/DNSCrypt/DTLS/DTLCP）与 DoH：选项被忽略不回告（§3.3.1 MUST ignore；DoH 接受函数自 2026-09 起忽略而非 FORMERR）
 - ⚠️ 客户端侧（§5.4 SHOULD，出站查询携带/校验对端 keepalive）未实现
 - 历史：4cefad6 曾完整实现，b8682dc 中间件化重构时调用点硬编码 0 造成静默回归，c6aa391 误信"仍在工作"的注释删掉了残存助手——2026-09 重接
+- 探测：`./zjdns --probe --keepalive tcp://host:port`（协商查询 + 无选项对照，显示回告超时）
 
 ---
 
@@ -1020,6 +1025,7 @@ Client ⇄ [2字节长度][DNS消息] ⇄ Server  (TLS 加密通道内)
 
 ### 我们的实现
 
+- §5.2.3：流式传输（TCP/DoT/TLCP-DoT）上无效/过期 server cookie 直接正常处理，不回 BADCOOKIE（避免同流重试循环，`TestEDNSMiddleware_BadCookieStreamExempt`，2026-09）
 - `edns/cookie.go`: `compare1982()`, `subtract1982()` 实现序列号运算 ✓
 - `DefaultCookieSecretRotationInterval = 24h`（RFC 7873 §7.1 默认 1 天）✓
 - Cookie 生命周期常量：1h/30min/5min（硬编码，匹配 RFC 9018 §4.3）✓
@@ -1561,6 +1567,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 ### 我们的实现
 
+- §6.4：resolver.arpa 的 A/AAAA 以权威 NODATA 本地应答（records-less zone 规则现已注册并短路，`TestZone_RecordsLessNODATA`，2026-09 修复哨兵死代码）
 - 已实现（`config/ddr.go`）：DoH/DoT 端点经 SVCB 公布；9606 RESINFO 计划在其上延伸
 
 ---
@@ -1729,6 +1736,7 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 ### 我们的实现
 
+- §3.5 客户端：无效 MQTYPE-Response（重复选项/重复 QTx/重复主类型）→ 丢弃该响应并 optionless 重试一次（`mqResponseInvalid` 接入两条重试路径，`TestMQResponseInvalid`，2026-09）
 - **客户端（出站）**：查询 qtype Q 时附加 `MQQUERY{配置 − Q}`（零分配，栈数组）。响应按 §3.5 验证（重复 MQRESPONSE / QTx 重复主类型 → 无效；MQQUERY 出现在响应 → 视为不支持）；完成的 QTx 记录（含 RRSIG）warm cache（正记录按 owner==qname 提取，负记录带 SOA 证明），并从客户端响应中**剥离**（客户端只问了主类型）；权威不支持 → fallback 独立查询（§3.5 义务，现有并发 walk 天然满足）
 - **服务端（合并）**：`middleware/mqtype.go` —— §3.3 八条 FORMERR（opcode/QDCOUNT=0/主类型非 data/空列表/元类型/重复/重复主类型/入站 MQRESPONSE）；§3.4 合并（RCODE/AA/AD 与主响应一致才并入、RR 去重、预算 ≤ client UDP size 且**合并本身不触发 TC**、完整 QTx 必入列表、空列表也必返以宣告支持）；每个 QTx 解析带 3s 超时（`DefaultMQTypeResolveTimeout`，§4 DoS 防护）
 - **本地合并（所有模式）**：客户端 MQQUERY 由 ZJDNS 本地合并（forward 也如此——ZJDNS 是完整解析器，QTx 走自己的上游解析），不透传；链上任一节点不支持 MQTYPE 也不影响响应支持性
@@ -1983,3 +1991,5 @@ Client ⇄ 数据透传 ⇄ Target
 | ------------------------------------ | ------------- | ----------------- | --------------------------------------------- |
 | DNSCrypt 查询缺少 ResolverMagic 前缀 | DNSCrypt §5.2 | 低 — 服务端用 ClientMagic 识别，查询中冗余 | 与 dnscrypt-proxy 一致；响应仍包含 ResolverMagic |
 | 递归上游查询 EDNS 载荷 4096 超 R5 推荐 1400 | RFC 9715 | 中 — 可能招致分片 | DNSSEC 签名引用/证明常超 1232，4096 是递归解析的实际需要；客户端侧仍用 1232 |
+| 无 EDNS 的客户端在加密传输上默认填充响应（附加 OPT+PADDING） | RFC 7830 §4 / RFC 6891 §6.1.1 | 低 — 极老客户端可能拒收带 OPT 的响应 | 刻意的隐私设计（加密流上对 legacy 客户端也做块对齐填充，`edns/HasPaddingOption`）；如需严格合规可改为跳过无 EDNS 客户端，2026-09 审计记录 |
+| ECS 响应回显 SCOPE 恒为 0 | RFC 7871 §7.3 | 低 — 客户端可能跨子网复用按 /24 存储的答案 | 缓存命中路径无权威 scope 可用（条目未存 scope）；修复需扩展 Entry 结构与命中键推导，暂记偏离（§7.3 scope=0 语义为"普遍适用"，与 /24 定制存在偏差） |

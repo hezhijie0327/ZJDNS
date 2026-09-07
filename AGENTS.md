@@ -155,6 +155,7 @@ go test -bench=. -short -benchmem -benchtime=500ms ./... \
 ./zjdns --probe --pipeline    tcp://8.8.8.8:53    # RFC 7766 pipelining
 ./zjdns --probe --conn-reuse  tls://1.1.1.1:853  # RFC 1035 connection reuse
 ./zjdns --probe --idle-timeout tls://1.1.1.1:853 # server idle timeout
+./zjdns --probe --keepalive   tcp://8.8.8.8:53    # RFC 7828 EDNS TCP keepalive
 
 # Load test client (all 12 protocols)
 (cd docs && go build -o /tmp/benchclient ./benchmark/loadtest)
