@@ -68,7 +68,9 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 	qtype := qctx.Qtype
 	qclass := qctx.Qclass
 	ecsOpt := qctx.ECSOpt
-	dnssecOK := qctx.ClientRequestedDNSSEC
+	// DNSSEC records stay in the response when the client set DO or asked
+	// for a DNSSEC type outright (RFC 4035 §3.2.1).
+	dnssecOK := handler.DNSSECIncluded(qctx)
 	validated := qr.Validated
 
 	msg := handler.BuildResponseMsg(qctx.Req)
@@ -88,7 +90,8 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 		dnssecEDECode = qr.DNSSECEDE
 	}
 
-	if validated {
+	if validated && handler.ClientUnderstandsAD(qctx.Req) {
+		// RFC 6840 §5.8: AD only for requesters that set DO or AD.
 		msg.AuthenticatedData = true
 	}
 

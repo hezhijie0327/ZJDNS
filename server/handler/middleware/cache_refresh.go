@@ -178,11 +178,12 @@ func (c *refreshCoordinator) serveExpiredWithRefresh(qctx *handler.QueryContext,
 			if qr.DNSSECEDE != 0 {
 				qctx.EDE = &dns.EDE{InfoCode: qr.DNSSECEDE, ExtraText: ""}
 			}
-			dnssecOK := qctx.ClientRequestedDNSSEC
+			dnssecOK := handler.DNSSECIncluded(qctx)
 			msg.Answer = zdnsutil.ProcessRecords(qr.Answer, 0, false, dnssecOK)
 			msg.Ns = zdnsutil.ProcessRecords(qr.Authority, 0, false, dnssecOK)
 			msg.Extra = zdnsutil.ProcessRecords(qr.Additional, 0, false, dnssecOK)
-			if qr.Validated {
+			if qr.Validated && handler.ClientUnderstandsAD(qctx.Req) {
+				// RFC 6840 §5.8: AD only for requesters that set DO or AD.
 				msg.AuthenticatedData = true
 			}
 			qctx.Res = msg

@@ -321,13 +321,13 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 	// The pre-packed wire is served verbatim on cache hits (both the
 	// direct-wire fast path and the Unpack path re-derive header flags from
 	// the stored wire) — complete the fields SetReply leaves wrong: RA
-	// (recursion available), AD (authenticated data for validated entries)
-	// and the RCODE (SetReply always resets it to NOERROR — NXDOMAIN
-	// entries would otherwise be served as NODATA on every cache hit).
+	// (recursion available) and the RCODE (SetReply always resets it to
+	// NOERROR — NXDOMAIN entries would otherwise be served as NODATA on
+	// every cache hit). AD is deliberately NOT baked into the wire: the
+	// direct-wire fast path serves it to DO=0 clients, and RFC 6840 §5.8
+	// forbids asserting validation to a requester that did not set DO/AD —
+	// the serve path (buildFromPrePacked) applies the gated AD instead.
 	msg.RecursionAvailable = true
-	if validated {
-		msg.AuthenticatedData = true
-	}
 	msg.Rcode = rcode
 	msg.Answer = answer
 	msg.Ns = authority

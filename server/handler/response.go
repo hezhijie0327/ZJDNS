@@ -32,6 +32,29 @@ func BuildResponseMsg(req *dns.Msg) *dns.Msg {
 	return msg
 }
 
+// ClientUnderstandsAD reports whether the requester indicated DNSSEC
+// awareness via the DO or AD bit — RFC 6840 §5.8 gates the response AD bit
+// on it: a resolver MUST NOT assert validation to a client that never
+// asked for DNSSEC semantics.
+func ClientUnderstandsAD(req *dns.Msg) bool {
+	return req != nil && (req.Security || req.AuthenticatedData)
+}
+
+// DNSSECIncluded reports whether DNSSEC records must be kept in the
+// response for this query: the client set DO, or the QTYPE itself is a
+// DNSSEC type — RFC 4035 §3.2.1: never strip what the query explicitly
+// asked for, even for a DO=0 client.
+func DNSSECIncluded(qctx *QueryContext) bool {
+	if qctx.ClientRequestedDNSSEC {
+		return true
+	}
+	switch qctx.Qtype {
+	case dns.TypeRRSIG, dns.TypeNSEC, dns.TypeNSEC3, dns.TypeDNSKEY, dns.TypeDS:
+		return true
+	}
+	return false
+}
+
 // BuildCacheEntryResponse builds a DNS response from a cache entry, applying
 // TTL deduction for fresh entries or cyclical stale-TTL for expired entries.
 // When isExpired is true, the caller should set qctx.EDE after calling.
@@ -89,7 +112,7 @@ func buildFromPrePacked(req *dns.Msg, entry *cache.Entry, isExpired bool) *dns.M
 	// Extended EDNS rcodes (>= 16) do not occur in cached responses.
 	msg.Rcode = uint16(wire[3] & 0x0F) //nolint:gosec // G115: rcode < 16, wire format bounded
 
-	if entry.Validated {
+	if entry.Validated && ClientUnderstandsAD(req) {
 		msg.AuthenticatedData = true
 	}
 
@@ -100,17 +123,21 @@ func buildFromPrePacked(req *dns.Msg, entry *cache.Entry, isExpired bool) *dns.M
 // BuildCacheEntryResponse) into its RR sections so middleware can modify it:
 // patches in the client's message ID and RD bit (the cached wire carries the
 // values from Set() time), filters DNSSEC proofs for DO=0 clients (RFC 3225
-// §4.4), and clears Data so the response is re-packed on the way out.
-// Returns false when the wire cannot be unpacked — the caller serves
-// SERVFAIL or skips its modification.
+// §4.4) unless the QTYPE itself is a DNSSEC type, and clears Data so the
+// response is re-packed on the way out. Returns false when the wire cannot
+// be unpacked — the caller serves SERVFAIL or skips its modification.
 func UnpackPrePackedForModify(qctx *QueryContext) bool {
 	msg := qctx.Res
+	// Unpack re-derives every header flag from the wire — the AD decision
+	// made in buildFromPrePacked (RFC 6840 §5.8 gate) must survive it.
+	ad := msg.AuthenticatedData
 	if err := msg.Unpack(); err != nil {
 		return false
 	}
 	msg.ID = qctx.Req.ID
 	msg.RecursionDesired = qctx.Req.RecursionDesired
-	if !qctx.ClientRequestedDNSSEC {
+	msg.AuthenticatedData = ad
+	if !DNSSECIncluded(qctx) {
 		msg.Answer = zdnsutil.ProcessRecords(msg.Answer, 0, false, false)
 		msg.Ns = zdnsutil.ProcessRecords(msg.Ns, 0, false, false)
 		msg.Extra = zdnsutil.ProcessRecords(msg.Extra, 0, false, false)
