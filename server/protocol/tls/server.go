@@ -14,6 +14,7 @@ import (
 	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -69,14 +70,19 @@ type Server struct {
 	serverGroup    *errgroup.Group
 	quicConnSem    chan struct{} // admission cap for concurrent QUIC connections (DoQ/DoH3) — half the errgroup limit so a QUIC flood cannot starve the DoT/DTLS/DoH listeners of goroutine slots (M-low)
 
-	listenerMu     sync.Mutex // protects all listener/conn slice fields below
-	dotListeners   []net.Listener
-	dotConns       map[net.Conn]struct{} // active DoT conns — woken on Shutdown (M-3-5)
-	doqConns       []*net.UDPConn
-	doqTransports  []*quic.Transport
-	doqListeners   []*quic.EarlyListener
-	dohServers     []*eHTTP.Server
-	h3Server       *http3.Server
+	listenerMu    sync.Mutex // protects all listener/conn slice fields below
+	dotListeners  []net.Listener
+	dotConns      map[net.Conn]struct{} // active DoT conns — woken on Shutdown (M-3-5)
+	doqConns      []*net.UDPConn
+	doqTransports []*quic.Transport
+	doqListeners  []*quic.EarlyListener
+	dohServers    []*eHTTP.Server
+	h3Server      *http3.Server
+	// QUIC Retry-whitelist caches (RFC 9000 §8.1): addresses that completed
+	// a handshake skip the next Retry. doqAddrCache is written by the DoQ
+	// accept loop; h3AddrCache by the first HTTP/3 request per connection.
+	doqAddrCache   *lrumap.Map[string, time.Time]
+	h3AddrCache    *lrumap.Map[string, time.Time]
 	httpsListeners []net.Listener
 	h3Conns        []*net.UDPConn
 	h3Transports   []*quic.Transport

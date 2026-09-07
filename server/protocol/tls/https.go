@@ -142,6 +142,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	protocol := config.ProtoHTTPS
 	if strings.HasPrefix(r.Proto, "HTTP/3") {
 		protocol = config.ProtoHTTP3
+		// The HTTP/3 peer completed its QUIC handshake and served a request —
+		// whitelist it so its next connection skips the Retry (RFC 9000
+		// §8.1.1). r.RemoteAddr is the direct QUIC peer (no proxying in h3).
+		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+			markAddrVerified(s.h3AddrCache, net.ParseIP(host))
+		}
 	}
 	response := s.handler.ServeDNS(req, edns.RequestMeta{ClientIP: clientIP, ClientName: clientName, IsSecure: true, Protocol: protocol})
 	if response == req { //nolint:revive // identity guard: ServeDNS must never return the request (L5)

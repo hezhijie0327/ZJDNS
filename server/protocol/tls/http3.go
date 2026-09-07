@@ -22,7 +22,8 @@ func (s *Server) startDOH3Server(port string) error {
 		return fmt.Errorf("DoH3 address resolution: %w", err)
 	}
 
-	addrCache := lrumap.New[string, time.Time](config.DefaultQUICAddrCacheSize)
+	s.h3AddrCache = lrumap.New[string, time.Time](config.DefaultQUICAddrCacheSize)
+	addrCache := s.h3AddrCache
 
 	tlsConfig := s.QUICTLSConfig().Clone()
 	tlsConfig.NextProtos = config.NextProtoDOH3

@@ -29,7 +29,8 @@ func (s *Server) startDOQServer() error {
 		return fmt.Errorf("DoQ address resolution: %w", err)
 	}
 
-	addrCache := lrumap.New[string, time.Time](config.DefaultQUICAddrCacheSize)
+	s.doqAddrCache = lrumap.New[string, time.Time](config.DefaultQUICAddrCacheSize)
+	addrCache := s.doqAddrCache
 
 	quicTLSConfig := s.QUICTLSConfig().Clone()
 	quicTLSConfig.NextProtos = config.NextProtoDOQ
@@ -106,6 +107,12 @@ func (s *Server) handleDOQConnections(doqListener *quic.EarlyListener) {
 
 		if conn == nil {
 			continue
+		}
+
+		// The handshake completed — the peer owns its source address, so
+		// its next connection skips the Retry (RFC 9000 §8.1.1).
+		if udpAddr, ok := conn.RemoteAddr().(*net.UDPAddr); ok {
+			markAddrVerified(s.doqAddrCache, udpAddr.IP)
 		}
 
 		log.Debugf("TLS: DoQ connection from %s — cipher=%s resumed=%v 0-RTT=%v",

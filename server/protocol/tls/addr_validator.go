@@ -6,19 +6,20 @@ import (
 	"zjdns/internal/lrumap"
 )
 
-// addrCacheTTL bounds how long a source address stays whitelisted. Entries
-// are inserted on first sight (before the client proves address ownership),
-// so a spoofed datagram can whitelist a victim IP for at most this long.
+// addrCacheTTL bounds how long a verified source address skips the QUIC
+// Retry (RFC 9000 §8.1.1: an address validated once needs no re-validation
+// within a short window).
 const addrCacheTTL = 5 * time.Minute
 
-// makeAddrValidator returns a VerifySourceAddress callback backed by an LRU
-// cache of recently-seen client IPs. If the client IP is found in the cache,
-// address validation (QUIC Retry) is skipped, avoiding connectivity issues
-// caused by NAT/firewall dropping Retry packets.
+// makeAddrValidator returns a quic-go VerifySourceAddress callback backed by
+// an LRU cache of addresses that have demonstrably completed a handshake
+// (marked via markAddrVerified — never on first sight, or a spoofed Initial
+// would validate its own spoofed source address).
 //
-// The cache is bounded per RFC 9000 (128 entries), and entries expire after
-// addrCacheTTL so a single spoofed datagram cannot whitelist a victim IP
-// indefinitely.
+// quic-go's contract is the OPPOSITE of what the name suggests: returning
+// true makes the server send a Retry (RFC 9000 §8.1 source-address
+// validation), returning false proceeds with the handshake. A verified
+// address therefore returns false; anything else returns true.
 func makeAddrValidator(cache *lrumap.Map[string, time.Time]) func(net.Addr) bool {
 	return func(addr net.Addr) bool {
 		if cache == nil {
@@ -28,16 +29,19 @@ func makeAddrValidator(cache *lrumap.Map[string, time.Time]) func(net.Addr) bool
 		if !ok {
 			return true
 		}
-		key := udpAddr.IP.String()
-		if seenAt, exists := cache.Get(key); exists && time.Since(seenAt) < addrCacheTTL {
-			// quic-go's VerifySourceAddress contract: true = the source is
-			// verified and the handshake proceeds WITHOUT a Retry.
-			return true
+		if seenAt, exists := cache.Get(udpAddr.IP.String()); exists && time.Since(seenAt) < addrCacheTTL {
+			return false // proven address — skip the Retry
 		}
-		// Unknown (or expired) address: insert it and request a Retry —
-		// returning false makes quic-go send one, which proves the client
-		// can receive packets at this address (RFC 9000 §8.1).
-		cache.Set(key, time.Now())
-		return false
+		return true // unknown or expired — prove address ownership first
 	}
+}
+
+// markAddrVerified whitelists an address after the client has demonstrably
+// completed a handshake (DoQ Accept) or served a request (DoH3), so its
+// next connection skips the Retry.
+func markAddrVerified(cache *lrumap.Map[string, time.Time], ip net.IP) {
+	if cache == nil || ip == nil {
+		return
+	}
+	cache.Set(ip.String(), time.Now())
 }
