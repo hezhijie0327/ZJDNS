@@ -90,3 +90,36 @@ func TestSynthesize(t *testing.T) {
 		t.Errorf("TTL = %d, want 300", aaaa.Hdr.TTL)
 	}
 }
+
+// TestSynthesizeNonGlobalWKP pins RFC 6052 §3.1: the Well-Known Prefix must
+// not represent non-global IPv4 addresses; a network-specific prefix may.
+func TestSynthesizeNonGlobalWKP(t *testing.T) {
+	wkp, _ := New(defaultPrefix)
+	custom, _ := New("2001:db8:64::/96")
+	aAnswer := []dns.RR{
+		&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("10.0.0.7")},
+		&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("93.184.216.34")},
+	}
+
+	answer, _, _ := wkp.Synthesize(nil, aAnswer, nil, nil)
+	if len(answer) != 1 {
+		t.Fatalf("WKP: expected only the global address synthesized, got %d", len(answer))
+	}
+	if got := answer[0].(*dns.AAAA).Addr; got != netip.MustParseAddr("64:ff9b::5db8:d822") {
+		t.Errorf("WKP: synthesized %s, want the global one", got)
+	}
+
+	answer, _, _ = custom.Synthesize(nil, aAnswer, nil, nil)
+	if len(answer) != 2 {
+		t.Fatalf("custom prefix: both addresses must map, got %d", len(answer))
+	}
+
+	// All-non-global under the WKP → nothing synthesizable.
+	onlyPrivate := []dns.RR{
+		&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.168.1.1")},
+	}
+	answer, _, _ = wkp.Synthesize(nil, onlyPrivate, nil, nil)
+	if len(answer) != 0 {
+		t.Errorf("WKP with only RFC1918 must synthesize nothing, got %d", len(answer))
+	}
+}

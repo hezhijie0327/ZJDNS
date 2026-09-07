@@ -14,6 +14,9 @@ import (
 type Synthesizer struct {
 	pref  netip.Prefix
 	bytes [16]byte // prefix as 16 bytes, right-padded with zero
+	// wkp marks the RFC 6052 §2.1 Well-Known Prefix (64:ff9b::/96), which
+	// §3.1 forbids from representing non-global IPv4 addresses.
+	wkp bool
 }
 
 const (
@@ -23,6 +26,37 @@ const (
 )
 
 var validPrefixLens = map[int]bool{32: true, 40: true, 48: true, 56: true, 64: true, 96: true}
+
+// wkpPrefix is the RFC 6052 §2.1 Well-Known Prefix.
+var wkpPrefix = netip.MustParsePrefix("64:ff9b::/96")
+
+// nonGlobalIPv4 lists the IPv4 special-purpose ranges RFC 6052 §3.1 bars
+// from the Well-Known Prefix (the IETF special-purpose registry entries
+// beyond what netip's own predicates cover).
+var nonGlobalIPv4 = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),       // "this network"
+	netip.MustParsePrefix("100.64.0.0/10"),   // CGNAT
+	netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments
+	netip.MustParsePrefix("192.0.2.0/24"),    // TEST-NET-1 (documentation)
+	netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking
+	netip.MustParsePrefix("198.51.100.0/24"), // TEST-NET-2 (documentation)
+	netip.MustParsePrefix("203.0.113.0/24"),  // TEST-NET-3 (documentation)
+	netip.MustParsePrefix("240.0.0.0/4"),     // reserved
+}
+
+// isGlobalIPv4 reports whether ip4 is a globally routable unicast address.
+func isGlobalIPv4(ip netip.Addr) bool {
+	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() ||
+		ip.IsMulticast() || ip.IsUnspecified() {
+		return false
+	}
+	for _, p := range nonGlobalIPv4 {
+		if p.Contains(ip) {
+			return false
+		}
+	}
+	return true
+}
 
 // New creates a Synthesizer for the given IPv6 prefix. The prefix length
 // must be one of 32, 40, 48, 56, 64, 96 (RFC 6052 Figure 1).
@@ -40,7 +74,7 @@ func New(prefix string) (*Synthesizer, error) {
 	if !validPrefixLens[pref.Bits()] {
 		return nil, fmt.Errorf("dns64: prefix length /%d is not valid (allowed: 32,40,48,56,64,96)", pref.Bits())
 	}
-	s := &Synthesizer{pref: pref.Masked()}
+	s := &Synthesizer{pref: pref.Masked(), wkp: pref.Masked() == wkpPrefix}
 	copy(s.bytes[:], pref.Masked().Addr().AsSlice())
 	return s, nil
 }
@@ -91,6 +125,13 @@ func (s *Synthesizer) Synthesize(
 		aRec, ok := rr.(*dns.A)
 		if !ok {
 			answer = append(answer, rr)
+			continue
+		}
+		// RFC 6052 §3.1: the Well-Known Prefix MUST NOT represent non-global
+		// IPv4 addresses — a synthesized 64:ff9b::x.x.x.x for RFC1918 space
+		// would look globally routable. A network-specific prefix may map
+		// them (the operator's NAT64 knows its own internals).
+		if s.wkp && !isGlobalIPv4(aRec.Addr) {
 			continue
 		}
 		answer = append(answer, &dns.AAAA{
