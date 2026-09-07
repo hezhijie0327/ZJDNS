@@ -265,3 +265,68 @@ func TestResponseMiddleware_SecureLegacyClient_Pads(t *testing.T) {
 		t.Error("legacy secure client must get default padding")
 	}
 }
+
+// TestResponseMiddleware_TCPKeepalive pins the re-wired RFC 7828 §3.3.2
+// behavior: a query carrying the EDNS TCP Keepalive option over a stream
+// transport gets the session idle timeout in the response; the same query
+// over UDP (§3.3.1) and an option-free query get no option at all.
+func TestResponseMiddleware_TCPKeepalive(t *testing.T) {
+	ednsH, err := edns.NewHandler(config.ECSConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	build := func(protocol string, withOption bool) *handler.QueryContext {
+		req := dnsutil.SetQuestion(new(dns.Msg), "example.com.", dns.TypeA)
+		req.UDPSize = 1232 // EDNS present
+		if withOption {
+			req.Pseudo = append(req.Pseudo, &dns.TCPKEEPALIVE{})
+		}
+		return (&handler.QueryContext{Req: req, Protocol: protocol}).InitQuestion()
+	}
+	next := handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
+		res := new(dns.Msg)
+		dnsutil.SetReply(res, qctx.Req)
+		res.Answer = []dns.RR{&dns.A{
+			Hdr:  dns.Header{Name: "example.com.", TTL: 300, Class: dns.ClassINET},
+			Addr: netip.MustParseAddr("192.0.2.1"),
+		}}
+		qctx.Res = res
+		return nil
+	})
+	chain := (&Response{edns: ednsH}).Wrap(next)
+
+	timeoutOf := func(msg *dns.Msg) (uint16, bool) {
+		for _, o := range msg.Pseudo {
+			if k, ok := o.(*dns.TCPKEEPALIVE); ok {
+				return k.Timeout, true
+			}
+		}
+		return 0, false
+	}
+
+	for _, tc := range []struct {
+		name       string
+		protocol   string
+		withOption bool
+		want       uint16
+		wantOK     bool
+	}{
+		{"tcp negotiated", "tcp", true, 1200, true},
+		{"dot negotiated", "tls", true, 600, true},
+		{"tlcp negotiated", "tlcp", true, 600, true},
+		{"udp ignores option", "udp", true, 0, false},
+		{"tcp unasked", "tcp", false, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			qctx := build(tc.protocol, tc.withOption)
+			if err := chain.ServeDNS(context.Background(), qctx); err != nil {
+				t.Fatal(err)
+			}
+			got, ok := timeoutOf(qctx.Res)
+			if ok != tc.wantOK || got != tc.want {
+				t.Fatalf("keepalive option = (%d, %t), want (%d, %t)", got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}

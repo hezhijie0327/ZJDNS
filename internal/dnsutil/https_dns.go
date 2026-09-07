@@ -150,10 +150,10 @@ func ServerDOHMsgAccept(m *dns.Msg) dns.MsgAcceptAction {
 	if len(m.Question) != 1 {
 		return dns.MsgReject
 	}
-	for _, o := range m.Pseudo {
-		if _, ok := o.(*dns.TCPKEEPALIVE); ok {
-			return dns.MsgReject
-		}
-	}
+	// An EDNS TCP Keepalive option in a DoH query is ignored, not rejected:
+	// the option is TCP-session-scoped (RFC 7828 §3.3.1 — a server MUST
+	// ignore it outside TCP), and DoH manages idle at its HTTP layer.
+	// Processing the query normally avoids a pointless FORMERR round-trip
+	// for clients that pin the option on every transport.
 	return dns.MsgAccept
 }

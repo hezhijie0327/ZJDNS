@@ -129,7 +129,7 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 					log.Debugf("EDNS: bad server cookie length %d (expected %d) from %s, returning BADCOOKIE", len(cookieOpt.ServerCookie), edns.DefaultCookieServerLen, qctx.ClientIP)
 				}
 				qctx.Result = "badcookie"
-				qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt, qctx.ECSOpt)
+				qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt, qctx.ECSOpt, m.keepaliveFor(qctx))
 				return nil
 			}
 		}
@@ -143,7 +143,7 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 					log.Debugf("EDNS: bad server cookie (status=%d) from %s, returning BADCOOKIE", cookieStatus, qctx.ClientIP)
 				}
 				qctx.Result = "badcookie"
-				qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt, qctx.ECSOpt)
+				qctx.Res = m.buildBadCookieResponse(req, qctx.ClientIP, cookieOpt, qctx.ECSOpt, m.keepaliveFor(qctx))
 				return nil
 			}
 		}
@@ -170,7 +170,16 @@ func (m *EDNS) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	})
 }
 
-func (m *EDNS) buildBadCookieResponse(req *dns.Msg, clientIP net.IP, cookieOpt *edns.CookieOption, ecsOpt *edns.ECSOption) *dns.Msg {
+// keepaliveFor computes the RFC 7828 response option value for a query that
+// negotiated TCP keepalive on a stream transport (0 otherwise).
+func (m *EDNS) keepaliveFor(qctx *handler.QueryContext) uint16 {
+	if edns.QueryTCPKeepalive(qctx.Req) {
+		return edns.TCPKeepaliveTimeout(qctx.Protocol)
+	}
+	return 0
+}
+
+func (m *EDNS) buildBadCookieResponse(req *dns.Msg, clientIP net.IP, cookieOpt *edns.CookieOption, ecsOpt *edns.ECSOption, keepalive uint16) *dns.Msg {
 	msg := handler.BuildResponseMsg(req)
 	msg.Rcode = dns.RcodeBadCookie
 	if cookieOpt == nil {
@@ -195,7 +204,7 @@ func (m *EDNS) buildBadCookieResponse(req *dns.Msg, clientIP net.IP, cookieOpt *
 	serverCookie := m.edns.GenerateServerCookie(clientIP, cookieOpt.ClientCookie)
 	cookieStr := edns.BuildCookieResponse(cookieOpt.ClientCookie, serverCookie)
 
-	m.edns.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil, false, edns.HasPaddingOption(req), 0)
+	m.edns.ApplyToMessage(msg, ecsOpt, false, cookieStr, nil, false, edns.HasPaddingOption(req), keepalive)
 	return msg
 }
 

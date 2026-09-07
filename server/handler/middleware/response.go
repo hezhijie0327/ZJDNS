@@ -24,6 +24,7 @@ type ednsState struct {
 	cookieStr      string
 	clientWantsPad bool
 	shouldAddEDNS  bool
+	keepalive      uint16 // RFC 7828: >0 when the query negotiated and the transport is a stream
 }
 
 // Wrap implements Wrapper.
@@ -92,6 +93,16 @@ func (m *Response) ednsStateFor(qctx *handler.QueryContext) ednsState {
 	// transports get padded by default (HasPaddingOption returns true for
 	// them), EDNS clients that send no PADDING option opt out explicitly and
 	// can take the fast path, and plain transports never pad.
+	// RFC 7828 §3.2: a TCP client that includes the keepalive option is
+	// answered with the server's current session idle timeout — only on
+	// stream transports (elsewhere TCPKeepaliveTimeout is 0 and the option
+	// is silently dropped, §3.3.1). The query necessarily carried an OPT to
+	// hold the option, so shouldAddEDNS is already true and the fast path
+	// cannot skip it.
+	var keepalive uint16
+	if edns.QueryTCPKeepalive(qctx.Req) {
+		keepalive = edns.TCPKeepaliveTimeout(qctx.Protocol)
+	}
 	return ednsState{
 		ecsOpt:         qctx.ECSOpt,
 		cookieStr:      qctx.CookieStr,
@@ -99,6 +110,7 @@ func (m *Response) ednsStateFor(qctx *handler.QueryContext) ednsState {
 		shouldAddEDNS: qctx.ECSOpt != nil || qctx.ClientRequestedDNSSEC || qctx.CookieStr != "" ||
 			qctx.EDE != nil || (qctx.IsSecure && qctx.ClientWantsPadding) ||
 			len(qctx.Req.Pseudo) > 0,
+		keepalive: keepalive,
 	}
 }
 
@@ -124,7 +136,7 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext, st ednsState) {
 		// response built by the EDNS middleware applied its own
 		// SUBNET/COOKIE/padding, and re-applying would duplicate options
 		// inside a single OPT (RFC 7873: at most one COOKIE per message).
-		m.edns.ApplyToMessage(msg, st.ecsOpt, qctx.IsSecure, st.cookieStr, qctx.EDE, false, st.clientWantsPad, 0)
+		m.edns.ApplyToMessage(msg, st.ecsOpt, qctx.IsSecure, st.cookieStr, qctx.EDE, false, st.clientWantsPad, st.keepalive)
 	}
 }
 

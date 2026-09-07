@@ -927,7 +927,10 @@ Client ← [2字节长度][DNS响应] ← Server  (按序)
 
 ### 我们的实现
 
-- ⚠️ `edns/edns.go:ApplyToMessage()` 支持 tcpKeepaliveTimeout 参数，但所有调用点固定传 0——实际从不发出该选项
+- 服务端协商：查询带 TCPKEEPALIVE 选项且传输为流式（tcp/tls/tlcp）时，响应回告真实会话空闲超时（100ms 单位）——plain TCP 1200（`DefaultTCPIdleTimeout` 120s）、DoT/TLCP-DoT 600（`DefaultTCPPoolIdleTimeout` 60s），与监听器的逐消息 read deadline 一致（`edns.QueryTCPKeepalive` + `edns.TCPKeepaliveTimeout`，经 Response/EDNS 中间件接入 `ApplyToMessage`；回归 `TestResponseMiddleware_TCPKeepalive`）
+- 非 TCP 传输（UDP/DoQ/DNSCrypt/DTLS/DTLCP）与 DoH：选项被忽略不回告（§3.3.1 MUST ignore；DoH 接受函数自 2026-09 起忽略而非 FORMERR）
+- ⚠️ 客户端侧（§5.4 SHOULD，出站查询携带/校验对端 keepalive）未实现
+- 历史：4cefad6 曾完整实现，b8682dc 中间件化重构时调用点硬编码 0 造成静默回归，c6aa391 误信"仍在工作"的注释删掉了残存助手——2026-09 重接
 
 ---
 
