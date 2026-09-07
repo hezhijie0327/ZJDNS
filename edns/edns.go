@@ -133,11 +133,28 @@ func (h *Handler) ApplyToMessage(msg *dns.Msg, ecs *ECSOption, isSecureConnectio
 		}
 	}
 	if ecs != nil {
+		sourcePrefix := ecs.SourcePrefix
+		address := addrToNetip(ecs.Address)
+		if isRequest {
+			// RFC 7871 §7.1.1: the outgoing SOURCE PREFIX-LENGTH is the
+			// shorter of the client's and the maximum the resolver caches
+			// (/24 v4, /56 v6) — forwarding /32//128 leaks the exact client
+			// address to every authoritative. The ADDRESS is truncated to
+			// match (§6: never serialize bits beyond the prefix).
+			prefixCap := uint8(DefaultECSv6Len) //nolint:gosec // G115: ECS prefix 0-128 fits uint8
+			if address.Is4() || address.Is4In6() {
+				prefixCap = uint8(DefaultECSv4Len)
+			}
+			if sourcePrefix > prefixCap {
+				sourcePrefix = prefixCap
+				address = netip.PrefixFrom(address, int(prefixCap)).Masked().Addr()
+			}
+		}
 		msg.Pseudo = append(msg.Pseudo, &dns.SUBNET{
 			Family:  ecs.Family,
-			Netmask: ecs.SourcePrefix,
+			Netmask: sourcePrefix,
 			Scope:   DefaultECSScope,
-			Address: addrToNetip(ecs.Address),
+			Address: address,
 		})
 	}
 

@@ -1,6 +1,7 @@
 package edns
 
 import (
+	"net/netip"
 	"testing"
 	"zjdns/config"
 
@@ -107,4 +108,41 @@ func TestApplyToMessage_ResponseNoAlgorithmOptions(t *testing.T) {
 			t.Errorf("response must not carry RFC 6975 options, got %T", o)
 		}
 	}
+}
+
+// TestApplyToMessage_ECSClamp pins RFC 7871 §7.1.1: outgoing (upstream)
+// queries carry the SHORTER of the client's source prefix and the resolver
+// maximum (/24 v4, /56 v6), with the address truncated to match; the
+// client-facing echo (isRequest=false) is untouched.
+func TestApplyToMessage_ECSClamp(t *testing.T) {
+	h := &Handler{}
+	ecs := &ECSOption{Family: 1, SourcePrefix: 32, ScopePrefix: 0, Address: netip.MustParseAddr("203.0.113.77").AsSlice()}
+
+	out := new(dns.Msg)
+	h.ApplyToMessage(out, ecs, false, "", nil, true, false, 0)
+	sub := ecsOf(out)
+	if sub == nil {
+		t.Fatal("no ECS option attached to the upstream query")
+	}
+	if sub.Netmask != DefaultECSv4Len {
+		t.Errorf("outgoing source prefix = %d, want %d (RFC 7871 §7.1.1)", sub.Netmask, DefaultECSv4Len)
+	}
+	if want := netip.MustParseAddr("203.0.113.0"); sub.Address.Compare(want) != 0 {
+		t.Errorf("outgoing address = %s, want %s (truncated to the prefix)", sub.Address, want)
+	}
+
+	echo := new(dns.Msg)
+	h.ApplyToMessage(echo, ecs, false, "", nil, false, false, 0)
+	if sub := ecsOf(echo); sub == nil || sub.Netmask != 32 {
+		t.Errorf("client echo must keep the client's /32, got %+v", sub)
+	}
+}
+
+func ecsOf(msg *dns.Msg) *dns.SUBNET {
+	for _, o := range msg.Pseudo {
+		if s, ok := o.(*dns.SUBNET); ok {
+			return s
+		}
+	}
+	return nil
 }
