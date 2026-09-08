@@ -164,12 +164,20 @@ const (
 // =============================================================================
 
 const (
-	DefaultDNSCryptCertificateTTL      = 24 * time.Hour // cert validity period (matches ref encrypted-dns-server)
-	DefaultDNSCryptCertificateRenewal  = 8 * time.Hour  // renewal interval — a new window is minted every 8h (matches ref)
-	DefaultDNSCryptSharedKeyCacheSize  = 2048           // max cached shared keys per server
-	DefaultDNSCryptReplayCacheSize     = 8192           // max tracked (client, nonce) replay entries
-	DefaultDNSCryptReplayAllow         = 3              // occurrences per window before dropping (UDP retransmits are legitimate)
-	DefaultDNSCryptReplayWindow        = 10 * time.Second
+	DefaultDNSCryptCertificateTTL     = 24 * time.Hour // cert validity period (matches ref encrypted-dns-server)
+	DefaultDNSCryptCertificateRenewal = 8 * time.Hour  // renewal interval — a new window is minted every 8h (matches ref)
+	DefaultDNSCryptSharedKeyCacheSize = 2048           // max cached shared keys per server
+	DefaultDNSCryptReplayCacheSize    = 8192           // max tracked (client, nonce) replay entries
+	DefaultDNSCryptReplayAllow        = 3              // occurrences per window before dropping (UDP retransmits are legitimate)
+	DefaultDNSCryptReplayWindow       = 10 * time.Second
+	// DefaultDNSCryptEphemeralKeyWindow bounds how long the CLIENT-side
+	// ephemeral X25519 key pair (ephemeralKeys upstreams) lives before
+	// rotation.  Per-query keys cost two X25519 operations per query AND
+	// serialized every query to an upstream behind state.mu; a rotated
+	// window keeps fresh client keys (a new ClientPk every window also
+	// makes the resolver-side shared-key cache effective) while removing
+	// the per-query keygen.  Tradeoff documented at prepareQuery.
+	DefaultDNSCryptEphemeralKeyWindow  = time.Minute
 	DefaultDNSCryptCertificateCacheTTL = 1 * time.Hour
 	DefaultDNSCryptReadTimeout         = 2 * time.Second
 	DefaultDNSCryptWriteTimeout        = 10 * time.Second // DNSCrypt TCP response write

@@ -47,8 +47,16 @@ type State struct {
 	// ewmaQuerySize holds the EWMA of encrypted response wire sizes as
 	// float64 bits (sync/atomic has no float type).
 	ewmaQuerySize atomic.Uint64
-	ephemeralKeys bool                         // per-query X25519 keys for forward secrecy (default true)
+	ephemeralKeys bool                         // time-window X25519 keys for forward secrecy (default true)
 	resolverPK    [dnscryptcrypto.KeySize]byte // resolver X25519 public key
+
+	// Ephemeral-key window (rotated under mu, see prepareQuery): one
+	// X25519 key pair + derived shared key per DefaultDNSCryptEphemeralKeyWindow
+	// instead of per query.
+	ephemeralSK     [dnscryptcrypto.KeySize]byte
+	ephemeralPK     [dnscryptcrypto.KeySize]byte
+	ephemeralShared [dnscryptcrypto.SharedKeySize]byte
+	ephemeralEnd    time.Time
 
 	// PQ fields — only set when the server offers a PQ certificate.
 	pqPublicKey       []byte
