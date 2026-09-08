@@ -53,6 +53,17 @@ type UDPConn struct {
 	idleTimeout time.Duration
 }
 
+// udpPendingPool recycles the per-exchange pending entry and its resultCh
+// (the former make(chan, 1) + struct per query).  A recycled channel is
+// quiescent and empty when pooled: the in-flight entry is deleted under the
+// write lock (Exchange cleanup, close) before the pool put, and readLoop
+// delivers only while the entry is registered — so no send can race a
+// reuse.  Collect-mode pendings are NOT recycled (close() closes collectCh
+// channels; collect mode is the rare spoofguard path).
+var udpPendingPool = sync.Pool{
+	New: func() any { return &udpPending{resultCh: make(chan []byte, 1)} },
+}
+
 // acquirePacketBuf returns a payload buffer of at least n bytes and the
 // release func that must be called exactly once after the payload has been
 // consumed (read, decrypted, unpacked).
@@ -157,10 +168,12 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 		return nil, ErrConnClosed
 	}
 
-	resultCh := make(chan []byte, 1)
+	p := udpPendingPool.Get().(*udpPending)
+	p.collectCh = nil
 	c.mu.Lock()
 	if c.closed.Load() {
 		c.mu.Unlock()
+		udpPendingPool.Put(p)
 		return nil, ErrConnClosed
 	}
 	if _, dup := c.inflight[matchKey]; dup {
@@ -168,9 +181,10 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 		// Match-key collision (2^-96 for DNSCrypt nonces, ID reuse for plain
 		// DNS after 65536 queries) — fail the new query; the caller retries
 		// on a fresh connection.
+		udpPendingPool.Put(p)
 		return nil, ErrKeyCollision
 	}
-	c.inflight[matchKey] = &udpPending{resultCh: resultCh}
+	c.inflight[matchKey] = p
 	c.mu.Unlock()
 
 	defer func() {
@@ -181,12 +195,13 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 		// return the tiered-pool payload buffer (M9).  A nil value marks
 		// connection close — nothing to release.
 		select {
-		case resp := <-resultCh:
+		case resp := <-p.resultCh:
 			if resp != nil {
 				ReleaseUDPPayload(resp)
 			}
 		default:
 		}
+		udpPendingPool.Put(p)
 	}()
 
 	// Serialise writes: UDP datagrams are atomic, but concurrent Write calls
@@ -214,7 +229,7 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 	retransmits := 0
 	for {
 		select {
-		case resp := <-resultCh:
+		case resp := <-p.resultCh:
 			if resp == nil {
 				return nil, ErrConnClosed
 			}
@@ -229,7 +244,7 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 				// late response (a retry storm on a dead server is worse than
 				// the wait).
 				select {
-				case resp := <-resultCh:
+				case resp := <-p.resultCh:
 					if resp == nil {
 						return nil, ErrConnClosed
 					}

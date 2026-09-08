@@ -63,27 +63,40 @@ func (p *ConnPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc f
 	}
 
 	// Single pass: filter dead connections and find a non-full candidate.
-	// Pool sizes are small (DefaultMaxConns=4) so the allocation is negligible.
-	liveConns := make([]*Conn, 0, len(conns))
+	// The filtered slice is rebuilt only when a dead connection was seen —
+	// the common all-live case (an alloc per Acquire otherwise).
+	var liveConns []*Conn // lazily allocated, dead-filtered view of conns
+	liveCount := 0
+	deadSeen := false
 	var leastLoaded *Conn
 	leastCount := math.MaxInt
 	for i, c := range conns {
 		if c.IsDead() {
+			if !deadSeen {
+				deadSeen = true
+				liveConns = make([]*Conn, 0, len(conns)-1)
+				liveConns = append(liveConns, conns[:i]...)
+			}
 			continue
 		}
-		liveConns = append(liveConns, c)
+		liveCount++
+		if deadSeen {
+			liveConns = append(liveConns, c)
+		}
 		inFlight := int(c.inFlight.Load())
 		if !c.IsFull() {
 			// Append remaining alive connections from conns[i+1:]
 			// to prevent leaking tracked connections and their
 			// readLoop goroutines.
-			for j := i + 1; j < len(conns); j++ {
-				if !conns[j].IsDead() {
-					liveConns = append(liveConns, conns[j])
+			if deadSeen {
+				for j := i + 1; j < len(conns); j++ {
+					if !conns[j].IsDead() {
+						liveConns = append(liveConns, conns[j])
+					}
 				}
+				p.total -= len(conns) - len(liveConns) // dead-filter accounting (U1)
+				p.conns[key] = liveConns
 			}
-			p.total -= len(conns) - len(liveConns) // dead-filter accounting (U1)
-			p.conns[key] = liveConns
 			p.mu.Unlock()
 			// TOCTOU: readLoop may close c after Unlock.  Benign — Exchange
 			// detects it via closed.Load() and the caller retries.
@@ -94,10 +107,12 @@ func (p *ConnPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc f
 			leastLoaded = c
 		}
 	}
-	p.total -= len(conns) - len(liveConns) // dead-filter accounting (U1)
-	p.conns[key] = liveConns
+	if deadSeen {
+		p.total -= len(conns) - len(liveConns) // dead-filter accounting (U1)
+		p.conns[key] = liveConns
+	}
 
-	if len(liveConns)+p.dialing[key] < p.maxConns {
+	if liveCount+p.dialing[key] < p.maxConns {
 		c, err := p.dialAndAdd(ctx, key, dialAddr, dialFunc)
 		if err != nil && leastLoaded != nil && !leastLoaded.IsDead() {
 			return leastLoaded, nil
