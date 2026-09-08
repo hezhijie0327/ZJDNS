@@ -43,6 +43,12 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		if qr.Err != nil {
 			return err
 		}
+		// RFC 6147 §5.1.2: NXDOMAIN is handled by normal DNS operation —
+		// the name does not exist, synthesis must not turn it into an
+		// answer-carrying NXDOMAIN (invalid per RFC 1035).
+		if qr.Rcode == dns.RcodeNameError {
+			return err
+		}
 		// RFC 6147 §5.1.4: the default exclude list treats IPv4-mapped
 		// AAAA (::ffff:0:0/96) as excluded — an answer consisting solely of
 		// them must be treated as empty so synthesis proceeds.
@@ -66,6 +72,10 @@ func (m *DNS64) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			qr.Answer, qr.Authority, qr.Additional = m.synthesizer.Synthesize(
 				qr.Authority, aqr.Answer, aqr.Authority, aqr.Additional,
 			)
+			// The synthesized answer replaces the empty answer of the
+			// original rcode (§5.1.2 treats non-NXDOMAIN rcodes as empty
+			// answers) — the served response is a positive NOERROR.
+			qr.Rcode = dns.RcodeSuccess
 			// The served content now derives from the A lookup — the AAAA
 			// response's AD assertion must not carry over to synthesized
 			// records (RFC 6147: synthesized data is not validated as-is).

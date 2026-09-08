@@ -142,6 +142,10 @@ func UnpackPrePackedForModify(qctx *QueryContext) bool {
 		msg.Ns = zdnsutil.ProcessRecords(msg.Ns, 0, false, false)
 		msg.Extra = zdnsutil.ProcessRecords(msg.Extra, 0, false, false)
 	}
+	// The pre-packed wire is per-Get memory exclusively owned by this
+	// message — return it to the wire pool instead of orphaning it to
+	// the GC (clearing Data alone hides it from Message.Put's release).
+	pool.ReleaseWire(msg.Data)
 	msg.Data = nil
 	return true
 }

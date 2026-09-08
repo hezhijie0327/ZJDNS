@@ -31,16 +31,17 @@ func NewSecondary(store cache.Store, res Resolver, pending *PendingRequests) *Se
 func (s *Secondary) Lookup(ctx context.Context, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, dnssecOK bool) *resolver.QueryResult {
 	if s.store != nil {
 		if entry, found, isExpired := s.store.Get(qname, qtype, qclass, ecsOpt); found {
-			if !isExpired && entry.Unpack() == nil {
+			ok := !isExpired && entry.Unpack() == nil
+			// The pooled TTL-offset slice is released on every path — the
+			// unpacked RR sections do not reference it.
+			entry.ReleaseOffsets()
+			if ok {
 				return &resolver.QueryResult{
 					Answer: entry.Answer, Authority: entry.Authority, Additional: entry.Additional,
 					Validated: entry.Validated, Rcode: entry.WireRcode(), Authoritative: entry.WireAuthoritative(),
 					Cacheable: true,
 				}
 			}
-			// Every skipped path — expired, or unpack failure — still
-			// returns the pooled TTL-offset slice.
-			entry.ReleaseOffsets()
 		}
 	}
 	query := func() *resolver.QueryResult {

@@ -145,6 +145,14 @@ func (s *Cache) buildEntry(ce *cacheEntry, ts int64, entryTTL int, validated boo
 		}
 	}
 	wire := msgWire[wireStart:]
+	// A DNS message header alone is 12 bytes — a shorter wire is corrupt
+	// (truncated spill write) and must degrade to a miss, never reach the
+	// serve path's wire[3] header reads.
+	if len(wire) < dns.MsgHeaderSize {
+		ReleaseTTLOffsets(offsets)
+		log.Debugf("CACHE: corrupt entry (name=%s type=%d) — wire %d bytes, below the 12-byte header", qname, qtype, len(wire))
+		return nil, false, false
+	}
 
 	// Threshold decompression.
 	var owned []byte
