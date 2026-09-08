@@ -19,6 +19,15 @@ import (
 	"gitee.com/Trisia/gotlcp/dtlcp"
 )
 
+// dtlcpAddrKey is an allocation-free map key for UDP client addresses —
+// fixed-size arrays are comparable, unlike net.UDPAddr's IP slice.  The
+// former src.String() key allocated on every dispatched datagram.  Mirrors
+// shared.addrKey.
+type dtlcpAddrKey struct {
+	ip   [16]byte
+	port uint16
+}
+
 // dtlcpListener implements net.Listener over UDP.  The accept loop reads
 // every datagram from the shared socket and dispatches it to the owning
 // client's queue — one demuxPacketConn per remote address.  This isolates
@@ -29,7 +38,7 @@ type dtlcpListener struct {
 	udpConn *net.UDPConn
 	cfg     *dtlcp.Config
 	mu      sync.Mutex
-	conns   map[string]*shared.DemuxPacketConn
+	conns   map[dtlcpAddrKey]*shared.DemuxPacketConn
 	closed  atomic.Bool
 }
 
@@ -37,8 +46,21 @@ func newDTLCPListener(udpConn *net.UDPConn, cfg *dtlcp.Config) *dtlcpListener {
 	return &dtlcpListener{
 		udpConn: udpConn,
 		cfg:     cfg,
-		conns:   make(map[string]*shared.DemuxPacketConn),
+		conns:   make(map[dtlcpAddrKey]*shared.DemuxPacketConn),
 	}
+}
+
+// newDTLCPAddrKey normalises an IPv4 address into its v4-mapped v6 form so
+// the same peer always produces the same key.
+func newDTLCPAddrKey(a *net.UDPAddr) dtlcpAddrKey {
+	var k dtlcpAddrKey
+	k.port = uint16(a.Port) //nolint:gosec // G115: UDP port always fits uint16
+	if len(a.IP) == 4 {
+		copy(k.ip[12:], a.IP)
+	} else {
+		copy(k.ip[:], a.IP)
+	}
+	return k
 }
 
 func (d *dtlcpListener) Addr() net.Addr {
@@ -125,7 +147,7 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 			continue
 		}
 
-		key := src.String()
+		key := newDTLCPAddrKey(src)
 		l.mu.Lock()
 		dc, ok := l.conns[key]
 		if !ok {
@@ -146,7 +168,7 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 				defer zdnsutil.HandlePanic("DTLCP client connection")
 				s.serveDTLCPClient(l.cfg, dc, src, func() {
 					l.mu.Lock()
-					delete(l.conns, src.String())
+					delete(l.conns, key)
 					l.mu.Unlock()
 				})
 				return nil

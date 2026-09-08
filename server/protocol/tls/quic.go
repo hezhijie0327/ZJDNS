@@ -160,6 +160,15 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 		}
 	}()
 
+	// Per-connection state: ConnectionState() and RemoteAddr are stable
+	// after the handshake — compute once instead of per stream/query.
+	// The former per-stream ConnectionState() calls took the QUIC
+	// connection's internal lock and copied the full TLS state per query.
+	clientIP := zdnsutil.ClientIPFromAddr(conn.RemoteAddr())
+	// Client-name credential: "{name}.{domain}" SNI ("" when absent).
+	clientName := zdnsutil.ClientNameFromSNI(conn.ConnectionState().TLS.ServerName, s.cfg.Domain)
+	used0RTT := conn.ConnectionState().Used0RTT
+
 	streamGroup := &errgroup.Group{}
 	streamGroup.SetLimit(config.DefaultMaxConcurrentStreams)
 
@@ -187,13 +196,13 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 		streamGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("DoQ stream handler")
 			defer func() { _ = stream.Close() }()
-			s.handleDOQStream(stream, conn)
+			s.handleDOQStream(stream, conn, clientIP, clientName, used0RTT)
 			return nil
 		})
 	}
 }
 
-func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
+func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn, clientIP net.IP, clientName string, used0RTT bool) {
 	if stream == nil {
 		return
 	}
@@ -260,7 +269,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 	// 0-RTT; other opcodes must not. For non-replayable transactions the
 	// server must either queue the query until the handshake completes or
 	// reply REFUSED with EDE "Too Early" — a stream reset is neither.
-	if conn.ConnectionState().Used0RTT && req.Opcode != dns.OpcodeQuery && req.Opcode != dns.OpcodeNotify {
+	if used0RTT && req.Opcode != dns.OpcodeQuery && req.Opcode != dns.OpcodeNotify {
 		refused := dnsutil.SetReply(&dns.Msg{}, req)
 		refused.Rcode = dns.RcodeRefused
 		if err := s.respondQUIC(stream, refused); err != nil {
@@ -270,9 +279,6 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn) {
 		return
 	}
 
-	clientIP := zdnsutil.ClientIPFromAddr(conn.RemoteAddr())
-	// Client-name credential: "{name}.{domain}" SNI ("" when absent).
-	clientName := zdnsutil.ClientNameFromSNI(conn.ConnectionState().TLS.ServerName, s.cfg.Domain)
 	// RFC 9250 §4.3.1: abort on client STOP_SENDING / RESET_STREAM.  The
 	// pooled request must be returned before the early exit (R3-L17).
 	select {

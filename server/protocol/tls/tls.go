@@ -205,6 +205,19 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		// to the long idle deadline for the rest of the connection.
 		_ = tlsConn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 
+		// Per-connection state, computed once after the handshake: the
+		// former per-query RemoteAddr type-assert and ConnectionState()
+		// (which takes the handshake mutex and copies the whole state)
+		// cost every query on the connection.
+		var clientIP net.IP
+		if addr := tlsConn.RemoteAddr(); addr != nil {
+			if tcpAddr, ok := addr.(*net.TCPAddr); ok {
+				clientIP = tcpAddr.IP
+			}
+		}
+		// Client-name credential: "{name}.{domain}" SNI ("" when absent).
+		clientName := zdnsutil.ClientNameFromSNI(tlsConn.ConnectionState().ServerName, s.cfg.Domain)
+
 		msgLength := binary.BigEndian.Uint16(lengthBuf)
 		if msgLength == 0 || msgLength > dns.MaxMsgSize {
 			return
@@ -239,15 +252,6 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		// into it and the query worker calls req.Unpack() again during
 		// processing. Instead, ownership transfers to the worker goroutine.
 		isPooled := pooledBuf != nil
-
-		var clientIP net.IP
-		if addr := tlsConn.RemoteAddr(); addr != nil {
-			if tcpAddr, ok := addr.(*net.TCPAddr); ok {
-				clientIP = tcpAddr.IP
-			}
-		}
-		// Client-name credential: "{name}.{domain}" SNI ("" when absent).
-		clientName := zdnsutil.ClientNameFromSNI(tlsConn.ConnectionState().ServerName, s.cfg.Domain)
 
 		select {
 		case workerCap <- struct{}{}:
