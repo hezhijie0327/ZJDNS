@@ -37,11 +37,11 @@ Section 标题栏位格式：`[RFC NNNN: 状态]` `合规标记`
 | Historic | 7 |
 | Internet-Draft | 4 (DNS Stamp, DNSCrypt, DELEG, DNS 0x20) |
 | 国密标准 | 1 (TLCP/DTLCP) |
-| **总计** | **112 RFC 条目 / 101 章节**（含 2065/2537、4033/4034/4035 等合并段；条目按 RFC 号出现次数计（合并段展开；RFC 6840、8499 兼有独立章节与合并段，双列计入）；94 个 RFC 编号章节 + 7 个非 RFC 章节：DELEG / DNS Stamp / DNSCrypt / DNS 0x20 / SOCKS5 / TLCP / 已知偏离） |
+| **总计** | **115 RFC 条目 / 104 章节**（含 2065/2537、4033/4034/4035 等合并段；条目按 RFC 号出现次数计（合并段展开；RFC 6840、8499 兼有独立章节与合并段，双列计入）；97 个 RFC 编号章节 + 7 个非 RFC 章节：DELEG / DNS Stamp / DNSCrypt / DNS 0x20 / SOCKS5 / TLCP / 已知偏离） |
 
 | 合规 | 数量 |
 |------|------|
-| ✅ 合规 | 80 |
+| ✅ 合规 | 83 |
 | ⚠️ 部分合规 | 8 (RFC 5001, 5011/9077, 6761, 6975, 8198, 8998, 9567) |
 | ⚪ 参考 | 24 |
 
@@ -1126,7 +1126,7 @@ Client ⇄ DTLS 记录 [DNS消息] ⇄ Server  (UDP 数据报)
 - **通配符合成**（§5.3，2026-09 补齐）：验证器按 RFC 4035 §5.3.4（owner 标签数 > RRSIG Labels）从验证过的正向应答中收割通配符展开，缓存到 per-apex 通配符表；后续查询被区间证明不存在且 `*.closest-encloser` 命中通配符表时，正向应答（owner 改写至查询名，RRSIG Labels 不变——RFC 4035 §5.3.2）或通配符 NODATA（NSEC bitmap / RFC 5155 §8.7 `H(*.CE)` exact）直接本地合成；NSEC3 按 §8.8 要求 next-closer 覆盖非 Opt-Out
 - **安全门控**：仅递归路径的加密验证结果参与（转发的 AD 启发式不算，§9）；NSEC3 Opt-Out 区间一律不合成（§5.2）；NSEC 按附录 B 判定 NXDOMAIN vs ENT（parent-zone NS-bit 丢弃）；NXDOMAIN 需通配符不存在证明（`*.closest-encloser` 被覆盖）；CD 位查询不合成（附录 A）；RFC 9824 NXNAME 压缩形式（exact-match NSEC 带 TYPE128）合成 NXDOMAIN
 - **TTL**（§5.4）：合成/索引 TTL = min(SOA TTL, MINIMUM, 10800, 配对 RRSIG 剩余有效期)，响应 TTL 随时间扣减
-- **RFC 6840 §4.1 守卫**：NS 位无 SOA 的委派点记录（如 DS 否定查询索引进的 NSEC3）不参与 exact-match NODATA 合成——委派名下的类型由子域声明
+- **RFC 6840 §4.1 守卫**：NS 位无 SOA 的委派点记录不参与除 DS 外的 exact-match NODATA 合成——委派名下的类型由子域声明；DS 是父侧例外：无 DS 位的委派 NSEC/NSEC3 即认证的 no-DS NODATA 证明（RFC 4035 §5.2 / RFC 5155 §8.6，2026-09 补齐，DS 查询同样可合成）
 - **已知限制**：索引仅内存不持久化，重启后随查询重建
 - **配置**：`features.cache.aggressive_nsec`（默认 true）；DNS64 启用时 AAAA 查询跳过合成（保 RFC 6147 §5.1.2 的 A 兜底合成）
 - 回归：`TestSynthesizeNegative_*` / `TestSynthesizeWildcard_*`（`cache/nsec_test.go`）、`TestCacheLookup_SynthesizesNegative` / `TestCacheLookup_SynthesizesWildcardPositive` / `TestCacheLookup_AggressiveNSECGates`（middleware）
@@ -1557,6 +1557,25 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 ---
 
+## RFC 9276 — NSEC3 Preparation and Validation Requirements  `[RFC 9276: Best Current Practice]`  ✅
+
+**NSEC3 参数使用指引（更新 RFC 5155）：权威侧应使用 iterations=0、无 salt、保留 ENT 记录；resolver 侧的验证与激进负缓存要求。**
+
+### 关键要求（resolver 侧）
+
+- §3.1: 激进 NSEC 缓存（与 RFC 8198 一致）减少 authoritative 负载
+- §3.2: 接受 iterations=0 的 NSEC3（不再按 RFC 5155 §10.3 的 iteration 上限拒绝）；拒绝超出上限的参数
+- Opt-Out 区间不证明不存在性（与 RFC 8198 §5.2 一致）
+
+### 我们的实现
+
+- `cache/nsec.go`：iterations ≤ `DefaultMaxNSEC3Iterations` 才可索引/合成；参数变更（re-sign 过渡）隔离到新表 ✓
+- 激进负缓存（RFC 8198 全套：区间合成 + 通配符 + DS 例外）✓
+- Opt-Out 一律不合成 ✓
+- 验证器迭代上限：`dnssec/nsec3.go`（含上限内全部 iterations 接受）✓
+
+---
+
 ## RFC 9460 — Service Binding and Parameter Specification (SVCB and HTTPS)  `[RFC 9460: Proposed Standard]`  ✅
 
 **SVCB（64）/HTTPS（65）RR：服务绑定 + 参数（alpn、port、ech、dohpath…），替代 SRV 的更优方案。**
@@ -1601,6 +1620,47 @@ Client ← STREAM[0]: [2字节长度][DNS响应(ID=0)] ← Server
 
 - §6.4：resolver.arpa 的 A/AAAA 以权威 NODATA 本地应答（records-less zone 规则现已注册并短路，`TestZone_RecordsLessNODATA`，2026-09 修复哨兵死代码）
 - 已实现（`config/ddr.go`）：DoH/DoT 端点经 SVCB 公布；9606 RESINFO 计划在其上延伸
+
+---
+
+## RFC 9471 — DNS Glue Authority  `[RFC 9471: Proposed Standard]`  ✅
+
+**澄清委派 glue 的可信度分级：in-domain glue（NS 名字在受委派区域之下）可信，sibling glue（兄弟区域的 NS 名字）仅为提示，必须独立验证后才能进入缓存。**
+
+### 关键要求
+
+- §5.1: 服务器 MUST 在 referral 中携带全部 in-domain glue（放不下则 TC=1）
+- §5.2: resolver 对 in-domain glue 可直接信任；sibling glue 只是 hint——resolver 必须经完整解析独立确认
+- §6: Sibling glue 风险场景（父区域被入侵、恶意注册商）与缓解（只把 glue 当地址提示，不当权威数据）
+
+### 我们的实现
+
+- 语义上已超出 §5.2 要求（`resolver/recursive_ns.go`）：glue 仅作地址提示参与本轮 fan-out（bailiwick 门 + 家族过滤），不受信数据一律不进入"可信 NS 地址"通道；NS 地址可信缓存由独立解析（`resolveNSAddressesConcurrent`，带 RFC 5452 校验的完整递归）写入，glue-only 记录走 cache.Set 标记的普通缓存并在后台重新解析精化（glue-first + background refinement）
+- bailiwick 门（RFC 1034 §4.3.2）：out-of-bailiwick glue 拒绝；in-bailiwick 无 glue/cache 的循环 NS 名跳过（自引用守卫）
+- 回归：`TestResolveNextNameservers_*`（resolver）
+
+---
+
+## RFC 9520 — Negative Caching of DNS Resolution Failures  `[RFC 9520: Proposed Standard]`  ✅
+
+**解析失败（SERVFAIL、权威全部不可达、DNSSEC 验证失败等）必须负缓存：消除对死名字的重复上游查询，同时防止失败重试风暴放大（更新 RFC 4697 §2.1.1 与 RFC 4035 §4.7）。**
+
+### 关键要求
+
+- §3.2: MUST 实现失败缓存；命中缓存时**不发出任何对应上游查询**；TTL ≥ 1s 且 ≤ 5min（RFC 2308）
+- §3.2: SHOULD 指数/线性退避（持续性失败逐次加长，如 5s 起）；SHOULD 限制失败缓存的内存/处理时间（抗资源耗尽）
+- §3.3: 权威全部无响应的区域 MUST 缓存失败，且同样限制对其父区域（及更浅祖先）的查询
+- §3.4: MUST 缓存 DNSSEC 验证失败（小 TTL；提供的 TTL 不可信）
+- §5: 失败消息不可签名 → 缓存投毒只能造成有界 DoS（5min 上限兜底）
+
+### 我们的实现
+
+- `resolver/failure_cache.go`：`Resolver.Query` 入口短路——LRU（`DefaultResolutionFailureCache`=4096，§5 内存上界）按 canonical (qname, qtype, qclass) 缓存失败；命中即返回 sentinel 错误（不发起任何 walk/上游查询），走既有 buildError → SERVFAIL + EDE 管道（过期时 middleware 的 stale 回退仍生效）
+- TTL：首次 5s（§3.2 示例值），每次过期后重试再失败按 `<<` 指数翻倍，封顶 5min（§3.2 MUST 上限 + RFC 2308）
+- DNSSEC 失败：`QueryResult.DNSSECEDE` 随条目携带（§3.4），命中响应带 RFC 8914 EDE
+- 不缓存：客户端取消/超时（失败未经证实）、CIDR 策略拒绝（policy ≠ 失败）；ECS 查询不参与（读写双向——同名字不同 ECS 的成败可能不同）
+- 父区域限速：委托缓存 + NS 地址 singleflight + in-flight 上限已有（§3.3 的既有防线）；失败缓存补齐 qname 粒度
+- 回归：`TestFailureCache_*`（resolver/failure_cache_test.go——短路、退避封顶、过期重查、策略/取消不缓存、ECS 双向绕过、EDE 携带、LRU 容量）
 
 ---
 
