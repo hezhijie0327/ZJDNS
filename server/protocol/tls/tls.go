@@ -45,7 +45,7 @@ func (s *Server) startDOTServer() error {
 		s.listenerMu.Unlock()
 
 		capturedDot := dotListener
-		s.serverGroup.Go(func() error {
+		s.groups.dot.Go(func() error {
 			defer zdnsutil.HandlePanic("DoT server")
 			s.handleDOTConnections(capturedDot)
 			return nil
@@ -89,7 +89,7 @@ func (s *Server) handleDOTConnections(dotListener net.Listener) {
 		s.dotConns[conn] = struct{}{}
 		s.listenerMu.Unlock()
 
-		s.serverGroup.Go(func() error {
+		s.groups.dot.Go(func() error {
 			defer zdnsutil.HandlePanic("DoT connection handler")
 			defer func() {
 				s.listenerMu.Lock()

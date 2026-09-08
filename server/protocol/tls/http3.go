@@ -77,7 +77,7 @@ func (s *Server) startDOH3Server(port string) error {
 		s.listenerMu.Unlock()
 
 		capturedH3 := listener
-		s.serverGroup.Go(func() error {
+		s.groups.h3.Go(func() error {
 			defer zdnsutil.HandlePanic("DoH3 server")
 			// The accept/admission loop lives in handleHTTP3Connections —
 			// the standalone path previously carried a line-for-line copy
@@ -119,7 +119,7 @@ func (s *Server) handleHTTP3Connections(h3Listener *quic.EarlyListener) {
 			_ = conn.CloseWithError(doq.QUICCodeExcessiveLoad, "connection limit reached")
 			continue
 		}
-		s.serverGroup.Go(func() error {
+		s.groups.h3.Go(func() error {
 			defer zdnsutil.HandlePanic("DoH3 connection handler")
 			defer func() { <-s.quicConnSem }()
 			if err := s.h3Server.ServeQUICConn(conn); err != nil && !errors.Is(err, http.ErrServerClosed) {

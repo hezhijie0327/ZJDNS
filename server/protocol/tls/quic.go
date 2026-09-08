@@ -77,7 +77,7 @@ func (s *Server) startDOQServer() error {
 		s.listenerMu.Unlock()
 
 		capturedDoQ := listener
-		s.serverGroup.Go(func() error {
+		s.groups.quic.Go(func() error {
 			defer zdnsutil.HandlePanic("DoQ server")
 			s.handleDOQConnections(capturedDoQ)
 			return nil
@@ -127,7 +127,7 @@ func (s *Server) handleDOQConnections(doqListener *quic.EarlyListener) {
 			_ = conn.CloseWithError(doq.QUICCodeExcessiveLoad, "connection limit reached")
 			continue
 		}
-		s.serverGroup.Go(func() error {
+		s.groups.quic.Go(func() error {
 			defer zdnsutil.HandlePanic("DoQ connection handler")
 			defer func() { <-s.quicConnSem }()
 			s.handleDOQConnection(conn)

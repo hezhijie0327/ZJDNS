@@ -56,6 +56,16 @@ type Config struct {
 	SkipHTTP3      bool // skip standalone DoH3 listener (shared UDP port with DNSCrypt)
 }
 
+// protocolGroups holds one errgroup per secure-protocol family (DoT, DoQ,
+// DoH3, DoH, DTLS) — see the groups field comment.
+type protocolGroups struct {
+	dot  *errgroup.Group
+	quic *errgroup.Group
+	h3   *errgroup.Group
+	doh  *errgroup.Group
+	dtls *errgroup.Group
+}
+
 // Server manages TLS-based secure DNS protocol listeners and their lifecycle.
 type Server struct {
 	cfg            *Config
@@ -67,8 +77,13 @@ type Server struct {
 	dohHandler     eHTTP.Handler  // shared-port DOH handler (wraps ServeHTTP for eHTTP)
 	ctx            context.Context
 	cancel         context.CancelCauseFunc
-	serverGroup    *errgroup.Group
-	quicConnSem    chan struct{} // admission cap for concurrent QUIC connections (DoQ/DoH3) — half the errgroup limit so a QUIC flood cannot starve the DoT/DTLS/DoH listeners of goroutine slots (M-low)
+	// groups holds one errgroup per secure-protocol family.  They used to
+	// share a single SetLimit(DefaultServerGoroutineLimit) group: 256
+	// long-lived DoT clients exhausted the budget and then blocked the
+	// other protocols' accepts (serverGroup.Go parks when full), so a
+	// connection flood on one transport starved the rest.
+	groups      *protocolGroups
+	quicConnSem chan struct{} // admission cap for concurrent QUIC connections (DoQ/DoH3) — half the errgroup limit so a QUIC flood cannot starve the DoT/DTLS/DoH listeners of goroutine slots (M-low)
 
 	listenerMu    sync.Mutex // protects all listener/conn slice fields below
 	dotListeners  []net.Listener
@@ -198,8 +213,17 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 	// s.ctx (cancelled with an error cause on Shutdown), and errgroup's
 	// first-error cancellation would cancel the whole group on any single
 	// handler error — the per-connection ctxs already handle that.
-	serverGroup, _ := errgroup.WithContext(ctx)
-	serverGroup.SetLimit(config.DefaultServerGoroutineLimit)
+	// The errgroup derived context is deliberately unused: goroutines
+	// derive from s.ctx (cancelled with an error cause on Shutdown), and
+	// errgroup's first-error cancellation would cancel the whole group on
+	// any single handler error — the per-connection ctxs already handle
+	// that.  Zero-value groups only provide the limit and Wait.
+	newGroup := func() *errgroup.Group {
+		g := &errgroup.Group{}
+		g.SetLimit(config.DefaultServerGoroutineLimit)
+		return g
+	}
+	groups := &protocolGroups{dot: newGroup(), quic: newGroup(), h3: newGroup(), doh: newGroup(), dtls: newGroup()}
 
 	s := &Server{
 		cfg:            cfg,
@@ -211,7 +235,7 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 		stdCert:        sCert,
 		ctx:            ctx,
 		cancel:         cancel,
-		serverGroup:    serverGroup,
+		groups:         groups,
 		quicConnSem:    make(chan struct{}, config.DefaultServerGoroutineLimit/2),
 		dotConns:       make(map[net.Conn]struct{}),
 	}
@@ -459,8 +483,12 @@ func (s *Server) Shutdown() error {
 		}
 	}
 
-	if err := s.serverGroup.Wait(); err != nil {
-		log.Errorf("TLS: Server goroutines finished with error: %v", err)
+	for name, g := range map[string]*errgroup.Group{
+		"DoT": s.groups.dot, "DoQ": s.groups.quic, "DoH3": s.groups.h3, "DoH": s.groups.doh, "DTLS": s.groups.dtls,
+	} {
+		if err := g.Wait(); err != nil {
+			log.Errorf("TLS: Server goroutines finished with error: %v (%s)", err, name)
+		}
 	}
 
 	log.Infof("TLS: Secure DNS server shut down")

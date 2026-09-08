@@ -76,7 +76,7 @@ func (s *Server) startDOHServer(port string) error {
 
 		capturedSrv := dohSrv
 		capturedListener := httpsListener
-		s.serverGroup.Go(func() error {
+		s.groups.doh.Go(func() error {
 			defer zdnsutil.HandlePanic("DoH server")
 			if err := capturedSrv.Serve(capturedListener); err != nil && !errors.Is(err, eHTTP.ErrServerClosed) {
 				if s.ctx.Err() != nil {
