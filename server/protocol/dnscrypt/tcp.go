@@ -102,7 +102,8 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 		// (server.go) and then Waits on the previous group. Adding under the
 		// lock guarantees Add either joins the waited group or the fresh
 		// (cancelled) one — never an Add-during-Wait on the swapped-out group.
-		s.mu.Lock()
+		// A READ lock suffices (see udp.go serveUDP).
+		s.mu.RLock()
 		s.wg.Go(func() {
 			defer zdnsutil.HandlePanic("DNSCrypt TCP handler")
 			defer func() { <-s.workerCap }()
@@ -114,7 +115,7 @@ func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 			}()
 			s.handleTCPConnection(ctx, conn)
 		})
-		s.mu.Unlock()
+		s.mu.RUnlock()
 	}
 }
 
@@ -142,7 +143,8 @@ func (s *Server) HandleSharedTCPConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	s.mu.Lock()
+	// READ lock suffices for the Add-during-Wait guarantee (see serveTCP).
+	s.mu.RLock()
 	s.wg.Go(func() {
 		defer zdnsutil.HandlePanic("Shared DNSCrypt TCP handler")
 		defer func() { <-s.workerCap }()
@@ -154,7 +156,7 @@ func (s *Server) HandleSharedTCPConn(ctx context.Context, conn net.Conn) {
 		}()
 		s.handleTCPConnection(ctx, conn)
 	})
-	s.mu.Unlock()
+	s.mu.RUnlock()
 }
 
 // handleTCPConnection processes queries on a TCP connection until the peer

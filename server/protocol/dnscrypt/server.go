@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 	"zjdns/config"
 	"zjdns/dnscert"
@@ -36,9 +37,12 @@ type Server struct {
 	wg             *sync.WaitGroup
 	tcpConns       map[net.Conn]struct{}
 	mu             sync.RWMutex
-	started        bool
-	ctx            context.Context
-	cancel         context.CancelCauseFunc
+	started        atomic.Bool
+	// keySnapshot is the immutable keys+sharedKeyCache view read atomically
+	// by the per-packet hot path (see publishKeys).
+	keySnapshot atomic.Pointer[keySnapshot]
+	ctx         context.Context
+	cancel      context.CancelCauseFunc
 
 	// signingSK is the Ed25519 provider identity key.  It stays fixed across
 	// resolver-key rotations — the sdns:// stamp encodes only this key.
@@ -79,6 +83,39 @@ type Server struct {
 // port is the listener port; providerName is auto-derived as
 // "2.dnscrypt-cert.<ddr.domain>" when empty; store persists the cert
 // windows across restarts (nil disables persistence).
+// keySnapshot is the immutable view of the key windows and shared-key cache
+// published after every rotation.  The per-packet hot path (hasClientMagic,
+// decrypt) reads it atomically instead of taking s.mu.RLock per packet.
+type keySnapshot struct {
+	keys           []keyEntry
+	sharedKeyCache *lrumap.Map[[32]byte, [32]byte]
+}
+
+// isStarted is lock-free: the flag is an atomic.Bool (all transitions still
+// under s.mu, so Shutdown ordering is unchanged).
+func (s *Server) isStarted() bool {
+	return s.started.Load()
+}
+
+// hasClientMagic checks whether b matches any active cert's client magic
+// (checks both classical and PQ certs in every key window).  Lock-free via
+// the immutable key snapshot — it runs on the per-packet hot path.
+func (s *Server) hasClientMagic(b []byte) bool {
+	ks := s.keySnapshot.Load()
+	if ks == nil {
+		return false
+	}
+	for _, k := range ks.keys {
+		if bytes.Equal(b, k.pair.Classical.ClientMagic[:]) {
+			return true
+		}
+		if bytes.Equal(b, k.pair.PQ.ClientMagic[:]) {
+			return true
+		}
+	}
+	return false
+}
+
 func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, store StateStore) (*Server, error) {
 	// ── Signing identity ───────────────────────────────────────────────────
 	// Explicit keys are required — like TLS requires a certificate.  The
@@ -185,6 +222,7 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, 
 		replayCache:    lrumap.New[string, replayEntry](config.DefaultDNSCryptReplayCacheSize),
 		store:          store,
 	}
+	s.publishKeys()
 
 	// Derive ticket key from the Ed25519 signing key for PQ resumption.
 	// Same derivation as the reference implementation (encrypted-dns-server).
@@ -221,7 +259,7 @@ func (s *Server) SetHandler(h edns.DNSHandler) {
 // before any packets are routed.
 func (s *Server) StartBackground() {
 	s.mu.Lock()
-	s.started = true
+	s.started.Store(true)
 	s.mu.Unlock()
 	go s.renewalLoop()
 }
@@ -243,12 +281,12 @@ func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.started {
+	if s.started.Load() {
 		return dnscryptcrypto.ErrServerAlreadyStarted
 	}
 
 	s.handler = dnsHandler
-	s.started = true
+	s.started.Store(true)
 
 	udpAddrs, err := zdnsutil.ResolveBindAddrs("udp", s.port)
 	if err != nil {
@@ -317,11 +355,11 @@ func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 // because the context is already cancelled.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
-	if !s.started {
+	if !s.started.Load() {
 		s.mu.Unlock()
 		return dnscryptcrypto.ErrServerNotStarted
 	}
-	s.started = false
+	s.started.Store(false)
 
 	close(s.rotateCh)
 
@@ -359,26 +397,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) isStarted() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.started
-}
-
-// hasClientMagic checks whether b matches any active cert's client magic
-// (checks both classical and PQ certs in every key window).
-func (s *Server) hasClientMagic(b []byte) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, k := range s.keys {
-		if bytes.Equal(b, k.pair.Classical.ClientMagic[:]) {
-			return true
-		}
-		if bytes.Equal(b, k.pair.PQ.ClientMagic[:]) {
-			return true
-		}
-	}
-	return false
+// publishKeys stores the current keys+sharedKeyCache view.  Must be called
+// under s.mu (write) after any mutation of s.keys or s.sharedKeyCache.
+func (s *Server) publishKeys() {
+	s.keySnapshot.Store(&keySnapshot{keys: s.keys, sharedKeyCache: s.sharedKeyCache})
 }
 
 func (s *Server) serveDNS(ctx context.Context, rw responseWriter, m *dns.Msg, protocol string) error {

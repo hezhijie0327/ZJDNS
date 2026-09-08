@@ -9,6 +9,7 @@ import (
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
+	"zjdns/internal/lrumap"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -186,12 +187,15 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.Encrypte
 		return s.decryptPQResumed(b)
 	}
 
-	// Snapshot keys and shared key cache under read lock — rotateKeys()
-	// writes both under write lock.
-	s.mu.RLock()
-	keysSnapshot := s.keys
-	cacheSnapshot := s.sharedKeyCache
-	s.mu.RUnlock()
+	var keysSnapshot []keyEntry
+	var cacheSnapshot *lrumap.Map[[32]byte, [32]byte]
+	// Lock-free snapshot — publishKeys() stores a fresh immutable view under
+	// the write lock at every rotation (the former per-packet RLock was a
+	// global serialization point on the hot path).
+	if ks := s.keySnapshot.Load(); ks != nil {
+		keysSnapshot = ks.keys
+		cacheSnapshot = ks.sharedKeyCache
+	}
 
 	// Try each key pair newest-first: PQ first, then classical.
 	for _, k := range keysSnapshot {
@@ -298,10 +302,11 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *dnscryptcrypto
 
 	peHash := dnscryptcrypto.ProfileExtensionHash()
 
-	// Snapshot keys under read lock — rotateKeys() writes under write lock.
-	s.mu.RLock()
-	keysSnapshot := s.keys
-	s.mu.RUnlock()
+	// Lock-free snapshot — see decrypt.
+	var keysSnapshot []keyEntry
+	if ks := s.keySnapshot.Load(); ks != nil {
+		keysSnapshot = ks.keys
+	}
 
 	var matchedPair *dnscryptcrypto.CertPair
 	for _, k := range keysSnapshot {

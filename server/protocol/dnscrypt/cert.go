@@ -70,6 +70,7 @@ func (s *Server) ResetKeys() error {
 	// it is not rotated alongside cert keys.
 	serial := entries[0].pair.Classical.Serial
 	s.keys = entries
+	s.publishKeys()
 	s.mu.Unlock()
 
 	if err := s.Save(); err != nil {
@@ -140,6 +141,7 @@ func (s *Server) purgeExpiredKeys() {
 	removed := len(s.keys) - n
 	if removed > 0 {
 		s.keys = s.keys[:n]
+		s.publishKeys()
 		log.Debugf("DNSCRYPT: purged %d expired key window(s), active=%d", removed, n)
 	}
 }
@@ -200,6 +202,7 @@ func (s *Server) updateKeys() {
 		// startup); it is not rotated alongside cert keys.
 	}
 	active := len(s.keys)
+	s.publishKeys()
 	s.mu.Unlock()
 
 	// Persist the new window set outside the lock: Save() takes RLock
