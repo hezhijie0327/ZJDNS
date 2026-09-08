@@ -1045,6 +1045,31 @@ Client ⇄ [2字节长度][DNS消息] ⇄ Server  (TLS 加密通道内)
 
 ---
 
+## RFC 8020 — NXDOMAIN Cut  `[RFC 8020: Proposed Standard]`  ✅
+
+**缓存的 NXDOMAIN 否定整个子树:后续查询命中已否认名字的后代时直接回 NXDOMAIN,不再发上游查询。**
+
+### 关键要求
+
+- §2:收到 NXDOMAIN 后缓存之(按 RFC 2308 负 TTL);其后该名字**子树内**的查询 SHOULD 直接回 NXDOMAIN("NXDOMAIN cut")
+- 例外:切割点之下的缓存数据可继续服务(精确命中优先)
+- RFC 6604:CNAME/DNAME 链的 NXDOMAIN 属于**链尾目标**——链头名字(存在)不得切割其子树
+- 附录 A:SOA owner 无法定位切割点 → 实现需精确名字集合
+- §5:对 ENT 错误返回 NXDOMAIN 的坏权威明确不支持;§7:未签名区域可被投毒放大切割面(既有风险,防御层兜底)
+
+### 我们的实现
+
+- `cache/nxdomain.go`:`Set()` 记录纯负缓存名(rcode=3、无 CNAME 链、IN 类、可缓存)到
+  lrumap 名字索引(`DefaultMaxNXDOMAINEntries`,含负 TTL 过期与 SOA 克隆);`NegativeAncestor`
+  零分配向上走标签探测最近祖先切割
+- `middleware/cache_lookup.go`:miss 路径在 RFC 8198 合成失败后探测切割,命中即合成
+  NXDOMAIN(authority = 祖先 SOA,剩余 TTL)并写穿普通负缓存(子域自动级联进索引)
+- **无条件应用**:独立于 `aggressive_nsec` 开关与 CD 位(rcode 语义,无 DNSSEC 断言;
+  RFC 6147 对 NXDOMAIN 本就不做 DNS64 合成)
+- 回归:`TestNegativeAncestor_*`(cache)、`TestCacheLookup_NXDOMAINCut*`(middleware)
+
+---
+
 ## RFC 8080 — EdDSA for DNSSEC  `[RFC 8080: Proposed Standard]`  ✅
 
 **算法 15（ED25519）/16（ED448）：EdDSA 签名，DNSSEC 的最优现代算法。**

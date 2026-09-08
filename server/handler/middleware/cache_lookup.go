@@ -100,17 +100,27 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 // happen in an aggressive negative caching algorithm, resolvers MUST fall back
 // to resolve the query as usual."
 func (m *CacheLookup) synthesizeNegative(ctx context.Context, qctx *handler.QueryContext, next handler.QueryHandler) error {
-	if m.aggressiveNSEC &&
-		!qctx.Req.CheckingDisabled && // RFC 8198 App. A: CD-set queries resolve normally
-		qctx.Qclass == dns.ClassINET &&
-		(!m.dns64 || qctx.Qtype != dns.TypeAAAA) {
-		if rcode, authority, ok := m.store.SynthesizeNegative(qctx.Qname, qctx.Qtype, qctx.Qclass); ok {
-			return m.serveSynthesized(ctx, qctx, nil, authority, rcode, next)
+	// RFC 8020 NXDOMAIN cut — independent of aggressive_nsec: a cached
+	// NXDOMAIN denies its whole subtree (rcode semantics, no DNSSEC angle;
+	// DNS64 never synthesizes for NXDOMAIN per RFC 6147 §5.1.2).  Only the
+	// DNSSEC-based RFC 8198 syntheses honor the CD-bit rule (App. A).
+	if qctx.Qclass == dns.ClassINET {
+		if !qctx.Req.CheckingDisabled && (!m.dns64 || qctx.Qtype != dns.TypeAAAA) && m.aggressiveNSEC {
+			if rcode, authority, ok := m.store.SynthesizeNegative(qctx.Qname, qctx.Qtype, qctx.Qclass); ok {
+				return m.serveSynthesized(ctx, qctx, nil, authority, rcode, next)
+			}
+			if answer, authority, ok := m.store.SynthesizeWildcard(qctx.Qname, qctx.Qtype, qctx.Qclass); ok {
+				// A synthesized wildcard answer is a validated positive — no
+				// rcode override; AD follows the serve-path gates (RFC 6840 §5.8).
+				return m.serveSynthesized(ctx, qctx, answer, authority, dns.RcodeSuccess, next)
+			}
 		}
-		if answer, authority, ok := m.store.SynthesizeWildcard(qctx.Qname, qctx.Qtype, qctx.Qclass); ok {
-			// A synthesized wildcard answer is a validated positive — no
-			// rcode override; AD follows the serve-path gates (RFC 6840 §5.8).
-			return m.serveSynthesized(ctx, qctx, answer, authority, dns.RcodeSuccess, next)
+		if soa, ttl, ok := m.store.NegativeAncestor(qctx.Qname); ok {
+			soa.Header().TTL = uint32(ttl) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+			if log.IsDebug() {
+				log.Debugf("CACHE: RFC 8020 NXDOMAIN cut for %s (denied ancestor cached)", qctx.Qname)
+			}
+			return m.serveSynthesized(ctx, qctx, nil, []dns.RR{soa}, dns.RcodeNameError, next)
 		}
 	}
 	return next.ServeDNS(ctx, qctx)

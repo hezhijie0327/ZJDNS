@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"net/netip"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"zjdns/config"
+	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
@@ -116,5 +118,84 @@ func BenchmarkStoreSetWithSpill(b *testing.B) {
 			Addr: netip.AddrFrom4([4]byte{192, 0, 2, byte(i % 256)}),
 		}
 		c.Set(name, dns.TypeA, dns.ClassINET, nil, []dns.RR{a}, nil, nil, false, 0)
+	}
+}
+
+// BenchmarkSynthesizeNegative_NSECHit measures the RFC 8198 aggressive lookup
+// on the miss path: zone pick (map iteration) + canonical binary search +
+// Appendix B + wildcard-denial scan over a populated table.
+func BenchmarkSynthesizeNegative_NSECHit(b *testing.B) {
+	s := New(config.LimitSettings{}, config.LimitSettings{}, "", "")
+	soa := &dns.SOA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600}, Minttl: 900}
+	wild := &dns.NSEC{
+		Hdr:        dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 86400},
+		NextDomain: "albatross.example.com.", TypeBitMap: []uint16{dns.TypeSOA, dns.TypeNS},
+	}
+	cover := &dns.NSEC{
+		Hdr:        dns.Header{Name: "albatross.example.com.", Class: dns.ClassINET, TTL: 86400},
+		NextDomain: "elephant.example.com.", TypeBitMap: []uint16{dns.TypeA},
+	}
+	s.IndexNegative("cat.example.com.", dns.ClassINET, []dns.RR{wild, cover}, []dns.RR{soa, wild, cover})
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, _, ok := s.SynthesizeNegative("dog.example.com.", dns.TypeA, dns.ClassINET); !ok {
+			b.Fatal("synthesis missed")
+		}
+	}
+}
+
+// BenchmarkNegativeAncestor measures the RFC 8020 probe: the ancestor walk is
+// on EVERY cache miss, so it must stay allocation-free.
+func BenchmarkNegativeAncestor_Miss(b *testing.B) {
+	s := New(config.LimitSettings{}, config.LimitSettings{}, "", "")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, _, ok := s.NegativeAncestor("deep.sub.example.com."); ok {
+			b.Fatal("unexpected cut")
+		}
+	}
+}
+
+func BenchmarkNegativeAncestor_Hit(b *testing.B) {
+	s := New(config.LimitSettings{}, config.LimitSettings{}, "", "")
+	soa := &dns.SOA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600}, Minttl: 900}
+	s.Set("foo.example.com.", dns.TypeA, dns.ClassINET, nil, nil, []dns.RR{soa}, nil, false, dns.RcodeNameError)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, _, ok := s.NegativeAncestor("x.foo.example.com."); !ok {
+			b.Fatal("cut missed")
+		}
+	}
+}
+
+// BenchmarkNSECZonePick512 measures the worst-case zone pick: 512 zone
+// tables iterated per miss-path synthesis attempt.
+func BenchmarkNSECZonePick512(b *testing.B) {
+	s := New(config.LimitSettings{}, config.LimitSettings{}, "", "")
+	soa := &dns.SOA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600}, Minttl: 900}
+	wild := &dns.NSEC{
+		Hdr:        dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 86400},
+		NextDomain: "albatross.example.com.", TypeBitMap: []uint16{dns.TypeSOA, dns.TypeNS},
+	}
+	cover := &dns.NSEC{
+		Hdr:        dns.Header{Name: "albatross.example.com.", Class: dns.ClassINET, TTL: 86400},
+		NextDomain: "elephant.example.com.", TypeBitMap: []uint16{dns.TypeA},
+	}
+	s.IndexNegative("cat.example.com.", dns.ClassINET, []dns.RR{wild, cover}, []dns.RR{soa, wild, cover})
+	for i := range 511 {
+		s.insertRanges(nsecZoneKey{apex: zdnsutil.Canonical("z" + strconv.Itoa(i) + ".example."), class: dns.ClassINET},
+			[]*nsecRange{{owner: "a." + zdnsutil.Canonical("z"+strconv.Itoa(i)+".example."), next: "z." + zdnsutil.Canonical("z"+strconv.Itoa(i)+".example."), ts: 1, ttl: 3600}},
+			nil, nsec3Params{}, 1)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, _, ok := s.SynthesizeNegative("dog.example.com.", dns.TypeA, dns.ClassINET); !ok {
+			b.Fatal("synthesis missed")
+		}
 	}
 }

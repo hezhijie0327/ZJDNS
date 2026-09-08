@@ -67,6 +67,16 @@ type Cache struct {
 	// interval tables (RFC 8198 §5.3 cache-deduced wildcard expansions).
 	nsecWild map[wildcardZoneKey]*wildcardTable
 
+	// nsecTLD indexes nsecZones by the apex's rightmost two labels so the
+	// miss-path zone pick never scans every table.  Rebuilt wholesale under
+	// nsecMu.Lock on table mutations; read lock-free (the map and the zones
+	// are copy-on-write immutable).
+	nsecTLD atomic.Pointer[map[string][]*nsecZone]
+
+	// nxNames indexes cached NXDOMAIN names for the RFC 8020 cut: a denied
+	// name denies its whole subtree (nxdomain.go).
+	nxNames *lrumap.Map[string, nxEntry]
+
 	closeOnce sync.Once
 }
 
@@ -120,6 +130,7 @@ func New(entriesLimit, latencyLimit config.LimitSettings, spillPath, latencySpil
 		latencies:  lrumap.NewSharded[string, latEntry](latencyMax),
 		latencyMax: latencyMax,
 	}
+	c.initNXDOMAINNames()
 	c.loadSpill(spillPath, entriesLimit.Disk, maxEntries)
 	c.loadLatencySpill(latencySpillPath, latencyLimit.Disk, latencyMax)
 	return c

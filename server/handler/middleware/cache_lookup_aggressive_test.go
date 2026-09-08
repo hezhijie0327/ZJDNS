@@ -185,3 +185,70 @@ func TestCacheLookup_SynthesizesWildcardPositive(t *testing.T) {
 }
 
 func netipMustParse(s string) netip.Addr { return netip.MustParseAddr(s) }
+
+// RFC 8020 NXDOMAIN cut: a cached NXDOMAIN for an ancestor answers the whole
+// subtree without resolution — independent of the aggressive_nsec switch and
+// of the CD bit (rcode semantics, no DNSSEC angle; RFC 8020 §2/§3).
+func TestCacheLookup_NXDOMAINCut(t *testing.T) {
+	store := testStore(t)
+	defer func() { _ = store.Close() }()
+
+	soa := &dns.SOA{
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600},
+		Ns:  "ns1.example.com.", Mbox: "hostmaster.example.com.", Serial: 1, Minttl: 900,
+	}
+	store.Set("nothere.example.com.", dns.TypeA, dns.ClassINET, nil, nil, []dns.RR{soa}, nil, false, dns.RcodeNameError)
+
+	req := testQuery(t)
+	req.Question[0].Header().Name = "deep.nothere.example.com."
+	qctx, nextRan, err := runCacheLookup(t, store, false, false, req, "deep.nothere.example.com.", dns.TypeA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nextRan {
+		t.Fatal("next chain invoked despite the RFC 8020 cut")
+	}
+	if qctx.Res == nil || qctx.Res.Rcode != dns.RcodeNameError {
+		t.Fatalf("served rcode = %v, want NXDOMAIN", qctx.Res)
+	}
+	if qctx.Result != "hit" {
+		t.Fatalf("Result = %q, want hit", qctx.Result)
+	}
+
+	// CD-bit queries get the cut too (it is not a DNSSEC assertion).
+	req = testQuery(t)
+	req.Question[0].Header().Name = "deep2.nothere.example.com."
+	req.CheckingDisabled = true
+	if qctx, nextRan, err := runCacheLookup(t, store, false, false, req, "deep2.nothere.example.com.", dns.TypeA); err != nil || nextRan {
+		t.Fatalf("CD bit: nextRan=%v err=%v, want the cut", nextRan, err)
+	} else if qctx.Res == nil || qctx.Res.Rcode != dns.RcodeNameError {
+		t.Fatalf("CD bit: rcode = %v, want NXDOMAIN", qctx.Res)
+	}
+
+	// The cut is also written through the plain cache: an exact repeat is a
+	// plain negative-cache hit with no synthesis at all.
+	if entry, found, expired := store.Get("deep.nothere.example.com.", dns.TypeA, dns.ClassINET, nil); !found || expired {
+		t.Fatalf("cut NXDOMAIN not persisted: found=%v expired=%v", found, expired)
+	} else {
+		entry.ReleaseOffsets()
+	}
+}
+
+// Siblings of the denied name are not cut (RFC 8020 §2 first-query example:
+// bar.foo.example NXDOMAIN says nothing about baz.foo.example).
+func TestCacheLookup_NXDOMAINCut_SiblingResolves(t *testing.T) {
+	store := testStore(t)
+	defer func() { _ = store.Close() }()
+
+	soa := &dns.SOA{
+		Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 3600},
+		Ns:  "ns1.example.com.", Mbox: "hostmaster.example.com.", Serial: 1, Minttl: 900,
+	}
+	store.Set("bar.foo.example.com.", dns.TypeA, dns.ClassINET, nil, nil, []dns.RR{soa}, nil, false, dns.RcodeNameError)
+
+	req := testQuery(t)
+	req.Question[0].Header().Name = "baz.foo.example.com."
+	if _, nextRan, err := runCacheLookup(t, store, false, false, req, "baz.foo.example.com.", dns.TypeA); err != nil || !nextRan {
+		t.Fatalf("sibling: nextRan=%v err=%v, want normal resolution", nextRan, err)
+	}
+}

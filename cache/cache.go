@@ -25,6 +25,10 @@ type StoreReader interface {
 	// name.  Returns the rcode plus authority records (SOA + proof) for a
 	// synthesizable denial; ok=false means "not covered — resolve normally".
 	SynthesizeNegative(qname string, qtype, qclass uint16) (rcode uint16, authority []dns.RR, ok bool)
+	// NegativeAncestor probes the RFC 8020 NXDOMAIN cut: returns the SOA and
+	// remaining TTL of the closest cached NXDOMAIN above qname (ok=false →
+	// no cut, resolve normally).
+	NegativeAncestor(qname string) (soa dns.RR, ttl int, ok bool)
 	// SynthesizeWildcard answers from the RFC 8198 §5.3 cache-deduced
 	// wildcard: the cached ranges prove qname nonexistent and a previously
 	// seen wildcard expansion (or its NODATA denial) covers it.  Returns the

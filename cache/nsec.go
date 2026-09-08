@@ -322,18 +322,22 @@ func (s *Cache) synthesizeWildcardNSEC3(qclass uint16, zone *nsecZone, qname str
 // qname (nil when none does).  Zones are copy-on-write immutable — safe to
 // use after the read lock is released.
 func (s *Cache) nsecZoneFor(qname string, qclass uint16) *nsecZone {
-	s.nsecMu.RLock()
-	defer s.nsecMu.RUnlock()
-	var zone *nsecZone
-	for key, z := range s.nsecZones {
-		if key.class != qclass || !dnsutil.IsBelow(key.apex, qname) {
-			continue
+	if idx := s.nsecTLD.Load(); idx != nil {
+		// Lock-free fast path: the index map and every zone table are
+		// copy-on-write immutable.
+		var zone *nsecZone
+		for _, z := range (*idx)[nsecTLDKey(qname)] {
+			if z.key.class != qclass || !dnsutil.IsBelow(z.key.apex, qname) {
+				continue
+			}
+			if zone == nil || len(z.key.apex) > len(zone.key.apex) {
+				zone = z
+			}
 		}
-		if zone == nil || len(key.apex) > len(zone.key.apex) {
-			zone = z
-		}
+		return zone
 	}
-	return zone
+	// Index not built yet (no negative ever indexed) — nothing can match.
+	return nil
 }
 
 // wildcardEntryFor returns the cached expansion for one wildcard name and
@@ -584,6 +588,30 @@ func (s *Cache) insertRanges(key nsecZoneKey, nsecRanges, nsec3Ranges []*nsecRan
 		k.nsec3 = true
 		s.nsecZones[k] = upsertNSECZone(s.nsecZones[k], k, params, nsec3Ranges, now, true)
 	}
+	s.rebuildNSECIndexLocked()
+}
+
+// rebuildNSECIndexLocked regenerates the TLD index for nsecZoneFor — called
+// with nsecMu held after any zone-table mutation (inserts are rare relative
+// to reads, so a wholesale rebuild is the cheap side of the trade).
+func (s *Cache) rebuildNSECIndexLocked() {
+	idx := make(map[string][]*nsecZone, len(s.nsecZones))
+	for _, z := range s.nsecZones {
+		k := nsecTLDKey(z.key.apex)
+		idx[k] = append(idx[k], z)
+	}
+	s.nsecTLD.Store(&idx)
+}
+
+// nsecTLDKey returns the rightmost two labels of a canonical name — the
+// narrowest suffix every zone containing that name must share.
+func nsecTLDKey(name string) string {
+	i := strings.LastIndexByte(name, '.')
+	if i <= 0 {
+		return name
+	}
+	j := strings.LastIndexByte(name[:i], '.')
+	return name[j+1:]
 }
 
 // upsertNSECZone merges newRanges into the zone's interval table (nil builds
@@ -652,6 +680,7 @@ func (s *Cache) evictNSECZoneLocked(now int64) {
 		}
 	}
 	delete(s.nsecZones, oldest)
+	s.rebuildNSECIndexLocked()
 }
 
 // ── NSEC synthesis (RFC 8198 §5.1, RFC 4035 §5.4, RFC 8198 App. B) ──────────

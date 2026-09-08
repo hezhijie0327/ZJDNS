@@ -62,6 +62,10 @@ const (
 	// DefaultAggressiveNSECRangePerZone bounds the indexed intervals per zone
 	// table (oldest-canonical trim on overflow).
 	DefaultAggressiveNSECRangePerZone = 1024
+
+	// DefaultMaxNXDOMAINEntries bounds the RFC 8020 NXDOMAIN-cut name index
+	// (denied names whose subtree is answered NXDOMAIN without resolution).
+	DefaultMaxNXDOMAINEntries = 4096
 )
 
 // =============================================================================

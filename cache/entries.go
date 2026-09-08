@@ -269,6 +269,13 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 	key.setECS(ecs)
 	qname = dnsutil.Canonical(qname)
 
+	// RFC 8020: a cacheable NXDOMAIN cuts the name's whole subtree.  Pure
+	// negatives only — a CNAME chain's NXDOMAIN belongs to the chain's final
+	// target (RFC 6604), so the original qname (which exists) must not cut.
+	if rcode == dns.RcodeNameError && len(answer) == 0 && qclass == dns.ClassINET && s.nxNames != nil {
+		s.indexNXDOMAIN(qname, entryTTL, authority, now)
+	}
+
 	// Strip EDNS OPT pseudo-record from additional before caching
 	// (padding and other EDNS options have no semantic value and waste
 	// storage space, up to 468 bytes per encrypted response). The

@@ -461,6 +461,11 @@ dig @127.0.0.1 -p 10533 big.test A +bufsize=4096           # TCP retry, full ans
 
 # NXDOMAIN propagation: miss and cache-hit must both report NXDOMAIN.
 dig @127.0.0.1 -p 10533 nonexistent-xyz12345.com A +short  # NXDOMAIN (repeat → hit)
+
+# RFC 8020 NXDOMAIN cut: after a cached NXDOMAIN, any deeper name answers
+# instantly from the cut — no upstream query (recursive mode + log_level
+# debug:CACHE shows "CACHE: RFC 8020 NXDOMAIN cut").
+dig @127.0.0.1 -p 10533 deep.sub.nonexistent-xyz12345.com A +noall +comments  # NXDOMAIN, 0ms
 ```
 
 ### RFC 8198 Aggressive NSEC Caching (recursive mode)
