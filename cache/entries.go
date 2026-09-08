@@ -226,6 +226,11 @@ func (s *Cache) buildEntry(ce *cacheEntry, ts int64, entryTTL int, validated boo
 		gen := s.latencyGen.Load()
 		if ce != nil {
 			if blob := ce.sorted.Load(); blob != nil && blob.version == gen {
+				// The freshly materialized wire/offsets pair is superseded by
+				// the sorted copy — return both to their pools instead of
+				// abandoning them to the GC on every fast-path hit.
+				pool.ReleaseWire(owned)
+				ReleaseTTLOffsets(offsets)
 				fastWire := pool.AcquireWire(len(blob.wire))
 				copy(fastWire, blob.wire)
 				fast := &Entry{

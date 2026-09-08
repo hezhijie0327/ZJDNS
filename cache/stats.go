@@ -1,10 +1,12 @@
 package cache
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"zjdns/config"
 	"zjdns/internal/log"
+	"zjdns/internal/spillfile"
 	"zjdns/internal/stats"
 	"zjdns/internal/ttl"
 )
@@ -38,23 +40,31 @@ func (s *Cache) FlushDB(target string) (int64, error) {
 		}
 	case "cache":
 		// Detach the evict callback for the wipe: Clear() fires OnEvict per
-		// entry, which would enqueue one spill write each (a syscall under
-		// the entries mutex) only for the file below to be truncated right
-		// after — and an async queued write could even land after the
-		// truncate, resurrecting wiped entries (2026-09 D5).
+		// entry, which would enqueue one spill write each only for the file
+		// below to be truncated right after.
 		s.entries.SetOnEvict(nil)
 		s.entries.Clear()
 		if s.spill != nil {
+			// Drain the async writer BEFORE truncating: writes enqueued
+			// before the detach must land before the Clear, not resurrect
+			// wiped entries after it.  Bounded — a stalled disk must not
+			// hang the admin endpoint.
+			if s.spillW != nil {
+				drainCtx, cancel := context.WithTimeout(context.Background(), config.DefaultBackgroundTimeout)
+				s.spillW.Close(drainCtx)
+				cancel()
+			}
 			if err := s.spill.Clear(); err != nil {
 				log.Warnf("CACHE: spill clear failed: %v", err)
 			}
-		}
-		if s.spillW != nil {
-			s.entries.SetOnEvict(func(key cacheKey, ce *cacheEntry) {
-				if ce.ts > 0 && ttl.CanServeExpired(ce.ts, ce.ttl, config.DefaultStaleMaxAge) {
-					s.spillW.Enqueue(key.encode(), ce.ts, ce.ttl, ce.validated, ce.msgWire)
-				}
-			})
+			if s.spillW != nil {
+				s.spillW = spillfile.NewAsyncWriter(s.spill)
+				s.entries.SetOnEvict(func(key cacheKey, ce *cacheEntry) {
+					if ce.ts > 0 && ttl.CanServeExpired(ce.ts, ce.ttl, config.DefaultStaleMaxAge) {
+						s.spillW.Enqueue(key.encode(), ce.ts, ce.ttl, ce.validated, ce.msgWire)
+					}
+				})
+			}
 		}
 	case "latency":
 		// Clear in place (lrumap is internally locked) — replacing the map
@@ -65,16 +75,24 @@ func (s *Cache) FlushDB(target string) (int64, error) {
 		s.latencies.Clear()
 		s.hasLatencyData.Store(false)
 		if s.spillLat != nil {
+			// Drain before truncating — same resurrect window as the cache
+			// tier above.
+			if s.spillLatW != nil {
+				drainCtx, cancel := context.WithTimeout(context.Background(), config.DefaultBackgroundTimeout)
+				s.spillLatW.Close(drainCtx)
+				cancel()
+			}
 			if err := s.spillLat.Clear(); err != nil {
 				log.Warnf("CACHE: latency spill clear failed: %v", err)
 			}
-		}
-		if s.spillLatW != nil {
-			s.latencies.SetOnEvict(func(key string, e latEntry) {
-				if e.lastProbe > 0 {
-					s.spillLatW.Enqueue(key, e.lastProbe, 0, false, marshalLatency(e))
-				}
-			})
+			if s.spillLatW != nil {
+				s.spillLatW = spillfile.NewAsyncWriter(s.spillLat)
+				s.latencies.SetOnEvict(func(key string, e latEntry) {
+					if e.lastProbe > 0 {
+						s.spillLatW.Enqueue(key, e.lastProbe, 0, false, marshalLatency(e))
+					}
+				})
+			}
 		}
 	case "delegation", "zone":
 		// Not owned by the cache store — no-op (kept for interface parity).

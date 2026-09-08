@@ -282,8 +282,16 @@ func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOp
 	}
 	servers := r.upstream.list()
 	qr := r.queryUpstream(ctx, question, ecs, servers)
-	if ecs == nil && qr.Err != nil {
-		r.recordFailure(question, &qr)
+	if ecs == nil {
+		if qr.Err != nil {
+			r.recordFailure(question, &qr)
+		} else {
+			// A success must drop any cached failure — otherwise the backoff
+			// step of an intermittently-failing name ratchets toward the
+			// 5-minute cap over its lifetime (RFC 9520 §3.2 tracks CURRENT,
+			// not lifetime, failures).
+			r.resetFailure(question)
+		}
 	}
 	// Upstreams echo the case of the question they received into record
 	// owners and rdata names — with CapsGuard that is our 0x20-randomized

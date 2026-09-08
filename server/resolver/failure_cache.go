@@ -88,6 +88,19 @@ func (r *Resolver) lookupCachedFailure(question Question) *QueryResult {
 	}
 }
 
+// resetFailure drops a cached failure after a successful resolution so the
+// next failure of the same question starts the backoff from step 0 again.
+func (r *Resolver) resetFailure(question Question) {
+	if r.failures == nil {
+		return
+	}
+	r.failures.Delete(failureKey{
+		qname:  dnsutil.Canonical(dnsutil.Fqdn(question.Name)),
+		qtype:  question.Qtype,
+		qclass: question.Qclass,
+	})
+}
+
 // recordFailure stores a resolution failure with exponential TTL growth:
 // 5s on the first failure, doubled per repeated failure of the same
 // question, capped at DefaultResolutionFailureMaxTTL (RFC 9520 §3.2).

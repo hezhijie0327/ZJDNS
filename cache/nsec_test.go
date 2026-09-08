@@ -42,9 +42,34 @@ func nsecTestNSEC(owner, next string, bitmap ...uint16) *dns.NSEC {
 }
 
 // indexProof feeds proof + authority through IndexNegative the way
-// StoreIfCacheable does after a validated negative resolution.
+// StoreIfCacheable does after a validated negative resolution.  Each proof
+// NSEC/NSEC3 gets an RRSIG in the authority when the fixture omits one —
+// the real pipeline only indexes cryptographically verified proofs, whose
+// signatures are always paired.
 func indexProof(t *testing.T, s *Cache, qname string, proof, authority []dns.RR) {
 	t.Helper()
+	for _, rr := range proof {
+		var covered uint16
+		switch rr.(type) {
+		case *dns.NSEC:
+			covered = dns.TypeNSEC
+		case *dns.NSEC3:
+			covered = dns.TypeNSEC3
+		default:
+			continue
+		}
+		paired := false
+		for _, cand := range authority {
+			if sig, ok := cand.(*dns.RRSIG); ok && sig.TypeCovered == covered &&
+				dns.EqualName(sig.Header().Name, rr.Header().Name) {
+				paired = true
+				break
+			}
+		}
+		if !paired {
+			authority = append(authority, nsecTestRRSIG(rr.Header().Name, covered, 0))
+		}
+	}
 	s.IndexNegative(qname, dns.ClassINET, proof, authority)
 }
 
@@ -460,7 +485,7 @@ func TestSynthesizeWildcard_NSEC_NODATA(t *testing.T) {
 	soa := nsecTestSOA("example.org.", 3600, 900)
 	wildNSEC := nsecTestNSEC("*.example.org.", "avocado.example.org.", dns.TypeA, dns.TypeRRSIG)
 	cover := nsecTestNSEC("avocado.example.org.", "zucchini.example.org.", dns.TypeA, dns.TypeRRSIG)
-	s.IndexNegative("leek.example.org.", dns.ClassINET, []dns.RR{wildNSEC, cover},
+	indexProof(t, s, "leek.example.org.", []dns.RR{wildNSEC, cover},
 		[]dns.RR{soa, wildNSEC, cover})
 
 	// AAAA absent from the wildcard's bitmap → NODATA.
@@ -519,7 +544,7 @@ func TestSynthesizeWildcard_NSEC3(t *testing.T) {
 	hiRec := nsec3TestRecord(t, hHi, hApex, false, dns.TypeA, dns.TypeRRSIG)
 	wildRec := nsec3TestRecord(t, hW, hLo, false, dns.TypeA, dns.TypeRRSIG) // exact H(*.example.org), A only
 	proof := []dns.RR{apexRec, loRec, hiRec, wildRec}
-	s.IndexNegative("m.example.org.", dns.ClassINET, proof,
+	indexProof(t, s, "m.example.org.", proof,
 		[]dns.RR{soa, apexRec, loRec, hiRec, wildRec})
 
 	// Positive: the prior expansion of *.example.org for another name.

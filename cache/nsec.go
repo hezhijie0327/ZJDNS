@@ -238,7 +238,7 @@ func (s *Cache) synthesizeWildcardNSEC(qclass uint16, zone *nsecZone, qname stri
 	if covering == nil {
 		return nil, nil, false
 	}
-	wildcard := "*." + nsecCommonAncestor(covering.owner, covering.next)
+	wildcard := nsecWildcardAt(nsecCommonAncestor(covering.owner, covering.next))
 	// Positive: a previously seen expansion of this exact wildcard carries qtype.
 	if we := s.wildcardEntryFor(zone.key.apex, qclass, wildcard, qtype); we != nil {
 		if remaining := we.ttl - int(now-we.ts); remaining > 0 {
@@ -507,7 +507,10 @@ func (s *Cache) evictWildcardZoneLocked() {
 // buildNSECRange pairs one verified NSEC with its RRSIGs and the negative TTL.
 func buildNSECRange(n *dns.NSEC, soa dns.RR, authority []dns.RR, now int64, negTTL int) *nsecRange {
 	rrset, ttl := pairedRRset(n, authority, dns.TypeNSEC, now, negTTL)
-	if rrset == nil {
+	// A proof without its RRSIGs (they rode in a section the pairing does
+	// not scan) can never be re-served as verified — mirror IndexWildcard's
+	// len(rrset) < 2 rejection.
+	if len(rrset) < 2 {
 		return nil
 	}
 	return &nsecRange{
@@ -529,7 +532,7 @@ func buildNSEC3Range(n *dns.NSEC3, soa dns.RR, authority []dns.RR, now int64, ne
 		return nil, params
 	}
 	rrset, ttl := pairedRRset(n, authority, dns.TypeNSEC3, now, negTTL)
-	if rrset == nil {
+	if len(rrset) < 2 { // no RRSIGs — see buildNSECRange
 		return nil, params
 	}
 	return &nsecRange{
@@ -779,7 +782,7 @@ func nsecAppendixB(r *nsecRange, qname string) (*nsecRange, bool, bool) {
 // interval is itself covered by a cached interval (RFC 4035 §5.4 step 6) —
 // the same set-level check the response validator performs.
 func nsecWildcardDenied(ranges []*nsecRange, covering *nsecRange) bool {
-	wildcard := "*." + nsecCommonAncestor(covering.owner, covering.next)
+	wildcard := nsecWildcardAt(nsecCommonAncestor(covering.owner, covering.next))
 	for _, r := range ranges {
 		if zdnsutil.DomainInRange(wildcard, r.owner, r.next) {
 			return true
@@ -821,6 +824,15 @@ func nsecNODATA(r *nsecRange, qtype uint16) (*nsecRange, bool) {
 		return nil, false // the qtype exists — never a denial
 	}
 	return r, true
+}
+
+// nsecWildcardAt returns the wildcard name at the closest encloser — the
+// root encloser yields "*." ("*.." would be malformed).
+func nsecWildcardAt(encloser string) string {
+	if encloser == "." {
+		return "*."
+	}
+	return "*." + encloser
 }
 
 // nsecCommonAncestor returns the longest common label suffix of two names —

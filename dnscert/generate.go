@@ -96,13 +96,12 @@ func (rc *ResolverConfig) NewCert(notBefore, notAfter uint32) (cert *dnscryptcry
 		return nil, fmt.Errorf("decoding resolver secret key: %w", err)
 	}
 	if len(resolverPk) != dnscryptcrypto.KeySize || len(resolverSk) != dnscryptcrypto.KeySize {
-		var keyErr error
-		sk, pk, keyErr := dnscryptcrypto.GenerateRandomKeyPair()
-		if keyErr != nil {
-			return nil, fmt.Errorf("generating resolver keys: %w", keyErr)
-		}
-		resolverSk = sk[:]
-		resolverPk = pk[:]
+		// A wrong-length key is a configuration fault: silently regenerating
+		// a random pair here would break the documented invariant that the
+		// paired PQ cert derives from the same X25519 seed, and the usable
+		// replacement keys would never be written back to the config.
+		return nil, fmt.Errorf("resolver key length: sk=%d pk=%d, want %d",
+			len(resolverSk), len(resolverPk), dnscryptcrypto.KeySize)
 	}
 	copy(cert.ResolverPk[:], resolverPk)
 	copy(cert.ResolverSk[:], resolverSk)

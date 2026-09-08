@@ -68,7 +68,7 @@ func nsecProvesNXDOMAIN(verified []*dns.NSEC, qname string) bool {
 		if !isDomainInRange(qname, owner, next) {
 			continue
 		}
-		wildcard := "*." + commonAncestor(owner, next)
+		wildcard := wildcardAtEncloser(commonAncestor(owner, next))
 		if isDomainInRange(wildcard, owner, next) {
 			return true
 		}
@@ -79,6 +79,16 @@ func nsecProvesNXDOMAIN(verified []*dns.NSEC, qname string) bool {
 		}
 	}
 	return false
+}
+
+// wildcardAtEncloser returns the wildcard name at the closest encloser —
+// the root encloser yields "*." ("*.." would be malformed and never fall
+// inside any NSEC interval).
+func wildcardAtEncloser(encloser string) string {
+	if encloser == "." {
+		return "*."
+	}
+	return "*." + encloser
 }
 
 // commonAncestor returns the longest common suffix (label-wise) of two

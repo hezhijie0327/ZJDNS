@@ -187,15 +187,14 @@ func (r *Recursive) validateNODATAWithNSEC(ctx context.Context, response *dns.Ms
 	if len(response.Answer) > 0 {
 		return validated, nil
 	}
-	if len(chain.childDS) == 0 {
-		// Unsigned delegation (no DS at the cut): the zone has no verifiable
-		// keys, so there is nothing to validate NSEC against — skip the
-		// DNSKEY prefetch, which would cost one query per unsigned NODATA
-		// level for nothing.  Signed zones keep the fetch and validation
-		// below.
-		return validated, nil
-	}
 	if len(chain.zoneDNSKEYs) == 0 {
+		if len(chain.childDS) == 0 && currentDomain != config.DNSRootZone {
+			// Unsigned delegation (no DS at the cut, and not the always-signed
+			// root): the zone has no verifiable keys, so there is nothing to
+			// validate NSEC against — skip the DNSKEY prefetch, which would
+			// cost one query per unsigned NODATA level for nothing.
+			return validated, nil
+		}
 		r.ensureZoneDNSKEYs(ctx, nameservers, currentDomain, chain)
 	}
 	if len(chain.zoneDNSKEYs) > 0 {

@@ -28,6 +28,7 @@ type AsyncWriter struct {
 
 	mu     sync.RWMutex
 	closed bool
+	failed atomic.Int64
 }
 
 // putRequest is one queued Store.Put.
@@ -78,9 +79,12 @@ func (w *AsyncWriter) loop() {
 	defer close(w.done)
 	for req := range w.ch {
 		if err := w.store.Put(req.key, req.ts, req.ttl, req.validated, req.wire); err != nil {
-			// Sampled: disk-full would otherwise log per write at full
-			// eviction rate (R2/E8 — persistence errors must be visible).
-			log.Debugf("CACHE: spill write %s failed: %v (dropped=%d)", req.key, err, w.dropped.Load())
+			// Sampled Warn: persistence loss must be visible at the default
+			// level, but disk-full fires at full eviction rate — first and
+			// then every 1024th failure.
+			if n := w.failed.Add(1); n == 1 || n%1024 == 0 {
+				log.Warnf("CACHE: spill write failed: %v (failures=%d, queue-drops=%d) — disk tier degraded", err, n, w.dropped.Load())
+			}
 		}
 	}
 }

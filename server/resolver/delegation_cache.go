@@ -44,7 +44,10 @@ func (e *delegationEntry) fresh() bool {
 // for the qname itself works for non-parent-side types.  At most
 // config.DefaultDelegationLookupZones entries are returned.
 func ancestorZones(qname string) []string {
-	fq := dnsutil.Fqdn(qname)
+	// Canonical (lowercased): storeDelegation keys are canonical, so a
+	// mixed-case/0x20-cased qname must not miss every delegation level and
+	// re-walk from the root (RFC 4343 case-insensitivity).
+	fq := zdnsutil.Canonical(dnsutil.Fqdn(qname))
 	if fq == "." {
 		return nil
 	}
