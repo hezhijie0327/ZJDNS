@@ -105,6 +105,16 @@ const (
 	// packets into the CPU-heavy SERVFAIL path.
 	DefaultServerGoroutineLimit = 256
 
+	// DefaultUDPDispatchShards is the shared-port UDP dispatch fan-out:
+	// SO_REUSEPORT lets each shard bind the same port and the kernel hashes
+	// every flow (4-tuple) to exactly one shard, so per-client packet
+	// affinity holds while the single-goroutine ReadFromUDP loop — the
+	// shared-port throughput ceiling — parallelises.  Each shard duplicates
+	// the per-protocol demux state; the per-client admission semaphore is
+	// shared, keeping the global flood bound.  Platforms without
+	// SO_REUSEPORT (Windows) collapse to one shard.
+	DefaultUDPDispatchShards = 4
+
 	DefaultTransportMax          = 64
 	DefaultQUICConfigCacheSize   = 128 // max cached QUIC configs (LRU)
 	DefaultTLSSessionCacheSize   = 128

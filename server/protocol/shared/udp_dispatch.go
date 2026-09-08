@@ -14,7 +14,6 @@ import (
 	"zjdns/config"
 	"zjdns/internal/demux"
 	"zjdns/internal/log"
-	"zjdns/internal/pool"
 
 	zdnsutil "zjdns/internal/dnsutil"
 )
@@ -53,100 +52,117 @@ func (m *Mux) startUDPGroup(g *UDPGroup) error {
 		label += ": " + joinStrings(parts, ", ")
 	}
 	log.Infof("%s server started on %v", label, addrs)
+
+	// Dispatch sharding: N sockets on the same port (SO_REUSEPORT), the
+	// kernel hashing each flow to one shard — per-client affinity holds,
+	// the single-goroutine read loop parallelises.  The per-client
+	// admission semaphore is SHARED so the global flood bound survives the
+	// fan-out; per-protocol demux state (QUIC transports, DTLS listener,
+	// DNSCrypt/DTLCP client maps, classification map) is per shard, which
+	// is sound because a flow's whole lifetime lands on one shard.
+	shards := 1
+	if reusePortSupported() {
+		shards = config.DefaultUDPDispatchShards
+	}
+	clientSem := make(chan struct{}, config.DefaultServerGoroutineLimit)
+
 	for _, addr := range addrs {
-		udpAddr, err := net.ResolveUDPAddr("udp", addr)
-		if err != nil {
-			return err
-		}
-
-		udpConn, err := net.ListenUDP("udp", udpAddr)
-		if err != nil {
-			return err
-		}
-
-		rt := &udpRuntime{
-			cfg:  g,
-			conn: udpConn,
-		}
-
-		if g.DTLSHandler != nil || g.ServeDTLCP != nil {
-			rt.dtlsPL = newDTLSPacketListener(udpConn)
-		}
-
-		if g.ServeDNSCrypt != nil {
-			rt.dcState = &sharedDNSCryptClient{
-				conns: make(map[addrKey]*DemuxPacketConn),
+		for shard := 0; shard < shards; shard++ {
+			var lc net.ListenConfig
+			if shards > 1 {
+				lc = net.ListenConfig{Control: controlReusePort()}
 			}
-		}
-
-		if g.ServeDTLCP != nil {
-			rt.dtlcpState = &sharedDTLSClient{
-				conns: make(map[addrKey]*DemuxPacketConn),
+			pc, err := lc.ListenPacket(m.groupCtx, "udp", addr)
+			if err != nil {
+				return err
 			}
-		}
+			conn := pc.(*net.UDPConn)
 
-		// Flood bound for per-client handler goroutines (P3).
-		rt.clientSem = make(chan struct{}, config.DefaultServerGoroutineLimit)
+			rt := &udpRuntime{
+				cfg:  g,
+				conn: conn,
+			}
 
-		if g.DOQHandler != nil {
-			rt.quicPC = newQUICPacketConn(udpConn)
+			if g.DTLSHandler != nil || g.ServeDTLCP != nil {
+				rt.dtlsPL = newDTLSPacketListener(conn)
+			}
 
-			capturedQUIC := rt.quicPC
-			capturedHandler := g.DOQHandler
-			m.host.Go(func() error {
-				defer zdnsutil.HandlePanic("Shared DoQ server")
-				if err := capturedHandler(capturedQUIC); err != nil {
-					if m.host.Ctx().Err() != nil {
-						return nil
-					}
-					log.Warnf("TLS: shared-port DoQ error: %v", err)
+			if g.ServeDNSCrypt != nil {
+				rt.dcState = &sharedDNSCryptClient{
+					conns: make(map[addrKey]*DemuxPacketConn),
 				}
+			}
+
+			if g.ServeDTLCP != nil {
+				rt.dtlcpState = &sharedDTLSClient{
+					conns: make(map[addrKey]*DemuxPacketConn),
+				}
+			}
+
+			// Flood bound for per-client handler goroutines (P3) — shared
+			// across shards.
+			rt.clientSem = clientSem
+
+			if g.DOQHandler != nil {
+				rt.quicPC = newQUICPacketConn(conn)
+
+				capturedQUIC := rt.quicPC
+				capturedHandler := g.DOQHandler
+				m.host.Go(func() error {
+					defer zdnsutil.HandlePanic("Shared DoQ server")
+					if err := capturedHandler(capturedQUIC); err != nil {
+						if m.host.Ctx().Err() != nil {
+							return nil
+						}
+						log.Warnf("TLS: shared-port DoQ error: %v", err)
+					}
+					return nil
+				})
+			}
+
+			if g.HTTP3Handler != nil {
+				rt.h3PC = newQUICPacketConn(conn)
+
+				capturedH3 := rt.h3PC
+				capturedHandler := g.HTTP3Handler
+				m.host.Go(func() error {
+					defer zdnsutil.HandlePanic("Shared DoH3 server")
+					if err := capturedHandler(capturedH3); err != nil {
+						if m.host.Ctx().Err() != nil {
+							return nil
+						}
+						log.Warnf("TLS: shared-port DoH3 error: %v", err)
+					}
+					return nil
+				})
+			}
+
+			if g.DTLSHandler != nil {
+				capturedDTLS := rt.dtlsPL
+				capturedHandler := g.DTLSHandler
+				m.host.Go(func() error {
+					defer zdnsutil.HandlePanic("Shared DTLS server")
+					if err := capturedHandler(capturedDTLS); err != nil {
+						if m.host.Ctx().Err() != nil {
+							return nil
+						}
+						log.Warnf("TLS: shared-port DTLS error: %v", err)
+					}
+					return nil
+				})
+			}
+
+			m.mu.Lock()
+			m.udpRuntimes = append(m.udpRuntimes, rt)
+			m.mu.Unlock()
+
+			capturedRT := rt
+			m.host.Go(func() error {
+				defer zdnsutil.HandlePanic("Shared UDP dispatch")
+				m.udpDispatchLoop(capturedRT)
 				return nil
 			})
 		}
-
-		if g.HTTP3Handler != nil {
-			rt.h3PC = newQUICPacketConn(udpConn)
-
-			capturedH3 := rt.h3PC
-			capturedHandler := g.HTTP3Handler
-			m.host.Go(func() error {
-				defer zdnsutil.HandlePanic("Shared DoH3 server")
-				if err := capturedHandler(capturedH3); err != nil {
-					if m.host.Ctx().Err() != nil {
-						return nil
-					}
-					log.Warnf("TLS: shared-port DoH3 error: %v", err)
-				}
-				return nil
-			})
-		}
-
-		if g.DTLSHandler != nil {
-			capturedDTLS := rt.dtlsPL
-			capturedHandler := g.DTLSHandler
-			m.host.Go(func() error {
-				defer zdnsutil.HandlePanic("Shared DTLS server")
-				if err := capturedHandler(capturedDTLS); err != nil {
-					if m.host.Ctx().Err() != nil {
-						return nil
-					}
-					log.Warnf("TLS: shared-port DTLS error: %v", err)
-				}
-				return nil
-			})
-		}
-
-		m.mu.Lock()
-		m.udpRuntimes = append(m.udpRuntimes, rt)
-		m.mu.Unlock()
-
-		capturedRT := rt
-		m.host.Go(func() error {
-			defer zdnsutil.HandlePanic("Shared UDP dispatch")
-			m.udpDispatchLoop(capturedRT)
-			return nil
-		})
 	}
 	return nil
 }
@@ -187,12 +203,15 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 	peerProto := make(map[addrKey]string)
 	var peerMu sync.RWMutex
 
+	// Read directly into the pooled datagram buffer: the former stack
+	// buffer + copy into a pooled buffer cost one full-packet memcpy per
+	// datagram on the single most contended loop in shared-port mode.
 	// Read bound: 8 KiB (pool.SecureBufferSize).  Go's ReadFromUDP
 	// silently truncates larger datagrams; QUIC initial packets are ≤1280
 	// by design and DNSCrypt frames are capped at 4096, so this bound is
 	// safe for every multiplexed protocol (standalone DoQ/DoH3 listeners,
 	// where quic-go reads the raw socket itself, are unaffected) (P-L4).
-	buf := make([]byte, pool.SecureBufferSize)
+	// On a read error the buffer returns to the pool below.
 
 	var pktCount uint32
 	var lastReap time.Time
@@ -210,8 +229,10 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 		default:
 		}
 
-		n, src, err := udpConn.ReadFromUDP(buf)
+		pb := PacketBufPool.Get().(*[]byte)
+		n, src, err := udpConn.ReadFromUDP(*pb)
 		if err != nil {
+			PacketBufPool.Put(pb)
 			select {
 			case <-m.groupCtx.Done():
 				return
@@ -222,9 +243,6 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 			}
 			return
 		}
-
-		pb := PacketBufPool.Get().(*[]byte)
-		copy(*pb, buf[:n])
 
 		// Amortised idle-client reaping: per-client conns whose peer went
 		// silent are closed and forgotten, bounding the maps under NAT
