@@ -804,7 +804,14 @@ func nsecNODATA(r *nsecRange, qtype uint16) (*nsecRange, bool) {
 	// RFC 6840 §4.1: an NS-without-SOA bitmap is a delegation point's record —
 	// it proves "no DS at the cut" and nothing about the other types the child
 	// zone may serve at this very name (e.g. a DS negative indexed it).
+	// DS is the one type the PARENT is authoritative for at a delegation: a
+	// delegation NSEC without the DS bit IS the authenticated no-DS NODATA
+	// proof (RFC 4035 §5.2), so DS queries synthesize from it too (RFC 8198
+	// §2 covers DS negatives like any other type).
 	if slices.Contains(nsec.TypeBitMap, dns.TypeNS) && !slices.Contains(nsec.TypeBitMap, dns.TypeSOA) {
+		if qtype == dns.TypeDS && !slices.Contains(nsec.TypeBitMap, dns.TypeDS) {
+			return r, true
+		}
 		return nil, false
 	}
 	if slices.Contains(nsec.TypeBitMap, dns.TypeCNAME) {
@@ -872,7 +879,12 @@ func synthesizeNSEC3(ranges []*nsecRange, params nsec3Params, qname string, qtyp
 		}
 		// RFC 6840 §4.1: a delegation point's NSEC3 (NS set, SOA absent)
 		// proves no DS at the cut — not the child zone's types at this name.
+		// DS is the parent-side exception: without the DS bit in the bitmap
+		// this is the authenticated no-DS NODATA proof (RFC 5155 §8.6).
 		if slices.Contains(nsec3.TypeBitMap, dns.TypeNS) && !slices.Contains(nsec3.TypeBitMap, dns.TypeSOA) {
+			if qtype == dns.TypeDS && !slices.Contains(nsec3.TypeBitMap, dns.TypeDS) {
+				return r, true
+			}
 			return nil, false
 		}
 		if slices.Contains(nsec3.TypeBitMap, dns.TypeCNAME) || slices.Contains(nsec3.TypeBitMap, qtype) {

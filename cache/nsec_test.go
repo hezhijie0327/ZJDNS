@@ -582,3 +582,54 @@ func TestSynthesizeWildcard_NSEC3_OptOutWildcard(t *testing.T) {
 		t.Fatal("NSEC3 wildcard NODATA synthesized from an Opt-Out exact record")
 	}
 }
+
+// RFC 6840 §4.1 + RFC 4035 §5.2: a delegation-shaped NSEC (NS set, SOA
+// absent) IS the authenticated no-DS proof at the delegation owner itself —
+// DS queries synthesize NODATA from it (RFC 8198 §2 covers DS negatives).
+// Other types at the delegation stay unsynthesizable (the child serves them).
+func TestSynthesizeNegative_NSEC_DelegationDS(t *testing.T) {
+	s := New(config.LimitSettings{}, config.LimitSettings{}, "", "")
+	soa := nsecTestSOA("example.com.", 3600, 900)
+	deleg := nsecTestNSEC("sub.example.com.", "zebra.example.com.", dns.TypeNS, dns.TypeRRSIG)
+	indexProof(t, s, "sub.example.com.", []dns.RR{deleg},
+		[]dns.RR{soa, deleg, nsecTestRRSIG(deleg.Hdr.Name, dns.TypeNSEC, 0)})
+
+	rcode, _, ok := s.SynthesizeNegative("sub.example.com.", dns.TypeDS, dns.ClassINET)
+	if !ok || rcode != dns.RcodeSuccess {
+		t.Fatalf("delegation no-DS NODATA: ok=%v rcode=%d, want NOERROR", ok, rcode)
+	}
+	// Non-DS types at the delegation are the child zone's business — no proof.
+	if _, _, ok := s.SynthesizeNegative("sub.example.com.", dns.TypeA, dns.ClassINET); ok {
+		t.Fatal("synthesized denial for A at a delegation point")
+	}
+	// A delegation NSEC that DOES list DS proves DS exists — never a denial.
+	withDS := nsecTestNSEC("deleg.example.com.", "zebra.example.com.", dns.TypeNS, dns.TypeDS, dns.TypeRRSIG)
+	indexProof(t, s, "deleg.example.com.", []dns.RR{withDS},
+		[]dns.RR{soa, withDS, nsecTestRRSIG(withDS.Hdr.Name, dns.TypeNSEC, 0)})
+	if _, _, ok := s.SynthesizeNegative("deleg.example.com.", dns.TypeDS, dns.ClassINET); ok {
+		t.Fatal("synthesized DS denial despite the DS bit in the bitmap")
+	}
+}
+
+// NSEC3 variant: the exact NSEC3 at a delegation owner (NS, no SOA, no DS)
+// proves no DS (RFC 5155 §8.6); Opt-Out still voids everything (RFC 8198 §5.2).
+func TestSynthesizeNegative_NSEC3_DelegationDS(t *testing.T) {
+	s := New(config.LimitSettings{}, config.LimitSettings{}, "", "")
+	soa := nsecTestSOA("example.com.", 3600, 900)
+	hSub := nsec3Hash(t, "sub.example.com.")
+	rec := nsec3TestRecord(t, hSub, nsec3TestMaxHash, false, dns.TypeNS, dns.TypeRRSIG)
+	indexProof(t, s, "sub.example.com.", []dns.RR{rec}, []dns.RR{soa, rec})
+
+	rcode, _, ok := s.SynthesizeNegative("sub.example.com.", dns.TypeDS, dns.ClassINET)
+	if !ok || rcode != dns.RcodeSuccess {
+		t.Fatalf("NSEC3 delegation no-DS NODATA: ok=%v rcode=%d, want NOERROR", ok, rcode)
+	}
+	if _, _, ok := s.SynthesizeNegative("sub.example.com.", dns.TypeA, dns.ClassINET); ok {
+		t.Fatal("synthesized A denial at a delegation point")
+	}
+	optOut := nsec3TestRecord(t, nsec3Hash(t, "oo.example.com."), nsec3TestMaxHash, true, dns.TypeNS, dns.TypeRRSIG)
+	indexProof(t, s, "oo.example.com.", []dns.RR{optOut}, []dns.RR{soa, optOut})
+	if _, _, ok := s.SynthesizeNegative("oo.example.com.", dns.TypeDS, dns.ClassINET); ok {
+		t.Fatal("synthesized DS denial from an Opt-Out NSEC3")
+	}
+}
