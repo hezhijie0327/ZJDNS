@@ -64,6 +64,56 @@ func findChainStep(answer []dns.RR, question Question) (nextCNAME *dns.CNAME, ha
 	return nextCNAME, hasTargetType
 }
 
+// cachedHopResult builds a QueryResult for the CNAME-chain hop question from
+// a fresh response-cache entry, or returns nil when the cache cannot serve
+// the hop (no store, miss, expired, empty entry, unpack failure).  TTLs are
+// rewritten to the entry's remaining TTL so a reused hop never re-enters the
+// cache or the client response with more freshness than it has.
+func (c *CNAME) cachedHopResult(question Question, ecs *edns.ECSOption) *QueryResult {
+	if c.resolver == nil || c.resolver.cache == nil {
+		return nil
+	}
+	entry, found, expired := c.resolver.cache.Get(question.Name, question.Qtype, question.Qclass, ecs)
+	if !found {
+		return nil
+	}
+	if expired {
+		// Stale entries keep the middleware's serve-stale semantics — a hop
+		// reuse only takes fresh data.
+		entry.ReleaseOffsets()
+		return nil
+	}
+	defer entry.ReleaseOffsets()
+	if err := entry.Unpack(); err != nil || (len(entry.Answer) == 0 && len(entry.Authority) == 0) {
+		return nil
+	}
+	remaining := entry.RemainingTTL()
+	withRemaining := func(rrs []dns.RR) []dns.RR {
+		if len(rrs) == 0 {
+			return nil
+		}
+		out := make([]dns.RR, len(rrs))
+		for i, rr := range rrs {
+			out[i] = rr.Clone()
+			rr.Header().TTL = remaining
+		}
+		return out
+	}
+	if log.IsDebug() {
+		log.Debugf("RECURSION: CNAME hop %s %s served from response cache (ttl_remaining=%d)",
+			question.Name, dns.TypeToString[question.Qtype], remaining)
+	}
+	return &QueryResult{
+		Answer:     withRemaining(entry.Answer),
+		Authority:  withRemaining(entry.Authority),
+		Additional: withRemaining(entry.Additional),
+		Rcode:      entry.WireRcode(),
+		Validated:  entry.Validated,
+		Cacheable:  true,
+		Server:     config.ProtoRecursive,
+	}
+}
+
 // probeTLDForPoison probes the first few TLD servers concurrently for the
 // full QNAME and delegates the verdict to security.Detector.IsPoisonedByTLD.
 // Any peer's A/AAAA answer is injection evidence (a TLD server never
@@ -174,9 +224,25 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 		// detection can't distinguish real from spoofed answers).
 		forceTCP := poisonOccurred
 
-		qr := c.resolver.recursive.resolve(ctx, currentQuestion, ecs, 0, forceTCP, false)
-		if qr.Err != nil {
-			return QueryResult{Cacheable: true, Err: qr.Err}
+		var qr QueryResult
+		served := false
+		// Serve the hop from the response cache when a fresh entry exists:
+		// CNAME targets are heavily shared across source domains, so a warm
+		// entry for the target saves the entire hop walk (the same use-own-
+		// cache-first behaviour RFC 1034 §5.3.3 expects of a resolver).
+		// Skipped under TCP-forced chains: after poison detection every hop
+		// re-resolves over TCP for a fresh, injection-free answer.
+		if !forceTCP {
+			if hop := c.cachedHopResult(currentQuestion, ecs); hop != nil {
+				qr = *hop
+				served = true
+			}
+		}
+		if !served {
+			qr = c.resolver.recursive.resolve(ctx, currentQuestion, ecs, 0, forceTCP, false)
+			if qr.Err != nil {
+				return QueryResult{Cacheable: true, Err: qr.Err}
+			}
 		}
 		if qr.Truncated {
 			// Any step's TC signal must reach the client — retry logic
