@@ -134,13 +134,41 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 	go func() {
 		defer zdnsutil.HandlePanic("DoT writer")
 		defer close(writerDone)
-		for task := range writeCh {
+		// Write coalescing — see plain/tcp.go: queued pipelined responses
+		// flush in one WriteTo (TLS record batching) instead of one Write
+		// per frame.
+		const maxWriteBatch = 16
+		frames := make(net.Buffers, 0, maxWriteBatch)
+		tasks := make([]writeTask, 0, maxWriteBatch)
+		flush := func() error {
 			_ = tlsConn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
-			_, err := tlsConn.Write(task.data)
-			if task.pooled {
-				pool.DefaultBuffer.Put(task.data)
+			_, err := frames.WriteTo(tlsConn)
+			for _, t := range tasks {
+				if t.pooled {
+					pool.DefaultBuffer.Put(t.data)
+				}
 			}
-			if err != nil {
+			frames = frames[:0]
+			tasks = tasks[:0]
+			return err
+		}
+		for task := range writeCh {
+			frames = append(frames, task.data)
+			tasks = append(tasks, task)
+		drain:
+			for len(frames) < maxWriteBatch {
+				select {
+				case t, ok := <-writeCh:
+					if !ok {
+						break drain
+					}
+					frames = append(frames, t.data)
+					tasks = append(tasks, t)
+				default:
+					break drain
+				}
+			}
+			if err := flush(); err != nil {
 				log.Debugf("TLS: write error: %v", err)
 				connCancel()
 				return
@@ -284,44 +312,48 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			}
 			defer pool.DefaultMessage.Put(response)
 
+			// Pack directly into the frame's spare capacity — see
+			// plain/tcp.go for the capacity-class reasoning (Message.Put's
+			// ReleaseWire skips this Data, so the frame is released exactly
+			// once, after the writer's write).
+			frameBuf := pool.DefaultBuffer.Get()
+			frameWireCap := cap(frameBuf) - zdnsutil.DNSFramePrefixLen
+			response.Data = frameBuf[2:2:frameWireCap]
 			err := response.Pack()
-			respBuf := response.Data
 			if err != nil {
 				log.Debugf("TLS: response pack error: %v", err)
+				pool.DefaultBuffer.Put(frameBuf)
 				return
 			}
-
-			poolBuf := pool.DefaultBuffer.Get()
-			// Record whether poolBuf was large enough BEFORE any Put call,
-			// so the error path does not read metadata of a buffer that
-			// may already be reused by another goroutine.
-			poolBufOK := len(poolBuf) >= zdnsutil.DNSFramePrefixLen+len(respBuf)
+			wireLen := len(response.Data)
 			var writeBuf []byte
-			if poolBufOK {
-				writeBuf = poolBuf[:zdnsutil.DNSFramePrefixLen+len(respBuf)]
+			var pooled bool
+			if cap(response.Data) == frameWireCap {
+				// Bounded by frameWireCap (8190) — inside the 16-bit prefix.
+				binary.BigEndian.PutUint16(frameBuf[:zdnsutil.DNSFramePrefixLen], uint16(wireLen)) //nolint:gosec // G115: bounded by frameWireCap
+				writeBuf = frameBuf[:zdnsutil.DNSFramePrefixLen+wireLen]
+				pooled = true
 			} else {
-				writeBuf = make([]byte, zdnsutil.DNSFramePrefixLen+len(respBuf))
-				pool.DefaultBuffer.Put(poolBuf)
-			}
-			if len(respBuf) > dns.MaxMsgSize {
-				// A 16-bit length prefix cannot represent this response; a
-				// wrapped length would desync the whole TCP stream. Drop it.
-				log.Debugf("TLS: dropping DoT response of %d bytes (exceeds 16-bit frame)", len(respBuf))
-				if poolBufOK {
-					pool.DefaultBuffer.Put(writeBuf)
+				if wireLen > dns.MaxMsgSize {
+					// A 16-bit length prefix cannot represent this response;
+					// a wrapped length would desync the whole TLS stream.
+					log.Debugf("TLS: dropping DoT response of %d bytes (exceeds 16-bit frame)", wireLen)
+					pool.DefaultBuffer.Put(frameBuf)
+					return
 				}
-				return
+				writeBuf = make([]byte, zdnsutil.DNSFramePrefixLen+wireLen)
+				binary.BigEndian.PutUint16(writeBuf[:zdnsutil.DNSFramePrefixLen], uint16(wireLen)) //nolint:gosec // G115: bounded by the MaxMsgSize check above
+				copy(writeBuf[zdnsutil.DNSFramePrefixLen:], response.Data)
+				pool.DefaultBuffer.Put(frameBuf)
 			}
-			binary.BigEndian.PutUint16(writeBuf[:zdnsutil.DNSFramePrefixLen], uint16(len(respBuf))) //nolint:gosec // G115: bounded by the MaxMsgSize check above
-			copy(writeBuf[zdnsutil.DNSFramePrefixLen:], respBuf)
 
 			select {
-			case writeCh <- writeTask{data: writeBuf, pooled: poolBufOK}:
+			case writeCh <- writeTask{data: writeBuf, pooled: pooled}:
 			case <-connCtx.Done():
-				if poolBufOK {
+				if pooled {
 					pool.DefaultBuffer.Put(writeBuf)
 				}
-				// else: poolBuf was already returned, and writeBuf is a
+				// else: the frame was already returned, and writeBuf is a
 				// separately allocated slice that will be GC'd.
 			}
 		}(req, edns.RequestMeta{ClientIP: clientIP, ClientName: clientName, IsSecure: true, Protocol: config.ProtoTLS}, pooledBuf, isPooled)
