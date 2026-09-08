@@ -299,31 +299,36 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		})
 	}
 
-	// t=0: race the first batch; widen to every remaining authority after
-	// DefaultFanoutWidenDelay without a winner.  The widen worker runs in
-	// the same errgroup — g.Wait() covers its late g.Go launches, so the
-	// pooled baseMsg is never returned while a widened worker still reads
-	// it, and a first-win cancel() aborts the widen before it fires.
+	// t=0: race the first batch; widen to every remaining authority after the
+	// delay without a winner.  The widen worker runs in the same errgroup —
+	// g.Wait() covers its late g.Go launches, so the pooled baseMsg is never
+	// returned while a widened worker still reads it, and a first-win
+	// cancel() aborts the widen before it fires.
 	//
-	// narrow (infrastructure walks — NS-address resolution): race a smaller
-	// first batch and never widen.  These queries hit root/TLD servers that
-	// answer from any racer; the extra candidates were almost pure
-	// cancel-and-dial churn, the dominant syscall volume under recursive
-	// load (pprof, 2026-09).
+	// Infrastructure walks (NS-address resolution — narrow) race a smaller
+	// first batch and widen much later: against root/TLD server sets the
+	// data-query delay fired constantly (cancel-and-dial churn dominating
+	// syscall volume under recursive load, pprof 2026-09), but widening
+	// never at all let a blackholed latency-ranked first batch pin the level
+	// to its full DefaultRecursiveQueryTimeout.  The longer infra delay only
+	// fires when the whole first batch has been silent — and a first-batch
+	// win still cancels it before the timer.
 	firstBatch := config.DefaultFanoutFirstBatch
+	widenDelay := config.DefaultFanoutWidenDelay
 	if narrow {
 		firstBatch = config.DefaultInfraFanoutFirstBatch
+		widenDelay = config.DefaultInfraFanoutWidenDelay
 	}
 	batchSize := min(len(nameservers), firstBatch)
 	batch := make([]config.UpstreamServer, batchSize)
 	for i, ns := range nameservers[:batchSize] {
 		launchNS(fillServer(batch, i, ns))
 	}
-	if !narrow && len(nameservers) > firstBatch {
+	if len(nameservers) > firstBatch {
 		rest := nameservers[firstBatch:]
 		g.Go(func() error {
 			defer zdnsutil.HandlePanic("Fan-out widen")
-			t := time.NewTimer(config.DefaultFanoutWidenDelay)
+			t := time.NewTimer(widenDelay)
 			defer t.Stop()
 			select {
 			case <-t.C:

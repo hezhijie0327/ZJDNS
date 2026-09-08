@@ -19,20 +19,20 @@ import (
 // When no match is found, it either triggers a QNAME minimisation retry
 // (continue=true) or returns a terminal result.
 func (r *Recursive) collectBestNSMatch(response *dns.Msg, normalizedQname, queryName, qname string, qnameMinimise, validated bool, ecsResponse *edns.ECSOption) (bestMatch string, bestNSRecords []*dns.NS, shouldContinue bool, termRes *QueryResult) {
-	allRRSections := make([]dns.RR, 0, len(response.Ns)+len(response.Answer))
-	allRRSections = append(allRRSections, response.Ns...)
-	allRRSections = append(allRRSections, response.Answer...)
-
-	for _, rrec := range allRRSections {
-		if ns, ok := rrec.(*dns.NS); ok {
-			nsName := zdnsutil.Canonical(rrec.Header().Name)
-			isMatch := dnsutil.IsBelow(dnsutil.Fqdn(nsName), dnsutil.Fqdn(normalizedQname))
-			if isMatch && len(nsName) >= len(bestMatch) {
-				if len(nsName) > len(bestMatch) {
-					bestMatch = nsName
-					bestNSRecords = []*dns.NS{ns}
-				} else {
-					bestNSRecords = append(bestNSRecords, ns)
+	// Two direct passes over Ns/Answer — a merged slice was an allocation on
+	// every referral level of every walk.
+	for _, section := range [2][]dns.RR{response.Ns, response.Answer} {
+		for _, rrec := range section {
+			if ns, ok := rrec.(*dns.NS); ok {
+				nsName := zdnsutil.Canonical(rrec.Header().Name)
+				isMatch := dnsutil.IsBelow(dnsutil.Fqdn(nsName), dnsutil.Fqdn(normalizedQname))
+				if isMatch && len(nsName) >= len(bestMatch) {
+					if len(nsName) > len(bestMatch) {
+						bestMatch = nsName
+						bestNSRecords = []*dns.NS{ns}
+					} else {
+						bestNSRecords = append(bestNSRecords, ns)
+					}
 				}
 			}
 		}

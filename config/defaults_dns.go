@@ -120,6 +120,15 @@ const (
 
 	DefaultFanoutWidenDelay = 75 * time.Millisecond
 
+	// DefaultInfraFanoutWidenDelay is the widen delay for narrow fan-outs.
+	// They widen much later than data queries: against root/TLD server sets
+	// the 75ms data delay fired constantly (the churn above), but widening
+	// never at all let a blackholed latency-ranked first batch pin NS-address
+	// resolution to the full DefaultRecursiveQueryTimeout.  The longer delay
+	// fires only when the whole first batch has been silent — the failure
+	// case it exists for — and a first-batch win still cancels it.
+	DefaultInfraFanoutWidenDelay = 500 * time.Millisecond
+
 	// RFC 9520 negative caching of resolution failures.  §3.2: failures MUST
 	// be cached at least 1s and MUST NOT be cached longer than 5 minutes;
 	// SHOULD grow the TTL with persistent failures (exponential backoff) and
