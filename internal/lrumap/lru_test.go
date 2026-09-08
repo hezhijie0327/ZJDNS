@@ -388,3 +388,28 @@ func TestOnEvict(t *testing.T) {
 		t.Errorf("onEvict after Get: want (c,3), got (%q,%d)", evictedKey, evictedVal)
 	}
 }
+
+func TestDeleteNoEvict(t *testing.T) {
+	evicted := ""
+	m := New[string, int](4)
+	m.SetOnEvict(func(k string, _ int) { evicted = k })
+	m.Set("a", 1)
+
+	m.DeleteNoEvict("a")
+	if evicted != "" {
+		t.Fatalf("DeleteNoEvict fired OnEvict for %q", evicted)
+	}
+	if _, ok := m.Get("a"); ok {
+		t.Fatal("DeleteNoEvict must remove the key")
+	}
+	if m.Len() != 0 {
+		t.Fatalf("Len = %d, want 0", m.Len())
+	}
+
+	// Plain Delete still fires the callback.
+	m.Set("b", 2)
+	m.Delete("b")
+	if evicted != "b" {
+		t.Fatal("Delete must fire OnEvict")
+	}
+}

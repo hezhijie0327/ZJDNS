@@ -108,6 +108,6 @@ func (s *Cache) CleanupLatency() {
 		return true
 	})
 	for _, key := range stale {
-		s.latencies.Delete(key)
+		s.latencies.DeleteNoEvict(key) // OnEvict would re-persist the stale record being purged
 	}
 }

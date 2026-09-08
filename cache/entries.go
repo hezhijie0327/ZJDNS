@@ -67,7 +67,7 @@ func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption) (
 			if !found {
 				// Corrupt BLOB — self-heal instead of warn-per-read: the
 				// next query for this key re-fetches from upstream (D8).
-				s.entries.Delete(key)
+				s.entries.DeleteNoEvict(key) // self-heal: OnEvict would re-spill the corrupt copy
 			}
 			return entry, found, expired
 		}
@@ -76,7 +76,7 @@ func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption) (
 				e, ok2, expired := s.buildEntry(entry, entry.ts, entry.ttl, entry.validated, entry.msgWire, qname, qtype)
 				if !ok2 {
 					s.spill.Delete(key.encode())
-					s.entries.Delete(key)
+					s.entries.DeleteNoEvict(key) // self-heal: OnEvict would re-spill the corrupt copy
 				}
 				return e, ok2, expired
 			}
@@ -95,7 +95,7 @@ func (s *Cache) GetTypes(qname string, qclass uint16, qtypes [2]uint16) (entries
 		if ce, ok := s.entries.Get(key); ok {
 			entries[i], found[i], expired[i] = s.buildEntry(ce, ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qt)
 			if !found[i] {
-				s.entries.Delete(key) // corrupt BLOB — self-heal (D8)
+				s.entries.DeleteNoEvict(key) // corrupt BLOB — self-heal; no re-spill
 			}
 			continue
 		}
@@ -104,7 +104,7 @@ func (s *Cache) GetTypes(qname string, qclass uint16, qtypes [2]uint16) (entries
 				entries[i], found[i], expired[i] = s.buildEntry(ce, ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qt)
 				if !found[i] {
 					s.spill.Delete(key.encode())
-					s.entries.Delete(key)
+					s.entries.DeleteNoEvict(key) // self-heal: OnEvict would re-spill the corrupt copy
 				}
 			}
 		}

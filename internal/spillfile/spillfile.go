@@ -393,30 +393,39 @@ func (s *Store) Indexed(key string, ts int64) bool {
 
 // Entries returns a snapshot of all indexed records (unordered).  A key in
 // both regions appears once — the tail record supersedes the sorted one,
-// and tombstoned keys are absent entirely.
+// and tombstoned keys are absent entirely.  Metadata is snapshotted under
+// mu and the block reads run outside it — same protocol as Get, so a full
+// scan never stalls concurrent Get/Set/Put.
 func (s *Store) Entries() []Entry {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	out := make([]Entry, 0, len(s.tailMap)+s.sortedRecordCount())
+	tail := make(map[string]struct{}, len(s.tailMap))
 	for k, te := range s.tailMap {
+		tail[k] = struct{}{} // tombstoned keys must still suppress the sorted copy
 		if te.deleted {
 			continue
 		}
 		out = append(out, Entry{Key: k, Ts: te.ts, Ttl: te.ttl, Validated: te.validated, WireOff: te.wireOff, WireLen: te.wireLen})
 	}
+	blocks := append([]sparseEntry(nil), s.sparse...)
 	ref := s.fref.Load()
-	for _, blk := range s.sparse {
-		buf := make([]byte, blk.blockEnd-blk.blockStart)
-		if _, err := ref.f.ReadAt(buf, blk.blockStart); err != nil {
+	s.mu.Unlock()
+
+	for _, blk := range blocks {
+		buf := acquireBlockBuf(int(blk.blockEnd - blk.blockStart))
+		block := buf[:blk.blockEnd-blk.blockStart]
+		if _, err := ref.f.ReadAt(block, blk.blockStart); err != nil {
+			releaseBlockBuf(block)
 			continue
 		}
-		scanBlock(blk.blockStart, buf, func(key string, ts int64, ttl int, validated bool, wireOff int64, wireLen int) bool {
-			if _, inTail := s.tailMap[key]; inTail {
+		scanBlock(blk.blockStart, block, func(key string, ts int64, ttl int, validated bool, wireOff int64, wireLen int) bool {
+			if _, inTail := tail[key]; inTail {
 				return true // superseded by a tail entry, or tombstoned
 			}
 			out = append(out, Entry{Key: key, Ts: ts, Ttl: ttl, Validated: validated, WireOff: wireOff, WireLen: int32(wireLen)}) //nolint:gosec // G115: wire length bounded by maxWireLen
 			return true
 		})
+		releaseBlockBuf(block)
 	}
 	return out
 }
@@ -443,10 +452,9 @@ func (s *Store) Clear() error {
 }
 
 // Flush fsyncs the file — called periodically and on shutdown for
-// durability (Put only reaches the page cache).
+// durability (Put only reaches the page cache).  The fsync runs without mu:
+// holding it stalls every Get/Set/Put for the full disk sync.
 func (s *Store) Flush() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return s.fref.Load().f.Sync()
 }
 
@@ -487,28 +495,36 @@ func (s *Store) sortedRecordCount() int {
 }
 
 // EntryCount returns the number of indexed records, excluding tombstoned
-// keys (a full-key scan — called only at startup and in tests).
+// keys (a full-key scan — called only at startup and in tests).  Metadata
+// is snapshotted under mu; the block reads run outside it.
 func (s *Store) EntryCount() int {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	n := 0
-	for _, te := range s.tailMap {
+	tail := make(map[string]struct{}, len(s.tailMap))
+	for k, te := range s.tailMap {
+		tail[k] = struct{}{}
 		if !te.deleted {
 			n++
 		}
 	}
+	blocks := append([]sparseEntry(nil), s.sparse...)
 	ref := s.fref.Load()
-	for _, blk := range s.sparse {
-		buf := make([]byte, blk.blockEnd-blk.blockStart)
-		if _, err := ref.f.ReadAt(buf, blk.blockStart); err != nil {
+	s.mu.Unlock()
+
+	for _, blk := range blocks {
+		buf := acquireBlockBuf(int(blk.blockEnd - blk.blockStart))
+		block := buf[:blk.blockEnd-blk.blockStart]
+		if _, err := ref.f.ReadAt(block, blk.blockStart); err != nil {
+			releaseBlockBuf(block)
 			continue
 		}
-		scanBlock(blk.blockStart, buf, func(key string, _ int64, _ int, _ bool, _ int64, _ int) bool {
-			if _, inTail := s.tailMap[key]; !inTail {
+		scanBlock(blk.blockStart, block, func(key string, _ int64, _ int, _ bool, _ int64, _ int) bool {
+			if _, inTail := tail[key]; !inTail {
 				n++
 			}
 			return true
 		})
+		releaseBlockBuf(block)
 	}
 	return n
 }

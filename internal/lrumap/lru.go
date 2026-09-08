@@ -221,6 +221,23 @@ func (m *Map[K, V]) Delete(key K) {
 	m.mu.Unlock()
 }
 
+// DeleteNoEvict removes a key without invoking OnEvict — for entries whose
+// persisted copy is already gone or known corrupt, where the evict callback
+// would re-persist exactly what the delete is discarding.
+func (m *Map[K, V]) DeleteNoEvict(key K) {
+	if len(m.shards) > 0 {
+		m.shardFor(key).DeleteNoEvict(key)
+		return
+	}
+	m.mu.Lock()
+	if e, ok := m.m[key]; ok {
+		m.remove(e)
+		delete(m.m, key)
+		m.len--
+	}
+	m.mu.Unlock()
+}
+
 // Clear removes all entries from the map.
 // OnEvict is called for each evicted entry.
 func (m *Map[K, V]) Clear() {
