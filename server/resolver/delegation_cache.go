@@ -1,8 +1,10 @@
 package resolver
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
@@ -24,6 +26,11 @@ type delegationEntry struct {
 	ds      []*dns.DS
 	ts      int64 // log.NowUnix() at store
 	ttl     int   // min(NS, DS) TTL, floor 10s, cap 7d
+
+	// refreshing CAS-guards the background refresh-ahead walk (one per
+	// entry at a time); the flag lives on the entry, so a promoted/evicted
+	// replacement starts unguarded.
+	refreshing atomic.Bool
 }
 
 // fresh reports whether the entry has not yet expired (lazy expiry on read).
@@ -191,6 +198,7 @@ func (r *Recursive) lookupDelegation(qname string, qtype uint16) (*delegationEnt
 	// Deepest fresh match wins — zones are walked deepest-first.
 	for _, z := range zones {
 		if e, ok := r.delegations.Get(z); ok && e.fresh() {
+			r.maybeRefreshDelegation(e)
 			return e, true
 		}
 		if r.spill != nil {
@@ -200,6 +208,47 @@ func (r *Recursive) lookupDelegation(qname string, qtype uint16) (*delegationEnt
 		}
 	}
 	return nil, false
+}
+
+// maybeRefreshDelegation spawns the background refresh-ahead walk for a
+// delegation entering the last fraction of its TTL.  The walk re-queries the
+// zone's NS type: the parent referral re-derives the NS RRset and DS chain,
+// storeDelegation re-stores the entry with fresh ts/ttl, and the walk's NS
+// resolution refreshes the address caches — while callers keep being served
+// from the still-fresh entry.  Nothing stale is ever served: the walk only
+// pre-warms the replacement before the expiry cliff.
+func (r *Recursive) maybeRefreshDelegation(e *delegationEntry) {
+	if r.ctx == nil {
+		return
+	}
+	remaining := e.ts + int64(e.ttl) - log.NowUnix()
+	if remaining <= 0 || remaining >= int64(e.ttl)/config.DefaultDelegationRefreshFraction {
+		return
+	}
+	if !e.refreshing.CompareAndSwap(false, true) {
+		return // a refresh walk is already running for this entry
+	}
+	// Global cap: a burst of expiring delegations must not multiply into a
+	// refresh storm (each walk is a full NS resolution).
+	if r.refreshInflight.Add(1) > config.DefaultDelegationRefreshMaxInflight {
+		r.refreshInflight.Add(-1)
+		e.refreshing.Store(false)
+		return
+	}
+	zone := e.zone
+	log.Debugf("RECURSION: delegation %s entering refresh window (remaining=%ds/%ds) — background re-validation",
+		zone, remaining, e.ttl)
+	go func() {
+		defer zdnsutil.HandlePanic("Delegation refresh")
+		defer r.refreshInflight.Add(-1)
+		defer e.refreshing.Store(false)
+		ctx, cancel := context.WithTimeout(r.ctx, config.DefaultDelegationRefreshTimeout)
+		defer cancel()
+		// The NS-type query keeps lookupDelegation from short-circuiting on
+		// this very entry (parent-side type skips the exact zone), so the
+		// walk genuinely re-consults the parent.
+		r.resolve(ctx, Question{Name: zone, Qtype: dns.TypeNS, Qclass: dns.ClassINET}, nil, 0, false, false)
+	}()
 }
 
 // resolveDelegationAddrs resolves the NS names in a delegation record to

@@ -114,6 +114,10 @@ type Recursive struct {
 	// config.DefaultMaxRecursiveInflightQueries — the last-line amplifier
 	// guard under the NS-address singleflight.
 	inFlightQueries atomic.Int64
+
+	// refreshInflight counts delegation refresh-ahead walks (bounded by
+	// config.DefaultDelegationRefreshMaxInflight) — see maybeRefreshDelegation.
+	refreshInflight atomic.Int64
 }
 
 // nsAddrFmtEntry is one memoized NS-address string set.

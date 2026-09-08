@@ -138,6 +138,16 @@ const (
 	DefaultResolutionFailureMaxStep = 7               // shift cap — 5s<<7 already exceeds the 5min cap
 	DefaultResolutionFailureCache   = 4096            // LRU capacity (resource-exhaustion bound, §5)
 
+	// Delegation refresh-ahead: once a cached zone-cut delegation enters the
+	// last 1/DefaultDelegationRefreshFraction of its TTL, one background
+	// NS-type walk re-derives the NS RRset, addresses and DS chain, and
+	// re-stores the entry — without it, expiry was a latency cliff: the next
+	// query paid the full cold re-walk from the deepest ancestor.  Stale
+	// delegations are never served; the walk only pre-warms the replacement.
+	DefaultDelegationRefreshFraction    = 4               // refresh inside the last quarter of the TTL
+	DefaultDelegationRefreshTimeout     = 5 * time.Second // per refresh walk
+	DefaultDelegationRefreshMaxInflight = 4               // global refresh cap (refresh storms)
+
 	// DefaultPoisonProbeTimeout bounds the TLD hijack probe query.
 	// The probe detects GFW-injected A/AAAA records at the delegation
 	// level before the authoritative query.  A bare UDP probe either
