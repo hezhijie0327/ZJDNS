@@ -1513,3 +1513,62 @@ func TestPoolReturnsToIdleAfterLoad(t *testing.T) {
 		t.Error("expected entries to be populated by the load")
 	}
 }
+
+// RFC 4035 §3.1.3 convention: answers carry the covered RRset first and the
+// RRSIG after it.  Latency sorting must not flip that — the RRSIG rides with
+// its RRset (owner + covered type), while CNAME records keep their
+// front-of-answer chain position.
+func TestSet_LatencySort_RRSIGAfterRRset(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	mc.hasLatencyData.Store(true)
+	// 2.2.2.2 probes fast, 1.1.1.1 slow → latency sort must flip the A pair.
+	mc.latencies.Set("2.2.2.2", latEntry{latency: 1, lastProbe: log.NowUnix()})
+	mc.latencies.Set("1.1.1.1", latEntry{latency: 99, lastProbe: log.NowUnix()})
+
+	sigA := &dns.RRSIG{Hdr: dns.Header{Name: "dash.example.com.", Class: dns.ClassINET, TTL: 300}, TypeCovered: dns.TypeA, Labels: 3}
+	sigCNAME := &dns.RRSIG{Hdr: dns.Header{Name: "chain.example.com.", Class: dns.ClassINET, TTL: 300}, TypeCovered: dns.TypeCNAME, Labels: 3}
+	cname := &dns.CNAME{Hdr: dns.Header{Name: "chain.example.com.", Class: dns.ClassINET, TTL: 300}, Target: "dash.example.com."}
+	a1 := &dns.A{Hdr: dns.Header{Name: "dash.example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("1.1.1.1")}
+	a2 := &dns.A{Hdr: dns.Header{Name: "dash.example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("2.2.2.2")}
+
+	// Wire order as received: [A slow, A fast, RRSIG A] for the chain target,
+	// and [CNAME, RRSIG CNAME] for the chain link.
+	mc.Set("dash.example.com.", dns.TypeA, dns.ClassINET, nil,
+		[]dns.RR{a1, a2, sigA}, nil, nil, true, 0)
+	mc.Set("chain.example.com.", dns.TypeCNAME, dns.ClassINET, nil,
+		[]dns.RR{cname, sigCNAME}, nil, nil, true, 0)
+
+	entry, found, _ := mc.Get("dash.example.com.", dns.TypeA, dns.ClassINET, nil)
+	if !found {
+		t.Fatal("A entry not found")
+	}
+	if err := entry.Unpack(); err != nil {
+		t.Fatal(err)
+	}
+	if len(entry.Answer) != 3 {
+		t.Fatalf("answer = %d records, want 3", len(entry.Answer))
+	}
+	// A records latency-sorted (2.2.2.2 first), RRSIG trails the RRset.
+	if got := entry.Answer[0].(*dns.A).Addr.String(); got != "2.2.2.2" {
+		t.Errorf("answer[0] = %s, want the fastest A (2.2.2.2)", got)
+	}
+	if got := entry.Answer[1].(*dns.A).Addr.String(); got != "1.1.1.1" {
+		t.Errorf("answer[1] = %s, want the slow A (1.1.1.1)", got)
+	}
+	if dns.RRToType(entry.Answer[2]) != dns.TypeRRSIG {
+		t.Errorf("answer[2] = %T, want the RRSIG last", entry.Answer[2])
+	}
+
+	entry2, found, _ := mc.Get("chain.example.com.", dns.TypeCNAME, dns.ClassINET, nil)
+	if !found {
+		t.Fatal("CNAME entry not found")
+	}
+	if err := entry2.Unpack(); err != nil {
+		t.Fatal(err)
+	}
+	if len(entry2.Answer) != 2 || dns.RRToType(entry2.Answer[0]) != dns.TypeCNAME || dns.RRToType(entry2.Answer[1]) != dns.TypeRRSIG {
+		t.Fatalf("chain answer = %v, want [CNAME, RRSIG]", entry2.Answer)
+	}
+}

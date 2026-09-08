@@ -42,33 +42,43 @@ func clonePooledOffsets(src []uint16) []uint16 {
 	return dst
 }
 
-// sortAnswerByLatency reorders A/AAAA records in entry.Answer by probe
-// latency (fastest first), keeping non-A/AAAA records (CNAME, etc.) at the
-// front in their original wire-format order. Latency is per-IP — all domains
-// sharing the same IP reuse the same row. Idempotent when ≤1 A/AAAA.
+// sortAnswerByLatency reorders ONLY the A/AAAA records in entry.Answer by
+// probe latency (fastest first), permuting them among their own slots — every
+// other record (CNAME, RRSIG, …) keeps its original position and order, so
+// RRSIGs stay attached after their RRset (RFC 4035 §3.1.3 convention) and
+// CNAME chains keep their wire order.  Latency is per-IP — all domains
+// sharing the same IP reuse the same row.  Idempotent when ≤1 A/AAAA.
 //
-// Uses a single pass over entry.Answer to separate A/AAAA from non-A/AAAA
-// records and collect IPs simultaneously, halving the iteration overhead.
-// sortAnswerByLatency reorders A/AAAA records by latency and reports whether
-// the order actually changed — when it did not, the pre-packed wire is
-// already optimal and the caller can skip the repack.
+// Reports whether the order actually changed — when it did not, the
+// pre-packed wire is already optimal and the caller can skip the repack.
 func (s *Cache) sortAnswerByLatency(entry *Entry) bool {
 	if !s.hasLatencyData.Load() || len(entry.Answer) <= 1 {
 		return false
 	}
-	original := slices.Clone(entry.Answer) // pointer copy — no RR deep clone
 
-	// Single pass: extract IP strings + collect for batch lookup.
+	// Single pass: collect the A/AAAA records and IPs.  slots records the
+	// A/AAAA slots in ascending order — the scatter destinations after the
+	// sort (the i-th sorted record belongs in the i-th address slot).
+	type slotRR struct {
+		slot int
+		rr   dns.RR
+	}
+	addrs := make([]slotRR, 0, len(entry.Answer))
+	slots := make([]int, 0, len(entry.Answer))
 	rrToIP := make(map[dns.RR]string, len(entry.Answer))
-	ips := make([]string, 0, len(entry.Answer))
-	for _, rr := range entry.Answer {
+	for i, rr := range entry.Answer {
 		if ip, ok := zdnsutil.ExtractIPString(rr); ok {
+			addrs = append(addrs, slotRR{slot: i, rr: rr})
+			slots = append(slots, i)
 			rrToIP[rr] = ip
-			ips = append(ips, ip)
 		}
 	}
-	if len(ips) <= 1 {
+	if len(addrs) <= 1 {
 		return false
+	}
+	ips := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		ips = append(ips, rrToIP[a.rr])
 	}
 
 	// Batch latency lookup from the in-memory map.
@@ -77,22 +87,11 @@ func (s *Cache) sortAnswerByLatency(entry *Entry) bool {
 		return false
 	}
 
-	// In-place sort using pre-computed IP strings — avoids O(n log n)
-	// type-switch calls inside the comparator.
-	slices.SortStableFunc(entry.Answer, func(a, b dns.RR) int {
-		aIP, aIsAddr := rrToIP[a]
-		bIP, bIsAddr := rrToIP[b]
-		if aIsAddr != bIsAddr {
-			if !aIsAddr {
-				return -1
-			}
-			return 1
-		}
-		if !aIsAddr {
-			return 0
-		}
-		aLat, aOK := latencies[aIP]
-		bLat, bOK := latencies[bIP]
+	// Sort only the address records — pre-computed IP strings avoid
+	// O(n log n) type-switch calls inside the comparator.
+	slices.SortStableFunc(addrs, func(a, b slotRR) int {
+		aLat, aOK := latencies[rrToIP[a.rr]]
+		bLat, bOK := latencies[rrToIP[b.rr]]
 		switch {
 		case aOK != bOK:
 			if aOK {
@@ -104,14 +103,20 @@ func (s *Cache) sortAnswerByLatency(entry *Entry) bool {
 				return aLat - bLat
 			}
 		}
-		return dns.Compare(a, b)
+		return dns.Compare(a.rr, b.rr)
 	})
-	for i := range entry.Answer {
-		if entry.Answer[i] != original[i] {
-			return true
+
+	// Scatter the i-th sorted record into the i-th A/AAAA slot — every other
+	// record keeps its original position (RRSIGs trail their RRset, CNAME
+	// chains keep their wire order).
+	changed := false
+	for i, a := range addrs {
+		if entry.Answer[slots[i]] != a.rr {
+			changed = true
+			entry.Answer[slots[i]] = a.rr
 		}
 	}
-	return false
+	return changed
 }
 
 // lookupIPLatencies fetches latencies for a batch of IPs from the in-memory
