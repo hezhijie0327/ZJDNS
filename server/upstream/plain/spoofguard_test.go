@@ -26,6 +26,15 @@ func spoofguardResponse(t *testing.T, answers, ns, extras []dns.RR, rcode uint16
 	return m.Data
 }
 
+// spoofguardQuery returns the query message the packed test responses answer
+// (UDPSize set so the EDNS gate is active, as a real EDNS query would be).
+func spoofguardQuery() *dns.Msg {
+	m := &dns.Msg{}
+	dnsutil.SetQuestion(m, "example.com.", dns.TypeA)
+	m.UDPSize = 4096
+	return m
+}
+
 func aRR(ip string) *dns.A {
 	return &dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 60}, Addr: netip.MustParseAddr(ip)}
 }
@@ -45,7 +54,7 @@ func TestSpoofguard_NonEDNSSingleAnswer_CollectedAsFallback(t *testing.T) {
 	raw := spoofguardResponse(t, []dns.RR{aRR("93.46.8.89")}, nil, nil, dns.RcodeSuccess)
 
 	s := &spoofguardState{}
-	if resp := s.processPacket(raw, len(raw), 4096, "1.2.3.4:53", false, 64, true); resp != nil {
+	if resp := s.processPacket(raw, len(raw), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp != nil {
 		t.Fatalf("expected nil (continue collecting), got a response")
 	}
 	if s.nonEDNS == nil {
@@ -60,7 +69,7 @@ func TestSpoofguard_NonEDNSSingleAnswer_CollectedAsFallback(t *testing.T) {
 	if s.nonEDNSSafe {
 		t.Fatal("bare single-answer non-EDNS must be marked ambiguous (nonEDNSSafe=false)")
 	}
-	if best := s.pickBest(); best == nil {
+	if best, _ := s.pickBest(); best == nil {
 		t.Fatal("pickBest must return the non-EDNS fallback")
 	}
 }
@@ -79,7 +88,7 @@ func TestSpoofguard_NonEDNS_CNAME_Safe(t *testing.T) {
 	raw := m.Data
 
 	s := &spoofguardState{}
-	if resp := s.processPacket(raw, len(raw), 4096, "1.2.3.4:53", false, 64, true); resp != nil {
+	if resp := s.processPacket(raw, len(raw), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp != nil {
 		t.Fatalf("expected nil (continue collecting), got a response")
 	}
 	if !s.nonEDNSSafe {
@@ -119,16 +128,16 @@ func TestSpoofguard_EDNSPreferredOverNonEDNSFallback(t *testing.T) {
 	s := &spoofguardState{}
 
 	fakeRaw := spoofguardResponse(t, []dns.RR{aRR("93.46.8.89")}, nil, nil, dns.RcodeSuccess)
-	if resp := s.processPacket(fakeRaw, len(fakeRaw), 4096, "1.2.3.4:53", false, 64, true); resp != nil {
+	if resp := s.processPacket(fakeRaw, len(fakeRaw), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp != nil {
 		t.Fatal("injected bare-A fake must be collected as fallback, not returned")
 	}
 
 	realRaw := spoofguardResponse(t, []dns.RR{aRR("142.250.80.4")}, nil, []dns.RR{optRR()}, dns.RcodeSuccess)
-	if resp := s.processPacket(realRaw, len(realRaw), 4096, "1.2.3.4:53", false, 64, true); resp != nil {
+	if resp := s.processPacket(realRaw, len(realRaw), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp != nil {
 		t.Fatal("EDNS response without TTL confidence must be collected, not returned")
 	}
 
-	best := s.pickBest()
+	best, _ := s.pickBest()
 	if best == nil {
 		t.Fatal("pickBest returned nil")
 	}
@@ -155,14 +164,14 @@ func TestSpoofguard_FastReturn_AuthoritySignals(t *testing.T) {
 		&dns.NS{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}, Ns: "ns1.example.com."},
 	}, nil, dns.RcodeSuccess)
 	s := &spoofguardState{}
-	if resp := s.processPacket(nsRaw, len(nsRaw), 4096, "1.2.3.4:53", false, 64, true); resp == nil {
+	if resp := s.processPacket(nsRaw, len(nsRaw), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp == nil {
 		t.Fatal("NS>0 must fast-return")
 	}
 
 	// AN>=2 — multi-answer responses are inherently trustworthy.
 	anRaw := spoofguardResponse(t, []dns.RR{aRR("1.1.1.1"), aRR("1.0.0.1")}, nil, nil, dns.RcodeSuccess)
 	s2 := &spoofguardState{}
-	if resp := s2.processPacket(anRaw, len(anRaw), 4096, "1.2.3.4:53", false, 64, true); resp == nil {
+	if resp := s2.processPacket(anRaw, len(anRaw), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp == nil {
 		t.Fatal("AN>=2 must fast-return")
 	}
 }
@@ -172,7 +181,7 @@ func TestSpoofguard_FastReturn_AuthoritySignals(t *testing.T) {
 func TestSpoofguard_EDNSFastAccept_TTLConfident(t *testing.T) {
 	raw := spoofguardResponse(t, []dns.RR{aRR("142.250.80.4")}, nil, []dns.RR{optRR()}, dns.RcodeSuccess)
 	s := &spoofguardState{}
-	if resp := s.processPacket(raw, len(raw), 4096, "1.2.3.4:53", true, 64, true); resp == nil {
+	if resp := s.processPacket(raw, len(raw), spoofguardQuery(), "1.2.3.4:53", true, 64, true); resp == nil {
 		t.Fatal("TTL-confident EDNS response must fast-accept")
 	}
 }
@@ -184,10 +193,10 @@ func TestSpoofguard_EDNSFastAccept_TTLConfident(t *testing.T) {
 func TestSpoofguard_IdenticalRepeat_ConfirmsImmediately(t *testing.T) {
 	raw := spoofguardResponse(t, []dns.RR{aRR("142.250.80.4")}, nil, []dns.RR{optRR()}, dns.RcodeSuccess)
 	s := &spoofguardState{}
-	if resp := s.processPacket(raw, len(raw), 4096, "1.2.3.4:53", false, 64, true); resp != nil {
+	if resp := s.processPacket(raw, len(raw), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp != nil {
 		t.Fatalf("first EDNS candidate must collect (nil), got a response")
 	}
-	if resp := s.processPacket(raw, len(raw), 4096, "1.2.3.4:53", false, 64, true); resp == nil {
+	if resp := s.processPacket(raw, len(raw), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp == nil {
 		t.Fatal("identical repeat must confirm and return immediately")
 	}
 }
@@ -199,10 +208,10 @@ func TestSpoofguard_MismatchedRepeat_KeepsCollecting(t *testing.T) {
 	raw1 := spoofguardResponse(t, []dns.RR{aRR("142.250.80.4")}, nil, []dns.RR{optRR()}, dns.RcodeSuccess)
 	raw2 := spoofguardResponse(t, []dns.RR{aRR("93.46.8.89")}, nil, []dns.RR{optRR()}, dns.RcodeSuccess)
 	s := &spoofguardState{}
-	if resp := s.processPacket(raw1, len(raw1), 4096, "1.2.3.4:53", false, 64, true); resp != nil {
+	if resp := s.processPacket(raw1, len(raw1), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp != nil {
 		t.Fatalf("first candidate must collect (nil), got a response")
 	}
-	if resp := s.processPacket(raw2, len(raw2), 4096, "1.2.3.4:53", false, 64, true); resp != nil {
+	if resp := s.processPacket(raw2, len(raw2), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp != nil {
 		t.Fatalf("mismatched repeat must keep collecting (nil), got a response")
 	}
 	if s.last == nil || s.prev == nil {
@@ -233,13 +242,54 @@ func TestSpoofguard_NonNOERROR_Collected(t *testing.T) {
 	// must not be dropped by the fallback gate.
 	raw := spoofguardResponse(t, nil, nil, nil, dns.RcodeNameError)
 	s := &spoofguardState{}
-	if resp := s.processPacket(raw, len(raw), 4096, "1.2.3.4:53", false, 64, true); resp != nil {
+	if resp := s.processPacket(raw, len(raw), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp != nil {
 		t.Fatal("non-NOERROR without authority signals must be collected, not returned early")
 	}
 	if s.last == nil {
 		t.Fatal("non-NOERROR response must be collected as a candidate")
 	}
-	if best := s.pickBest(); best == nil {
+	if best, _ := s.pickBest(); best == nil {
 		t.Fatal("pickBest must return the non-NOERROR candidate")
+	}
+}
+
+// TestSpoofguard_PickBest_TakesOwnership verifies pickBest clears the winning
+// slot: the returned message must be the caller's only reference, so the next
+// collect round can never recycle it while still referenced.
+func TestSpoofguard_PickBest_TakesOwnership(t *testing.T) {
+	raw := spoofguardResponse(t, []dns.RR{aRR("93.46.8.89")}, nil, nil, dns.RcodeSuccess)
+	s := &spoofguardState{}
+	if resp := s.processPacket(raw, len(raw), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp != nil {
+		t.Fatal("expected nil (continue collecting)")
+	}
+	best, ttl := s.pickBest()
+	if best == nil {
+		t.Fatal("pickBest must return the fallback")
+	}
+	if ttl != 64 {
+		t.Fatalf("pickBest TTL = %d, want 64", ttl)
+	}
+	if s.nonEDNS != nil {
+		t.Fatal("pickBest must clear the winning slot")
+	}
+}
+
+// TestSpoofguard_QuestionMismatch_Dropped verifies a datagram that does not
+// echo the query's question never enters the candidate set, whatever its
+// fast signals say.
+func TestSpoofguard_QuestionMismatch_Dropped(t *testing.T) {
+	m := &dns.Msg{}
+	dnsutil.SetQuestion(m, "other.example.org.", dns.TypeA)
+	m.Response = true
+	m.Answer = []dns.RR{aRR("93.46.8.89"), aRR("93.46.8.90")}
+	if err := m.Pack(); err != nil {
+		t.Fatalf("pack: %v", err)
+	}
+	s := &spoofguardState{}
+	if resp := s.processPacket(m.Data, len(m.Data), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp != nil {
+		t.Fatal("question-mismatched datagram must be dropped even with AN>=2")
+	}
+	if s.last != nil || s.nonEDNS != nil {
+		t.Fatal("no candidate may be retained from a mismatched datagram")
 	}
 }

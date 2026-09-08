@@ -148,8 +148,7 @@ func (s *spoofguardState) copyData(raw []byte, n int) []byte {
 }
 
 // unpackCandidate unpacks raw[:n] into a pooled message, detaching Data
-// before return; nil when the wire does not parse.  The five former inline
-// copies of this block had already drifted once (U5) (U9).
+// before return; nil when the wire does not parse.
 func (s *spoofguardState) unpackCandidate(raw []byte, n int) *dns.Msg {
 	resp := pool.DefaultMessage.Get()
 	resp.Data = s.copyData(raw, n)
@@ -161,9 +160,24 @@ func (s *spoofguardState) unpackCandidate(raw []byte, n int) *dns.Msg {
 	return resp
 }
 
+// unpackMatching unpacks a candidate and drops it when it does not echo the
+// query's question — a misrouted or forged datagram must never enter the
+// candidate set, whatever its fast signals say.
+func (s *spoofguardState) unpackMatching(raw []byte, n int, query *dns.Msg) *dns.Msg {
+	resp := s.unpackCandidate(raw, n)
+	if resp == nil {
+		return nil
+	}
+	if !matchQuestion(resp, query) {
+		pool.DefaultMessage.Put(resp)
+		return nil
+	}
+	return resp
+}
+
 // processPacket applies EDNS-gate and fast-return checks to a single raw packet.
 // Returns a response to return immediately, or nil to continue the loop.
-func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, addr string, ttlConfident bool, ttl uint8, spoofguardEnabled bool) *dns.Msg {
+func (s *spoofguardState) processPacket(raw []byte, n int, query *dns.Msg, addr string, ttlConfident bool, ttl uint8, spoofguardEnabled bool) *dns.Msg {
 	s.packets++
 	s.lastRecv = time.Now()
 
@@ -176,7 +190,7 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 	rcode := int(raw[3] & 0x0F)
 
 	if ancount >= 2 || nscount > 0 || ad == 1 {
-		resp := s.unpackCandidate(raw, n)
+		resp := s.unpackMatching(raw, n, query)
 		if resp == nil {
 			return nil
 		}
@@ -215,9 +229,9 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 	// When spoofguard is disabled (HopGuard-only mode), skip the EDNS gate
 	// entirely — HopGuard's TTL validation is the sole filter. The response
 	// has already passed HopGuard validation before entering processPacket.
-	if rcode == dns.RcodeSuccess && queryUDPSize > 0 {
+	if rcode == dns.RcodeSuccess && query.UDPSize > 0 {
 		if !spoofguardEnabled {
-			resp := s.unpackCandidate(raw, n)
+			resp := s.unpackMatching(raw, n, query)
 			if resp == nil {
 				return nil
 			}
@@ -225,7 +239,7 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 			s.lastTTL = ttl
 			return resp
 		}
-		resp := s.unpackCandidate(raw, n)
+		resp := s.unpackMatching(raw, n, query)
 		if resp == nil {
 			return nil
 		}
@@ -292,7 +306,7 @@ func (s *spoofguardState) processPacket(raw []byte, n int, queryUDPSize uint16, 
 		s.lastTTL = ttl
 		return resp
 	}
-	resp := s.unpackCandidate(raw, n)
+	resp := s.unpackMatching(raw, n, query)
 	if resp == nil {
 		return nil
 	}
@@ -353,35 +367,25 @@ func (s *spoofguardState) collectEDNSCandidate(resp *dns.Msg, ttlConfident bool,
 	return nil
 }
 
-// pickBestTTL returns the TTL of the candidate that pickBest would return.
-func (s *spoofguardState) pickBestTTL() uint8 {
-	if s.last != nil {
-		return s.lastTTL
-	}
-	if s.nonEDNS != nil {
-		return s.nonEDNSTTL
-	}
-	// pickBest prefers the richer prev when last is single-answer — feed
-	// the TTL of the record that will actually be served (U16).
-	if s.prev != nil {
-		return s.prevTTL
-	}
-	return 0
-}
-
-// pickBest returns the best candidate.  EDNS-bearing candidates are always
-// preferred; the non-EDNS fallback is only used when no EDNS response arrived
-// (e.g. authoritative servers that don't echo EDNS).  The fallback is served
+// pickBest returns the best candidate together with its TTL, taking
+// ownership of the winner: the winning slot is cleared and the losers are
+// returned to the pool, so the caller holds the only remaining reference to
+// the returned message.  EDNS-bearing candidates are always preferred; the
+// non-EDNS fallback is only used when no EDNS response arrived (e.g.
+// authoritative servers that don't echo EDNS).  The fallback is served
 // only after the collect window so a second (EDNS) candidate gets a chance to
 // outrank it.
-func (s *spoofguardState) pickBest() *dns.Msg {
+func (s *spoofguardState) pickBest() (best *dns.Msg, ttl uint8) {
 	// No EDNS candidate — fall back to non-EDNS (already validated as
 	// CNAME-bearing or multi-answer in processPacket).
 	if s.last == nil {
-		if s.nonEDNS != nil {
-			log.Debugf("UPSTREAM: spoofguard fell back to non-EDNS candidate (ans=%d, collected=%d)", s.nonEDNSAns, s.rejected)
+		if s.nonEDNS == nil {
+			return nil, 0
 		}
-		return s.nonEDNS
+		log.Debugf("UPSTREAM: spoofguard fell back to non-EDNS candidate (ans=%d, collected=%d)", s.nonEDNSAns, s.rejected)
+		resp, ttl := s.nonEDNS, s.nonEDNSTTL
+		s.nonEDNS = nil
+		return resp, ttl
 	}
 	// EDNS candidates exist — prefer them.  Discard non-EDNS fallback.
 	if s.nonEDNS != nil {
@@ -389,26 +393,40 @@ func (s *spoofguardState) pickBest() *dns.Msg {
 		s.nonEDNS = nil
 	}
 	if s.prev == nil {
-		return s.last
+		resp, ttl := s.last, s.lastTTL
+		s.last = nil
+		return resp, ttl
 	}
 	if s.lastAns == 1 && s.prevAns > 1 {
 		log.Debugf("UPSTREAM: spoofguard chose richer prev (ans=%d) over tail (ans=%d)", s.prevAns, s.lastAns)
 		pool.DefaultMessage.Put(s.last)
-		return s.prev
+		s.last = nil
+		resp, ttl := s.prev, s.prevTTL
+		s.prev = nil
+		return resp, ttl
 	}
 	if s.prevAns == 1 && s.lastAns > 1 {
 		log.Debugf("UPSTREAM: spoofguard chose richer tail (ans=%d) over prev (ans=%d)", s.lastAns, s.prevAns)
 		pool.DefaultMessage.Put(s.prev)
-		return s.last
+		s.prev = nil
+		resp, ttl := s.last, s.lastTTL
+		s.last = nil
+		return resp, ttl
 	}
 	// Equal answer count: pick randomly to avoid deterministic tail-win
 	// that a GFW attacker can exploit by delaying their fake response.
 	if rand.IntN(2) == 0 { //nolint:gosec // G404: tie-breaking — not cryptographic
 		log.Debugf("UPSTREAM: spoofguard chose prev (ans=%d, same richness, random)", s.prevAns)
 		pool.DefaultMessage.Put(s.last)
-		return s.prev
+		s.last = nil
+		resp, ttl := s.prev, s.prevTTL
+		s.prev = nil
+		return resp, ttl
 	}
 	log.Debugf("UPSTREAM: spoofguard chose tail (ans=%d, same richness, random)", s.lastAns)
 	pool.DefaultMessage.Put(s.prev)
-	return s.last
+	s.prev = nil
+	resp, ttl := s.last, s.lastTTL
+	s.last = nil
+	return resp, ttl
 }

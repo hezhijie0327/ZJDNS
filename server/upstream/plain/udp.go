@@ -41,8 +41,15 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 			// control messages, so both spoofguard and hopguard run over
 			// the pooled sockets (proxy ASSOCIATE sockets included; hopguard
 			// TTL capture degrades to unavailable over SOCKS5).
-			if resp, err := c.executeUDPCollect(ctx, msg, server); err == nil {
+			resp, err := c.executeUDPCollect(ctx, msg, server)
+			if err == nil {
 				return resp, nil
+			}
+			// An ambiguity verdict must never reach the single-read pooled
+			// path below — its first ID-matching datagram under injection is
+			// the spoof.  Surface it so the resolver retries over TCP.
+			if errors.Is(err, errAmbiguous) || errors.Is(err, errAmbiguousNoConfirm) {
+				return nil, err
 			}
 			// Pooled collect failed — fall through to pooled single.
 		}
@@ -307,7 +314,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					continue
 				}
 				ttlConfident := hg != nil && hg.Confident(server.Address) && pkt.TTL != 0
-				resp := sg.processPacket(pkt.Data, len(pkt.Data), msg.UDPSize, server.Address, ttlConfident, pkt.TTL, server.Spoofguard)
+				resp := sg.processPacket(pkt.Data, len(pkt.Data), msg, server.Address, ttlConfident, pkt.TTL, server.Spoofguard)
 				pkt.Release()
 				if resp != nil {
 					// Safe: fast-return (AN≥2/NS>0/AD=1), TTL-confident EDNS,
@@ -348,9 +355,9 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 				pollTimer.Reset(next)
 				if sg.last != nil && now.Sub(sg.lastRecv) > sg.collectWindow() {
 					// EDNS candidate — safe, return directly.
-					resp := sg.pickBest()
+					resp, respTTL := sg.pickBest()
 					if hg != nil {
-						hg.Feed(server.Address, sg.pickBestTTL())
+						hg.Feed(server.Address, respTTL)
 					}
 					if previous != nil {
 						pool.DefaultMessage.Put(previous)
@@ -360,7 +367,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					return resp, nil
 				}
 				if sg.last == nil && sg.nonEDNS != nil && now.Sub(sg.lastRecv) > sg.collectWindow() {
-					resp := sg.pickBest()
+					resp, respTTL := sg.pickBest()
 					uc.ReleaseCollect(matchKey)
 					if sg.nonEDNSSafe || sg.rejected <= 1 {
 						// CNAME-bearing — GFW does not inject CNAME chains.
@@ -370,7 +377,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 						// safe to serve directly (no confirmation re-query
 						// latency for legitimate no-EDNS servers).
 						if hg != nil {
-							hg.Feed(server.Address, sg.pickBestTTL())
+							hg.Feed(server.Address, respTTL)
 						}
 						if previous != nil {
 							pool.DefaultMessage.Put(previous)
@@ -382,7 +389,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					// matching re-query before serving (pure UDP).
 					if previous != nil && sameUDPAnswer(previous, resp) {
 						if hg != nil {
-							hg.Feed(server.Address, sg.pickBestTTL())
+							hg.Feed(server.Address, respTTL)
 						}
 						pool.DefaultMessage.Put(previous)
 						resp.ID = originalID
@@ -399,7 +406,9 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					break collect // re-query in the next round
 				}
 				if now.After(maxDeadline) {
-					resp := sg.pickBest()
+					// Classify before pickBest — it clears the winning slot.
+					safe := sg.last != nil || sg.nonEDNSSafe || sg.rejected <= 1
+					resp, respTTL := sg.pickBest()
 					if resp == nil {
 						if previous != nil {
 							pool.DefaultMessage.Put(previous)
@@ -407,9 +416,9 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 						uc.ReleaseCollect(matchKey)
 						return nil, errNoResponse
 					}
-					if sg.last != nil || sg.nonEDNSSafe || sg.rejected <= 1 {
+					if safe {
 						if hg != nil {
-							hg.Feed(server.Address, sg.pickBestTTL())
+							hg.Feed(server.Address, respTTL)
 						}
 						if previous != nil {
 							pool.DefaultMessage.Put(previous)
