@@ -327,10 +327,15 @@ func (s *Server) respondQUIC(stream *quic.Stream, response *dns.Msg) error {
 		return errors.New("response is nil")
 	}
 
-	err := response.Pack()
 	respBuf := response.Data
-	if err != nil {
-		return fmt.Errorf("pack response: %w", err)
+	if len(respBuf) == 0 {
+		// Pre-packed cache-hit wires are served verbatim — Pack would
+		// re-serialize the nil RR sections into a header-only wire.
+		err := response.Pack()
+		if err != nil {
+			return fmt.Errorf("pack response: %w", err)
+		}
+		respBuf = response.Data
 	}
 
 	buf := pool.DefaultBuffer.Get()

@@ -312,39 +312,20 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			}
 			defer pool.DefaultMessage.Put(response)
 
-			// Pack directly into the frame's spare capacity — see
-			// plain/tcp.go for the capacity-class reasoning (Message.Put's
-			// ReleaseWire skips this Data, so the frame is released exactly
-			// once, after the writer's write).
+			// Build the framed wire: pack straight into the frame's spare
+			// capacity, or copy a pre-packed cache-hit wire verbatim (Pack
+			// would re-serialize its nil RR sections into a header-only
+			// frame).  A pooled frame is released exactly once — after the
+			// writer's write (Message.Put's ReleaseWire skips cleared Data).
 			frameBuf := pool.DefaultBuffer.Get()
-			frameWireCap := cap(frameBuf) - zdnsutil.DNSFramePrefixLen
-			response.Data = frameBuf[2:2:frameWireCap]
-			err := response.Pack()
-			if err != nil {
-				log.Debugf("TLS: response pack error: %v", err)
+			writeBuf, pooled, ok := zdnsutil.PackStreamFrame(frameBuf, response)
+			if !ok {
+				log.Debugf("TLS: DoT response pack/size error")
 				pool.DefaultBuffer.Put(frameBuf)
 				return
 			}
-			wireLen := len(response.Data)
-			var writeBuf []byte
-			var pooled bool
-			if cap(response.Data) == frameWireCap {
-				// Bounded by frameWireCap (8190) — inside the 16-bit prefix.
-				binary.BigEndian.PutUint16(frameBuf[:zdnsutil.DNSFramePrefixLen], uint16(wireLen)) //nolint:gosec // G115: bounded by frameWireCap
-				writeBuf = frameBuf[:zdnsutil.DNSFramePrefixLen+wireLen]
-				pooled = true
-			} else {
-				if wireLen > dns.MaxMsgSize {
-					// A 16-bit length prefix cannot represent this response;
-					// a wrapped length would desync the whole TLS stream.
-					log.Debugf("TLS: dropping DoT response of %d bytes (exceeds 16-bit frame)", wireLen)
-					pool.DefaultBuffer.Put(frameBuf)
-					return
-				}
-				writeBuf = make([]byte, zdnsutil.DNSFramePrefixLen+wireLen)
-				binary.BigEndian.PutUint16(writeBuf[:zdnsutil.DNSFramePrefixLen], uint16(wireLen)) //nolint:gosec // G115: bounded by the MaxMsgSize check above
-				copy(writeBuf[zdnsutil.DNSFramePrefixLen:], response.Data)
-				pool.DefaultBuffer.Put(frameBuf)
+			if !pooled {
+				pool.DefaultBuffer.Put(frameBuf) // response outgrew the frame — heap frame in use
 			}
 
 			select {

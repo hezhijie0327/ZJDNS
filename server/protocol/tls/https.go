@@ -202,9 +202,13 @@ func (s *Server) respondDOH(w http.ResponseWriter, response *dns.Msg) error {
 		return nil
 	}
 
-	if err := response.Pack(); err != nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return fmt.Errorf("pack response: %w", err)
+	// Pre-packed cache-hit wires are served verbatim — Pack would
+	// re-serialize the nil RR sections into a header-only wire.
+	if len(response.Data) == 0 {
+		if err := response.Pack(); err != nil {
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return fmt.Errorf("pack response: %w", err)
+		}
 	}
 	bytes := response.Data
 

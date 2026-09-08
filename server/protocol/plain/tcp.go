@@ -282,44 +282,20 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn, handler
 			}
 			defer pool.DefaultMessage.Put(response)
 
-			// Pack directly into the frame's spare capacity: the frame is
-			// [2-byte prefix][wire], so pointing Pack at frameBuf[2:]
-			// removes the former full-wire copy per response.  Pack detaches
-			// to a fresh buffer when the message exceeds the frame budget —
-			// detected via the capacity check below (rare: >8KB responses).
-			// Message.Put's ReleaseWire skips this Data (capacity class is
-			// not the 2048 wire class), so the frame is released exactly
-			// once — after the writer's writev.
+			// Build the framed wire: pack straight into the frame's spare
+			// capacity, or copy a pre-packed cache-hit wire verbatim (Pack
+			// would re-serialize its nil RR sections into a header-only
+			// frame).  A pooled frame is released exactly once — after the
+			// writer's writev (Message.Put's ReleaseWire skips cleared Data).
 			frameBuf := pool.DefaultBuffer.Get()
-			frameWireCap := cap(frameBuf) - zdnsutil.DNSFramePrefixLen
-			response.Data = frameBuf[2:2:frameWireCap]
-			err := response.Pack()
-			if err != nil {
-				log.Debugf("PLAIN: TCP response pack error: %v", err)
+			writeBuf, pooled, ok := zdnsutil.PackStreamFrame(frameBuf, response)
+			if !ok {
+				log.Debugf("PLAIN: TCP response pack/size error")
 				pool.DefaultBuffer.Put(frameBuf)
 				return
 			}
-			wireLen := len(response.Data)
-			var writeBuf []byte
-			var pooled bool
-			if cap(response.Data) == frameWireCap {
-				// A 16-bit prefix bounds the wire at 65535; the in-place
-				// path is bounded by frameWireCap (8190), so no check needed.
-				binary.BigEndian.PutUint16(frameBuf[:zdnsutil.DNSFramePrefixLen], uint16(wireLen)) //nolint:gosec // G115: bounded by frameWireCap
-				writeBuf = frameBuf[:zdnsutil.DNSFramePrefixLen+wireLen]
-				pooled = true
-			} else {
-				if wireLen > dns.MaxMsgSize {
-					// A 16-bit length prefix cannot represent this response;
-					// a wrapped length would desync the whole TCP stream.
-					log.Debugf("PLAIN: dropping TCP response of %d bytes (exceeds 16-bit frame)", wireLen)
-					pool.DefaultBuffer.Put(frameBuf)
-					return
-				}
-				writeBuf = make([]byte, zdnsutil.DNSFramePrefixLen+wireLen)
-				binary.BigEndian.PutUint16(writeBuf[:zdnsutil.DNSFramePrefixLen], uint16(wireLen)) //nolint:gosec // G115: bounded by the MaxMsgSize check above
-				copy(writeBuf[zdnsutil.DNSFramePrefixLen:], response.Data)
-				pool.DefaultBuffer.Put(frameBuf)
+			if !pooled {
+				pool.DefaultBuffer.Put(frameBuf) // response outgrew the frame — heap frame in use
 			}
 
 			select {

@@ -134,10 +134,14 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 	}
 	defer pool.DefaultMessage.Put(resp)
 
-	if err := resp.Pack(); err != nil {
-		log.Debugf("TLCP: DoH pack error: %v", err)
-		http.Error(w, "pack error", http.StatusInternalServerError)
-		return
+	// Pre-packed cache-hit wires are served verbatim — Pack would
+	// re-serialize the nil RR sections into a header-only wire.
+	if len(resp.Data) == 0 {
+		if err := resp.Pack(); err != nil {
+			log.Debugf("TLCP: DoH pack error: %v", err)
+			http.Error(w, "pack error", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", dnshttp.MimeType)

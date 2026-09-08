@@ -2,8 +2,10 @@ package dnsutil
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"net"
+	"net/netip"
 	"slices"
 	"testing"
 	"time"
@@ -181,5 +183,89 @@ func TestWriteTCPMsgSegmented_SegSizeLargerThanPayload(t *testing.T) {
 	}
 	if n != len(msg) {
 		t.Errorf("expected %d bytes written, got %d", len(msg), n)
+	}
+}
+
+// TestPackStreamFrame_PrePacked verifies the cache-hit direct-send path: a
+// response whose Data is populated and RR sections nil must be copied into
+// the frame verbatim — re-Packing would serialize the nil sections into a
+// header-only wire.
+func TestPackStreamFrame_PrePacked(t *testing.T) {
+	q := new(dns.Msg)
+	mdnsutil.SetQuestion(q, "example.com.", dns.TypeA)
+	if err := q.Pack(); err != nil {
+		t.Fatal(err)
+	}
+	wire := q.Data
+	msg := new(dns.Msg)
+	msg.Data = wire
+	msg.Response = true
+
+	dst := make([]byte, 0, 8192)
+	frame, aliased, ok := PackStreamFrame(dst, msg)
+	if !ok || !aliased {
+		t.Fatalf("ok=%v aliased=%v, want true/true", ok, aliased)
+	}
+	if len(frame) != DNSFramePrefixLen+len(wire) {
+		t.Fatalf("frame len = %d, want %d", len(frame), DNSFramePrefixLen+len(wire))
+	}
+	if !bytes.Equal(frame[DNSFramePrefixLen:], wire) {
+		t.Fatal("pre-packed wire must be copied verbatim")
+	}
+	if int(binary.BigEndian.Uint16(frame[:DNSFramePrefixLen])) != len(wire) {
+		t.Fatal("length prefix must carry the wire length")
+	}
+	if msg.Data == nil {
+		t.Fatal("pre-packed Data must stay set — its owner releases it via Message.Put")
+	}
+}
+
+// TestPackStreamFrame_PacksIntoSpare verifies the normal path packs into
+// dst's spare capacity and clears Data afterwards.
+func TestPackStreamFrame_PacksIntoSpare(t *testing.T) {
+	msg := new(dns.Msg)
+	mdnsutil.SetQuestion(msg, "example.com.", dns.TypeA)
+	msg.Response = true
+	msg.Answer = []dns.RR{&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 60}, Addr: netip.MustParseAddr("192.0.2.1")}}
+
+	dst := make([]byte, 0, 8192)
+	frame, aliased, ok := PackStreamFrame(dst, msg)
+	if !ok || !aliased {
+		t.Fatalf("ok=%v aliased=%v, want true/true", ok, aliased)
+	}
+	if len(frame) <= DNSFramePrefixLen {
+		t.Fatal("packed frame must carry a wire")
+	}
+	if msg.Data != nil {
+		t.Fatal("packed Data must be cleared so Message.Put never releases frame memory")
+	}
+	un := new(dns.Msg)
+	un.Data = frame[DNSFramePrefixLen:]
+	if err := un.Unpack(); err != nil {
+		t.Fatalf("packed frame does not unpack: %v", err)
+	}
+	if len(un.Answer) != 1 {
+		t.Fatalf("unpacked answer count = %d, want 1", len(un.Answer))
+	}
+}
+
+// TestPackStreamFrame_OversizeHeapFallback verifies a pre-packed wire larger
+// than dst lands on the heap frame and is reported as not aliased.
+func TestPackStreamFrame_OversizeHeapFallback(t *testing.T) {
+	wire := make([]byte, 4096)
+	msg := new(dns.Msg)
+	msg.Data = wire
+	msg.Response = true
+
+	dst := make([]byte, 0, 512)
+	frame, aliased, ok := PackStreamFrame(dst, msg)
+	if !ok || aliased {
+		t.Fatalf("ok=%v aliased=%v, want true/false", ok, aliased)
+	}
+	if len(frame) != DNSFramePrefixLen+len(wire) {
+		t.Fatalf("frame len = %d, want %d", len(frame), DNSFramePrefixLen+len(wire))
+	}
+	if !bytes.Equal(frame[DNSFramePrefixLen:], wire) {
+		t.Fatal("oversize wire must be copied into the heap frame")
 	}
 }

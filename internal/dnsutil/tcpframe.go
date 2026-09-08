@@ -1,6 +1,7 @@
 package dnsutil
 
 import (
+	"encoding/binary"
 	"errors"
 	"io"
 	"math/rand/v2"
@@ -47,6 +48,49 @@ func ReadTCPMsg(conn net.Conn) (*dns.Msg, error) {
 	}
 	msg.Data = slices.Clone(msg.Data) // detach from pool buffer before deferred Put
 	return msg, nil
+}
+
+// PackStreamFrame packs resp into dst as a stream frame (2-byte length
+// prefix + wire, RFC 1035 §4.2.2).  dst must be a caller-provided buffer
+// with spare capacity for the prefix (typically a pooled frame buffer);
+// the packed path serializes straight into dst's spare capacity.
+//
+// A pre-packed resp (Data populated, RR sections nil — the cache-hit
+// direct-send path) is copied verbatim: re-Packing it would serialize the
+// nil sections into a header-only wire.  resp.Data is cleared once its
+// wire has been placed, except for pre-packed wires, which their owner
+// (the cache entry's per-Get buffer) releases via Message.Put.
+//
+// aliased reports whether frame is backed by dst; the caller keeps dst
+// (or returns it to its pool) after the frame's write completes.  A wire
+// beyond dst's capacity lands on the heap.  ok=false on pack error or a
+// wire that the 16-bit prefix cannot represent.
+func PackStreamFrame(dst []byte, resp *dns.Msg) (frame []byte, aliased, ok bool) {
+	wire := resp.Data
+	if len(wire) == 0 {
+		resp.Data = dst[DNSFramePrefixLen : DNSFramePrefixLen : cap(dst)-DNSFramePrefixLen]
+		if err := resp.Pack(); err != nil {
+			resp.Data = nil
+			return nil, false, false
+		}
+		wire = resp.Data
+		resp.Data = nil
+	}
+	if len(wire) > dns.MaxMsgSize {
+		return nil, false, false
+	}
+	if DNSFramePrefixLen+len(wire) > cap(dst) {
+		frame = make([]byte, DNSFramePrefixLen+len(wire))
+		binary.BigEndian.PutUint16(frame[:DNSFramePrefixLen], uint16(len(wire))) //nolint:gosec // G115: bounded by the MaxMsgSize check above
+		copy(frame[DNSFramePrefixLen:], wire)
+		return frame, false, true
+	}
+	frame = dst[:DNSFramePrefixLen+len(wire)]
+	binary.BigEndian.PutUint16(frame[:DNSFramePrefixLen], uint16(len(wire))) //nolint:gosec // G115: bounded by the MaxMsgSize check above
+	if len(resp.Data) > 0 {
+		copy(frame[DNSFramePrefixLen:], wire)
+	}
+	return frame, true, true
 }
 
 // WriteTCPMsgSegmented writes a DNS wire-format message to conn with a
