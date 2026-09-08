@@ -19,6 +19,7 @@ type StatsResult struct {
 	Entries int64
 
 	Total, Hits, Misses, Stales, Zones, Errors, Blocked, Badcookie                        int64
+	Any, ACL                                                                              int64
 	UDP, TCP, TLS, QUIC, HTTPS, HTTP3, DTLS, DNSCrypt, DNSCryptTCP, TLCP, HTTPTLCP, DTLCP int64
 	Noerr, Formerr, Servfail, NXDomain, Notimp, Refused, Other                            int64
 	Secure, Insecure, Bogus, Poisoned                                                     int64
@@ -30,13 +31,21 @@ type StatsResult struct {
 }
 
 // counters holds every aggregation dimension of the query stats.
-// All fields are atomic.Int64 so the hot-path Record needs no locks.
+//
+// Dimensions are packed into two combo-indexed counter arrays instead of one
+// atomic.Int64 per metric: Record adds once per combo array, so a query pays
+// three atomic adds (totalMS + result×protocol + rcode×dnssec×poisoned)
+// instead of five — total was the single most contended line under load —
+// and concurrent protocols land on different cache lines instead of
+// false-sharing adjacent fields.  Snapshot decodes each nonzero combo slot
+// back into its per-dimension metrics, so the public StatsResult shape is
+// unchanged.  A single packed 64-bit word per query is NOT possible: counts
+// accumulated in bit-fields carry across dimension boundaries, corrupting
+// the per-dimension totals.
 type counters struct {
-	total, hits, misses, stales, zones, errors, blocked, badcookie                        atomic.Int64
-	udp, tcp, tls, quic, https, http3, dtls, dnscrypt, dnscryptTCP, tlcp, httpTLCP, dtlcp atomic.Int64
-	noerr, formerr, servfail, nxdomain, notimp, refused, other                            atomic.Int64
-	secure, insecure, bogus, poisoned                                                     atomic.Int64
-	totalMS                                                                               atomic.Int64
+	resultProto       [resultCount * protoCount]atomic.Int64
+	rcodeDnssecPoison [rcodeCount * dnssecCount * poisonCount]atomic.Int64
+	totalMS           atomic.Int64
 }
 
 // rcodeJournal tracks per-RCODE domain counts. Each RCODE owns a bounded
@@ -62,6 +71,60 @@ type Journal struct {
 // e.g. bits carried by the OPT record).  Bounding the bucket space keeps the
 // journal immune to attacker-influenced RCODE diversity (M2).
 const maxRcodeBucket = 24
+
+// Result dimension indices.  "any" (RFC 8482) and "acl" (REFUSED by access
+// control) are real classifications set by the middleware — they previously
+// only reached the derived total; as explicit slots every query is now
+// counted in exactly one result bucket.
+const (
+	idxResultHit = iota
+	idxResultMiss
+	idxResultStale
+	idxResultZone
+	idxResultAny
+	idxResultACL
+	idxResultError
+	idxResultBlocked
+	idxResultBadcookie
+	idxResultOther
+)
+
+const (
+	idxProtoUDP = iota
+	idxProtoTCP
+	idxProtoTLS
+	idxProtoQUIC
+	idxProtoHTTPS
+	idxProtoHTTP3
+	idxProtoDTLS
+	idxProtoDNSCrypt
+	idxProtoDNSCryptTCP
+	idxProtoTLCP
+	idxProtoHTTPTLCP
+	idxProtoDTLCP
+	idxProtoOther
+)
+
+// Rcode dimension: standard RCODEs 0-5 keep their own slots (mirroring the
+// former rcodeJournal bucketing), everything else shares one.
+const (
+	idxRcodeOther = 6
+	rcodeCount    = idxRcodeOther + 1
+)
+
+const (
+	idxDNSSECNone = iota
+	idxDNSSECSecure
+	idxDNSSECInsecure
+	idxDNSSECBogus
+)
+
+const (
+	resultCount = idxResultOther + 1
+	protoCount  = idxProtoOther + 1
+	dnssecCount = idxDNSSECBogus + 1
+	poisonCount = 2
+)
 
 // rcodeBucket folds an extended RCODE into the bounded bucket space: the
 // standard RCODEs 0-23 keep their own journal, everything else shares one
@@ -105,123 +168,120 @@ func NewJournal(journalCapacity int) *Journal {
 }
 
 // Record updates the aggregated counters and, for non-hit results, the
-// per-RCODE domain journal. Pure memory: atomic adds + one short critical
-// section. Must not be called after Close (there is none — the Journal is
+// per-RCODE domain journal. Pure memory: three atomic adds + two combo-index
+// switches. Must not be called after Close (there is none — the Journal is
 // owned by the cache and dies with it).
 func (m *Journal) Record(r *RequestRecord) {
 	c := &m.cnt
-	c.total.Add(1)
 	c.totalMS.Add(r.ResponseTime)
-	switch r.Result {
-	case "hit":
-		c.hits.Add(1)
-	case "miss":
-		c.misses.Add(1)
-	case "stale":
-		c.stales.Add(1)
-	case "zone":
-		c.zones.Add(1)
-	case "error":
-		c.errors.Add(1)
-	case "blocked":
-		c.blocked.Add(1)
-	case "badcookie":
-		c.badcookie.Add(1)
-	}
-	switch r.Protocol {
-	case "udp":
-		c.udp.Add(1)
-	case "tcp":
-		c.tcp.Add(1)
-	case "tls":
-		c.tls.Add(1)
-	case "quic":
-		c.quic.Add(1)
-	case "https":
-		c.https.Add(1)
-	case "http3":
-		c.http3.Add(1)
-	case "dtls":
-		c.dtls.Add(1)
-	case "dnscrypt":
-		c.dnscrypt.Add(1)
-	case "dnscrypt-tcp":
-		c.dnscryptTCP.Add(1)
-	case "tlcp":
-		c.tlcp.Add(1)
-	case "http-tlcp":
-		c.httpTLCP.Add(1)
-	case "dtlcp":
-		c.dtlcp.Add(1)
-	}
-	switch r.Rcode {
-	case 0:
-		c.noerr.Add(1)
-	case 1:
-		c.formerr.Add(1)
-	case 2:
-		c.servfail.Add(1)
-	case 3:
-		c.nxdomain.Add(1)
-	case 4:
-		c.notimp.Add(1)
-	case 5:
-		c.refused.Add(1)
-	default:
-		c.other.Add(1)
-	}
-	switch r.DNSSECStatus {
-	case "secure":
-		c.secure.Add(1)
-	case "insecure":
-		c.insecure.Add(1)
-	case "bogus":
-		c.bogus.Add(1)
-	}
-	if r.Poisoned {
-		c.poisoned.Add(1)
-	}
+	c.resultProto[resultIndex(r.Result)*protoCount+protocolIndex(r.Protocol)].Add(1)
+	c.rcodeDnssecPoison[rcodeIndex(r.Rcode)*(dnssecCount*poisonCount)+
+		dnssecIndex(r.DNSSECStatus)*poisonCount+boolIndex(r.Poisoned)].Add(1)
 
 	if r.Result != "hit" {
 		m.journal.record(r.Rcode, r.Qname)
 	}
 }
 
+// resultIndex maps a Result classification to its combo-slot index.
+func resultIndex(result string) int {
+	switch result {
+	case "hit":
+		return idxResultHit
+	case "miss":
+		return idxResultMiss
+	case "stale":
+		return idxResultStale
+	case "zone":
+		return idxResultZone
+	case "any":
+		return idxResultAny
+	case "acl":
+		return idxResultACL
+	case "error":
+		return idxResultError
+	case "blocked":
+		return idxResultBlocked
+	case "badcookie":
+		return idxResultBadcookie
+	default:
+		return idxResultOther
+	}
+}
+
+// protocolIndex maps a transport label to its combo-slot index.
+func protocolIndex(protocol string) int {
+	switch protocol {
+	case "udp":
+		return idxProtoUDP
+	case "tcp":
+		return idxProtoTCP
+	case "tls":
+		return idxProtoTLS
+	case "quic":
+		return idxProtoQUIC
+	case "https":
+		return idxProtoHTTPS
+	case "http3":
+		return idxProtoHTTP3
+	case "dtls":
+		return idxProtoDTLS
+	case "dnscrypt":
+		return idxProtoDNSCrypt
+	case "dnscrypt-tcp":
+		return idxProtoDNSCryptTCP
+	case "tlcp":
+		return idxProtoTLCP
+	case "http-tlcp":
+		return idxProtoHTTPTLCP
+	case "dtlcp":
+		return idxProtoDTLCP
+	default:
+		return idxProtoOther
+	}
+}
+
+// rcodeIndex folds an extended RCODE (24..4095, e.g. bits carried by the OPT
+// record) into the bounded slot space, mirroring the journal's bucketing.
+func rcodeIndex(rcode int) int {
+	if rcode < 0 || rcode > idxRcodeOther-1 {
+		return idxRcodeOther
+	}
+	return rcode
+}
+
+// dnssecIndex maps a DNSSEC validation status to its combo-slot index.
+func dnssecIndex(status string) int {
+	switch status {
+	case "secure":
+		return idxDNSSECSecure
+	case "insecure":
+		return idxDNSSECInsecure
+	case "bogus":
+		return idxDNSSECBogus
+	default:
+		return idxDNSSECNone
+	}
+}
+
+// boolIndex maps a bool to its combo-slot half (poisoned).
+func boolIndex(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // ResetCounters zeroes all atomic counters. Used by the .stats.clear CHAOS
 // control endpoint.
 func (m *Journal) ResetCounters() {
 	c := &m.cnt
-	c.total.Store(0)
-	c.hits.Store(0)
-	c.misses.Store(0)
-	c.stales.Store(0)
-	c.zones.Store(0)
-	c.errors.Store(0)
-	c.blocked.Store(0)
-	c.badcookie.Store(0)
-	c.udp.Store(0)
-	c.tcp.Store(0)
-	c.tls.Store(0)
-	c.quic.Store(0)
-	c.https.Store(0)
-	c.http3.Store(0)
-	c.dtls.Store(0)
-	c.dnscrypt.Store(0)
-	c.dnscryptTCP.Store(0)
-	c.tlcp.Store(0)
-	c.httpTLCP.Store(0)
-	c.dtlcp.Store(0)
-	c.noerr.Store(0)
-	c.formerr.Store(0)
-	c.servfail.Store(0)
-	c.nxdomain.Store(0)
-	c.notimp.Store(0)
-	c.refused.Store(0)
-	c.other.Store(0)
-	c.secure.Store(0)
-	c.insecure.Store(0)
-	c.bogus.Store(0)
-	c.poisoned.Store(0)
+	for i := range c.resultProto {
+		c.resultProto[i].Store(0)
+	}
+	for i := range c.rcodeDnssecPoison {
+		c.rcodeDnssecPoison[i].Store(0)
+	}
 	c.totalMS.Store(0)
 }
 
@@ -235,43 +295,103 @@ func (m *Journal) ResetJournal() {
 
 // Snapshot returns a consistent point-in-time view of all counters and the
 // per-RCODE top-N journal (top 10 per RCODE). entryCount is the cache's entry
-// count, passed through from the caller.
+// count, passed through from the caller.  Total is derived as the sum of the
+// result buckets — every Record adds to exactly one, so the sum is exact.
 func (m *Journal) Snapshot(entryCount int64) *StatsResult {
-	c := &m.cnt
-	return &StatsResult{
-		Entries:     entryCount,
-		Total:       c.total.Load(),
-		Hits:        c.hits.Load(),
-		Misses:      c.misses.Load(),
-		Stales:      c.stales.Load(),
-		Zones:       c.zones.Load(),
-		Errors:      c.errors.Load(),
-		Blocked:     c.blocked.Load(),
-		Badcookie:   c.badcookie.Load(),
-		UDP:         c.udp.Load(),
-		TCP:         c.tcp.Load(),
-		TLS:         c.tls.Load(),
-		QUIC:        c.quic.Load(),
-		HTTPS:       c.https.Load(),
-		HTTP3:       c.http3.Load(),
-		DTLS:        c.dtls.Load(),
-		DNSCrypt:    c.dnscrypt.Load(),
-		DNSCryptTCP: c.dnscryptTCP.Load(),
-		TLCP:        c.tlcp.Load(),
-		HTTPTLCP:    c.httpTLCP.Load(),
-		DTLCP:       c.dtlcp.Load(),
-		Noerr:       c.noerr.Load(),
-		Formerr:     c.formerr.Load(),
-		Servfail:    c.servfail.Load(),
-		NXDomain:    c.nxdomain.Load(),
-		Notimp:      c.notimp.Load(),
-		Refused:     c.refused.Load(),
-		Other:       c.other.Load(),
-		Secure:      c.secure.Load(),
-		Insecure:    c.insecure.Load(),
-		Bogus:       c.bogus.Load(),
-		Poisoned:    c.poisoned.Load(),
-		TotalMS:     c.totalMS.Load(),
-		TopByRcode:  m.journal.topAll(10),
+	s := &StatsResult{
+		Entries:    entryCount,
+		TopByRcode: m.journal.topAll(10),
 	}
+	c := &m.cnt
+	for i := range c.resultProto {
+		v := c.resultProto[i].Load()
+		if v == 0 {
+			continue
+		}
+		result, proto := i/protoCount, i%protoCount
+		s.Total += v
+		switch result {
+		case idxResultHit:
+			s.Hits += v
+		case idxResultMiss:
+			s.Misses += v
+		case idxResultStale:
+			s.Stales += v
+		case idxResultZone:
+			s.Zones += v
+		case idxResultAny:
+			s.Any += v
+		case idxResultACL:
+			s.ACL += v
+		case idxResultError:
+			s.Errors += v
+		case idxResultBlocked:
+			s.Blocked += v
+		case idxResultBadcookie:
+			s.Badcookie += v
+		}
+		switch proto {
+		case idxProtoUDP:
+			s.UDP += v
+		case idxProtoTCP:
+			s.TCP += v
+		case idxProtoTLS:
+			s.TLS += v
+		case idxProtoQUIC:
+			s.QUIC += v
+		case idxProtoHTTPS:
+			s.HTTPS += v
+		case idxProtoHTTP3:
+			s.HTTP3 += v
+		case idxProtoDTLS:
+			s.DTLS += v
+		case idxProtoDNSCrypt:
+			s.DNSCrypt += v
+		case idxProtoDNSCryptTCP:
+			s.DNSCryptTCP += v
+		case idxProtoTLCP:
+			s.TLCP += v
+		case idxProtoHTTPTLCP:
+			s.HTTPTLCP += v
+		case idxProtoDTLCP:
+			s.DTLCP += v
+		}
+	}
+	for i := range c.rcodeDnssecPoison {
+		v := c.rcodeDnssecPoison[i].Load()
+		if v == 0 {
+			continue
+		}
+		rc, rem := i/(dnssecCount*poisonCount), i%(dnssecCount*poisonCount)
+		dnssec, poison := rem/poisonCount, rem%poisonCount
+		switch rc {
+		case 0:
+			s.Noerr += v
+		case 1:
+			s.Formerr += v
+		case 2:
+			s.Servfail += v
+		case 3:
+			s.NXDomain += v
+		case 4:
+			s.Notimp += v
+		case 5:
+			s.Refused += v
+		default:
+			s.Other += v
+		}
+		switch dnssec {
+		case idxDNSSECSecure:
+			s.Secure += v
+		case idxDNSSECInsecure:
+			s.Insecure += v
+		case idxDNSSECBogus:
+			s.Bogus += v
+		}
+		if poison == 1 {
+			s.Poisoned += v
+		}
+	}
+	s.TotalMS = c.totalMS.Load()
+	return s
 }

@@ -58,10 +58,12 @@ func (m *Journal) FormatLines(entryCount int64) []string {
 	out = append(out, fmt.Sprintf("entries=%d total=%d avg=%.1fms",
 		snap.Entries, total, avgMs))
 
-	// Results — omit zero-count entries.
+	// Results — omit zero-count entries.  "any" (RFC 8482) and "acl"
+	// (REFUSED) are explicit result classes so the buckets sum to total.
 	if s := formatStatsLine(
 		statsMetric{"hit", snap.Hits, hitR}, statsMetric{"miss", snap.Misses, missR},
 		statsMetric{"stale", snap.Stales, staleR}, statsMetric{"zone", snap.Zones, zoneR},
+		statsMetric{"any", snap.Any, pct(snap.Any)}, statsMetric{"acl", snap.ACL, pct(snap.ACL)},
 		statsMetric{"blocked", snap.Blocked, blockedR}, statsMetric{"badcookie", snap.Badcookie, badcookieR},
 		statsMetric{"error", snap.Errors, errorR},
 	); s != "" {
