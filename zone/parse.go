@@ -113,6 +113,8 @@ func (e *Evaluator) loadFile(table *zoneTable, parent *config.ZoneRule) (int, er
 				if strings.HasPrefix(f, "rcode=") {
 					if n, err := strconv.Atoi(f[6:]); err == nil {
 						curRcode = n
+					} else {
+						log.Warnf("ZONE: invalid rcode %q in %s — ignored", f[6:], curDomain)
 					}
 				} else if strings.HasPrefix(f, "match=") {
 					tags, err := parseMatchTags(strings.Split(f[6:], ","))

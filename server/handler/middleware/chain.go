@@ -58,6 +58,7 @@ type Dependencies struct {
 //
 // Execution order (outermost → innermost):
 //
+//	Stats         — request journal (the single recording site)
 //	Response      — EDNS / cookie / EDE application
 //	EDNS          — ECS + cookie parsing (full unpack of plain transport msgs)
 //	MQTYPE        — RFC 10029 multi-QTYPE merge (recursive mode)

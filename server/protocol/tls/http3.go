@@ -40,8 +40,12 @@ func (s *Server) startDOH3Server(port string) error {
 	// IdleTimeout is the HTTP/3-layer idle bound: QUIC-layer trickles
 	// (ACKs, PINGs — which reset the transport MaxIdleTimeout) do NOT
 	// reset it, so a client that keeps the connection transport-alive
-	// while sending no requests is still closed.
-	s.h3Server = &http3.Server{Handler: s, IdleTimeout: config.DefaultQUICServerIdleTimeout}
+	// while sending no requests is still closed.  Create only when nil —
+	// the shared-port path may already have built it, and replacing it
+	// abandons the serving instance (Shutdown only stops the newest).
+	if s.h3Server == nil {
+		s.h3Server = &http3.Server{Handler: s, IdleTimeout: config.DefaultQUICServerIdleTimeout}
+	}
 	s.listenerMu.Unlock()
 
 	log.Infof("TLS: DoH3 server started on %v", addrs)
@@ -120,7 +124,14 @@ func (s *Server) handleHTTP3Connections(h3Listener *quic.EarlyListener) {
 		s.groups.h3.Go(func() error {
 			defer zdnsutil.HandlePanic("DoH3 connection handler")
 			defer func() { <-s.quicConnSem }()
-			if err := s.h3Server.ServeQUICConn(conn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.listenerMu.Lock()
+			h3 := s.h3Server
+			s.listenerMu.Unlock()
+			if h3 == nil {
+				_ = conn.CloseWithError(quic.ApplicationErrorCode(0), "h3 server not started")
+				return nil
+			}
+			if err := h3.ServeQUICConn(conn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Debugf("TLS: DoH3 connection error: %v", err)
 			}
 			return nil

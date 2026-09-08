@@ -60,6 +60,14 @@ func (m *Response) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				} else {
 					qctx.Res.Data[2] &^= 0x01
 				}
+				// RFC 6840 §5.8: the stored wire never carries AD — apply the
+				// gated AD decision (buildFromPrePacked's) here, on the wire,
+				// or DO=0/AD-flagging clients would never see AD on cache hits.
+				if qctx.Res.AuthenticatedData {
+					qctx.Res.Data[3] |= 0x20
+				} else {
+					qctx.Res.Data[3] &^= 0x20
+				}
 				return err
 			}
 			// EDNS options are needed — unpack the pre-built wire so the

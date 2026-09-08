@@ -38,13 +38,21 @@ func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY, qtResults <-
 	}
 
 	// RFC 10029 §3.4: a truncated primary response MUST NOT be extended —
-	// the additional queries are not processed.  The MQTYPE-Response option
-	// is still returned (empty list) to signal support.
+	// the additional queries are not merged into this response.  The
+	// MQTYPE-Response option is still returned (empty list) to signal
+	// support, and the already-launched QTx results are drained and written
+	// to the cache so the client's TCP retry finds them warm.
 	if msg.Truncated {
 		if log.IsDebug() {
 			log.Debugf("MQTYPE: primary response truncated — skipping additional types for %s", qctx.Req.Question[0].Header().Name)
 		}
 		msg.Pseudo = append(msg.Pseudo, &dns.MQRESPONSE{})
+		for range len(qtResults) {
+			qtr := <-qtResults
+			if qtr.qr != nil && qtr.qr.Err == nil {
+				handler.StoreIfCacheable(m.store, qctx.Qname, qtr.qt, qctx.Qclass, qctx.ECSOpt, qtr.qr)
+			}
+		}
 		return
 	}
 

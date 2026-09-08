@@ -92,6 +92,13 @@ func (s *Server) acceptTCP(ctx context.Context, listener net.Listener, handler e
 		}
 
 		s.tcpMu.Lock()
+		if s.tcpClosed {
+			// Shutdown won between the Accept and this insert — the map is
+			// gone; close the conn here or its fd leaks.
+			s.tcpMu.Unlock()
+			_ = conn.Close()
+			return
+		}
 		s.tcpConns[conn] = struct{}{}
 		s.tcpMu.Unlock()
 
@@ -331,6 +338,7 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn, handler
 func (s *Server) shutdownTCP() {
 	s.tcpMu.Lock()
 	defer s.tcpMu.Unlock()
+	s.tcpClosed = true
 	for _, l := range s.tcpListeners {
 		_ = l.Close()
 	}

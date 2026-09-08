@@ -286,7 +286,15 @@ func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 	}
 
 	s.handler = dnsHandler
-	s.started.Store(true)
+	bound := false
+	// The started flag doubles as the double-start guard; a failed bind
+	// must clear it or a retry reports ErrServerAlreadyStarted until a
+	// full Shutdown.  Partial listeners are closed by the error paths.
+	defer func() {
+		if !bound {
+			s.started.Store(false)
+		}
+	}()
 
 	udpAddrs, err := zdnsutil.ResolveBindAddrs("udp", s.port)
 	if err != nil {
@@ -343,6 +351,7 @@ func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 
 	// Start background key renewal goroutine.
 	go s.renewalLoop()
+	bound = true
 
 	return nil
 }

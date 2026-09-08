@@ -121,8 +121,8 @@ func XchachaOpen(out, nonce, ciphertext, key []byte) (res []byte, err error) {
 	var tag [poly1305.TagSize]byte
 	msg := ciphertext[poly1305.TagSize:]
 	hash := poly1305.New(&polyKey)
-	_, _ = hash.Write(msg) // _ = error: poly1305 hash Write never fails
-	hash.Sum(tag[:0])      // Sum is infallible for poly1305
+	_, _ = hash.Write(msg)          // _ = error: poly1305 hash Write never fails
+	copy(tag[:], hash.Sum(tag[:0])) // never rely on Sum aliasing its append target
 
 	if subtle.ConstantTimeCompare(tag[:], ciphertext[:poly1305.TagSize]) != 1 {
 		return nil, errCipherTextAuthenticationFail

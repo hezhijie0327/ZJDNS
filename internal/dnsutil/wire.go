@@ -69,7 +69,12 @@ func SkipWireName(wire []byte, pos int) (int, bool) {
 			return pos + 1, true
 		}
 		if l&0xC0 == 0xC0 {
-			// Compression pointer — skip 2 bytes, name ends here.
+			// Compression pointer — skip 2 bytes, name ends here.  Both
+			// pointer bytes must be on the wire: a truncated pointer would
+			// return an out-of-range offset its callers slice by.
+			if pos+1 >= len(wire) {
+				return 0, false
+			}
 			return pos + 2, true
 		}
 		// Label: l bytes of label data.

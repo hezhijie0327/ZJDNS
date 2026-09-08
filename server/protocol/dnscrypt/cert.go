@@ -220,9 +220,13 @@ func (s *Server) updateKeys() {
 // reference encrypted-dns-server.  A nil previous mints a single window from
 // a fresh random seed — the start of a new chain.
 func (s *Server) deriveAndSign(previous *dnscryptcrypto.CertPair, now uint32) []keyEntry {
+	signingPK, ok := s.signingSK.Public().(ed25519.PublicKey)
+	if !ok {
+		return nil
+	}
 	rc := dnscert.ResolverConfig{
 		ProviderName: s.providerName,
-		PublicKey:    dnscryptcrypto.HexEncodeKey(s.signingSK.Public().(ed25519.PublicKey)),
+		PublicKey:    dnscryptcrypto.HexEncodeKey(signingPK),
 		PrivateKey:   dnscryptcrypto.HexEncodeKey(s.signingSK),
 	}
 

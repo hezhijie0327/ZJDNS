@@ -73,7 +73,9 @@ func (c *CNAME) cachedHopResult(question Question, ecs *edns.ECSOption) *QueryRe
 	if c.resolver == nil || c.resolver.cache == nil {
 		return nil
 	}
-	entry, found, expired := c.resolver.cache.Get(question.Name, question.Qtype, question.Qclass, ecs)
+	// The cache keys canonical qnames — a mixed-case/0x20-cased hop name
+	// would always miss (RFC 4343).
+	entry, found, expired := c.resolver.cache.Get(zdnsutil.Canonical(question.Name), question.Qtype, question.Qclass, ecs)
 	if !found {
 		return nil
 	}

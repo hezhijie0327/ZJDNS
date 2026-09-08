@@ -91,6 +91,15 @@ func (l *dtlsPacketListener) dispatch(src *net.UDPAddr, pb *[]byte, n int) {
 		select {
 		case l.acceptCh <- dtlsAcceptResult{conn: cc, addr: src}:
 		default:
+			// Accept queue full — nobody will serve this conn.  Drop it now
+			// or the client's handshake stalls for the full idle-reap window
+			// with the conn still registered.
+			l.mu.Lock()
+			delete(l.clients, key)
+			l.mu.Unlock()
+			_ = cc.Close()
+			PacketBufPool.Put(pb)
+			return
 		}
 	} else {
 		l.mu.Unlock()

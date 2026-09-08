@@ -100,6 +100,7 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			response := handler.BuildResponseMsg(qctx.Req)
 			response.Rcode = dns.RcodeRefused
 			qctx.Res = response
+			qctx.Result = "zone" // journal the policy denial like a zone-rule match
 			return nil
 		}
 

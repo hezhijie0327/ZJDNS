@@ -132,6 +132,9 @@ func rcodeBucket(rcode int) int {
 	if rcode > maxRcodeBucket {
 		return maxRcodeBucket
 	}
+	if rcode < 0 { // defensive: a negative index would nil-deref the bucket
+		return 0
+	}
 	return rcode
 }
 

@@ -154,7 +154,7 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 			dc = &shared.DemuxPacketConn{
 				Shared: l.udpConn,
 				Remote: src,
-				Ch:     make(chan shared.DemuxPacket, 32),
+				Ch:     make(chan shared.DemuxPacket, shared.DemuxDispatchQueueDepth),
 			}
 			l.conns[key] = dc
 			l.mu.Unlock()

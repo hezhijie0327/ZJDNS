@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
@@ -211,6 +212,9 @@ func GenerateDNSCryptConfig(provider, addr string) (string, error) {
 	}
 
 	_, port, _ := strings.CutLast(addr, ":")
+	if pn, err := strconv.Atoi(port); err != nil || pn < 1 || pn > 65535 {
+		return "", fmt.Errorf("dnscrypt address %q has no valid port", addr)
+	}
 
 	cfg := &FullConfig{}
 	cfg.Server.Protocol.DNSCrypt = port

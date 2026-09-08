@@ -22,6 +22,7 @@ type Server struct {
 	config       *config.ServerConfig
 	udpServers   []*dns.Server
 	tcpMu        sync.Mutex
+	tcpClosed    bool
 	tcpListeners []net.Listener
 	tcpConns     map[net.Conn]struct{}
 }

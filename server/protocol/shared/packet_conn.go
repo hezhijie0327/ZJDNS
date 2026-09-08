@@ -107,6 +107,11 @@ const (
 	reapCheckEveryPackets = 1024
 )
 
+// DemuxDispatchQueueDepth is the per-client dispatch queue depth for
+// standalone (non-shared-port) demux listeners — same sizing as the shared
+// path: too-small queues drop legitimate bursts from one client.
+const DemuxDispatchQueueDepth = demuxDispatchQueue
+
 // PacketBufPool manages pooled datagram buffers.  The dispatch loop
 // allocates from the pool; consumers copy data out and return the buffer.
 var PacketBufPool = sync.Pool{
@@ -276,7 +281,19 @@ func (c *dtlsClientConn) Close() error {
 	if c.closed.CompareAndSwap(false, true) {
 		close(c.ch)
 	}
-	return nil
+	// Drain queued datagram buffers back to the packet pool — they would
+	// otherwise be GC'd.
+	for {
+		select {
+		case pkt, ok := <-c.ch:
+			if !ok {
+				return nil
+			}
+			PacketBufPool.Put(&pkt.data)
+		default:
+			return nil
+		}
+	}
 }
 
 func (c *dtlsClientConn) LocalAddr() net.Addr { return c.shared.LocalAddr() }
@@ -328,7 +345,19 @@ func (c *quicPacketConn) Close() error {
 	if c.closed.CompareAndSwap(false, true) {
 		close(c.done)
 	}
-	return nil
+	// Drain queued datagram buffers back to the packet pool — they would
+	// otherwise be GC'd.
+	for {
+		select {
+		case pkt, ok := <-c.ch:
+			if !ok {
+				return nil
+			}
+			PacketBufPool.Put(&pkt.data)
+		default:
+			return nil
+		}
+	}
 }
 
 func (c *quicPacketConn) LocalAddr() net.Addr { return c.shared.LocalAddr() }
