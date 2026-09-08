@@ -69,6 +69,21 @@ func (c *refreshCoordinator) finish(qname string, qtype, qclass uint16, ecs *edn
 	c.inFlight.Done(key)
 }
 
+// startThrottled acquires the in-flight gate and consults the prefetch
+// cooldown; when the cooldown refuses, the freshly acquired gate is released
+// again so the key is not blocked until eviction.  False when a refresh is
+// already in flight or the key is within its cooldown window.
+func (c *refreshCoordinator) startThrottled(qname string, qtype, qclass uint16, ecs *edns.ECSOption) bool {
+	if !c.tryStart(qname, qtype, qclass, ecs) {
+		return false
+	}
+	if c.cooldown != nil && !c.cooldown.ShouldStart(qname, qtype, log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds()) {
+		c.finish(qname, qtype, qclass, ecs)
+		return false
+	}
+	return true
+}
+
 // spawnPrefetch runs refresh as a best-effort background job, releasing the
 // in-flight gate on slot saturation so a later refresh can start.  TryGo,
 // not Go: the call sits on the per-query path, and Go blocks when the

@@ -47,13 +47,12 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			qctx.Res = buildCacheResponse(qctx, entry, false)
 			qctx.Result = "hit" // journal rcode comes from the served response (negative-cache NXDOMAIN → 3)
 
-			// Prefetch if TTL is below threshold.  Gate order matters: the
-			// in-flight check (tryStart) runs BEFORE ShouldStart — the
-			// cooldown's timestamp is a side effect, and burning it on a
-			// refresh that never starts throttles the key for nothing (H-L9).
+			// Prefetch if TTL is below threshold.  startThrottled keeps the
+			// in-flight check before the cooldown's timestamp side effect —
+			// burning the cooldown on a refresh that never starts (already in
+			// flight) would throttle the key for nothing.
 			if m.refresh.canStart() && entry.ShouldPrefetch(config.DefaultPrefetchThresholdPercent) &&
-				m.refresh.tryStart(qname, qtype, qclass, ecsOpt) &&
-				m.refresh.cooldown != nil && m.refresh.cooldown.ShouldStart(qname, qtype, log.NowUnixNano(), config.DefaultPrefetchThrottleInterval.Nanoseconds()) {
+				m.refresh.startThrottled(qname, qtype, qclass, ecsOpt) {
 				m.refresh.spawnPrefetch("prefetch fresh-hit", qname, qtype, qclass, ecsOpt)
 			}
 			return nil
@@ -66,8 +65,11 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			qctx.Res = buildCacheResponse(qctx, entry, true)
 
 			// PreferStale: return stale immediately, refresh in background.
+			// The cooldown applies here too: a key whose refreshes fail must
+			// not re-refresh at full query rate (refresh storm on an
+			// upstream outage).
 			if m.preferStale && m.refresh.canStart() {
-				if m.refresh.tryStart(qname, qtype, qclass, ecsOpt) {
+				if m.refresh.startThrottled(qname, qtype, qclass, ecsOpt) {
 					m.refresh.spawnPrefetch("stale prefetch", qname, qtype, qclass, ecsOpt)
 				}
 				qctx.Result = "stale"
@@ -75,7 +77,7 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			}
 
 			// Default: try a quick foreground refresh, fall back to stale.
-			if !m.refresh.canStart() || !m.refresh.tryStart(qname, qtype, qclass, ecsOpt) {
+			if !m.refresh.canStart() || !m.refresh.startThrottled(qname, qtype, qclass, ecsOpt) {
 				qctx.Result = "stale"
 				return nil
 			}

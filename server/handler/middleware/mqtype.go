@@ -23,15 +23,15 @@ import (
 // (forwarding included) — each QTx resolves through the server's own
 // upstreams, so the response supports MQTYPE regardless of upstream
 // support.  The option is never passed through.
+type MQTYPE struct {
+	store     cache.Store
+	secondary *handler.Secondary
+}
+
 // qtResult is one prefetched additional-QTYPE resolution.
 type qtResult struct {
 	qt uint16
 	qr *resolver.QueryResult
-}
-
-type MQTYPE struct {
-	store     cache.Store
-	secondary *handler.Secondary
 }
 
 type mqtypeError string
@@ -91,6 +91,13 @@ func (m *MQTYPE) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		if len(qtTypes) > config.DefaultMQTypeMaxQTx {
 			qtTypes = qtTypes[:config.DefaultMQTypeMaxQTx]
 		}
+		// Capture the values the QTx goroutines need before launching them:
+		// they outlive this handler's return, and qctx is recycled to the
+		// pool as soon as ServeDNS returns — goroutines capture only values,
+		// never the QueryContext itself.
+		qname, qclass := qctx.Qname, qctx.Qclass
+		ecsOpt := qctx.ECSOpt
+		dnssec := qctx.ClientRequestedDNSSEC
 		qtResults := make(chan qtResult, len(qtTypes))
 		for _, qt := range qtTypes {
 			go func() { //nolint:gosec // G118: QTx must detach from the request lifecycle (RFC 10029 §4) — a near-deadline request ctx must not abort the fresh QTx budget
@@ -99,7 +106,7 @@ func (m *MQTYPE) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				defer qtCancel()
 				qtResults <- qtResult{
 					qt: qt,
-					qr: m.secondary.Lookup(qtCtx, qctx.Qname, qt, qctx.Qclass, qctx.ECSOpt, qctx.ClientRequestedDNSSEC),
+					qr: m.secondary.Lookup(qtCtx, qname, qt, qclass, ecsOpt, dnssec),
 				}
 			}()
 		}
