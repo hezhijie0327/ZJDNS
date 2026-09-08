@@ -170,9 +170,18 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn, handler
 	}()
 
 	var wg sync.WaitGroup
+	// readClean marks a client half-close (io.EOF after complete frames):
+	// responses to already-received queries must still flush, so the
+	// workers' writeCh sends are not raced against connCancel. A non-clean
+	// exit (error, reset) cancels first — the connection cannot carry the
+	// responses anyway.
+	readClean := false
 	defer func() {
-		connCancel()
+		if !readClean {
+			connCancel()
+		}
 		wg.Wait()
+		connCancel()
 
 		// Drain any remaining write tasks — the writer goroutine may have
 		// exited early on a write error, leaving pooled buffers in the
@@ -206,7 +215,9 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn, handler
 
 		_, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
-			if !errors.Is(err, io.EOF) && !zdnsutil.IsTemporaryError(err) {
+			if errors.Is(err, io.EOF) {
+				readClean = true
+			} else if !zdnsutil.IsTemporaryError(err) {
 				log.Debugf("PLAIN: TCP read length error remote=%s: %v", conn.RemoteAddr(), err)
 			}
 			return

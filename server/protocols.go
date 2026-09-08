@@ -258,6 +258,14 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 							return ""
 						}
 						if cfg.Server.Protocol.HTTP3.Port == primaryPort {
+							if quicPortShared {
+								// DoQ and DoH3 initial datagrams are both QUIC
+								// long headers — the demux layer cannot tell
+								// them apart, and the dispatch would route
+								// every datagram to DoQ, silently blackholing
+								// DoH3 on this port.
+								return fmt.Errorf("http3 and quic cannot share UDP port %s: their initial datagrams are indistinguishable", primaryPort)
+							}
 							primary.HTTP3Handler = s.tls.HandleHTTP3FromPacketConn
 						}
 					}

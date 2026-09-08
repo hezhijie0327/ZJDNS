@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"time"
 	"zjdns/config"
 	"zjdns/internal/demux"
 	"zjdns/internal/log"
@@ -206,7 +207,14 @@ func (m *Mux) startTCPGroup(g *TCPGroup) error {
 						if m.host.Ctx().Err() != nil {
 							return nil
 						}
-						if !zdnsutil.IsTemporaryError(err) {
+						// Same discipline as the standalone DNSCrypt TCP
+						// listener: log and back off — a silent return kills
+						// DNSCrypt-on-shared-port until restart, and a tight
+						// continue spins the CPU on a persistent error.
+						log.Warnf("PLAIN: shared-port DNSCrypt TCP accept error: %v", err)
+						select {
+						case <-time.After(config.DefaultAcceptRetryDelay):
+						case <-m.host.Ctx().Done():
 							return nil
 						}
 						continue

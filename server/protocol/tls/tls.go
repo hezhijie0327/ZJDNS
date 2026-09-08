@@ -177,9 +177,18 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 	}()
 
 	var wg sync.WaitGroup
+	// readClean marks a client half-close (io.EOF after complete frames):
+	// responses to already-received queries must still flush, so the
+	// workers' writeCh sends are not raced against connCancel. A non-clean
+	// exit (error, reset) cancels first — the connection cannot carry the
+	// responses anyway.
+	readClean := false
 	defer func() {
-		connCancel() // signal workers to stop
+		if !readClean {
+			connCancel() // broken connection — abort in-flight workers first
+		}
 		wg.Wait()    // wait for workers to finish
+		connCancel() // workers done — release any residual Done selects
 
 		// Drain any remaining write tasks — the writer goroutine may
 		// have exited early on a write error, leaving pooled buffers
@@ -221,7 +230,9 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 
 		_, err := io.ReadFull(reader, lengthBuf)
 		if err != nil {
-			if !errors.Is(err, io.EOF) && !zdnsutil.IsTemporaryError(err) {
+			if errors.Is(err, io.EOF) {
+				readClean = true
+			} else if !zdnsutil.IsTemporaryError(err) {
 				log.Debugf("TLS: read length error remote=%s: %v",
 					tlsConn.RemoteAddr(), err)
 			}

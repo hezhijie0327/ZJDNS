@@ -262,6 +262,11 @@ func (s *Server) Start() error {
 
 	for err := range errChan {
 		if err != nil {
+			// A runtime protocol error must take the same cleanup path as
+			// the signal handler — skipping it loses the cache flush and
+			// leaves listeners and background groups running while main
+			// exits.
+			s.shutdownServer()
 			return err
 		}
 	}

@@ -431,7 +431,7 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 			dc.lastSeen.Store(log.NowUnix())
 			if !dc.Send(DemuxPacket{Data: (*pb)[:n], Addr: src}) {
 				PacketBufPool.Put(pb)
-				noteDispatchDrop("dtlcp")
+				noteDispatchDrop("dnscrypt")
 			}
 		}
 	}
