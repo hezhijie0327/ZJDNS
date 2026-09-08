@@ -66,7 +66,9 @@ var packBufPool = sync.Pool{
 }
 
 // AcquireWire returns a byte slice of length n backed by the pooled 2048-byte
-// class when n fits, or a fresh allocation otherwise.
+// class when n fits, or a fresh allocation otherwise.  Buffers are NOT
+// zeroed on release: the caller must overwrite the full [0,n) range (Pack or
+// copy) before anyone reads it.
 func AcquireWire(n int) []byte {
 	if n > wireBufferSize || n < 0 {
 		return make([]byte, n)
@@ -77,9 +79,15 @@ func AcquireWire(n int) []byte {
 
 // ReleaseWire returns a buffer to the wire pool; only exact-class capacities
 // are accepted (grown or foreign buffers are dropped to the GC).
+//
+// No clear: every consumer fully overwrites the consumed range before the
+// buffer is handed on (AcquireWire's contract — Pack writes [0,len) end to
+// end, serve-path consumers copy exact-length wires), so a memset per
+// released response (2 KB) was pure cost on the hot path.  New consumers
+// MUST keep the write-full-range-before-read invariant, same as
+// releasePacketBuf.
 func ReleaseWire(buf []byte) {
 	if cap(buf) == wireBufferSize {
-		clear(buf[:wireBufferSize])
 		b := buf[:wireBufferSize]
 		wireBufPool.Put(&b)
 	}
