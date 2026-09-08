@@ -7,26 +7,50 @@ package lrumap
 
 import "hash/maphash"
 
-// defaultShards is the shard count used by NewSharded; a power of two so the
-// shard pick is a mask. 64 matches typical L3-cache-sized critical sections
-// under high core counts.
-const defaultShards = 64
+const (
+	// defaultShards caps the shard count; a power of two so the shard pick
+	// is a mask.
+	defaultShards = 64
+
+	// minEntriesPerShard stops growing the shard count once shards would
+	// hold fewer than this many entries — 64 shards over a 2000-entry cache
+	// is 32 entries per shard, pure per-shard overhead (mutex, sentinels,
+	// map) for critical sections that are already tiny.
+	minEntriesPerShard = 64
+)
 
 // NewSharded creates a Map whose storage is split across shards, each with
 // its own mutex and LRU list. Keys of any comparable type are distributed via
 // maphash.Comparable (struct keys — e.g. the cache's fixed-size cacheKey —
-// hash by value, no stringification). Capacities below 2×defaultShards
-// degenerate to a single shard so the capacity bound stays exact (sharding
-// rounds per-shard capacity up).
+// hash by value, no stringification). The shard count doubles while each new
+// shard would still hold at least minEntriesPerShard entries (bounded by
+// defaultShards), and tiny capacities degenerate to a single shard so the
+// capacity bound stays exact.
 func NewSharded[K comparable, V any](capacity int) *Map[K, V] {
-	if capacity < 2*defaultShards {
+	return NewShardedWithHash[K, V](capacity, nil)
+}
+
+// NewShardedWithHash is NewSharded with a caller-provided hash function
+// (nil = maphash.Comparable).  The response cache passes a hand-rolled
+// hash over its fixed-size key — faster than the generic comparable hash
+// on the per-hit shard pick.
+func NewShardedWithHash[K comparable, V any](capacity int, hash func(K) uint64) *Map[K, V] {
+	if capacity < 2*minEntriesPerShard {
 		return New[K, V](capacity)
 	}
-	perShard := capacity/defaultShards + 1
+	shards := 1
+	for shards < defaultShards && capacity/(shards*2) >= minEntriesPerShard {
+		shards *= 2
+	}
+	perShard := capacity/shards + 1
 	m := &Map[K, V]{}
-	seed := maphash.MakeSeed()
-	m.hashKey = func(k K) uint64 { return maphash.Comparable(seed, k) }
-	for range defaultShards {
+	if hash != nil {
+		m.hashKey = hash
+	} else {
+		seed := maphash.MakeSeed()
+		m.hashKey = func(k K) uint64 { return maphash.Comparable(seed, k) }
+	}
+	for range shards {
 		m.shards = append(m.shards, newShardMap[K, V](perShard))
 	}
 	return m

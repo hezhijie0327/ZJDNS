@@ -22,6 +22,30 @@ var (
 	ipv6FallbackPrefixes = []int{56, 48, 32, 0}
 )
 
+// hashCacheKey hashes a cacheKey for the sharded LRU's shard pick — a
+// hand-rolled FNV-1a over the qname folded with the fixed fields.  It
+// replaces maphash.Comparable on the per-hit path: every cache hit pays
+// this hash, and DNS-name-length strings hash faster byte-wise than via
+// the generic comparable reflection path.
+func hashCacheKey(k cacheKey) uint64 {
+	const (
+		fnvOffset uint64 = 14695981039346656037
+		fnvPrime  uint64 = 1099511628211
+	)
+	h := fnvOffset
+	for i := 0; i < len(k.qname); i++ {
+		h ^= uint64(k.qname[i])
+		h *= fnvPrime
+	}
+	h ^= uint64(k.qtype) | uint64(k.qclass)<<16 | uint64(k.ecsPref)<<32 | uint64(k.ecsLen)<<40
+	h *= fnvPrime
+	for _, b := range k.ecsAddr {
+		h ^= uint64(b)
+		h *= fnvPrime
+	}
+	return h
+}
+
 // encode renders the deterministic spill-store form of the key:
 // qname \x00 qtype(2) qclass(2) ecsLen ecsAddr[:ecsLen] ecsPref.
 // Used only at the spill boundary (eviction write, promotion read) — one

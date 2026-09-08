@@ -49,6 +49,7 @@ func (s *Store) Warm(topN int, keep func(ts int64, ttl int) bool) (entries []War
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	ref := s.fref.Load()
 	for k, te := range s.tailMap {
 		if te.deleted {
 			continue
@@ -58,7 +59,7 @@ func (s *Store) Warm(topN int, keep func(ts int64, ttl int) bool) (entries []War
 	for _, blk := range s.sparse {
 		buf := acquireBlockBuf(int(blk.blockEnd - blk.blockStart))
 		block := buf[:blk.blockEnd-blk.blockStart]
-		if _, err := s.f.ReadAt(block, blk.blockStart); err != nil {
+		if _, err := ref.f.ReadAt(block, blk.blockStart); err != nil {
 			releaseBlockBuf(block)
 			continue
 		}
@@ -77,7 +78,7 @@ func (s *Store) Warm(topN int, keep func(ts int64, ttl int) bool) (entries []War
 	out := make([]WarmEntry, 0, len(h))
 	for _, e := range h {
 		wire := make([]byte, e.WireLen)
-		if _, err := s.f.ReadAt(wire, e.WireOff); err != nil {
+		if _, err := ref.f.ReadAt(wire, e.WireOff); err != nil {
 			continue // unreadable — drop rather than hand out a zero wire
 		}
 		out = append(out, WarmEntry{Key: e.Key, Ts: e.Ts, Ttl: e.Ttl, Validated: e.Validated, Wire: wire})
@@ -89,11 +90,29 @@ func (s *Store) Warm(topN int, keep func(ts int64, ttl int) bool) (entries []War
 // returns true, atomically (temp + rename).  The merge folds the tail region
 // into the sorted region, deduplicates (newest ts wins; the tail record wins
 // ts ties — it was appended later), and rebuilds the sparse index.  Keep is
-// called with the map mutex held; it must not call back into the store.
+// called without any lock held, but must not call back into the store.
 // Records are visited in key order.
+//
+// Locking: wmu is held for the whole rewrite (a concurrent Put appending to
+// the old tail after the metadata snapshot would lose its record at the
+// swap), but the metadata snapshot releases mu — block reads, the keep
+// filter and the rewrite run WITHOUT the metadata lock, so spill reads
+// (Get/Indexed) proceed throughout.  The former design held mu across the
+// entire file rewrite, pausing every spill read for seconds on large files.
 func (s *Store) Compact(keep func(key string, ts int64, ttl int) bool) error {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+
+	// Snapshot metadata and the file handle, then release mu for the bulk
+	// work.  sparse is immutable between compacts (replaced, never mutated
+	// in place), so the slice header is a stable snapshot.
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	tailSnapshot := make(map[string]tailEntry, len(s.tailMap))
+	maps.Copy(tailSnapshot, s.tailMap)
+	sparseSnapshot := s.sparse
+	oldRef := s.fref.Load()
+	recordBudget := len(s.tailMap) + s.sortedRecordCount()
+	s.mu.Unlock()
 
 	// Pass 1: collect metadata for every live record (no wire bytes — the
 	// old file is read per-record during the write pass, keeping the
@@ -106,20 +125,20 @@ func (s *Store) Compact(keep func(key string, ts int64, ttl int) bool) error {
 		wireOff   int64
 		wireLen   int32
 	}
-	metas := make([]meta, 0, len(s.tailMap)+s.sortedRecordCount())
-	for k, te := range s.tailMap {
+	metas := make([]meta, 0, recordBudget)
+	for k, te := range tailSnapshot {
 		if te.deleted {
 			continue
 		}
 		metas = append(metas, meta{key: k, ts: te.ts, ttl: te.ttl, validated: te.validated, wireOff: te.wireOff, wireLen: te.wireLen})
 	}
-	for _, blk := range s.sparse {
+	for _, blk := range sparseSnapshot {
 		buf := make([]byte, blk.blockEnd-blk.blockStart)
-		if _, err := s.f.ReadAt(buf, blk.blockStart); err != nil {
+		if _, err := oldRef.f.ReadAt(buf, blk.blockStart); err != nil {
 			continue
 		}
 		scanBlock(blk.blockStart, buf, func(key string, ts int64, ttl int, validated bool, wireOff int64, wireLen int) bool {
-			if _, inTail := s.tailMap[key]; inTail {
+			if _, inTail := tailSnapshot[key]; inTail {
 				return true // superseded by a tail entry, or tombstoned
 			}
 			metas = append(metas, meta{key: key, ts: ts, ttl: ttl, validated: validated, wireOff: wireOff, wireLen: int32(wireLen)}) //nolint:gosec // G115: wire length bounded by maxWireLen
@@ -163,7 +182,7 @@ func (s *Store) Compact(keep func(key string, ts int64, ttl int) bool) error {
 	// dropped=true when the record was unreadable — skipped, not an error.
 	writeRec := func(m meta) (dropped bool, err error) {
 		wire := make([]byte, m.wireLen)
-		if _, err := s.f.ReadAt(wire, m.wireOff); err != nil {
+		if _, err := oldRef.f.ReadAt(wire, m.wireOff); err != nil {
 			return true, nil //nolint:nilerr // unreadable record — drop it
 		}
 		rec := recordBytes(m.key, m.ts, m.ttl, m.validated, wire)
@@ -209,29 +228,42 @@ func (s *Store) Compact(keep func(key string, ts int64, ttl int) bool) error {
 	if err := tf.Close(); err != nil {
 		return err
 	}
-	// Windows cannot rename over an open file — close the old handle first
-	// (harmless on POSIX, where the rename would have succeeded anyway).
-	if err := s.f.Close(); err != nil {
-		return err
-	}
+	// POSIX renames over an open file fine — readers still holding oldRef
+	// keep reading the renamed-away inode, whose kept records are identical,
+	// so no read ever observes a closed handle.  Windows cannot; there the
+	// rename fails and the retry below closes the old handle first (those
+	// readers self-heal to a miss — internal/poll blocks fd reuse).
 	if err := os.Rename(tmp, s.path); err != nil {
-		// Reopen the original file so the store stays usable after a failed
-		// rename (the tmp file is removed by the deferred cleanup).
-		nf, openErr := os.OpenFile(s.path, os.O_RDWR, 0o644) //nolint:gosec // G304: path from trusted config
-		if openErr == nil {
-			s.f = nf
+		_ = oldRef.f.Close()
+		if err := os.Rename(tmp, s.path); err != nil {
+			// Reopen the original file so the store stays usable after a
+			// failed rename (the tmp file is removed by the deferred cleanup).
+			nf, openErr := os.OpenFile(s.path, os.O_RDWR, 0o644) //nolint:gosec // G304: path from trusted config
+			if openErr == nil {
+				s.mu.Lock()
+				s.fref.Store(&fileRef{f: nf})
+				s.mu.Unlock()
+			}
+			return err
 		}
-		return err
 	}
 
 	nf, err := os.OpenFile(s.path, os.O_RDWR, 0o644) //nolint:gosec // G304: path from trusted config
 	if err != nil {
 		return err
 	}
-	s.f = nf
+	s.mu.Lock()
+	s.fref.Store(&fileRef{f: nf})
 	s.sparse = newSparse
 	s.tailMap = make(map[string]tailEntry)
 	s.sortedEnd = tail
 	s.tail = tail
+	retired := s.retired
+	s.retired = oldRef // one-generation grace — see the retired field comment
+	s.mu.Unlock()
+	if retired != nil {
+		_ = retired.f.Close()
+	}
+	s.resetMisses()
 	return nil
 }

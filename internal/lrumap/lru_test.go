@@ -79,22 +79,34 @@ func TestEviction(t *testing.T) {
 }
 
 func TestLRU_GetMovesToFront(t *testing.T) {
+	// Get-promotion is windowed: a hit on an entry whose stamp fell out of
+	// the working-set window (cap clock ticks) re-promotes it; hits inside
+	// the window are read-only.  This test exercises the stale-hit path
+	// (white-box stamp aging — a full map cannot age an entry via inserts
+	// without evicting it).
 	m := New[string, int](3)
 	m.Set("a", 1)
 	m.Set("b", 2)
-	m.Set("c", 3) // order: c(most recent), b, a(LRU)
+	m.Set("c", 3) // order: c(most recent), b, a(LRU); clock=3
 
-	// Access "a" — it moves to front: a, c, b. Now b is LRU.
+	// Age the clock and a's stamp by hand: a was last touched at clock=1.
+	m.clock.Store(100)
+	m.mu.RLock()
+	ea := m.m["a"]
+	m.mu.RUnlock()
+	ea.seen.Store(1)
+
+	// Stale hit on "a" — re-promotes: a, c, b. Now b is LRU.
 	m.Get("a")
 
 	// Insert "d" — evicts b.
 	m.Set("d", 4)
 
 	if _, ok := m.Get("b"); ok {
-		t.Error("b should have been evicted (became LRU after a was accessed)")
+		t.Error("b should have been evicted (became LRU after a was re-promoted)")
 	}
 	if _, ok := m.Get("a"); !ok {
-		t.Error("a should still be present (was accessed recently)")
+		t.Error("a should still be present (was re-promoted)")
 	}
 	if _, ok := m.Get("c"); !ok {
 		t.Error("c should still be present")
@@ -366,8 +378,9 @@ func TestOnEvict(t *testing.T) {
 		t.Errorf("onEvict: want (a,1), got (%q,%d)", evictedKey, evictedVal)
 	}
 
-	// Get "b" to mark it recent, then add "e" — "c" should be evicted.
-	m.Get("b")
+	// Re-promote "b" (LoadOrStore: exact re-promotion without firing
+	// OnEvict), then add "e" — "c" should be evicted.
+	m.LoadOrStore("b", 2)
 	evictedKey = ""
 	m.Set("e", 5)
 

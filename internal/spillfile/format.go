@@ -88,7 +88,7 @@ func (s *Store) writeHeader(sortedEnd int64, blockCount int32) error {
 	buf[len(Magic)] = Version
 	binary.BigEndian.PutUint64(buf[len(Magic)+1:], uint64(sortedEnd))    //nolint:gosec // G115: sortedEnd is a file offset — fits uint64
 	binary.BigEndian.PutUint32(buf[len(Magic)+1+8:], uint32(blockCount)) //nolint:gosec // G115: block count bounded by file records
-	_, err := s.f.WriteAt(buf, 0)
+	_, err := s.fref.Load().f.WriteAt(buf, 0)
 	return err
 }
 
@@ -96,8 +96,9 @@ func (s *Store) writeHeader(sortedEnd int64, blockCount int32) error {
 // truncated trailing record and any record that follows a corrupt one
 // (append-order trust).
 func (s *Store) scan() error {
+	f := s.fref.Load().f
 	var header [headerLen]byte
-	n, err := io.ReadFull(s.f, header[:])
+	n, err := io.ReadFull(f, header[:])
 	if errors.Is(err, io.EOF) {
 		// Fresh empty file — initialise the header.
 		if err := s.writeHeader(int64(headerLen), 0); err != nil {
@@ -118,7 +119,7 @@ func (s *Store) scan() error {
 	}
 	sortedEnd := int64(binary.BigEndian.Uint64(header[len(Magic)+1:]))    //nolint:gosec // G115: file offsets fit int64
 	blockCount := int32(binary.BigEndian.Uint32(header[len(Magic)+1+8:])) //nolint:gosec // G115: block count bounded by file records
-	fi, err := s.f.Stat()
+	fi, err := f.Stat()
 	if err != nil {
 		return err
 	}
@@ -136,7 +137,7 @@ func (s *Store) scan() error {
 	// ~1 per scanBufBytes; skipping the wire via Discard reads it through
 	// the page cache instead of seeking past it, which the sequential
 	// readahead had pulled in anyway.
-	br := bufio.NewReaderSize(s.f, scanBufBytes)
+	br := bufio.NewReaderSize(f, scanBufBytes)
 	var keyLenBuf [2]byte
 	// recBuf is reused across readRecord calls: the per-record buffers
 	// (keyBuf make + 4 fixed-field buffers + string copies) were ~19M
@@ -240,7 +241,7 @@ func (s *Store) scan() error {
 // reject it as corrupt otherwise).  Returns nil (scan continues from the
 // good prefix).
 func (s *Store) truncateAt(off int64) error {
-	if err := s.f.Truncate(off); err != nil {
+	if err := s.fref.Load().f.Truncate(off); err != nil {
 		return err
 	}
 	s.tail = off

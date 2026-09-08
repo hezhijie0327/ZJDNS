@@ -11,13 +11,20 @@
 // boxing overhead.
 package lrumap
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // lruEntry holds a key-value pair with embedded doubly-linked list pointers.
 type lruEntry[K comparable, V any] struct {
 	key        K
 	val        V
 	prev, next *lruEntry[K, V]
+	// seen is the Map clock value at the entry's last promotion/insert.
+	// Read under the read lock on every hit; written only under the write
+	// lock.  atomic because the read side holds no exclusive lock.
+	seen atomic.Uint64
 }
 
 // Map is a concurrent-safe bounded map with LRU eviction.
@@ -25,12 +32,20 @@ type lruEntry[K comparable, V any] struct {
 // A Map created via NewSharded dispatches every method to the shard owning
 // the key — mu/head/tail are unused in that case.
 type Map[K comparable, V any] struct {
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	m    map[K]*lruEntry[K, V]
 	head *lruEntry[K, V] // sentinel: most-recent side
 	tail *lruEntry[K, V] // sentinel: least-recent side
 	len  int
 	cap  int
+
+	// clock advances on every insert and promotion.  A hit on an entry
+	// whose stamp is older than cap clock ticks (i.e. cap inserts happened
+	// since it was last touched — it fell out of the working-set window)
+	// upgrades to the write lock and re-promotes; hits inside the window
+	// run read-only, so concurrent readers never serialize on list
+	// rewrites.  The eviction tail stays genuinely cold.
+	clock atomic.Uint64
 
 	// Sharding (NewSharded): non-empty ⇒ every method dispatches to the
 	// shard owning the key. Set before the map is published; read-only after.
@@ -77,21 +92,40 @@ func (m *Map[K, V]) SetOnEvict(fn func(K, V)) {
 }
 
 // Get returns the value for key and whether it was found.
-// Accessing an entry marks it as most recently used.
+//
+// Hits run under the READ lock.  Recency is bumped on the hit path only
+// when the entry has fallen out of the working-set window (cap inserts
+// since its last promotion) — that upgrade takes the write lock; hits on
+// entries inside the window never rewrite the list, so concurrent readers
+// stop serializing behind every hit's moveToFront.  Eviction quality is
+// preserved: the list tail is still the coldest region, and re-accessed
+// cold entries are re-promoted exactly.
 func (m *Map[K, V]) Get(key K) (V, bool) {
 	if len(m.shards) > 0 {
 		return m.shardFor(key).Get(key)
 	}
-	m.mu.Lock()
-	if e, ok := m.m[key]; ok {
-		m.moveToFront(e)
-		v := e.val
-		m.mu.Unlock()
-		return v, true
+	m.mu.RLock()
+	e, ok := m.m[key]
+	if !ok {
+		m.mu.RUnlock()
+		var zero V
+		return zero, false
 	}
-	m.mu.Unlock()
-	var zero V
-	return zero, false
+	v := e.val
+	stale := m.clock.Load()-e.seen.Load() >= uint64(m.cap) //nolint:gosec // G115: cap is positive (New clamps <= 0 to 64)
+	m.mu.RUnlock()
+
+	if stale {
+		m.mu.Lock()
+		// The entry may have been removed between the RUnlock and this
+		// Lock (eviction/Delete nil the list pointers) — skip if detached.
+		if e.prev != nil {
+			m.moveToFront(e)
+			e.seen.Store(m.clock.Add(1))
+		}
+		m.mu.Unlock()
+	}
+	return v, true
 }
 
 // Set stores the value under key, evicting the least recently used entry
@@ -111,6 +145,7 @@ func (m *Map[K, V]) Set(key K, val V) {
 		}
 		e.val = val
 		m.moveToFront(e)
+		e.seen.Store(m.clock.Add(1))
 		m.mu.Unlock()
 		return
 	}
@@ -118,6 +153,7 @@ func (m *Map[K, V]) Set(key K, val V) {
 		m.evictLocked()
 	}
 	e := &lruEntry[K, V]{key: key, val: val}
+	e.seen.Store(m.clock.Add(1))
 	m.m[key] = e
 	m.pushFront(e)
 	m.len++
@@ -136,12 +172,14 @@ func (m *Map[K, V]) LoadOrStore(key K, val V) (V, bool) {
 	defer m.mu.Unlock()
 	if e, ok := m.m[key]; ok {
 		m.moveToFront(e)
+		e.seen.Store(m.clock.Add(1))
 		return e.val, true
 	}
 	if m.len >= m.cap {
 		m.evictLocked()
 	}
 	e := &lruEntry[K, V]{key: key, val: val}
+	e.seen.Store(m.clock.Add(1))
 	m.m[key] = e
 	m.pushFront(e)
 	m.len++

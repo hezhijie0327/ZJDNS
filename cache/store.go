@@ -126,7 +126,7 @@ func New(entriesLimit, latencyLimit config.LimitSettings, spillPath, latencySpil
 	c := &Cache{
 		// Sharded: every query's Get/Set (hit or miss) touches these maps —
 		// a single LRU mutex serialised the whole server at high QPS.
-		entries:    lrumap.NewSharded[cacheKey, *cacheEntry](maxEntries),
+		entries:    lrumap.NewShardedWithHash[cacheKey, *cacheEntry](maxEntries, hashCacheKey),
 		maxEntries: maxEntries,
 		statsMgr:   stats.NewJournal(0),
 		latencies:  lrumap.NewSharded[string, latEntry](latencyMax),

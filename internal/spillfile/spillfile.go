@@ -28,6 +28,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 )
 
 // Entry is a snapshot of one indexed record, used by callers for startup
@@ -56,16 +57,49 @@ type WarmEntry struct {
 // arrives (top-K newest selection in O(n log max) instead of a full sort).
 type warmHeap []Entry
 
+// fileRef is the immutable handle snapshot taken by every reader before it
+// leaves the metadata lock: preads run against the snapshot, so a Compact
+// swapping the file handle never races an in-flight read.  internal/poll
+// guarantees ops on a closed *os.File fail with ErrClosed (no fd-reuse
+// hazard), so a reader that loaded the old snapshot across a swap self-heals
+// to a miss.
+type fileRef struct {
+	f *os.File
+}
+
 // Store is a sorted-region + tail-region key-value store.
 type Store struct {
-	f    *os.File
 	path string
+
+	// fref is the current file handle.  Readers snapshot it under mu and
+	// pread OUTSIDE the lock (the former Get/Indexed held mu across every
+	// pread, serializing all spill reads behind disk latency — and the
+	// delegation-promote path on the recursive hot route takes these reads).
+	fref atomic.Pointer[fileRef]
+
+	// wmu serializes structural writers (Put/Delete/Compact): Compact holds
+	// it across its lock-free rewrite so a concurrent Put cannot append to
+	// the old file's tail after the metadata snapshot (records would be
+	// lost at the swap).  Reads never take wmu.
+	wmu sync.Mutex
 
 	mu        sync.Mutex // guards sparse, tailMap, tail, sortedEnd
 	sparse    []sparseEntry
 	tailMap   map[string]tailEntry
 	tail      int64 // next append offset (== physical EOF)
 	sortedEnd int64 // byte boundary between the sorted and tail regions
+
+	// neg memoizes full-miss keys (repeated ECS-variant misses re-reading
+	// blocks); invalidated by Put/Delete and cleared by Compact/Clear.
+	negMu sync.Mutex
+	neg   map[string]struct{}
+
+	// retired holds the previous file generation after a Compact (POSIX:
+	// the renamed-away inode stays readable through the open handle, so
+	// readers still holding the old snapshot never observe ErrClosed).  It
+	// is closed one Compact later — no reader can plausibly hold a snapshot
+	// across a full compact cycle — and by Close.
+	retired *fileRef
 }
 
 // Corruption guards — record lengths come from the file, so a corrupt or
@@ -96,6 +130,10 @@ const (
 	// the per-record read syscalls of the unbuffered scan amortise away on
 	// multi-GB spill files.
 	scanBufBytes = 1 << 20
+
+	// negCacheMax bounds the memoized-miss map; hitting the cap resets it
+	// wholesale (a re-derived miss costs one block read).
+	negCacheMax = 8192
 )
 
 // Tiered block-buffer pools for the spill-hit hot path: the single-tier pool
@@ -153,7 +191,8 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	st := &Store{f: f, path: path, tailMap: make(map[string]tailEntry)}
+	st := &Store{path: path, tailMap: make(map[string]tailEntry)}
+	st.fref.Store(&fileRef{f: f})
 	if err := st.scan(); err != nil {
 		_ = f.Close()
 		return nil, err
@@ -168,7 +207,8 @@ func Create(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	st := &Store{f: f, path: path, tailMap: make(map[string]tailEntry)}
+	st := &Store{path: path, tailMap: make(map[string]tailEntry)}
+	st.fref.Store(&fileRef{f: f})
 	if err := st.writeHeader(int64(headerLen), 0); err != nil {
 		_ = f.Close()
 		return nil, err
@@ -187,10 +227,15 @@ func (s *Store) Put(key string, ts int64, ttl int, validated bool, wire []byte) 
 	}
 	rec := recordBytes(key, ts, ttl, validated, wire)
 
+	// wmu first (lock order wmu→mu everywhere): during a Compact the append
+	// waits for the swap and then lands on the NEW file with the NEW tail.
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	off := s.tail
-	if _, err := s.f.WriteAt(rec, off); err != nil {
+	ref := s.fref.Load()
+	if _, err := ref.f.WriteAt(rec, off); err != nil {
+		s.mu.Unlock()
 		return err
 	}
 	s.tail += int64(len(rec))
@@ -198,6 +243,8 @@ func (s *Store) Put(key string, ts int64, ttl int, validated bool, wire []byte) 
 		ts: ts, ttl: ttl, validated: validated,
 		wireOff: off + int64(recordHeaderLen+len(key)), wireLen: int32(len(wire)), //nolint:gosec // G115: wire length bounded by maxWireLen
 	}
+	s.mu.Unlock()
+	s.forgetMiss(key)
 	return nil
 }
 
@@ -205,8 +252,11 @@ func (s *Store) Put(key string, ts int64, ttl int, validated bool, wire []byte) 
 // deleted in the tail map; a record in the sorted region gets a tombstone.
 // The physical record stays on disk until the next merge.
 func (s *Store) Delete(key string) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.forgetMiss(key)
 	if te, found := s.tailMap[key]; found {
 		te.deleted = true
 		s.tailMap[key] = te
@@ -223,64 +273,118 @@ func (s *Store) Delete(key string) {
 // the sparse index (~10 steps for 2000 blocks), reads the target block in one
 // pread and parses it sequentially.
 func (s *Store) Get(key string) (ts int64, ttl int, validated bool, wire []byte, ok bool) {
-	// The whole read runs under s.mu: Compact (also under s.mu) closes and
-	// reassigns s.f — a ReadAt released from the lock raced that swap and
-	// could read through the closed handle or at generation-stale offsets.
-	// pread is thread-safe and page-cache-fast, and the bulk
-	// operations (Entries/Warm/Compact) already hold this mutex across IO.
+	// Memoized miss: repeated absent keys (ECS variants of the same qname)
+	// used to re-pay the lock + block pread every time.  Put/Delete
+	// invalidate, so a remembered miss cannot mask a fresh record.
+	if s.hasMiss(key) {
+		return 0, 0, false, nil, false
+	}
+
+	// Metadata phase under mu; the pread runs OUTSIDE the lock against a
+	// snapshotted handle (see fileRef).  The former design held mu across
+	// every pread — Compact's full-file rewrite under the same lock paused
+	// all spill reads for its whole duration.
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	// Tail region: O(1) map lookup.
-	if te, found := s.tailMap[key]; found {
+	te, found := s.tailMap[key]
+	var blk sparseEntry
+	if !found {
+		idx := sort.Search(len(s.sparse), func(i int) bool { return s.sparse[i].firstKey > key })
+		if idx == 0 {
+			s.mu.Unlock()
+			s.rememberMiss(key)
+			return 0, 0, false, nil, false
+		}
+		blk = s.sparse[idx-1]
+	}
+	ref := s.fref.Load()
+	s.mu.Unlock()
+
+	if found {
 		if te.deleted {
 			return 0, 0, false, nil, false
 		}
 		wire = make([]byte, te.wireLen)
-		if _, err := s.f.ReadAt(wire, te.wireOff); err != nil {
+		if _, err := ref.f.ReadAt(wire, te.wireOff); err != nil {
 			return 0, 0, false, nil, false
 		}
 		return te.ts, te.ttl, te.validated, wire, true
 	}
-	// Sorted region: binary-search the sparse index, then parse the block.
-	idx := sort.Search(len(s.sparse), func(i int) bool { return s.sparse[i].firstKey > key })
-	if idx == 0 {
-		return 0, 0, false, nil, false
-	}
-	blk := s.sparse[idx-1]
 
+	// Sorted region: one pread for the target block, parsed sequentially.
 	buf := acquireBlockBuf(int(blk.blockEnd - blk.blockStart))
 	block := buf[:blk.blockEnd-blk.blockStart]
 	defer releaseBlockBuf(block)
-	if _, err := s.f.ReadAt(block, blk.blockStart); err != nil {
+	if _, err := ref.f.ReadAt(block, blk.blockStart); err != nil {
 		return 0, 0, false, nil, false
 	}
 	rts, rttl, rvalidated, rwire, found := lookupInBlock(block, key)
 	if !found {
+		s.rememberMiss(key)
 		return 0, 0, false, nil, false
 	}
 	return rts, rttl, rvalidated, append([]byte(nil), rwire...), true
+}
+
+// hasMiss reports whether key is memoized absent.
+func (s *Store) hasMiss(key string) bool {
+	s.negMu.Lock()
+	_, hit := s.neg[key]
+	s.negMu.Unlock()
+	return hit
+}
+
+// rememberMiss memoizes a full miss, bounding the map by wholesale reset —
+// negative results are cheap to re-derive (one block read).
+func (s *Store) rememberMiss(key string) {
+	s.negMu.Lock()
+	if s.neg == nil {
+		s.neg = make(map[string]struct{}, negCacheMax)
+	}
+	if len(s.neg) >= negCacheMax {
+		s.neg = make(map[string]struct{}, negCacheMax)
+	}
+	s.neg[key] = struct{}{}
+	s.negMu.Unlock()
+}
+
+// forgetMiss drops a memoized miss after a Put or Delete made the key
+// potentially present again.
+func (s *Store) forgetMiss(key string) {
+	s.negMu.Lock()
+	delete(s.neg, key)
+	s.negMu.Unlock()
+}
+
+// resetMisses clears the memo — called when the record set is rebuilt.
+func (s *Store) resetMisses() {
+	s.negMu.Lock()
+	s.neg = nil
+	s.negMu.Unlock()
 }
 
 // Indexed reports whether the store holds a record for key with exactly the
 // given timestamp — used by callers to avoid re-appending unchanged entries
 // during a full-memory flush.
 func (s *Store) Indexed(key string, ts int64) bool {
-	// Under s.mu for the same Compact-race reason as Get.
+	// Metadata under mu, pread outside — same protocol as Get.
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if te, found := s.tailMap[key]; found {
+		s.mu.Unlock()
 		return !te.deleted && te.ts == ts
 	}
 	idx := sort.Search(len(s.sparse), func(i int) bool { return s.sparse[i].firstKey > key })
 	if idx == 0 {
+		s.mu.Unlock()
 		return false
 	}
 	blk := s.sparse[idx-1]
+	ref := s.fref.Load()
+	s.mu.Unlock()
 
 	buf := acquireBlockBuf(int(blk.blockEnd - blk.blockStart))
 	block := buf[:blk.blockEnd-blk.blockStart]
 	defer releaseBlockBuf(block)
-	if _, err := s.f.ReadAt(block, blk.blockStart); err != nil {
+	if _, err := ref.f.ReadAt(block, blk.blockStart); err != nil {
 		return false
 	}
 	rts, _, _, _, found := lookupInBlock(block, key)
@@ -300,9 +404,10 @@ func (s *Store) Entries() []Entry {
 		}
 		out = append(out, Entry{Key: k, Ts: te.ts, Ttl: te.ttl, Validated: te.validated, WireOff: te.wireOff, WireLen: te.wireLen})
 	}
+	ref := s.fref.Load()
 	for _, blk := range s.sparse {
 		buf := make([]byte, blk.blockEnd-blk.blockStart)
-		if _, err := s.f.ReadAt(buf, blk.blockStart); err != nil {
+		if _, err := ref.f.ReadAt(buf, blk.blockStart); err != nil {
 			continue
 		}
 		scanBlock(blk.blockStart, buf, func(key string, ts int64, ttl int, validated bool, wireOff int64, wireLen int) bool {
@@ -318,18 +423,22 @@ func (s *Store) Entries() []Entry {
 
 // Clear removes all records (index + file truncated back to the header).
 func (s *Store) Clear() error {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	ref := s.fref.Load()
 	if err := s.writeHeader(int64(headerLen), 0); err != nil {
 		return err
 	}
-	if err := s.f.Truncate(int64(headerLen)); err != nil {
+	if err := ref.f.Truncate(int64(headerLen)); err != nil {
 		return err
 	}
 	s.tail = int64(headerLen)
 	s.sortedEnd = int64(headerLen)
 	s.sparse = nil
 	s.tailMap = make(map[string]tailEntry)
+	s.resetMisses()
 	return nil
 }
 
@@ -338,16 +447,24 @@ func (s *Store) Clear() error {
 func (s *Store) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.f.Sync()
+	return s.fref.Load().f.Sync()
 }
 
 // Close flushes and closes the store.
 func (s *Store) Close() error {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	err := s.f.Sync()
-	if cerr := s.f.Close(); err == nil {
+	ref := s.fref.Load()
+	err := ref.f.Sync()
+	if cerr := ref.f.Close(); err == nil {
 		err = cerr
+	}
+	retired := s.retired
+	s.retired = nil
+	s.mu.Unlock()
+	if retired != nil {
+		_ = retired.f.Close()
 	}
 	return err
 }
@@ -380,9 +497,10 @@ func (s *Store) EntryCount() int {
 			n++
 		}
 	}
+	ref := s.fref.Load()
 	for _, blk := range s.sparse {
 		buf := make([]byte, blk.blockEnd-blk.blockStart)
-		if _, err := s.f.ReadAt(buf, blk.blockStart); err != nil {
+		if _, err := ref.f.ReadAt(buf, blk.blockStart); err != nil {
 			continue
 		}
 		scanBlock(blk.blockStart, buf, func(key string, _ int64, _ int, _ bool, _ int64, _ int) bool {
