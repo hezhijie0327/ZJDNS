@@ -30,11 +30,85 @@ func FoldCase(rrs []dns.RR) {
 }
 
 // foldCaseRR folds the owner and every embedded rdata name of an RR to
-// lowercase by rebuilding it via the zone parser — the same self-describing
-// grammar — so any RR type, including future ones, is covered without a
-// per-type field table.  Returns the input unchanged when there is nothing
-// to fold.
+// lowercase.  Every RR type carrying rdata names in the miekg library gets a
+// field-wise path: plain ASCII scans with zero allocations (RFC 4343 §3) —
+// the previous approach serialised every record to presentation form
+// (rr.String(), several allocations per RR) just to discover there was
+// nothing to fold.  Any other type falls back to the type-agnostic
+// presentation reparse, so future and exotic RR types keep full coverage.
+//
+// FoldCase's contract is "lowercase in place": the RR is uniquely owned by
+// the caller (fresh per-query unpack, or a cache clone), so fields are
+// mutated directly.
 func foldCaseRR(rr dns.RR) dns.RR {
+	rr.Header().Name = ASCIIFold(rr.Header().Name)
+	switch v := rr.(type) {
+	case *dns.A, *dns.AAAA, *dns.TXT, *dns.DS, *dns.DNSKEY, *dns.NSEC3, *dns.OPT,
+		*dns.TLSA, *dns.SMIMEA, *dns.URI, *dns.CAA, *dns.SSHFP, *dns.HINFO,
+		*dns.OPENPGPKEY, *dns.RFC3597, *dns.ANY, *dns.NID, *dns.L32, *dns.L64:
+		// No rdata names — the owner fold above is the whole job.
+	case *dns.SOA:
+		v.Ns = ASCIIFold(v.Ns)
+		v.Mbox = ASCIIFold(v.Mbox)
+	case *dns.NS:
+		v.Ns = ASCIIFold(v.Ns)
+	case *dns.CNAME:
+		v.Target = ASCIIFold(v.Target)
+	case *dns.DNAME:
+		v.Target = ASCIIFold(v.Target)
+	case *dns.PTR:
+		v.Ptr = ASCIIFold(v.Ptr)
+	case *dns.MX:
+		v.Mx = ASCIIFold(v.Mx)
+	case *dns.SRV:
+		v.Target = ASCIIFold(v.Target)
+	case *dns.NAPTR:
+		v.Replacement = ASCIIFold(v.Replacement)
+	case *dns.KX:
+		v.Exchanger = ASCIIFold(v.Exchanger)
+	case *dns.AFSDB:
+		v.Hostname = ASCIIFold(v.Hostname)
+	case *dns.RT:
+		v.Host = ASCIIFold(v.Host)
+	case *dns.PX:
+		v.Map822 = ASCIIFold(v.Map822)
+		v.Mapx400 = ASCIIFold(v.Mapx400)
+	case *dns.MINFO:
+		v.Rmail = ASCIIFold(v.Rmail)
+		v.Email = ASCIIFold(v.Email)
+	case *dns.TALINK:
+		v.PreviousName = ASCIIFold(v.PreviousName)
+		v.NextName = ASCIIFold(v.NextName)
+	case *dns.SVCB:
+		v.Target = ASCIIFold(v.Target)
+	case *dns.HTTPS:
+		v.Target = ASCIIFold(v.Target)
+	case *dns.NSEC:
+		v.NextDomain = ASCIIFold(v.NextDomain)
+	case *dns.RRSIG:
+		v.SignerName = ASCIIFold(v.SignerName)
+	case *dns.SIG:
+		v.SignerName = ASCIIFold(v.SignerName)
+	case *dns.HIP:
+		for i, s := range v.RendezvousServers {
+			v.RendezvousServers[i] = ASCIIFold(s)
+		}
+	default:
+		// Unknown or exotic type — the presentation reparse covers every
+		// name it carries, including ones this switch will grow for.
+		return presentationFoldCase(rr)
+	}
+	return rr
+}
+
+// presentationFoldCase is the type-agnostic fallback: rebuild the record
+// from its folded presentation form via the zone parser — the same
+// self-describing grammar — so any RR type, including future ones, is
+// covered without enumerating it above.  Returns the input unchanged when
+// there is nothing to fold or the reparse fails (defensive — serve the
+// original; the owner may already have been folded in place, which is its
+// correct canonical form).
+func presentationFoldCase(rr dns.RR) dns.RR {
 	folded, changed := foldPresentationNames(rr.String())
 	if !changed {
 		return rr
