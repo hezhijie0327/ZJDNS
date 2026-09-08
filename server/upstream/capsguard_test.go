@@ -321,7 +321,7 @@ func TestCapsDowngradePerAddress(t *testing.T) {
 	}
 	// Expiry: a disabled address whose window elapsed must randomise again.
 	st, _ := c.capsDowngrades.Get("10.0.0.1:53")
-	st.disabledUntil = time.Now().Add(-time.Second)
+	st.disabledUntil.Store(time.Now().Add(-time.Second).UnixNano())
 	c.capsDowngrades.Set("10.0.0.1:53", st)
 	if c.capsDisabled("10.0.0.1:53") {
 		t.Fatal("address still disabled after the retry window elapsed")

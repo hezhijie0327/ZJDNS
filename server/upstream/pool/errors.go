@@ -16,3 +16,14 @@ var (
 	ErrMaxConnsReached   = errors.New("pool: max conns reached for key")
 	ErrWriteFailed       = errors.New("pool: write failed")
 )
+
+// storeLive replaces a key's connection slice after the Acquire dead
+// filter — an all-dead key is deleted outright so stale keys do not pin
+// map entries until ReapDead.
+func storeLive[C any](conns map[string][]*C, key string, live []*C) {
+	if len(live) == 0 {
+		delete(conns, key)
+		return
+	}
+	conns[key] = live
+}

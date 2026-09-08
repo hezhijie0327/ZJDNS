@@ -34,11 +34,10 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 	parsedURL := ep.url
 
 	var client *http.Client
-	var isCached bool
 	if c.dohTransports != nil { // Close() never nils the map (tls/client.go) — guarded for symmetry
-		client, isCached = c.dohTransports.Get(ep.key)
+		client, _ = c.dohTransports.Get(ep.key)
 	}
-	if !isCached {
+	if client == nil {
 		client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, ep.eTLSCfg)
 	}
 
@@ -47,21 +46,23 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 		return resp, nil
 	}
 
-	if isCached {
-		for i := 0; shouldRetryHTTP(err) && i < config.DefaultSecureTransportRetries; i++ {
-			// Atomic compare-and-delete: another goroutine may have replaced
-			// the transport for this key — only evict if it is still ours.
-			if c.dohTransports != nil && c.dohTransports.CompareAndDelete(ep.key, client) {
-				if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
-					ct.CloseIdleConnections()
-				}
+	// Fresh (uncached) clients retry too: first-use failures (TLS handshake
+	// races, 0-RTT rejection) strike new transports exactly as cached ones —
+	// ExecuteHTTP3 applies the same policy.
+	for i := 0; shouldRetryHTTP(err) && i < config.DefaultSecureTransportRetries; i++ {
+		// Atomic compare-and-delete: another goroutine may have replaced
+		// the transport for this key — only evict if it is still ours (a
+		// no-op for an uncached client).
+		if c.dohTransports != nil && c.dohTransports.CompareAndDelete(ep.key, client) {
+			if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
+				ct.CloseIdleConnections()
 			}
+		}
 
-			client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, ep.eTLSCfg)
-			resp, err = zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, client, http.MethodGet)
-			if err == nil {
-				return resp, nil
-			}
+		client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, ep.eTLSCfg)
+		resp, err = zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, client, http.MethodGet)
+		if err == nil {
+			return resp, nil
 		}
 	}
 

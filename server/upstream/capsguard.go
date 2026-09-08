@@ -6,16 +6,18 @@ package upstream
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 	"zjdns/config"
 )
 
 // capsDowngradeStat tracks one upstream address's 0x20 mismatch history.
-// Stored by pointer — the counter update runs under mu (U6).
+// Stored by pointer — the counter update runs under mu; disabledUntil is
+// atomic (UnixNano) because the hot path reads it without the mutex.
 type capsDowngradeStat struct {
 	mu            sync.Mutex
 	mismatches    int
-	disabledUntil time.Time
+	disabledUntil atomic.Int64
 }
 
 // capsDisabled reports whether 0x20 randomisation is currently skipped for
@@ -26,7 +28,7 @@ func (c *Client) capsDisabled(addr string) bool {
 		return false
 	}
 	st, ok := c.capsDowngrades.Get(addr)
-	return ok && time.Now().Before(st.disabledUntil)
+	return ok && st != nil && time.Now().UnixNano() < st.disabledUntil.Load()
 }
 
 // noteCapsSuccess resets the consecutive-mismatch counter after a
@@ -61,7 +63,7 @@ func (c *Client) noteCapsMismatch(addr string) bool {
 	st.mismatches++
 	if st.mismatches >= config.DefaultCapsGuardDowngradeAfter {
 		st.mismatches = 0
-		st.disabledUntil = time.Now().Add(config.DefaultCapsGuardRetryAfter)
+		st.disabledUntil.Store(time.Now().Add(config.DefaultCapsGuardRetryAfter).UnixNano())
 		return true
 	}
 	return false

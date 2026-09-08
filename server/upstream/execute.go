@@ -182,12 +182,18 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 		if err == nil {
 			return resp, nil
 		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			// Caller-side cancellation (first-win fan-out, shutdown): the
+			// fallback would burn a full handshake nobody waits for.
+			return nil, err
+		}
 		log.Debugf("UPSTREAM: DTLS query failed for %s, falling back to TLS: %v", server.Address, err)
-		// Use Background+timeout, not ctx: the DTLS attempt consumed the
+		// WithoutCancel+timeout, not ctx: the DTLS attempt consumed the
 		// caller's deadline, and WithTimeout(ctx, ...) inherits the
 		// already-expired parent deadline (min(parent, timeout) = past).
-		// The cross-protocol fallback gets its own full budget.
-		tlsCtx, tlsCancel := context.WithTimeout(context.Background(), c.timeout)
+		// The cross-protocol fallback gets its own full budget while the
+		// context values survive.
+		tlsCtx, tlsCancel := context.WithTimeout(context.WithoutCancel(ctx), c.timeout)
 		defer tlsCancel()
 		return c.tlsClient.ExecuteTLS(tlsCtx, msg, server)
 	case config.ProtoTLCP:
@@ -201,10 +207,15 @@ func (c *Client) executeSecureQuery(ctx context.Context, msg *dns.Msg, server *c
 		if err == nil {
 			return resp, nil
 		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			// Caller-side cancellation — the fallback would burn a full
+			// handshake nobody waits for.
+			return nil, err
+		}
 		log.Debugf("UPSTREAM: DTLCP query failed for %s, falling back to TLCP: %v", server.Address, err)
-		// Use Background+timeout — same reason as DTLS→TLS: the DTLCP
-		// attempt exhausted the caller's deadline.
-		tlcpCtx, tlcpCancel := context.WithTimeout(context.Background(), c.timeout)
+		// WithoutCancel+timeout — same reason as DTLS→TLS: the DTLCP
+		// attempt exhausted the caller's deadline, but values survive.
+		tlcpCtx, tlcpCancel := context.WithTimeout(context.WithoutCancel(ctx), c.timeout)
 		defer tlcpCancel()
 		return c.tlcpClient.ExecuteTLCP(tlcpCtx, msg, server)
 	default:

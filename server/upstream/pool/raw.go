@@ -100,7 +100,7 @@ func (p *RawPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc fu
 					}
 				}
 				p.total -= len(conns) - len(liveConns) // dead-filter accounting (U1)
-				p.conns[key] = liveConns
+				storeLive(p.conns, key, liveConns)
 			}
 			p.mu.Unlock()
 			return c, nil
@@ -112,7 +112,7 @@ func (p *RawPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc fu
 	}
 	if deadSeen {
 		p.total -= len(conns) - len(liveConns) // dead-filter accounting (U1)
-		p.conns[key] = liveConns
+		storeLive(p.conns, key, liveConns)
 	}
 
 	if liveCount+p.dialing[key] < p.maxConns {

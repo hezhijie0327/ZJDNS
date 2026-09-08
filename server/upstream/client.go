@@ -86,12 +86,11 @@ func New() *Client {
 		WriteTimeout: config.DefaultDNSQueryTimeout,
 	}
 
-	// NOTE: All three clients alias the same *dns.Transport. This is safe
+	// NOTE: Both clients alias the same *dns.Transport. This is safe
 	// because dns.Client only reads Transport config fields (Dialer, timeouts)
 	// and never mutates them. A future change to Transport on one client would
-	// affect all three -- clone the Transport if per-client divergence is needed.
+	// affect both -- clone the Transport if per-client divergence is needed.
 	udpClient := &dns.Client{Transport: defaultTransport}
-	tcpClient := &dns.Client{Transport: defaultTransport}
 	tlsDNSClient := &dns.Client{Transport: defaultTransport}
 
 	dohTransport := &eHTTP.Transport{
@@ -136,7 +135,7 @@ func New() *Client {
 		}
 	}
 
-	c.plainClient = plain.New(udpClient, tcpClient, tcpPool, c.proxyDialer, timeout)
+	c.plainClient = plain.New(udpClient, tcpPool, c.proxyDialer, timeout)
 	c.tlsClient = tlsclient.New(tlsDNSClient, dohClient, doh3Client, dotPool, quicPool, sessionCache, quicSessionCache, dtlsSessions, c.proxyDialer, timeout)
 	c.tlcpClient = tlcpclient.New(c.proxyDialer, timeout)
 	c.dnscryptClient = dnscrypt.New(c.proxyDialer)
@@ -199,9 +198,17 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 		}
 	}
 
+	if randomized {
+		defer func() {
+			// The caller may re-send msg (MQTYPE optionless retry, the next
+			// raced upstream): the randomized name must not outlive this
+			// call, or the next ExecuteQuery captures it as the original.
+			msg.Question[0].Header().Name = original
+		}()
+	}
+
 	// Log the name actually sent — after CapsGuard randomization, so the
-	// 0x20 case pattern is visible in the debug log (the caller-facing
-	// original is restored only on a mismatch retry below).
+	// 0x20 case pattern is visible in the debug log.
 	if len(msg.Question) > 0 {
 		log.Debugf("UPSTREAM: querying %s (%s) for %s", server.Address, server.Protocol, msg.Question[0].Header().Name)
 	}

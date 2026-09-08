@@ -287,8 +287,13 @@ func (c *Conn) readLoop() {
 		c.mu.RLock()
 		pq, ok := c.inflight[resp.ID]
 		c.mu.RUnlock()
-		// RFC 7766 §7: verify response question matches the query.
-		if ok && len(resp.Question) > 0 {
+		// RFC 7766 §7: verify response question matches the query. A
+		// qdcount=0 response to a question-bearing query is a mismatch —
+		// a stale or forged datagram must not match on ID alone.
+		if ok && len(resp.Question) == 0 {
+			ok = false
+		}
+		if ok {
 			rq := resp.Question[0]
 			if !dns.EqualName(rq.Header().Name, pq.qname) || dns.RRToType(rq) != pq.qtype || rq.Header().Class != pq.qclass {
 				ok = false

@@ -12,6 +12,7 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/internal/resolv"
+	zpool "zjdns/server/upstream/pool"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -48,11 +49,7 @@ func (c *Client) ExecuteTCP(ctx context.Context, msg *dns.Msg, server *config.Up
 			poolKey += "|split"
 		}
 		pc, err := c.tcpPool.Acquire(ctx, poolKey, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
-			if proxyDialer != nil {
-				return proxyDialer.DialContext(dialCtx, "tcp", addr)
-			}
-			var d net.Dialer
-			return resolv.Default.DialContext(dialCtx, "tcp", addr, &d)
+			return dialTCP(dialCtx, addr, proxyDialer)
 		})
 		if err == nil {
 			pc.SetSegmentation(segSize)
@@ -65,22 +62,37 @@ func (c *Client) ExecuteTCP(ctx context.Context, msg *dns.Msg, server *config.Up
 			}
 			log.Debugf("UPSTREAM: pipelined TCP query to %s failed: %v, falling back", server.Address, err)
 		}
+		// Same gate as the UDP path: a canceled/expired context can never
+		// succeed past this point, and the pool's saturation errors exist
+		// precisely to bound concurrent dials — falling through to a
+		// per-query dial bypasses the caps.
+		if ctx.Err() != nil ||
+			errors.Is(err, zpool.ErrNoAvailableSocket) ||
+			errors.Is(err, zpool.ErrMaxConnsReached) ||
+			errors.Is(err, zpool.ErrPoolShutdown) {
+			return nil, err
+		}
 	}
 
-	// Non-pooled fallback. When a proxy is configured, do manual dial + exchange
-	// because dns.Client.ExchangeContext cannot be routed through a SOCKS5 proxy.
-	if proxyDialer != nil {
-		return c.exchangeViaProxy(ctx, msg, server.Address, proxyDialer, segSize)
-	}
-
-	response, _, err := c.tcpClient.Exchange(ctx, msg, config.ProtoTCP, server.Address)
-	return response, err
+	// Non-pooled fallback: manual dial + exchange so splitguard's segmented
+	// writes keep applying (dns.Client cannot segment) and SOCKS5 routing
+	// works (ExchangeContext cannot be proxied).
+	return c.exchangeSegmented(ctx, msg, server.Address, proxyDialer, segSize)
 }
 
-// exchangeViaProxy sends a DNS query over TCP through a SOCKS5 proxy using
-// manual dial + dns.Conn exchange.
-func (c *Client) exchangeViaProxy(ctx context.Context, msg *dns.Msg, addr string, proxyDialer *socks5.Dialer, segSize int) (*dns.Msg, error) {
-	conn, err := proxyDialer.DialContext(ctx, "tcp", addr)
+// dialTCP dials addr over TCP, through the SOCKS5 proxy when configured.
+func dialTCP(ctx context.Context, addr string, proxyDialer *socks5.Dialer) (net.Conn, error) {
+	if proxyDialer != nil {
+		return proxyDialer.DialContext(ctx, "tcp", addr)
+	}
+	var d net.Dialer
+	return resolv.Default.DialContext(ctx, "tcp", addr, &d)
+}
+
+// exchangeSegmented sends a DNS query over a fresh TCP connection (optionally
+// via SOCKS5) with splitguard's optional write segmentation.
+func (c *Client) exchangeSegmented(ctx context.Context, msg *dns.Msg, addr string, proxyDialer *socks5.Dialer, segSize int) (*dns.Msg, error) {
+	conn, err := dialTCP(ctx, addr, proxyDialer)
 	if err != nil {
 		return nil, err
 	}

@@ -327,10 +327,11 @@ func (p *QUIC) Put(key string, conn *quic.Conn) {
 			evicted = append(evicted, victim)
 		}
 	}
+	total := p.total // capture under the lock — the log below runs after Unlock
 	p.mu.Unlock()
 	for _, v := range evicted {
 		v.close()
-		log.Debugf("UPSTREAM: evicted QUIC %s for capacity after Put (total=%d/%d)", v.addr, p.total, p.maxTotal)
+		log.Debugf("UPSTREAM: evicted QUIC %s for capacity after Put (total=%d/%d)", v.addr, total, p.maxTotal)
 	}
 }
 
