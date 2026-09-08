@@ -175,17 +175,17 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 	for {
 		select {
 		case <-s.ctx.Done():
-			_ = streamGroup.Wait()
+			_ = streamGroup.Wait() // _ = error: barrier only — per-stream errors were handled by their handlers
 			return
 		case <-conn.Context().Done():
-			_ = streamGroup.Wait()
+			_ = streamGroup.Wait() // _ = error: barrier only — per-stream errors were handled by their handlers
 			return
 		default:
 		}
 
 		stream, err := conn.AcceptStream(s.ctx)
 		if err != nil {
-			_ = streamGroup.Wait()
+			_ = streamGroup.Wait() // _ = error: barrier only — per-stream errors were handled by their handlers
 			return
 		}
 

@@ -320,8 +320,9 @@ func (c *CryptoValidator) isNODATAValid(response *dns.Msg, qname string, qtype u
 // applied: synthesis re-applies them against each future query name.
 func (c *CryptoValidator) harvestDenialProof(response *dns.Msg, verifiedDNSKEYs []*dns.DNSKEY) []dns.RR {
 	authSigs := CollectRRSIGs(response.Ns, response.Extra)
-	verifiedNSEC, _ := c.verifyNSEC(authSigs, findNSEC(response.Ns), verifiedDNSKEYs, "", 0, "")
-	verifiedNSEC3, _ := c.verifyNSEC3(authSigs, findNSEC3(response.Ns), verifiedDNSKEYs, "", 0, "")
+	verifiedNSEC, _ := c.verifyNSEC(authSigs, findNSEC(response.Ns), verifiedDNSKEYs, "", 0, "")    // _ = error: harvest is best-effort — a failed verify yields no proof
+	verifiedNSEC3, _ := c.verifyNSEC3(authSigs, findNSEC3(response.Ns), verifiedDNSKEYs, "", 0, "") // _ = error: harvest is best-effort — a failed verify yields no proof
+
 	nsecProof := asProofRRs(verifiedNSEC)
 	nsec3Proof := asProofRRs(verifiedNSEC3)
 	if len(nsecProof) == 0 {

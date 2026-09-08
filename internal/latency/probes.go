@@ -132,7 +132,7 @@ func probeUDP(ctx context.Context, ip net.IP, port int) error {
 	defer func() { _ = conn.Close() }() // _ = error: best-effort cleanup close
 
 	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline) // _ = error: deadline advisory, benign on closed conn
+		_ = conn.SetDeadline(deadline) // _ = error: deadline advisory — best-effort IO bound // _ = error: deadline advisory, benign on closed conn
 	}
 
 	// Send a single-byte datagram — valid per RFC 768 and
@@ -174,7 +174,7 @@ func probeDNSQuery(ctx context.Context, ip net.IP, port int, tcp bool) error {
 	defer func() { _ = conn.Close() }() // _ = error: best-effort cleanup close
 
 	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline) // _ = error: deadline advisory, benign on closed conn
+		_ = conn.SetDeadline(deadline) // _ = error: deadline advisory — best-effort IO bound // _ = error: deadline advisory, benign on closed conn
 	}
 
 	if tcp {
@@ -243,7 +243,7 @@ func probeICMP(ctx context.Context, ip net.IP) error {
 	defer func() { _ = conn.Close() }()
 
 	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
+		_ = conn.SetDeadline(deadline) // _ = error: deadline advisory — best-effort IO bound
 	}
 
 	// Use a random ID + seq per probe to prevent concurrent probes

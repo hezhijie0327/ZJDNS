@@ -264,7 +264,7 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) [
 		if !found[i] || entry == nil {
 			continue
 		}
-		_ = entry.Unpack()
+		_ = entry.Unpack() // _ = error: an unpack failure leaves Answer nil — treated as a miss
 		if len(entry.Answer) == 0 {
 			continue
 		}

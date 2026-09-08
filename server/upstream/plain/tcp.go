@@ -48,29 +48,31 @@ func (c *Client) ExecuteTCP(ctx context.Context, msg *dns.Msg, server *config.Up
 		if server.Splitguard {
 			poolKey += "|split"
 		}
-		pc, err := c.tcpPool.Acquire(ctx, poolKey, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
+		pc, acqErr := c.tcpPool.Acquire(ctx, poolKey, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
 			return dialTCP(dialCtx, addr, proxyDialer)
 		})
-		if err == nil {
+		if acqErr == nil {
 			pc.SetSegmentation(segSize)
-			response, err := pc.Exchange(ctx, msg)
-			if err == nil {
+			response, exErr := pc.Exchange(ctx, msg)
+			if exErr == nil {
 				return response, nil
 			}
 			if pc.IsDead() {
 				c.tcpPool.Remove(pc)
 			}
-			log.Debugf("UPSTREAM: pipelined TCP query to %s failed: %v, falling back", server.Address, err)
-		}
-		// Same gate as the UDP path: a canceled/expired context can never
-		// succeed past this point, and the pool's saturation errors exist
-		// precisely to bound concurrent dials — falling through to a
-		// per-query dial bypasses the caps.
-		if ctx.Err() != nil ||
-			errors.Is(err, zpool.ErrNoAvailableSocket) ||
-			errors.Is(err, zpool.ErrMaxConnsReached) ||
-			errors.Is(err, zpool.ErrPoolShutdown) {
-			return nil, err
+			log.Debugf("UPSTREAM: pipelined TCP query to %s failed: %v, falling back", server.Address, exErr)
+			// Same gate as the UDP path: a canceled/expired context can never
+			// succeed past this point, and falling through to a per-query dial
+			// burns a handshake nobody waits for.
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+		} else if errors.Is(acqErr, zpool.ErrNoAvailableSocket) ||
+			errors.Is(acqErr, zpool.ErrMaxConnsReached) ||
+			errors.Is(acqErr, zpool.ErrPoolShutdown) {
+			// The pool's saturation errors exist precisely to bound concurrent
+			// dials — falling through to a per-query dial bypasses the caps.
+			return nil, acqErr
 		}
 	}
 
@@ -104,7 +106,7 @@ func (c *Client) exchangeSegmented(ctx context.Context, msg *dns.Msg, addr strin
 	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
 	defer stop()
 	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
+		_ = conn.SetDeadline(deadline) // _ = error: deadline advisory — best-effort IO bound
 	}
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
 		_ = tcpConn.SetNoDelay(true) // disable Nagle for splitguard small-segment writes

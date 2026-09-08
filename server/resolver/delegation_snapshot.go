@@ -210,6 +210,15 @@ func (r *Recursive) getDelegationFromSpill(zone string) (*delegationEntry, bool)
 // Indexed check sees them) and the remaining IO runs OUTSIDE the
 // delegations lock — a synchronous Range+Put would hold the lock that every
 // recursive walk needs for the whole flush.
+// closeDelegationSpill closes the delegation spill store at shutdown.
+func (r *Recursive) closeDelegationSpill() {
+	if r.spill != nil {
+		if err := r.spill.Close(); err != nil {
+			log.Warnf("RECURSION: delegation spill close: %v", err)
+		}
+	}
+}
+
 func (r *Recursive) flushDelegationSpill() {
 	if r.spill == nil {
 		return

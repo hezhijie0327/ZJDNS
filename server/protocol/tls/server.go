@@ -446,12 +446,12 @@ func (s *Server) Shutdown() error {
 	if h3Server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 		defer cancel()
-		_ = h3Server.Shutdown(ctx)
+		_ = h3Server.Shutdown(ctx) // _ = error: best-effort shutdown sweep
 	}
 	for _, srv := range dohServers {
 		if srv != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
-			_ = srv.Shutdown(ctx)
+			_ = srv.Shutdown(ctx) // _ = error: best-effort shutdown sweep
 			cancel()
 		}
 	}

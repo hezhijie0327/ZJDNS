@@ -69,12 +69,13 @@ type fileRef struct {
 
 // Store is a sorted-region + tail-region key-value store.
 type Store struct {
-	path string
+	path   string
+	closed atomic.Bool
 
 	// fref is the current file handle.  Readers snapshot it under mu and
-	// pread OUTSIDE the lock (the former Get/Indexed held mu across every
-	// pread, serializing all spill reads behind disk latency — and the
-	// delegation-promote path on the recursive hot route takes these reads).
+	// pread OUTSIDE the lock — holding mu across preads serializes all
+	// spill reads behind disk latency, and the delegation-promote path on
+	// the recursive hot route takes these reads.
 	fref atomic.Pointer[fileRef]
 
 	// wmu serializes structural writers (Put/Delete/Compact): Compact holds
@@ -458,8 +459,12 @@ func (s *Store) Flush() error {
 	return s.fref.Load().f.Sync()
 }
 
-// Close flushes and closes the store.
+// Close flushes and closes the store.  Idempotent — a second call returns
+// os.ErrClosed from the underlying file instead of double-closing.
 func (s *Store) Close() error {
+	if !s.closed.CompareAndSwap(false, true) {
+		return os.ErrClosed
+	}
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	s.mu.Lock()

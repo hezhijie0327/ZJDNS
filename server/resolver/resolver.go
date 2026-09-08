@@ -220,9 +220,11 @@ func (r *Resolver) CleanupDelegations() {
 }
 
 // FlushDelegationSpill pushes the in-memory delegation cache to the spill
-// store (shutdown hook).
+// store and closes the store (shutdown hook — the fd is otherwise released
+// only by process exit).
 func (r *Resolver) FlushDelegationSpill() {
 	r.recursive.flushDelegationSpill()
+	r.recursive.closeDelegationSpill()
 }
 
 // CompactDelegationSpill rewrites the delegation spill store when expired

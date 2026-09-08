@@ -20,7 +20,8 @@ import (
 // ExecuteUDP sends a DNS query over UDP to the upstream server, optionally
 // routing through a SOCKS5 proxy. When server.Spoofguard is true, uses raw
 // socket multi-read to capture both GFW-injected fakes and the real response,
-// returning the chronologically last (tail) response.
+// returning the best candidate (EDNS preferred, richer answer wins, random
+// tie-break).
 func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
 	if msg == nil {
 		return nil, errors.New("plain: nil query message")

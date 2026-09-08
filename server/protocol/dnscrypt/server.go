@@ -286,10 +286,11 @@ func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 	}
 
 	s.handler = dnsHandler
+	s.started.Store(true)
 	bound := false
-	// The started flag doubles as the double-start guard; a failed bind
-	// must clear it or a retry reports ErrServerAlreadyStarted until a
-	// full Shutdown.  Partial listeners are closed by the error paths.
+	// A failed bind must clear the started flag or a retry reports
+	// ErrServerAlreadyStarted until a full Shutdown.  Partial listeners are
+	// closed by the error paths.
 	defer func() {
 		if !bound {
 			s.started.Store(false)

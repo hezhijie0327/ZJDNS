@@ -290,7 +290,7 @@ func (s *spoofguardState) processPacket(raw []byte, n int, query *dns.Msg, addr 
 	// HopGuard TTL validation — return it directly without candidate
 	// collection.
 	if !spoofguardEnabled {
-		resp := s.unpackCandidate(raw, n)
+		resp := s.unpackMatching(raw, n, query)
 		if resp == nil {
 			return nil
 		}
