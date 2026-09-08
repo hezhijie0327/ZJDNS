@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"sync"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
@@ -66,20 +65,13 @@ func (c *Client) ExecuteHTTP3(ctx context.Context, msg *dns.Msg, server *config.
 	if server == nil {
 		return nil, errors.New("http3: nil server config")
 	}
-	tlsConfig := c.stdTLSConfig(server)
-
-	parsedURL, err := url.Parse(server.Address)
+	ep, err := c.dohEndpointFor(server)
 	if err != nil {
 		return nil, fmt.Errorf("parse URL: %w", err)
 	}
-
-	if parsedURL.Port() == "" {
-		// Hostname() strips IPv6 brackets — JoinHostPort on the raw Host
-		// would double-bracket literals like [[2001:db8::1]]:443.
-		parsedURL.Host = net.JoinHostPort(parsedURL.Hostname(), config.DefaultHTTP3Port)
-	}
-
-	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
+	tlsConfig := ep.stdTLSCfg
+	parsedURL := ep.url
+	key := ep.key
 
 	var client *http.Client
 	var isCached bool

@@ -32,22 +32,33 @@ func ExecuteDoHRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient
 		msg.ID = originalID
 		return nil, fmt.Errorf("pack: %w", err)
 	}
-	buf := append([]byte{}, msg.Data...) // copy to break aliasing with pooled msg.Data
 
 	// Build the DoH GET URL by cloning the upstream URL and setting the dns
 	// query parameter — dnshttp.NewRequest appends /dns-query unconditionally,
 	// but ZJDNS URLs already include the full path; it also only supports
 	// GET/POST, not GET0RTT (HTTP/3). NOTE: the caller's own RawQuery (e.g.
 	// "?param=value" on the upstream URL) is replaced, not merged — the dns
-	// parameter is the DoH query.
+	// parameter is the DoH query.  The wire is encoded straight from
+	// msg.Data: the base64 string owns its bytes, and nothing mutates
+	// msg.Data between Pack and encoding, so the former defensive copy was
+	// dead weight on every request.
 	q := *u // shallow copy — caller's URL must not be mutated
-	q.RawQuery = "dns=" + base64.RawURLEncoding.EncodeToString(buf)
+	q.RawQuery = "dns=" + base64.RawURLEncoding.EncodeToString(msg.Data)
 
-	httpReq, err := http.NewRequestWithContext(ctx, httpMethod, q.String(), http.NoBody)
-	if err != nil {
-		msg.ID = originalID
-		return nil, fmt.Errorf("create request: %w", err)
+	// The request is built literally instead of via http.NewRequestWithContext,
+	// which would re-parse q.String() (a url.Parse + several allocations per
+	// request).  Field parity with NewRequestWithContext: HTTP/1.1 proto
+	// defaults (transports rewrite it for h2/h3), empty body, no Host
+	// override — the transport derives :authority from q.Host.
+	httpReq := &http.Request{
+		Method:     httpMethod,
+		URL:        &q,
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		Header:     make(http.Header, 2),
+		Body:       http.NoBody,
 	}
+	httpReq = httpReq.WithContext(ctx)
 
 	httpReq.Header.Set("Accept", dnshttp.MimeType)
 	httpReq.Header.Set("User-Agent", "")

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"syscall"
 	"zjdns/config"
@@ -28,27 +27,19 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 	if server == nil {
 		return nil, errors.New("https: nil server config")
 	}
-	parsedURL, err := url.Parse(server.Address)
+	ep, err := c.dohEndpointFor(server)
 	if err != nil {
 		return nil, fmt.Errorf("parse URL: %w", err)
 	}
-
-	if parsedURL.Port() == "" {
-		// Hostname() strips IPv6 brackets — JoinHostPort on the raw Host
-		// would double-bracket literals like [[2001:db8::1]]:443.
-		parsedURL.Host = net.JoinHostPort(parsedURL.Hostname(), config.DefaultHTTPSPort)
-	}
-
-	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
-	tlsConfig := c.eTLSClientConfig(server)
+	parsedURL := ep.url
 
 	var client *http.Client
 	var isCached bool
 	if c.dohTransports != nil { // Close() never nils the map (tls/client.go) — guarded for symmetry
-		client, isCached = c.dohTransports.Get(key)
+		client, isCached = c.dohTransports.Get(ep.key)
 	}
 	if !isCached {
-		client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
+		client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, ep.eTLSCfg)
 	}
 
 	resp, err := zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, client, http.MethodGet)
@@ -60,13 +51,13 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 		for i := 0; shouldRetryHTTP(err) && i < config.DefaultSecureTransportRetries; i++ {
 			// Atomic compare-and-delete: another goroutine may have replaced
 			// the transport for this key — only evict if it is still ours.
-			if c.dohTransports != nil && c.dohTransports.CompareAndDelete(key, client) {
+			if c.dohTransports != nil && c.dohTransports.CompareAndDelete(ep.key, client) {
 				if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
 					ct.CloseIdleConnections()
 				}
 			}
 
-			client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
+			client = c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, ep.eTLSCfg)
 			resp, err = zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, client, http.MethodGet)
 			if err == nil {
 				return resp, nil
@@ -77,7 +68,7 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 	// Evict the transport only on transport-level failures, not on
 	// caller-side timeouts or cancelled contexts — a healthy connection pool
 	// must survive a slow upstream (http3.go applies the same distinction).
-	if err != nil && !isCallerSideTimeout(err) && c.dohTransports != nil && c.dohTransports.CompareAndDelete(key, client) {
+	if err != nil && !isCallerSideTimeout(err) && c.dohTransports != nil && c.dohTransports.CompareAndDelete(ep.key, client) {
 		if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
 			ct.CloseIdleConnections()
 		}

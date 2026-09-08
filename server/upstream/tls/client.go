@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
@@ -44,6 +43,11 @@ type Client struct {
 	dohTransports  *lrumap.Map[string, *http.Client]
 	doh3Transports *lrumap.Map[string, *http.Client]
 
+	// dohEndpoints caches the per-upstream request target (parsed URL,
+	// transport key, base TLS configs) keyed by *UpstreamServer identity —
+	// see dohEndpoint.
+	dohEndpoints *lrumap.Map[*config.UpstreamServer, *dohEndpoint]
+
 	getProxy func(*config.UpstreamServer) *socks5.Dialer
 
 	ktlsTX  bool
@@ -77,6 +81,7 @@ func New(
 		quicConfigs:      lrumap.New[string, *quic.Config](config.DefaultQUICConfigCacheSize),
 		dohTransports:    lrumap.New[string, *http.Client](config.DefaultTransportMax * 2),
 		doh3Transports:   lrumap.New[string, *http.Client](config.DefaultTransportMax),
+		dohEndpoints:     lrumap.New[*config.UpstreamServer, *dohEndpoint](config.DefaultTransportMax * 2),
 		getProxy:         getProxy,
 		timeout:          timeout,
 	}
@@ -321,38 +326,24 @@ func (c *Client) WarmUpQUIC(ctx context.Context, server *config.UpstreamServer) 
 // signature consistency with the other WarmUp* methods, which the warmup
 // dispatcher calls uniformly.
 func (c *Client) WarmUpHTTPS(_ context.Context, server *config.UpstreamServer) {
-	parsedURL, err := url.Parse(server.Address)
+	ep, err := c.dohEndpointFor(server)
 	if err != nil {
 		log.Debugf("UPSTREAM: pre-warm DoH parse %s: %v", server.Address, err)
 		return
 	}
-	if parsedURL.Port() == "" {
-		// Hostname() strips IPv6 brackets — JoinHostPort on the raw Host
-		// would double-bracket literals like [[2001:db8::1]]:443.
-		parsedURL.Host = net.JoinHostPort(parsedURL.Hostname(), config.DefaultHTTPSPort)
-	}
-	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
-	tlsConfig := c.eTLSClientConfig(server)
-	c.createDOHClient(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, tlsConfig)
-	log.Debugf("UPSTREAM: pre-warmed DoH transport for %s (key=%s)", server.Address, key)
+	c.createDOHClient(ep.url.Host, server.ServerName, server.SkipTLSVerify, server.Proxy, ep.eTLSCfg)
+	log.Debugf("UPSTREAM: pre-warmed DoH transport for %s (key=%s)", server.Address, ep.key)
 }
 
 // WarmUpHTTP3 pre-creates a DoH3 transport.  The ctx parameter is unused
 // (HTTP/3 transports dial lazily) but kept for signature consistency with
 // the other WarmUp* methods (see WarmUpHTTPS).
 func (c *Client) WarmUpHTTP3(_ context.Context, server *config.UpstreamServer) {
-	parsedURL, err := url.Parse(server.Address)
+	ep, err := c.dohEndpointFor(server)
 	if err != nil {
 		log.Debugf("UPSTREAM: pre-warm DoH3 parse %s: %v", server.Address, err)
 		return
 	}
-	if parsedURL.Port() == "" {
-		// Hostname() strips IPv6 brackets — JoinHostPort on the raw Host
-		// would double-bracket literals like [[2001:db8::1]]:443.
-		parsedURL.Host = net.JoinHostPort(parsedURL.Hostname(), config.DefaultHTTPSPort)
-	}
-	key := transportKey(parsedURL.Host, server.ServerName, server.SkipTLSVerify, server.Proxy)
-	tlsConfig := c.stdTLSConfig(server)
-	c.createDOH3Client(key, parsedURL.Host, server.Proxy, tlsConfig)
-	log.Debugf("UPSTREAM: pre-warmed DoH3 transport for %s (key=%s)", server.Address, key)
+	c.createDOH3Client(ep.key, ep.url.Host, server.Proxy, ep.stdTLSCfg)
+	log.Debugf("UPSTREAM: pre-warmed DoH3 transport for %s (key=%s)", server.Address, ep.key)
 }
