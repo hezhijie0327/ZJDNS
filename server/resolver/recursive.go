@@ -225,6 +225,12 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 	for {
 		select {
 		case <-ctx.Done():
+			// Join a deferred chain update before dying: its goroutine writes
+			// to chain and holds a pooled response that must be returned.
+			if pendingChain != nil {
+				<-pendingChain.done
+				pool.DefaultMessage.Put(pendingChain.response)
+			}
 			return QueryResult{Cacheable: true, Poisoned: poisonSeen, Err: ctx.Err()}
 		default:
 		}
@@ -283,6 +289,11 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		}
 
 		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard, infra)
+		// The verify memo deduplicates verifications of ONE response — clear
+		// it as each new response arrives: a Put-and-continue at a later
+		// level recycles the pointer, and a pool Get may hand it back with
+		// different content that would inherit the stale verdict.
+		chain.verifyMemo = dnssecVerifyMemo{}
 
 		// Join the level's DNSKEY prefetch before anything touches chain —
 		// from here on the main goroutine owns chain again.  The wait is

@@ -94,8 +94,9 @@ func (c *CNAME) cachedHopResult(question Question, ecs *edns.ECSOption) *QueryRe
 		}
 		out := make([]dns.RR, len(rrs))
 		for i, rr := range rrs {
-			out[i] = rr.Clone()
-			rr.Header().TTL = remaining
+			clone := rr.Clone()
+			clone.Header().TTL = remaining
+			out[i] = clone
 		}
 		return out
 	}
