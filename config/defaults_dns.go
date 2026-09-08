@@ -115,10 +115,19 @@ const (
 	// (infrastructure-walk) fan-outs: NS-address resolution queries against
 	// root/TLD servers, which answer from any racer — extra candidates were
 	// measured as cancel-and-dial churn dominating syscall volume under
-	// recursive load (2026-09).  Narrow fan-outs never widen.
+	// recursive load (2026-09).
 	DefaultInfraFanoutFirstBatch = 3
 
 	DefaultFanoutWidenDelay = 75 * time.Millisecond
+
+	// RFC 9520 negative caching of resolution failures.  §3.2: failures MUST
+	// be cached at least 1s and MUST NOT be cached longer than 5 minutes;
+	// SHOULD grow the TTL with persistent failures (exponential backoff) and
+	// bound the cache memory (LRU capacity).
+	DefaultResolutionFailureTTL     = 5 * time.Second // first-failure TTL (RFC 9520 §3.2 example)
+	DefaultResolutionFailureMaxTTL  = 5 * time.Minute // hard cap (RFC 9520 §3.2 / RFC 2308)
+	DefaultResolutionFailureMaxStep = 7               // shift cap — 5s<<7 already exceeds the 5min cap
+	DefaultResolutionFailureCache   = 4096            // LRU capacity (resource-exhaustion bound, §5)
 
 	// DefaultPoisonProbeTimeout bounds the TLD hijack probe query.
 	// The probe detects GFW-injected A/AAAA records at the delegation

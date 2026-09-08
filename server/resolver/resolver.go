@@ -77,7 +77,7 @@ type upstreamSet struct {
 }
 
 // Resolver handles DNS query resolution by dispatching to upstream servers or
-// built-in recursive resolution.
+// built-in recursive resolution with CNAME chasing and DNSSEC validation.
 type Resolver struct {
 	queryClient   UpstreamClient
 	edns          *edns.Handler
@@ -89,6 +89,10 @@ type Resolver struct {
 	validator     *Validator
 	DNSSECEnforce bool
 	cache         cache.Store // DNS response cache for NS A/AAAA lookups
+
+	// failures is the RFC 9520 negative cache of resolution failures
+	// (qname/qtype/qclass → short-TTL SERVFAIL with EDE).
+	failures *lrumap.Map[failureKey, *failureEntry]
 
 	// fallbackTimeout is the delayed-adoption gate for fallback upstreams
 	// (zero applies config.DefaultFallbackTimeout — tests override it).
@@ -186,6 +190,7 @@ func New(cfg *Config) (*Resolver, error) {
 		DNSSECEnforce:   cfg.DNSSECEnforce,
 		upstream:        &upstreamSet{},
 		cache:           cfg.Cache,
+		failures:        newFailureLRU(),
 		fallbackTimeout: config.DefaultFallbackTimeout,
 	}
 	delegationMax := cfg.DelegationMaxEntries
@@ -268,8 +273,18 @@ func (r *Resolver) UpstreamServers() []*config.UpstreamServer {
 // upstream is explicitly configured — an empty upstream list resolves to
 // "no upstream servers" (SERVFAIL), not built-in recursion.
 func (r *Resolver) Query(ctx context.Context, question Question, ecs *edns.ECSOption) *QueryResult {
+	// RFC 9520 §3.2: a cached resolution failure answers before any outgoing
+	// query is issued.  Only ECS-less queries participate (see package comment).
+	if ecs == nil {
+		if qr := r.lookupCachedFailure(question); qr != nil {
+			return qr
+		}
+	}
 	servers := r.upstream.list()
 	qr := r.queryUpstream(ctx, question, ecs, servers)
+	if ecs == nil && qr.Err != nil {
+		r.recordFailure(question, &qr)
+	}
 	// Upstreams echo the case of the question they received into record
 	// owners and rdata names — with CapsGuard that is our 0x20-randomized
 	// case, which must never leak to clients (draft-vixie-dnsext-dns0x20-00
