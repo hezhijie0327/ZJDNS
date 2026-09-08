@@ -58,7 +58,7 @@ func (c *Client) execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 		} else if !useTCP && result.Error != nil && !errors.Is(result.Error, context.Canceled) {
 			// Same cancellation gate as the plain-UDP branch: a first-win
 			// cancel is not a transport failure, and a doomed TCP attempt
-			// on it only burns a slot (U10).
+			// on it only burns a slot.
 			log.Debugf("UPSTREAM: DNSCrypt UDP query failed for %s, falling back to TCP: %v", qname, result.Error)
 			useTCP = true
 		}
@@ -76,7 +76,7 @@ func (c *Client) execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 			result.Response, result.Error = c.dnscryptClient.Execute(tcpCtx, msg, server, true)
 			if result.Error != nil && udpErr != nil {
 				// Keep the UDP-side root cause for diagnostics — the plain
-				// branch joins both; the DNSCrypt branch overwrote it (U10).
+				// branch joins both.
 				result.Error = errors.Join(udpErr, result.Error)
 			}
 			if result.Error == nil {
@@ -115,7 +115,7 @@ func (c *Client) execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 			// exhausted the original deadline.  WithTimeout takes the
 			// EARLIER of parent-deadline and timeout, so when the caller
 			// set a budget the combined wait cannot exceed it; only
-			// deadline-less parents get the full c.timeout here (M-low).
+			// deadline-less parents get the full c.timeout here.
 			tcpCtx, tcpCancel := context.WithTimeout(ctx, c.timeout)
 			defer tcpCancel()
 
@@ -143,7 +143,7 @@ func (c *Client) execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 				} else {
 					// Both transports failed — join the errors so neither
 					// the original UDP failure nor the TCP failure is lost
-					// for diagnostics (M-low).
+					// for diagnostics.
 					result.Error = errors.Join(result.Error, fmt.Errorf("tcp fallback failed: %w", tcpErr))
 				}
 			}

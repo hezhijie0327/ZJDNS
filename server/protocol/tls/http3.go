@@ -79,9 +79,7 @@ func (s *Server) startDOH3Server(port string) error {
 		capturedH3 := listener
 		s.groups.h3.Go(func() error {
 			defer zdnsutil.HandlePanic("DoH3 server")
-			// The accept/admission loop lives in handleHTTP3Connections —
-			// the standalone path previously carried a line-for-line copy
-			// that had already drifted from the shared one (P-M2).
+			// The accept/admission loop lives in handleHTTP3Connections.
 			s.handleHTTP3Connections(capturedH3)
 			return nil
 		})

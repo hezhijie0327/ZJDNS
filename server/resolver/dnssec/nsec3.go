@@ -158,7 +158,7 @@ func matchesNSEC3NODATA(verified []*dns.NSEC3, qname string, qtype uint16, hashA
 		// non-Opt-Out zone means an incomplete/corrupt proof (every
 		// existing name — including empty non-terminals — has an NSEC3
 		// owner there), so the NODATA must fail closed instead of being
-		// accepted and negatively cached (R3-M14).
+		// accepted and negatively cached.
 		if !nsec3CoveringHasOptOut(verified, qnameHash) {
 			return false
 		}

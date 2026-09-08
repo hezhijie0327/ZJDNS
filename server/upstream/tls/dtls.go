@@ -119,7 +119,7 @@ func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.U
 	}
 
 	response.Data = nil // detach from pooled buffer before deferred Put
-	// Reject ID mismatches like the TLS/plain-TCP paths (M7) — silently
+	// Reject ID mismatches like the TLS/plain-TCP paths — silently
 	// rewriting the ID would accept a datagram belonging to another query.
 	if response.ID != msg.ID {
 		pool.DefaultMessage.Put(response)

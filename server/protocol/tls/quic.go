@@ -280,7 +280,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn, clientIP 
 	}
 
 	// RFC 9250 §4.3.1: abort on client STOP_SENDING / RESET_STREAM.  The
-	// pooled request must be returned before the early exit (R3-L17).
+	// pooled request must be returned before the early exit.
 	select {
 	case <-conn.Context().Done():
 		pool.DefaultMessage.Put(req)
@@ -288,7 +288,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn, clientIP 
 	default:
 	}
 	response := s.handler.ServeDNS(req, edns.RequestMeta{ClientIP: clientIP, ClientName: clientName, IsSecure: true, Protocol: config.ProtoQUIC})
-	if response == req { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+	if response == req { //nolint:revive // identity guard: ServeDNS must never return the request
 		response = nil
 	}
 

@@ -164,7 +164,7 @@ func mergeRRs(dst, src []dns.RR) []dns.RR {
 	}
 	// Precompute each src RR's folded rdata once — the dup check must not
 	// format both RRs (rr.String() allocates) for every (existing, candidate)
-	// pair (H-L4).
+	// pair.
 	keys := make([]string, len(src))
 	for i, rr := range src {
 		if rr != nil {

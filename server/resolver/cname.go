@@ -176,12 +176,8 @@ func (r *Recursive) probeTLDForPoison(ctx context.Context, tldServers []string, 
 }
 
 func (c *CNAME) resolve(ctx context.Context, question Question, ecs *edns.ECSOption) QueryResult {
-	// No singleflight dedup: every query walks independently.  The delegation
-	// cache (in-memory LRU + spill) and the NS-address cache still deduplicate across queries
-	// once a walk completes; in-flight coalescing via pending.ResultGroup was
-	// removed because its follower-promotion ran duplicate full walks without
-	// an overall deadline, amplifying any bottleneck (spill-tier disk reads, network)
-	// into a goroutine explosion under load (2026-08 production incidents).
+	// No singleflight dedup: every query walks independently; the delegation
+	// and NS-address caches deduplicate once a walk completes.
 	return c.resolveInner(ctx, question, ecs)
 }
 
@@ -247,7 +243,7 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 		}
 		if qr.Truncated {
 			// Any step's TC signal must reach the client — retry logic
-			// depends on it (M-low).
+			// depends on it.
 			truncated = true
 		}
 
@@ -295,7 +291,7 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 			}
 			// Owner must be the current CNAME target: a type-only match
 			// would surface unrelated same-type records from other owners
-			// into the chain (M-low).
+			// into the chain.
 			if strings.EqualFold(h.Name, currentQuestion.Name) {
 				allAnswers = append(allAnswers, rr)
 			}

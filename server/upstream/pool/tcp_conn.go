@@ -197,7 +197,7 @@ func (c *Conn) Exchange(ctx context.Context, msg *dns.Msg) (response *dns.Msg, e
 	// until the readLoop's 60s idle timeout closes it. The deadline set and
 	// zero-restore live INSIDE the writeMu critical section: a concurrent
 	// Exchange must not have its deadline wiped by another's deferred
-	// restore while it is still writing (R3-M5) — serialized under the lock
+	// restore while it is still writing — serialized under the lock
 	// each exchange sets, writes, and clears its own deadline in turn.
 	c.writeMu.Lock()
 	if deadline, ok := ctx.Deadline(); ok {
@@ -277,7 +277,7 @@ func (c *Conn) readLoop() {
 		}
 		// Detach resp.Data from the pooled buffer before returning it,
 		// otherwise the message carries a dangling pointer to zeroed memory.
-		// NOTE(L15): resp.Data=nil before buffer Put relies on miekg/dns copy-based
+		// NOTE: resp.Data=nil before buffer Put relies on miekg/dns copy-based
 		// Unpack. A future zero-copy parser would corrupt pooled responses.
 		resp.Data = nil
 		if pooled {

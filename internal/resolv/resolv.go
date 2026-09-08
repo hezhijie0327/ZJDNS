@@ -1,10 +1,9 @@
 // Package resolv caches hostname→IP resolution for upstream dials.
 //
-// A loaded server re-resolved hostname upstreams on every pool dial and
-// per-query fallback (190M net.Resolver.lookupIPAddr calls in the pprof
-// window).  LookupHost resolves once per hostname per TTL, deduplicating
-// concurrent resolutions with a singleflight; DialContext and
-// ResolveUDPAddr wrap it for the two dial shapes the upstream clients use.
+// Hostname upstreams resolve once per hostname per TTL
+// (singleflight-deduplicated) instead of on every pool dial and per-query
+// fallback; DialContext and ResolveUDPAddr wrap LookupHost for the two dial
+// shapes the upstream clients use.
 //
 // SNI safety contract: a cached dial IP must never change TLS ServerName
 // semantics.  Transports that derive SNI from the dial address (quic-go's

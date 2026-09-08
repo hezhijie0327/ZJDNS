@@ -93,7 +93,7 @@ func (s *Server) encrypt(m *dns.Msg, q *dnscryptcrypto.EncryptedQuery, isUDP boo
 
 	// Reuse the shared key from decrypt when available — the query may
 	// have matched a previous key pair during rotation overlap. Computing
-	// with s.current() would encrypt with the wrong key (audit finding A).
+	// with s.current() would encrypt with the wrong key.
 	sharedKey := q.SharedKey
 	if sharedKey == [dnscryptcrypto.SharedKeySize]byte{} {
 		curr := s.current()
@@ -212,8 +212,7 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.Encrypte
 			copy(resolverSk[:], k.pair.PQ.PqPrivateKey)
 			decrypted, decErr := query.Decrypt(b, resolverSk)
 			if decErr == nil {
-				// NOTE(L10): could use pool.DefaultMessage.Get() here — left as &dns.Msg{}
-				// because pool ownership semantics differ for decrypt-shortlived messages.
+				// Could use pool.DefaultMessage.Get(); left as &dns.Msg{} — cold path.
 				msg = &dns.Msg{}
 				msg.Data = decrypted
 				if unpackErr := msg.Unpack(); unpackErr != nil {

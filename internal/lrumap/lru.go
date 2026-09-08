@@ -132,7 +132,7 @@ func (m *Map[K, V]) Get(key K) (V, bool) {
 // if the map has reached its capacity and key is new.  Overwriting an
 // existing key invokes OnEvict with the OLD value — resource-holding values
 // (dialers, clients, sessions) must be released when replaced, exactly as
-// capacity eviction releases them (R2 finding).
+// capacity eviction releases them.
 func (m *Map[K, V]) Set(key K, val V) {
 	if len(m.shards) > 0 {
 		m.shardFor(key).Set(key, val)

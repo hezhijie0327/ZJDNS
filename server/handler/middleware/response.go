@@ -87,7 +87,7 @@ func (m *Response) ednsStateFor(qctx *handler.QueryContext) ednsState {
 	// qctx.IsSecure is deliberately NOT part of shouldAddEDNS — including it
 	// forced every TLS-family listener (DoT/DoQ/DoH/DoH3/DTLS/TLCP/DTLCP)
 	// onto the unpack+re-Pack path, silently disabling the pre-packed
-	// direct-wire fast path on 7 of 8 protocol families (R3-M1).  Padding —
+	// direct-wire fast path on 7 of 8 protocol families.  Padding —
 	// the only consumer of IsSecure — is added exactly when
 	// (isSecure && clientWantsPadding): legacy no-EDNS clients on secure
 	// transports get padded by default (HasPaddingOption returns true for

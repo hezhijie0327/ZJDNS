@@ -41,8 +41,8 @@ type UDPPool struct {
 }
 
 // Tiered payload-buffer pools for the pooled-UDP read loop: the per-response
-// make([]byte, n) allocation on the hot path (every plain-UDP, DNSCrypt and
-// raw-framed response) is replaced with a size-classed pool (M-3-6).
+// make([]byte, n) on the hot path (every plain-UDP, DNSCrypt and
+// raw-framed response) is served by a size-classed pool.
 const (
 	packetBufSmall  = 512   // typical A/AAAA responses
 	packetBufMedium = 1500  // Ethernet MTU
@@ -56,7 +56,7 @@ var (
 )
 
 // drainCollectCh empties a collect channel without blocking, returning each
-// queued payload buffer to its tier pool (M-3-6).
+// queued payload buffer to its tier pool.
 func drainCollectCh(ch <-chan collectPacket) {
 	for {
 		select {
@@ -146,7 +146,7 @@ func (p *UDPPool) Acquire(ctx context.Context, key, dialAddr string, wantTTL boo
 						liveConns = append(liveConns, conns[j])
 					}
 				}
-				p.total -= len(conns) - len(liveConns) // dead-filter accounting (U1)
+				p.total -= len(conns) - len(liveConns) // dead-filter accounting
 				storeLive(p.conns, key, liveConns)
 			}
 			p.mu.Unlock()
@@ -158,7 +158,7 @@ func (p *UDPPool) Acquire(ctx context.Context, key, dialAddr string, wantTTL boo
 		}
 	}
 	if deadSeen {
-		p.total -= len(conns) - len(liveConns) // dead-filter accounting (U1)
+		p.total -= len(conns) - len(liveConns) // dead-filter accounting
 		storeLive(p.conns, key, liveConns)
 	}
 
@@ -240,7 +240,7 @@ func (p *UDPPool) dialAndAdd(ctx context.Context, key, dialAddr string, wantTTL 
 			return nil, ErrMaxConnsReached
 		}
 		p.conns[key] = append(p.conns[key], c)
-		p.total++ // replaceDead decremented for the dead one — net-zero swap (U2)
+		p.total++ // replaceDead decremented for the dead one — net-zero swap
 		p.mu.Unlock()
 		old.close()
 		return c, nil
@@ -248,7 +248,7 @@ func (p *UDPPool) dialAndAdd(ctx context.Context, key, dialAddr string, wantTTL 
 
 	p.conns[key] = append(p.conns[key], c)
 	p.total++
-	// Global cap (H1): a flood of distinct authoritative NS addresses must
+	// Global cap: a flood of distinct authoritative NS addresses must
 	// not grow the socket working set without bound.  Evict sockets to make
 	// room — dead ones first, then the least-recently-used — and close them
 	// after unlocking (ABBA convention, as in Remove/Shutdown).
@@ -273,18 +273,9 @@ func (p *UDPPool) dialAndAdd(ctx context.Context, key, dialAddr string, wantTTL 
 	return c, nil
 }
 
-// evictOne removes one socket from the pool to make room for a new dial,
-// preferring (1) dead sockets awaiting the periodic ReapDead sweep (already
-// closed — nil victim), (2) idle live sockets (nothing in flight) oldest
-// first.  In-flight sockets are NEVER evicted: killing a busy socket fails
-// every query waiting on it, and the callers fall through to per-query dials
-// that re-enter the pool — a self-reinforcing dial/evict churn loop under
-// saturation (the remote pprof finding that drove this soft-cap).  When
-// every socket is busy the pool overshoots maxTotal transiently; idle
-// sockets self-close via the read-loop idle timeout and ReapDead reclaims
-// their slots.  Must be called with p.mu held; skip is never evicted.  The
-// live victim is returned WITHOUT closing — the caller closes it outside
-// p.mu (ABBA convention, as in Remove/Shutdown).
+// evictOne removes one socket to make room — dead first, then idle-oldest;
+// in-flight sockets are never evicted (killing one fails its waiters and
+// triggers dial/evict churn).  Caller closes the victim outside p.mu.
 func (p *UDPPool) evictOne(skip *UDPConn) (victim *UDPConn, removed bool) {
 	// (1) Dead sockets cost a slot while waiting for ReapDead — drop them
 	// without closing anything (their readLoop already closed the conn).
@@ -349,7 +340,7 @@ func (p *UDPPool) replaceDead(key string) *UDPConn {
 // no live connections left.  Called periodically by the server — a socket
 // idle-recycled by its readLoop otherwise stays pinned under its address key
 // until that address is queried again, and the key space itself grows with
-// every distinct authoritative NS address ever seen (H1).
+// every distinct authoritative NS address ever seen.
 func (p *UDPPool) ReapDead() {
 	p.mu.Lock()
 	defer p.mu.Unlock()

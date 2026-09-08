@@ -154,7 +154,7 @@ func WriteTCPMsg(conn net.Conn, msg *dns.Msg) error {
 	}
 	// RFC 1035 §2.3.4: a DNS message is at most 65535 bytes on the wire —
 	// a longer payload cannot be represented by the length prefix and would
-	// silently wrap (R3-M23).
+	// silently wrap.
 	if len(msg.Data) > dns.MaxMsgSize {
 		return errors.New("dns: message exceeds 65535-byte TCP limit")
 	}

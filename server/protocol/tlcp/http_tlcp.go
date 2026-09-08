@@ -29,7 +29,7 @@ func (s *Server) startDOHServer() error {
 		rawListener, err := net.Listen("tcp", addr)
 		if err != nil {
 			// Fail fast, matching tls/https.go and the server's own
-			// startup policy (P-M3).
+			// startup policy.
 			return fmt.Errorf("TLCP DoH listen on %s: %w", addr, err)
 		}
 		keepAliveListener := &tcpKeepAliveListener{Listener: rawListener}
@@ -125,7 +125,7 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 	clientIP := zdnsutil.ClientIPFromRequest(r.RemoteAddr, s.trustedProxies, r.Header)
 
 	resp := s.handler.ServeDNS(msg, edns.RequestMeta{ClientIP: clientIP, ClientName: clientName, IsSecure: true, Protocol: config.ProtoHTTPTLCP})
-	if resp == msg { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+	if resp == msg { //nolint:revive // identity guard: ServeDNS must never return the request
 		resp = nil
 	}
 	if resp == nil {
@@ -147,9 +147,9 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", dnshttp.MimeType)
 	// RFC 8484 §5.1 (SHOULD): the smallest answer TTL (SOA MINIMUM for
 	// negative responses) — shared with the TLS DoH handler via
-	// dnsutil.DOHCacheControl (2026-09 P-L7).
+	// dnsutil.DOHCacheControl.
 	w.Header().Set("Cache-Control", zdnsutil.DOHCacheControl(resp))
-	// NOTE(M12): Write error is intentionally ignored — partial response cannot be
+	// Write error is intentionally ignored — partial response cannot be
 	// recovered. Client will detect truncation via connection close.
 	_, _ = w.Write(resp.Data) //nolint:gosec // G705: DNS wire format bytes, not HTML
 }

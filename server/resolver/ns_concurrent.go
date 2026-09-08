@@ -25,8 +25,7 @@ import (
 // withEarlierTimeout derives a timeout context only when it tightens the
 // parent's deadline.  Nested walk levels already carry tighter budgets
 // (fan-out → flight → walk), and the redundant cancelCtx+timer per level
-// was a measured allocation tax (context.propagateCancel/cancelCtx.Done,
-// pprof alloc_space 2026-09).  The returned cancel is a no-op when no
+// is pure allocation overhead.  The returned cancel is a no-op when no
 // derivation happened — the parent's deadline applies unchanged.
 func withEarlierTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
 	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= d {
@@ -86,9 +85,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	attachMQType(baseMsg, r.mqtype, question.Qtype)
 	// Per-server UpstreamServer structs share one backing array per launch
 	// group: the guards/protocol are identical across servers, only Address
-	// varies, and a separate heap object per launch was a measured
-	// allocation hotspot under recursive load (pprof alloc_space, 2026-09).
-	// The array is sized to the group actually launched — the widen group
+	// varies.  The array is sized to the group actually launched — the widen group
 	// allocates its own only when it fires (the first win usually lands
 	// inside the first batch and widening never happens).
 	fillServer := func(srvs []config.UpstreamServer, i int, nsAddr string) *config.UpstreamServer {
@@ -183,7 +180,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 				// RFC 5452 §9.3: reject responses that do not echo the query's
 				// question — a replayed signed response for a different name
 				// in the same zone would otherwise validate and poison the
-				// cache (R3-H1).
+				// cache.
 				if !responseEchoesQuestion(result.Response, question) {
 					log.Debugf("RECURSION: ns=%s question echo mismatch for %s %s", server.Address, question.Name, dns.TypeToString[question.Qtype])
 					pool.DefaultMessage.Put(result.Response)
@@ -307,8 +304,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	//
 	// Infrastructure walks (NS-address resolution — narrow) race a smaller
 	// first batch and widen much later: against root/TLD server sets the
-	// data-query delay fired constantly (cancel-and-dial churn dominating
-	// syscall volume under recursive load, pprof 2026-09), but widening
+	// data-query delay fired constantly, but widening
 	// never at all let a blackholed latency-ranked first batch pin the level
 	// to its full DefaultRecursiveQueryTimeout.  The longer infra delay only
 	// fires when the whole first batch has been silent — and a first-batch
@@ -368,7 +364,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	// serveWinner handles a NOERROR race winner: returns the collected
 	// NXDOMAIN (if any) to the pool, carries the poison verdict, and drains
 	// orphan responses that slipped into the buffer between the winner's
-	// send and cancel() propagation (M10).
+	// send and cancel() propagation.
 	serveWinner := func(resp *dns.Msg) (*dns.Msg, defense.Verdict, error) {
 		if nx := nxdomainMsg.Load(); nx != nil {
 			pool.DefaultMessage.Put(nx)
@@ -486,7 +482,7 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 	if retryResult.Response == nil {
 		return
 	}
-	// RFC 5452 §9.3: same question-echo gate as the main path (R3-H1).
+	// RFC 5452 §9.3: same question-echo gate as the main path.
 	if !responseEchoesQuestion(retryResult.Response, question) {
 		log.Debugf("RECURSION: ns=%s FORMERR retry question echo mismatch for %s %s", nsAddr, question.Name, dns.TypeToString[question.Qtype])
 		pool.DefaultMessage.Put(retryResult.Response)

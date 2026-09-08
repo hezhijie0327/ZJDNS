@@ -46,7 +46,7 @@ func Compress(data []byte) []byte {
 
 // Decompress decompresses data with zstd.  Returns nil for empty input.
 // When dst has enough capacity it is reused as the output buffer (avoids
-// allocation on the hot path, P3); pass nil to always allocate fresh.
+// allocation on the hot path); pass nil to always allocate fresh.
 func Decompress(data, dst []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, nil
@@ -57,10 +57,8 @@ func Decompress(data, dst []byte) ([]byte, error) {
 // SkipWireName returns the offset after the domain name at pos in a packed
 // DNS message.  Handles both label sequences and compression pointers
 // (RFC 1035 §4.1.4).  Returns ok=false when the walk runs past the wire end.
-// The single shared implementation — bridge.go truncation and the cache's
-// TTL-offset scans previously each carried their own copy, which diverged
-// (the cache copy stopped at any NUL byte; the bridge copy handled pointers
-// correctly — R3-L24 family).
+// The single shared implementation for bridge.go truncation and the cache's
+// TTL-offset scans — the walk semantics must not diverge between them.
 func SkipWireName(wire []byte, pos int) (int, bool) {
 	for {
 		if pos >= len(wire) {

@@ -84,7 +84,7 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 			// would leak on every connection teardown.  The conn's Context
 			// closes exactly when the connection ends (pool removal,
 			// CloseWithError, idle), so the relay's lifetime mirrors the
-			// connection's (H3).
+			// connection's.
 			done := conn.Context().Done()
 			go func() {
 				defer zdnsutil.HandlePanic("QUIC proxy relay release")
@@ -139,13 +139,9 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 				}
 			} else if isQUICConnFatal(err) || pc.Conn.Context().Err() != nil {
 				// Remove ONLY on transport-fatal errors or a dead conn
-				// context: a deadline expiry or stream-quota congestion is
-				// transient — removing the shared conn on it failed every
-				// other in-flight query multiplexed over the same
-				// connection and started a close/redial churn loop under
-				// upstream saturation (2026-09 U7).  Cancellation and
-				// timeouts leave the conn pooled, like every other pool
-				// consumer.
+				// context; deadline expiry and stream-quota congestion are
+				// transient, and removing the shared conn fails every
+				// multiplexed in-flight query.
 				c.quicPool.Remove(pc)
 			}
 			log.Debugf("UPSTREAM: pooled DoQ query to %s failed: %v, retrying with new connection", server.Address, err)
@@ -218,8 +214,8 @@ func (c *Client) doQUICQuery(ctx context.Context, conn *quic.Conn, msg *dns.Msg,
 	}()
 
 	_ = stream.SetDeadline(time.Now().Add(timeout))
-	// Fail fast on ctx cancellation like the DoT/DTLS/DTLCP transports
-	// (R3-M6): stream I/O is not ctx-aware, so without this a cancelled
+	// Fail fast on ctx cancellation like the DoT/DTLS/DTLCP transports:
+	// stream I/O is not ctx-aware, so without this a cancelled
 	// query (client disconnect, shutdown) leaves the goroutine and stream
 	// blocked until the full timeout elapses.
 	stop := context.AfterFunc(ctx, func() {

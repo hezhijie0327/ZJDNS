@@ -26,7 +26,7 @@ type CacheStore struct {
 	resolver handler.Resolver
 }
 
-// ecsMismatchCount samples the ECS-mismatch Warn (C-M1) — atomic, hot path.
+// ecsMismatchCount samples the ECS-mismatch Warn — atomic, hot path.
 var ecsMismatchCount atomic.Uint64
 
 // Wrap implements Wrapper.
@@ -104,7 +104,7 @@ func (m *CacheStore) buildSuccess(qctx *handler.QueryContext) *dns.Msg {
 		// Security-relevant event (spoofed or misrouted response) — sampled
 		// Warn, not per-query: an upstream that consistently rewrites ECS
 		// (or a spoofer) hits this branch at full query rate and would
-		// flood the log otherwise (2026-09 C-M1).
+		// flood the log otherwise.
 		if n := ecsMismatchCount.Add(1); n%config.DefaultECSMismatchWarnEvery == 1 {
 			log.Warnf("EDNS: ECS mismatch for %s — returning SERVFAIL (spoofed or misrouted response) [%dth]", qname, n)
 		}

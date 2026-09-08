@@ -95,8 +95,8 @@ type udpRuntime struct {
 
 	// clientSem bounds concurrent per-client handler goroutines (DTLCP
 	// handshake/service, DNSCrypt drain).  Without a try-acquire cap, a
-	// spoofed-source flood created one DemuxPacketConn + goroutine per
-	// unique (IP, port) for the idle-reap window — unbounded (2026-09 P3).
+	// spoofed-source flood creates one DemuxPacketConn + goroutine per
+	// unique (IP, port) for the idle-reap window — unbounded.
 	clientSem chan struct{}
 }
 

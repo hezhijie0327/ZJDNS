@@ -166,7 +166,7 @@ func addDDRRecords(cfg *ServerConfig) {
 	zoneServiceRecords := make([]ZoneRecord, 0, len(records))
 	// RFC 9462 §4: ServiceMode SVCB responses for _dns.resolver.arpa MUST
 	// NOT use "." or "resolver.arpa" as the TargetName — the resolver's own
-	// hostname (the certificate domain) is used instead (R3-M12).
+	// hostname (the certificate domain) is used instead.
 	for priority, r := range records {
 		var content string
 		if r.dohpath != "" {

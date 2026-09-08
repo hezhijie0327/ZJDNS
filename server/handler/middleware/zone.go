@@ -26,12 +26,12 @@ type Zone struct {
 // wildcardPrefix is the zone-rule wildcard marker (matches zone package).
 const wildcardPrefix = "*."
 
-// chaosDenialCount samples the destructive-CHAOS denial Warn (C-M2).
+// chaosDenialCount samples the destructive-CHAOS denial Warn.
 var chaosDenialCount atomic.Uint64
 
 // destructiveChaosNames are the CHAOS control endpoints that mutate server
 // state, precomputed once — a per-call ToLower+concat rebuild would run on
-// every zone-matched query (H-L6).
+// every zone-matched query.
 var destructiveChaosNames = func() map[string]struct{} {
 	base := strings.ToLower(config.DefaultProjectName)
 	names := []string{"cache.clear.", "stats.clear.", "latency.clear.", "querylog.clear.", "dnscrypt.clear."}
@@ -93,7 +93,7 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		if isDestructiveChaosName(qname) && (qctx.ClientIP == nil || !qctx.ClientIP.IsLoopback()) {
 			// Sampled: any remote client can spam these names, each carrying
 			// attacker-chosen context — a per-packet Warn is a log-flood
-			// vector (2026-09 C-M2).
+			// vector.
 			if n := chaosDenialCount.Add(1); n%config.DefaultChaosDenialWarnEvery == 1 {
 				log.Warnf("SECURITY: denying destructive CHAOS query %s from non-loopback client %s [%dth denial]", qname, qctx.ClientIP, n)
 			}
@@ -139,7 +139,7 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			// Zone rules are served authoritatively by this server — the AA
 			// bit is required for RESINFO responses (RFC 9606 §3: AA MUST be
 			// set on the resolver's own records) and matches the semantics
-			// of local policy data (R2 finding).
+			// of local policy data.
 			response.Authoritative = true
 			// Freshly cloned per hit (cloneRRs) — deduct in place, no re-clone.
 			elapsed := ttl.Elapsed(zoneResult.CreatedAt)
@@ -154,7 +154,7 @@ func (m *Zone) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			// with the QUERIED name as owner — the wildcard rule's records
 			// carry the literal "*.<domain>" owner (the stored Domain has no
 			// "*." prefix — LoadRules strips it), which must be rewritten
-			// before serving (R3-M7).
+			// before serving.
 			if zoneResult.Wildcard {
 				wildOwner := wildcardPrefix + zoneResult.Domain
 				response.Answer = rewriteOwnerNames(response.Answer, wildOwner, qname)

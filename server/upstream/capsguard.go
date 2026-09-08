@@ -33,7 +33,7 @@ func (c *Client) capsDisabled(addr string) bool {
 
 // noteCapsSuccess resets the consecutive-mismatch counter after a
 // successful 0x20 echo (draft §6.4 — the downgrade tracks current, not
-// lifetime, behaviour) (S8).
+// lifetime, behaviour).
 func (c *Client) noteCapsSuccess(addr string) {
 	if c.capsDowngrades == nil {
 		return
@@ -49,7 +49,7 @@ func (c *Client) noteCapsSuccess(addr string) {
 // whether this mismatch crossed the downgrade threshold.  The stat is a
 // pointer keyed in the LRU: the read-modify-write runs under the stat's own
 // mutex, so concurrent mismatches for one address cannot lose increments
-// (lrumap.Get returns a value copy) (U6).
+// (lrumap.Get returns a value copy).
 func (c *Client) noteCapsMismatch(addr string) bool {
 	if c.capsDowngrades == nil {
 		return false

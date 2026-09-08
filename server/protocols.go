@@ -23,7 +23,7 @@ import (
 // DNSCrypt, Plain) into the Server struct.  The first error is returned and
 // fails New() — a configured protocol that cannot initialise (bad
 // certificate, invalid port) is a configuration error, not something to
-// silently skip (M-low).
+// silently skip.
 func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Handler) error {
 	// Detect shared ports early so protocol servers can coordinate:
 	//   - TCP 443: HTTPS + HTTPoverTLCP + DNSCrypt (any subset ≥2)

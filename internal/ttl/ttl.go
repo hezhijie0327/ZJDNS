@@ -74,7 +74,7 @@ func Elapsed(timestamp int64) int64 {
 
 // DeductElapsedCyclical returns a new slice with each RR's TTL reduced by
 // elapsed, decreasing monotonically and clamping at 0 — an expired record
-// must never be re-served with a full TTL (the old modular wrap reset it to
+// must never be re-served with a full TTL (a modular wrap would reset it to
 // origTTL at exact multiples, keeping expired zone data valid indefinitely).
 // Each RR is deep-copied and adjusted independently.
 func DeductElapsedCyclical(rrs []dns.RR, elapsed int64) []dns.RR {

@@ -25,7 +25,7 @@ type Client struct {
 	// Bounded LRU, not sync.Map: in recursive mode the keys are every
 	// authority address the walk ever touches, and proxy + hopguard (the
 	// degraded pairing that triggers the notice) grows that set without
-	// limit (2026-09 S5).
+	// limit.
 	hopguardWarned *lrumap.Map[string, struct{}]
 }
 

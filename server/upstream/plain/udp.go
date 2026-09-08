@@ -65,11 +65,9 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 		// A canceled/expired context can never succeed past this point,
 		// and the pool's saturation errors exist precisely to bound
 		// concurrent dials — falling through to a per-query dial either
-		// re-dials on a dead context or bypasses the caps.  Both were the
-		// dominant dns.Transport dial churn under recursive race load
-		// (pprof alloc_space, 2026-09); fall through only for pool
-		// failures a fresh socket could still fix (write errors, closed
-		// connections).
+		// re-dials on a dead context or bypasses the caps.  Fall through
+		// to a per-query dial only for pool failures a fresh socket could
+		// still fix (write errors, closed connections).
 		if ctx.Err() != nil ||
 			errors.Is(err, zpool.ErrNoAvailableSocket) ||
 			errors.Is(err, zpool.ErrMaxConnsReached) ||
@@ -153,7 +151,7 @@ func (c *Client) executeUDPPooled(ctx context.Context, msg *dns.Msg, server *con
 	response := pool.DefaultMessage.Get()
 	response.Data = payload
 	if err := response.Unpack(); err != nil {
-		// Return the pooled payload buffer (M-3-6).
+		// Return the pooled payload buffer.
 		zpool.ReleaseUDPPayload(payload)
 		pool.DefaultMessage.Put(response)
 		return nil, err
@@ -209,7 +207,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 	}
 
 	// One timer per collect window, Reset per iteration — time.After inside
-	// the select allocated a fresh timer every poll (M-3-6).
+	// the select allocates a fresh timer every poll.
 	pollTimer := time.NewTimer(config.DefaultSpoofguardPollInterval)
 	defer pollTimer.Stop()
 
@@ -290,18 +288,18 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 						pool.DefaultMessage.Put(previous)
 					}
 					if sg.last != nil {
-						sg.last.ID = originalID // tracking ID must not escape (U5)
+						sg.last.ID = originalID // tracking ID must not escape
 						return sg.last, nil
 					}
 					return nil, errCollectClosed
 				}
 				// Gate on 12 bytes first — processPacket reads raw[6..9] for
 				// the fast-signal checks; a 2-9 byte datagram with a matching
-				// ID would index out of range (H9; the multi-read path gates
+				// ID would index out of range (the multi-read path gates
 				// n<12).  ID/length validation also runs BEFORE HopGuard Feed
-				// so that stray datagrams never enter the TTL histogram (M1).
+				// so that stray datagrams never enter the TTL histogram.
 				if len(pkt.Data) < 12 || uint16(pkt.Data[0])<<8|uint16(pkt.Data[1]) != trackingID {
-					pkt.Release() // M8: every rejected packet returns its tiered buffer
+					pkt.Release() // every rejected packet returns its tiered buffer
 					continue
 				}
 				// HopGuard: validate gates packet acceptance; Feed happens

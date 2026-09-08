@@ -103,7 +103,7 @@ type Store struct {
 }
 
 // Corruption guards — record lengths come from the file, so a corrupt or
-// tampered spill file must not drive an unbounded allocation (M3).
+// tampered spill file must not drive an unbounded allocation.
 const (
 	// maxKeyLen is the exact uint16 domain — a key of len 65536 would wrap
 	// the length field to 0 and write a record the scanner treats as
@@ -273,9 +273,9 @@ func (s *Store) Delete(key string) {
 // the sparse index (~10 steps for 2000 blocks), reads the target block in one
 // pread and parses it sequentially.
 func (s *Store) Get(key string) (ts int64, ttl int, validated bool, wire []byte, ok bool) {
-	// Memoized miss: repeated absent keys (ECS variants of the same qname)
-	// used to re-pay the lock + block pread every time.  Put/Delete
-	// invalidate, so a remembered miss cannot mask a fresh record.
+	// Memoized miss: repeated absent keys (ECS variants of one qname) skip
+	// the lock + pread; Put/Delete invalidate, so a remembered miss cannot
+	// mask a fresh record.
 	if s.hasMiss(key) {
 		return 0, 0, false, nil, false
 	}

@@ -56,7 +56,7 @@ func (m *Resolution) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			if qr == nil {
 				// Defensive: a nil QueryResult with nil error would leave
 				// ServeDNS returning nil (bridge guards it, but the error
-				// would be lost) — surface a SERVFAIL instead (M-low).
+				// would be lost) — surface a SERVFAIL instead.
 				return errors.New("recursive resolution returned no result")
 			}
 			qctx.ResolutionResult = qr

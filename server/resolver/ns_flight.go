@@ -22,14 +22,10 @@ type nsAddrFlightResult struct {
 }
 
 // resolveNSAddrFlight resolves one NS name/qtype pair, deduplicating
-// concurrent walks via singleflight.  Relying on the NS-address cache alone
-// ("the cache deduplicates once populated") does not bound the case where
-// the cache NEVER populates: a delegation whose authoritative servers are
-// unreachable respawns the full root walk for the same NS names at every
-// level, and self-similar NS sets (nsXX.constellix.com ↔
-// nsXX.constellix.net referring to each other) multiply the tree — one
-// client lookup of kernel.org fired ~290k UDP queries (2026-08).  One
-// leader walks; concurrent callers with the same key wait for and share the
+// concurrent walks via singleflight.  Unreachable authorities respawn the
+// full root walk per level per query; self-similar NS sets multiply the
+// tree.  Singleflight bounds concurrent walks to one leader per
+// (NS name, qtype); callers with the same key wait for and share the
 // result, bounded by their own ctx.
 //
 // The leader runs under an intrinsic DefaultNSAddrFlightTimeout budget: a

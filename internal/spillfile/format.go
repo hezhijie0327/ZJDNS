@@ -60,10 +60,10 @@ func acquireBlockBuf(n int) []byte {
 }
 
 // releaseBlockBuf returns a tiered block buffer to its class pool; buffers
-// that grew in place to odd sizes (the old single-tier pool's retention
-// source) are dropped for the GC.  No clear: the only consumers fill the
-// requested range with ReadAt before reading, so stale bytes are never
-// observed (a memset per 64KB block read cost ~55% on BenchmarkGetSorted).
+// that grew in place to odd sizes are dropped for the GC.  No clear: the only
+// consumers fill the requested range with ReadAt before reading, so stale
+// bytes are never observed (a memset per 64KB block read cost ~55% on
+// BenchmarkGetSorted).
 func releaseBlockBuf(b []byte) {
 	switch cap(b) {
 	case blockBufSmall:
@@ -290,7 +290,7 @@ func lookupInBlock(buf []byte, key string) (ts int64, ttl int, validated bool, w
 			return 0, 0, false, nil, false
 		}
 		wireLen := int(binary.BigEndian.Uint32(buf[pos+15+keyLen : pos+19+keyLen]))
-		if wireLen > maxWireLen { // 32-bit int overflow hardening (F15)
+		if wireLen > maxWireLen { // 32-bit int overflow hardening
 			return 0, 0, false, nil, false
 		}
 		recLen := recordHeaderLen + keyLen + wireLen
@@ -327,7 +327,7 @@ func scanBlock(blockStart int64, buf []byte, fn func(key string, ts int64, ttl i
 			return false
 		}
 		wireLen := int(binary.BigEndian.Uint32(buf[pos+15+keyLen : pos+19+keyLen]))
-		if wireLen > maxWireLen { // 32-bit int overflow hardening (F15)
+		if wireLen > maxWireLen { // 32-bit int overflow hardening
 			return false
 		}
 		recLen := recordHeaderLen + keyLen + wireLen

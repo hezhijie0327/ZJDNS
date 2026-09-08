@@ -14,7 +14,7 @@ import (
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 // StateStore persists the DNSCrypt identity + cert windows across restarts.
-// Implemented by *FileStore (persist_file.go) — the database package was removed in the 2026-08 all-memory migration.  A nil store disables persistence.
+// Implemented by *FileStore (persist_file.go); a nil store disables persistence.
 type StateStore interface {
 	LoadDNSCryptState() (identity, windows []byte, err error)
 	SaveDNSCryptState(identity, windows []byte) error

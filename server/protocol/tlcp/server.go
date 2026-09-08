@@ -53,7 +53,7 @@ type Server struct {
 	// runs Shutdown concurrently with the appends.
 	listenerMu     sync.Mutex
 	dotListeners   []net.Listener
-	dotConns       map[net.Conn]struct{} // active TLCP DoT conns — woken on Shutdown (M-3-5)
+	dotConns       map[net.Conn]struct{} // active TLCP DoT conns — woken on Shutdown
 	dohListeners   []net.Listener
 	dohServers     []*http.Server
 	dtlcpListeners []*dtlcpListener
@@ -279,7 +279,7 @@ func (s *Server) Shutdown() error {
 		}
 	}
 	// Wake active TLCP DoT connections — their read loops block in
-	// io.ReadFull with a 60s idle deadline (M-3-5).
+	// io.ReadFull with a 60s idle deadline.
 	s.listenerMu.Lock()
 	for conn := range s.dotConns {
 		_ = conn.SetReadDeadline(time.Unix(1, 0))

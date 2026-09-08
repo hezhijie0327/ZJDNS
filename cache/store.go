@@ -30,7 +30,7 @@ type Cache struct {
 
 	// spillW drains eviction writes off the entries-mutex: OnEvict runs
 	// under the lrumap lock, where a synchronous WriteAt froze every
-	// concurrent Get/Set for the IO duration (2026-09 D2).
+	// concurrent Get/Set for the IO duration.
 	spillW *spillfile.AsyncWriter
 
 	// hasLatencyData gates sortAnswerByLatency: when false (no latency data has
@@ -161,7 +161,7 @@ func (s *Cache) Close() error {
 func (s *Cache) Flush() {
 	// Drain the async writers first so the Indexed check below sees the
 	// queued eviction writes; bounded by the shutdown timeout — a stalled
-	// disk must not hang shutdown indefinitely (2026-09 D6).
+	// disk must not hang shutdown indefinitely.
 	drainCtx, drainCancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
 	defer drainCancel()
 	if s.spillW != nil {

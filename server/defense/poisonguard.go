@@ -85,7 +85,7 @@ func (d *Detector) Validate(zone, queryName string, response *dns.Msg) Verdict {
 
 	for _, rr := range response.Answer {
 		if rr == nil {
-			continue // defensive: malformed responses must not panic the validator (R2)
+			continue // defensive: malformed responses must not panic the validator
 		}
 		// EqualFold (case-insensitive, zero-alloc) instead of Canonical —
 		// owner names and the already-canonical query name are both FQDNs,

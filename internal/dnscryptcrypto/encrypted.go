@@ -139,9 +139,9 @@ func (r *EncryptedResponse) Encrypt(
 		}
 	} else {
 		// TCP: bound the plaintext like the PQ path — a DNS payload beyond
-		// MaxDNSUDPPacketSize cannot be served by any DNSCrypt transport
-		// (R3-M22).  The server-side truncation loop shrinks responses
-		// before this point, so this is a defense-in-depth guard.
+		// MaxDNSUDPPacketSize cannot be served by any DNSCrypt transport.
+		// The server-side truncation loop shrinks responses before this
+		// point, so this is a defense-in-depth guard.
 		if len(packet) > MaxDNSUDPPacketSize {
 			return nil, ErrResponseTooLarge
 		}

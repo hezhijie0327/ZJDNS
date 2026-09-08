@@ -64,7 +64,7 @@ type StoreLifecycle interface {
 }
 
 // Store defines the full cache storage interface, composed from its role
-// interfaces so consumers can depend on only the methods they need (C5).
+// interfaces so consumers can depend on only the methods they need.
 type Store interface {
 	StoreReader
 	StoreWriter
@@ -131,8 +131,8 @@ func (e *Entry) rebuildResponseWire() {
 
 	// Skip 12-byte header + question section to find the first RR.  A
 	// label-aware walk, not a zero-byte scan: QNAME label content may
-	// legally contain NUL octets (RFC 1035 §3.1), which stopped the scan
-	// mid-name and produced a misaligned offset table (R3-L24).
+	// legally contain NUL octets (RFC 1035 §3.1), which a zero-byte scan
+	// would stop mid-name and misalign the offset table.
 	pos := dns.MsgHeaderSize
 	off, ok := zdnsutil.SkipWireName(msg.Data, pos)
 	if !ok {

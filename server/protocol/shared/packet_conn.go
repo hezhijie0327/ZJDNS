@@ -95,11 +95,8 @@ const (
 	demuxWorkersPerClient = 64
 
 	// demuxDispatchQueue bounds the per-client DNSCrypt/DTLCP packet queue.
-	// It replaces the kernel socket buffer a dedicated listener would give
-	// the protocol stack: 32 (the old value) overflowed on legitimate
-	// bursts from a single multiplexing client (many workers behind one
-	// socket), silently dropping datagrams that only a ~1s client
-	// retransmission recovered — visible as a fixed ~1s tail latency.
+	// It replaces the kernel socket buffer a dedicated listener would give:
+	// too-small queues drop legitimate bursts from one multiplexing client.
 	demuxDispatchQueue = 256
 
 	// clientIdleTimeout bounds how long a silent per-client conn is kept.
@@ -178,10 +175,10 @@ func (d *DemuxPacketConn) Close() error {
 	defer d.sendMu.Unlock()
 	if d.closed.CompareAndSwap(false, true) {
 		close(d.Ch)
-		// Drain queued datagrams back to the packet pool — up to 32 pooled
-		// buffers per conn were simply GC'd under reap churn (L5).  The
-		// sendMu critical section guarantees no concurrent Send races the
-		// drain (Send returns false once closed is set).
+		// Drain queued datagrams back to the packet pool — they would
+		// otherwise be GC'd.  The sendMu critical section guarantees no
+		// concurrent Send races the drain (Send returns false once closed
+		// is set).
 		for pkt := range d.Ch {
 			full := pkt.Data[:cap(pkt.Data)]
 			PacketBufPool.Put(&full)
@@ -194,8 +191,7 @@ func (d *DemuxPacketConn) Close() error {
 // the queue is full — the caller must return the pool buffer.  ALL senders
 // must go through this guarded path (sendMu + closed CAS): a bare send on
 // the exported Ch races a concurrent Close with a panic that kills the
-// whole dispatch loop (2026-09 P1 — the standalone DTLCP accept loop
-// bypassed this guard exactly like that).
+// whole dispatch loop.
 func (d *DemuxPacketConn) Send(pkt DemuxPacket) bool {
 	d.sendMu.Lock()
 	defer d.sendMu.Unlock()
@@ -262,8 +258,7 @@ func (c *dtlsClientConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	if len(p) < pkt.n {
 		PacketBufPool.Put(&pkt.data)
 		// io.ErrShortBuffer (net.Conn contract), NOT net.ErrClosed — a
-		// merely-small caller buffer must not tear the connection down
-		// (P-L3).
+		// merely-small caller buffer must not tear the connection down.
 		return 0, pkt.src, io.ErrShortBuffer
 	}
 	n := copy(p, pkt.data[:pkt.n])
@@ -314,7 +309,7 @@ func (c *quicPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		}
 		if len(p) < pkt.n {
 			PacketBufPool.Put(&pkt.data)
-			// Silent truncation hides data loss — report it (P-L3).
+			// Silent truncation hides data loss — report it.
 			return 0, pkt.src, io.ErrShortBuffer
 		}
 		n := copy(p, pkt.data[:pkt.n])

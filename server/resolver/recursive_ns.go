@@ -129,19 +129,15 @@ func (r *Recursive) resolveNextNameservers(
 		uncovered = append(uncovered, ns)
 	}
 	if len(uncovered) > 0 {
-		// Glue-first (unbound-style): when cache or glue already addresses at
-		// least one usable nameserver — usable after the address-family
+		// Glue-first (unbound-style): when cache or glue already addresses
+		// at least one usable nameserver — usable after the address-family
 		// filter, so a v6-glue-only delegation on an IPv4-only host still
-		// resolves in the foreground — return immediately.  The walk
-		// proceeds on those addresses while the uncovered names resolve in
-		// the background under the full query budget: off the critical path,
-		// deduped by the NS-address flight, and the results land in the
-		// NS-address cache for subsequent queries.  A blocking wait — even
-		// the bounded one this replaced — let a slow out-of-bailiwick NS
-		// subtree (the huaweicloud-dns fleet cycle behind cdnhwc2.com)
-		// dominate the cold-walk tail (2026-09).  With nothing addressed at
-		// all, the independent resolution is the only source of addresses
-		// and stays in the foreground.
+		// resolves in the foreground — return immediately.  Uncovered NS
+		// names continue in the background under the full query budget —
+		// a blocking wait would let one slow out-of-bailiwick subtree
+		// dominate the cold-walk tail.  With nothing addressed at all, the
+		// independent resolution is the only source of addresses and stays
+		// in the foreground.
 		if usable := filterByFamily(result.addrs, r.addressFamily); len(usable) > 0 {
 			go func() {
 				defer zdnsutil.HandlePanic("Background NS refinement")

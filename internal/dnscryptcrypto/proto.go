@@ -21,9 +21,8 @@ const (
 	// MaxDNSUDPPacketSize is the largest UDP datagram worth sending over the
 	// public internet.  Matches dnscrypt-proxy and the common EDNS0 buffer
 	// of 4096 bytes.  Intentionally NOT aliased to pool.RecursiveUDPBuffer
-	// Size: that import edge shifted hot-binary layout and cost ~13% on the
-	// query pipeline — keep the value duplicated with a
-	// comment instead (C-L3).
+	// Size: that import edge perturbs hot-binary layout (~13% on the query
+	// pipeline) — keep the value duplicated with a comment instead.
 	MaxDNSUDPPacketSize = 4096
 
 	// MinDNSPacketSize is the minimum possible DNS packet size.

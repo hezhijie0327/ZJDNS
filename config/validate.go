@@ -240,7 +240,7 @@ func validatePorts(cfg *ServerConfig) error {
 		{"server.protocol.dtls", proto.DTLS, "udp"},
 		{"server.protocol.dtlcp", proto.DTLCP, "udp"},
 		{"server.protocol.dnscrypt", proto.DNSCrypt, "udp"},
-		{"server.protocol.dnscrypt", proto.DNSCrypt, "tcp"}, // the DNSCrypt listener binds both (D4)
+		{"server.protocol.dnscrypt", proto.DNSCrypt, "tcp"}, // the DNSCrypt listener binds both
 		{"server.pprof", cfg.Server.Pprof, "tcp"},
 	}
 

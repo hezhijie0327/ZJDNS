@@ -75,8 +75,8 @@ func wireZoneDynamicContent(store cache.Store, rules []config.ZoneRule, resetDNS
 	for i := range rules {
 		// Canonicalize both sides: zone.LoadRules stores canonical names,
 		// but the raw config rule may carry case variants or omit the
-		// trailing dot — an exact-string match silently never wired the
-		// dynamic function (R3-M19).
+		// trailing dot — an exact-string match silently never wires the
+		// dynamic function.
 		switch dnsutil.Canonical(rules[i].Name) {
 		case dnsutil.Canonical(config.DefaultProjectName + ".stats"):
 			rules[i].DynamicContent = func(net.IP) []string { return store.Stats() }
@@ -95,9 +95,8 @@ func wireZoneDynamicContent(store cache.Store, rules []config.ZoneRule, resetDNS
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("stats") }, "reset")
 		case dnsutil.Canonical(config.DefaultProjectName + ".latency.clear"):
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("latency") }, "flushed")
-		// zjdns.delegation.clear was removed: FlushDB has no delegation
-		// branch (the cache store does not own the delegation cache), so the
-		// endpoint always replied a false "flushed" (L2).
+		// No delegation flush endpoint: the cache store does not own the
+		// delegation cache.
 		case dnsutil.Canonical(config.DefaultProjectName + ".querylog.clear"):
 			rules[i].DynamicContent = makeFlushFunc(func() (int64, error) { return store.FlushDB("querylog") }, "flushed")
 		case dnsutil.Canonical(config.DefaultProjectName + ".dnscrypt.clear"):

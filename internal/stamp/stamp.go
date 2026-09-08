@@ -78,7 +78,7 @@ const (
 
 // Minimum wire lengths per protocol: format layout arithmetic
 // (proto + props + length prefix + minimum field size), kept named so the
-// guards cannot silently desync from the parsers (M-low).
+// guards cannot silently desync from the parsers.
 const (
 	minPlainLen      = 1 + 8 + 1 + 1 // proto + props + addrLen(1) + minAddr(1)
 	minDNSCryptLen   = 44            // proto+props+addrLen+addr+pkLen+pk(32)+provLen+prov
@@ -215,10 +215,9 @@ func Parse(stampStr string) (*DNSStamp, error) {
 // vocabulary, NOT the stamp's own names: the upstream client dispatches DoT
 // via ExecuteTLS under ProtoTLS ("tls"), DoQ via ExecuteQUIC under ProtoQUIC
 // ("quic"), DoH via ExecuteHTTPS under ProtoHTTPS ("https").  Returning the
-// stamp names ("dot"/"doq"/"doh") produced a silently broken upstream —
-// validateConfig runs before stamp normalization, so the invalid protocol
-// bypassed validation and every query failed with "unsupported protocol"
-// (R3-H2 family: "doh" fixed earlier, "dot"/"doq" the same defect).
+// stamp names ("dot"/"doq"/"doh") would be silently broken: validateConfig
+// runs before stamp normalization, so the invalid protocol bypasses
+// validation and every query fails with "unsupported protocol".
 func ProtoToConfig(stampProto ProtoType) string {
 	switch stampProto {
 	case ProtoPlain:
@@ -258,7 +257,7 @@ func (s *DNSStamp) BuildDoHURL() string {
 		// not the address.  The encoder moves the port onto the hostname
 		// ("host:port"), so a port-bearing provider name supplies the URL
 		// port — otherwise JoinHostPort brackets the whole thing into an
-		// invalid "[host:port]:port" URL (R3-M17).  The cheap colon check
+		// invalid "[host:port]:port" URL.  The cheap colon check
 		// keeps the common hostname-only path allocation- and error-free.
 		if strings.Contains(s.ProviderName, ":") {
 			if hn, hp, err := net.SplitHostPort(s.ProviderName); err == nil {

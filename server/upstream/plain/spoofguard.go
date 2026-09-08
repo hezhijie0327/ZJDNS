@@ -44,7 +44,7 @@ type spoofguardState struct {
 	copyBuf []byte
 }
 
-// Copy-buffer shrink cadence for spoofguardState.copyBuf (C-L6): after
+// Copy-buffer shrink cadence for spoofguardState.copyBuf: after
 // copyBufShrinkAfter copies, an oversized buffer (copyBufShrinkFactor× the
 // working set, above copyBufShrinkMinCap) is reallocated down.
 const (
@@ -138,7 +138,7 @@ func (s *spoofguardState) copyData(raw []byte, n int) []byte {
 	copy(s.copyBuf, raw[:n])
 	s.copyBufShrinkCount++
 	// Copy-buffer shrink cadence: after copyBufShrinkAfter copies, an oversized
-	// buffer (4× the working set, ≥512 B floor) is reallocated down (C-L6).
+	// buffer (4× the working set, ≥512 B floor) is reallocated down.
 	if s.copyBufShrinkCount >= copyBufShrinkAfter && cap(s.copyBuf) > copyBufShrinkFactor*n && cap(s.copyBuf) > copyBufShrinkMinCap {
 		s.copyBuf = make([]byte, n)
 		copy(s.copyBuf, raw[:n])
@@ -218,13 +218,10 @@ func (s *spoofguardState) processPacket(raw []byte, n int, query *dns.Msg, addr 
 	}
 
 	// EDNS-gate: GFW only injects bare A/AAAA records without EDNS and
-	// without CNAME chains.  Non-EDNS responses are collected as a
-	// low-priority fallback — EDNS-bearing candidates always win and the
-	// collect window waits for a second candidate, so a real EDNS response
-	// beats an injected bare A.  Single-answer non-EDNS is no longer
-	// dropped outright: legitimate authorities that don't echo EDNS return
-	// that exact shape, and dropping it made every such query block the full
-	// query budget (github.com nsone, production incident 2026-08).
+	// without CNAME chains.  Non-EDNS responses are a low-priority fallback:
+	// EDNS-bearing candidates always win, and dropping single-answer
+	// non-EDNS outright would block every authority that does not echo EDNS
+	// for the full budget.
 	//
 	// When spoofguard is disabled (HopGuard-only mode), skip the EDNS gate
 	// entirely — HopGuard's TTL validation is the sole filter. The response
@@ -258,14 +255,9 @@ func (s *spoofguardState) processPacket(raw []byte, n int, query *dns.Msg, addr 
 			return s.collectEDNSCandidate(resp, ttlConfident, ttl, addr)
 		}
 
-		// Non-EDNS NOERROR responses (single-answer included) are collected
-		// as the low-priority fallback instead of being dropped.  The old
-		// gate rejected single-answer non-EDNS as a "GFW injects bare
-		// A/AAAA" signature — but legitimate authorities that do not echo
-		// EDNS return exactly that shape (e.g. github.com's nsone servers),
-		// so every query to them blocked the full 9s budget and SERVFAILed.
-		// pickBest still prefers EDNS-bearing candidates and the collect
-		// window waits for a second candidate.  A bare single-answer A/AAAA
+		// Non-EDNS NOERROR responses (single-answer included) are the
+		// low-priority fallback; legitimate authorities that do not echo
+		// EDNS return exactly that shape.  A bare single-answer A/AAAA
 		// is marked ambiguous (nonEDNSSafe=false): executeUDPCollect only
 		// serves it after a matching re-query confirms it (pure-UDP
 		// consistency — GFW fakes vary per packet, the real answer is

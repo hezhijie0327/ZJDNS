@@ -22,14 +22,13 @@ func resinfoKeys(cfg *ServerConfig) []string {
 	// SignatureNotYetValid(8), RRSIGsMissing(10), NSECMissing(12),
 	// Blocked(15), NoReachableAuthority(22), NetworkError(23),
 	// InvalidQueryType(30).  The list must not advertise codes the codebase
-	// never emits (2026-08 audit: dropped 2,5,9,11,13,14,19 — never
-	// emitted; added 1,7,22,30 — emitted but missing).
+	// never emits.
 	keys = append(keys, "exterr=0,1,3,4,6,7,8,10,12,15,22,23,30")
 
 	if cfg != nil && cfg.Server.Features.DDR.InfoURL != "" {
 		// RFC 9606 §5 requires an https:// URI; RFC 6763 §6.1 caps a TXT
 		// character-string at 255 bytes — reject instead of advertising a
-		// broken key (R2 finding).
+		// broken key.
 		u, err := url.Parse(cfg.Server.Features.DDR.InfoURL)
 		if err == nil && u.Scheme == "https" && len(cfg.Server.Features.DDR.InfoURL) <= 255 {
 			keys = append(keys, "infourl="+cfg.Server.Features.DDR.InfoURL)
@@ -82,9 +81,7 @@ func addResolverInfoRecords(cfg *ServerConfig) {
 
 	// RFC 9462 §6.4: resolver.arpa itself MUST be treated as a locally
 	// served zone — the records-less rule serves authoritative NODATA for
-	// A/AAAA instead of forwarding the SUDN upstream (R3-M13; the sentinel
-	// previously never registered — the loader dropped records-less
-	// rcode-0 rules).
+	// A/AAAA instead of forwarding the SUDN upstream.
 	if !hasZoneRule(cfg, "resolver.arpa") {
 		cfg.Zone = append(cfg.Zone, ZoneRule{Name: "resolver.arpa"})
 	}

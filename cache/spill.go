@@ -40,12 +40,9 @@ func (s *Cache) loadSpill(path string, diskCap, maxEntries int) {
 		}
 		s.entries.Set(key, &cacheEntry{msgWire: w.Wire, ts: w.Ts, ttl: w.Ttl, validated: w.Validated})
 	}
-	// Spill-on-evict registered AFTER the warm-up load — load-time capacity
-	// evictions must not re-spill the very entries just read back.  The
-	// write itself is queued to the async writer: OnEvict runs under the
-	// entries mutex and a synchronous Put here froze all cache lookups
-	// during the write (and queued behind a Compact for its whole rewrite)
-	// (2026-09 D2).  Queue-full drops are counted and re-derivable.
+	// Spill-on-evict registers after the warm-up load (load-time evictions
+	// must not re-spill) and queues writes: OnEvict runs under the entries
+	// mutex.  Queue-full drops are counted and re-derivable.
 	s.spillW = spillfile.NewAsyncWriter(spill)
 	s.entries.SetOnEvict(func(key cacheKey, ce *cacheEntry) {
 		if ce.ts > 0 && ttl.CanServeExpired(ce.ts, ce.ttl, config.DefaultStaleMaxAge) {
@@ -57,7 +54,7 @@ func (s *Cache) loadSpill(path string, diskCap, maxEntries int) {
 
 // Close flushes and closes the spill stores (the in-memory LRUs need no
 // cleanup).  Idempotent — a second Close returns nil instead of
-// os.ErrClosed from the spill stores (2026-09 D15).
+// os.ErrClosed from the spill stores.
 
 // getFromSpill reads a spill record by key and promotes it to memory.  An
 // expired record is dropped from the index (the file record lingers until

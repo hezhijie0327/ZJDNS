@@ -112,7 +112,7 @@ func (h *HopGuard) Validate(serverIP string, observed uint8) bool {
 	}
 
 	// Evaluate trustedKeys only when debug is on — it sorts and joins the
-	// baseline keys on every rejection (R3-M20).
+	// baseline keys on every rejection.
 	if log.IsDebug() {
 		log.Debugf("UPSTREAM: hopguard reject TTL=%d for %s (trusted: %s)", observed, serverIP, trustedKeys(v))
 	}
@@ -149,7 +149,7 @@ func (h *HopGuard) Feed(serverIP string, observed uint8) {
 		// Rebuild at most once per Feed: the time-based fallback (for
 		// low-traffic upstreams where the sample-based rebuild never fires)
 		// and the sample-based rebuild are mutually exclusive — firing
-		// both in one call would apply the 3/4 decay twice (M-low).
+		// both in one call would apply the 3/4 decay twice.
 		rebuild := false
 		if log.NowUnixNano()-st.lastRebuild > hopGuardRebuildIntervalNanos {
 			st.lastRebuild = log.NowUnixNano()
@@ -176,7 +176,7 @@ func (h *HopGuard) Feed(serverIP string, observed uint8) {
 		log.Debugf("UPSTREAM: hopguard learning (%d samples, %d TTLs) for %s",
 			st.samples, len(st.histogram), serverIP)
 	}
-	if st.samples%hopGuardMinSamples == 0 { // ≥1 guaranteed — the samples counter starts at 1 (S9)
+	if st.samples%hopGuardMinSamples == 0 { // ≥1 guaranteed — the samples counter starts at 1
 		rebuildTrusted(st)
 		if v := st.view.Load(); v != nil && v.armed {
 			log.Debugf("UPSTREAM: hopguard armed (%d trusted, threshold=%d) for %s",
@@ -208,7 +208,7 @@ func (h *HopGuard) Confident(serverIP string) bool {
 // re-enters the histogram this way and can become trusted at the next
 // rebuild, instead of locking the server into SERVFAIL with no recovery
 // path; attacker-injected TTLs are diluted 16x and still cannot win the
-// mode competition (M2).
+// mode competition.
 func (h *HopGuard) ShouldSampleRejected(serverIP string) bool {
 	if h == nil {
 		return false
@@ -308,10 +308,10 @@ func rebuildTrusted(st *serverState) {
 			st.histogram[ttl] = newCount
 		}
 	}
-	// Recompute threshold from the decayed histogram. Only the MODE itself
-	// is promoted: an attacker that consistently repeats one injected TTL
-	// value could otherwise reach count >= mode/4 after decay and enter the
-	// trusted set, weakening hopguard's discrimination.
+	// Recompute threshold from the decayed histogram.  Only TTLs meeting
+	// the confidence threshold are promoted; values at least half the mode
+	// are co-promoted so a stable bimodal baseline converges instead of
+	// thrashing.
 	threshold := trustThreshold(st)
 	mode := modeTTL(st)
 	trusted := make(map[uint8]struct{}, len(st.histogram)/2+1)

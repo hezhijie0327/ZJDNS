@@ -32,7 +32,7 @@ func (c *Client) ExecuteTLCP(ctx context.Context, msg *dns.Msg, server *config.U
 	if c.tlcpPool != nil {
 		pc, err := c.tlcpPool.Acquire(ctx, tlcpPoolKey(server), server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
 			// Config built only on dial — the pool-hit path skips the
-			// per-query SystemCertPool Clone (M-3-6).
+			// per-query SystemCertPool Clone.
 			tlcpCfg := c.tlcpClientConfig(server).Clone()
 			tlcpCfg.NextProtos = config.NextProtoDOT
 			return c.dialTLCPConnForDOT(dialCtx, addr, tlcpCfg, proxyDialer)
@@ -135,7 +135,7 @@ func (c *Client) exchangeOverTLCP(ctx context.Context, msg *dns.Msg, addr string
 	if err != nil {
 		return nil, err
 	}
-	// Reject ID mismatches like the TLS/plain-TCP paths (M7) — the response
+	// Reject ID mismatches like the TLS/plain-TCP paths — the response
 	// was read on a fresh per-query connection, but a misbehaving or
 	// intercepted server may still echo a stale datagram.
 	if response.ID != msg.ID {

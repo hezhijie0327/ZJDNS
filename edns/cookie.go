@@ -192,7 +192,7 @@ func (c *CookieGenerator) IsServerCookieValid(clientIP net.IP, clientCookie, ser
 		expect := rfc9018MAC(&key, clientCookie, reserved, ts, clientIP)
 		// Constant-time compare: the MAC is keyed with the server secret —
 		// a short-circuiting array compare leaks the match position through
-		// timing (R3-L6).
+		// timing.
 		if subtle.ConstantTimeCompare(sig[:], expect[:]) == 1 {
 			if i > 0 || needsRenew {
 				// Validated with a staging/old secret or needs a

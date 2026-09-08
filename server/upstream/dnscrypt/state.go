@@ -83,7 +83,7 @@ const ewmaDecay = 2.0 / 31.0
 // never touches state.mu).  The non-CAS minQueryLen Store may race a
 // concurrent blindAdjust escalation computed against the pre-reset EWMA —
 // self-healing (the next TC re-escalates), one lost padding escalation in a
-// rare interleaving (U18).
+// rare interleaving.
 func (s *State) adjustQuerySize(wireLen int) {
 	for {
 		old := math.Float64frombits(s.ewmaQuerySize.Load())

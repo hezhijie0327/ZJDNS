@@ -9,10 +9,8 @@ import (
 )
 
 // bindIPsOnce memoises the host enumeration underlying ResolveBindAddrs.
-// Every protocol listener (~13 call sites) used to re-enumerate ALL
-// interfaces and addresses at startup — repeated syscalls that dominated
-// listener setup on hosts with many interfaces.  Listeners are created once
-// at startup, so a process-lifetime snapshot is sufficient.
+// ResolveBindAddrs runs for every listener at startup; a process-lifetime
+// snapshot avoids per-listener interface enumeration.
 var bindIPsOnce sync.Once
 
 var bindIPs []net.IP

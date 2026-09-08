@@ -204,7 +204,7 @@ func (e *ECSOption) IsValid() bool {
 	}
 	expectedLen := (int(e.SourcePrefix) + 7) / 8
 	// RFC 7871 §6: a family-1 address is 4 octets — a 16-byte v4-mapped
-	// representation (net.ParseIP of an IPv4 literal) is malformed (M-low).
+	// representation (net.ParseIP of an IPv4 literal) is malformed.
 	if e.Family == 1 && len(e.Address) == net.IPv6len {
 		return false
 	}

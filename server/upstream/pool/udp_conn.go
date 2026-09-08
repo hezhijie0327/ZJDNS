@@ -64,9 +64,6 @@ var udpPendingPool = sync.Pool{
 	New: func() any { return &udpPending{resultCh: make(chan []byte, 1)} },
 }
 
-// acquirePacketBuf returns a payload buffer of at least n bytes and the
-// release func that must be called exactly once after the payload has been
-// consumed (read, decrypted, unpacked).
 // retransmitTimerPool recycles the per-exchange retransmit timer — see
 // Exchange.  Timers are returned stopped; Go 1.23+ guarantees a stopped
 // timer's channel never carries a stale value, so pooling needs no drain.
@@ -89,6 +86,9 @@ func releaseRetransmitTimer(t *time.Timer) {
 	retransmitTimerPool.Put(t)
 }
 
+// acquirePacketBuf returns a payload buffer of at least n bytes and the
+// release func that must be called exactly once after the payload has been
+// consumed (read, decrypted, unpacked).
 func acquirePacketBuf(n int) (packet []byte, release func()) {
 	switch {
 	case n <= packetBufSmall:
@@ -146,9 +146,6 @@ func (c *UDPConn) NextID() uint16 {
 	return id
 }
 
-// retransmitTimerPool recycles the per-exchange retransmit timer — see
-// Exchange.  Timers are returned stopped; Go 1.23+ guarantees a stopped
-// timer's channel never carries a stale value, so pooling needs no drain.
 // Exchange sends payload and waits for the response whose extracted match key
 // equals matchKey.  The returned slice is owned by the caller.
 func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string) ([]byte, error) {
@@ -192,7 +189,7 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 		delete(c.inflight, matchKey)
 		c.mu.Unlock()
 		// Drain an orphaned response that arrived after ctx cancellation and
-		// return the tiered-pool payload buffer (M9).  A nil value marks
+		// return the tiered-pool payload buffer.  A nil value marks
 		// connection close — nothing to release.
 		select {
 		case resp := <-p.resultCh:
@@ -219,11 +216,9 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 	// response — a single lost packet otherwise stalls the query until the
 	// full context deadline (RFC 1035 §4.2.1).  The retransmit reuses the
 	// same tracking ID, so the (possibly duplicate) response still matches
-	// the registered in-flight key.  The timer comes from a pool: one
-	// NewTimer per exchange was a measured allocation hotspot under
-	// recursive load (pprof alloc_space, 2026-09); Go 1.23+ timer semantics
-	// (unbuffered channel, no stale-value race) make Reset-after-Stop safe
-	// without draining.
+	// the registered in-flight key.  The timer comes from a pool: Go 1.23+
+	// timer semantics (unbuffered channel, no stale-value race) make
+	// Reset-after-Stop safe without draining.
 	retransmitTimer := acquireRetransmitTimer()
 	defer releaseRetransmitTimer(retransmitTimer)
 	retransmits := 0
@@ -322,10 +317,10 @@ func (c *UDPConn) ExchangeCollect(ctx context.Context, payload []byte, matchKey 
 
 // ReleaseCollect unregisters matchKey, returns the queued collect packets'
 // payload buffers to their tier pools, and releases the capacity slot held by
-// an ExchangeCollect caller (M8 — without the drain, up to 4 pooled buffers
-// were abandoned per collect round).  The entry is removed under the lock
-// (H2), so readLoop can no longer deliver to it; draining outside the lock
-// cannot race a new delivery.
+// an ExchangeCollect caller (without the drain, up to 4 pooled buffers leak
+// per collect round).  The entry is removed under the lock, so readLoop can
+// no longer deliver to it; draining outside the lock cannot race a new
+// delivery.
 func (c *UDPConn) ReleaseCollect(matchKey string) {
 	c.mu.Lock()
 	p := c.inflight[matchKey]
@@ -386,7 +381,7 @@ func (c *UDPConn) readLoop() {
 			continue // not a response for any of our queries — drop
 		}
 		// Lookup AND delivery under RLock: close() closes collectChs under the
-		// write lock, so a send can never race a closed channel (H2).
+		// write lock, so a send can never race a closed channel.
 		c.mu.RLock()
 		p, ok := c.inflight[key]
 		if !ok {
@@ -397,7 +392,7 @@ func (c *UDPConn) readLoop() {
 		// Copy the payload out of the read buffer — the waiter decrypts/
 		// unpacks asynchronously and owns the returned slice.  The release
 		// func travels with the data; result-channel consumers call
-		// releasePacketBuf by capacity class (M-3-6).
+		// releasePacketBuf by capacity class.
 		packet, release := acquirePacketBuf(n)
 		copy(packet, buf[:n])
 
@@ -433,9 +428,8 @@ func (c *UDPConn) close() {
 		for _, p := range c.inflight {
 			if p.collectCh != nil {
 				// Collect-mode waiters block on collectCh — closing it wakes
-				// them (the !ok branch in executeUDPCollect).  Previously
-				// they were never signalled and burned the full query
-				// budget on a dead socket (M-3-6).
+				// them (the !ok branch in executeUDPCollect) instead of
+				// letting them burn the budget on a dead socket.
 				close(p.collectCh)
 			} else {
 				select {

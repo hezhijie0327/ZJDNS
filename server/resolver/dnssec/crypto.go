@@ -604,8 +604,7 @@ func serialLess(a, b uint32) bool {
 
 // KeyTags precomputes the RFC 4034 App. B key tag of each key once —
 // KeyTag() re-derives the digest on every call, so a sig×key matching
-// loop would otherwise pay len(sigs)×len(keys) digest computations
-// (2026-09 R5).
+// loop would otherwise pay len(sigs)×len(keys) digest computations.
 func KeyTags(keys []*dns.DNSKEY) []uint16 {
 	tags := make([]uint16, len(keys))
 	for i, k := range keys {

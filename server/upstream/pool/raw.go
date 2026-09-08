@@ -99,7 +99,7 @@ func (p *RawPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc fu
 						liveConns = append(liveConns, conns[j])
 					}
 				}
-				p.total -= len(conns) - len(liveConns) // dead-filter accounting (U1)
+				p.total -= len(conns) - len(liveConns) // dead-filter accounting
 				storeLive(p.conns, key, liveConns)
 			}
 			p.mu.Unlock()
@@ -111,7 +111,7 @@ func (p *RawPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc fu
 		}
 	}
 	if deadSeen {
-		p.total -= len(conns) - len(liveConns) // dead-filter accounting (U1)
+		p.total -= len(conns) - len(liveConns) // dead-filter accounting
 		storeLive(p.conns, key, liveConns)
 	}
 
@@ -166,7 +166,7 @@ func (p *RawPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc
 			return nil, ErrMaxConnsReached
 		}
 		p.conns[key] = append(p.conns[key], c)
-		p.total++ // replaceDead decremented for the dead one — net-zero swap (U2)
+		p.total++ // replaceDead decremented for the dead one — net-zero swap
 		n := len(p.conns[key])
 		p.mu.Unlock()
 		old.close()
@@ -176,7 +176,7 @@ func (p *RawPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFunc
 
 	p.conns[key] = append(p.conns[key], c)
 	p.total++
-	// Global cap (H1): a flood of distinct upstream keys must not grow the
+	// Global cap: a flood of distinct upstream keys must not grow the
 	// connection working set without bound.  Evict connections to make room
 	// — dead ones first, then the least-recently-used — and close them after
 	// unlocking (ABBA convention, as in Remove/Shutdown).

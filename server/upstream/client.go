@@ -121,8 +121,7 @@ func New() *Client {
 		timeout:      timeout,
 		proxyDialers: lrumap.New[string, *socks5.Dialer](config.DefaultTransportMax * 2),
 		// Pointer values + per-stat mutex: lrumap.Get returns a copy, so a
-		// value-typed read-modify-write lost concurrent increments and
-		// delayed the 0x20 downgrade threshold (2026-09 U6).
+		// value-typed read-modify-write would lose concurrent increments.
 		capsDowngrades: lrumap.New[string, *capsDowngradeStat](config.DefaultCapsGuardDowngradeMapCapacity),
 	}
 
@@ -217,8 +216,8 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 
 	// Draft §6.4 semantics: only CONSECUTIVE mismatches count — a
 	// successful echo resets the per-address counter, so an intermittent
-	// case-rewriting middlebox (1 mismatch per N queries) no longer
-	// accumulates to a periodic 10-minute downgrade window (S8).
+	// case-rewriting middlebox (1 mismatch per N queries) cannot accumulate
+	// mismatches into a downgrade.
 	if randomized && result.Error == nil && result.Response != nil &&
 		len(result.Response.Question) > 0 &&
 		result.Response.Question[0].Header().Name == randName {
@@ -307,7 +306,7 @@ func (c *Client) Close() {
 	// write would race those reads (same pattern as tls.Client.Close —
 	// server/upstream/tls/client.go). The map dies with the Client.
 	if c.proxyDialers != nil {
-		// The dialers are closed by this Range (M-low).
+		// The dialers are closed by this Range.
 		c.proxyDialers.Range(func(key string, d *socks5.Dialer) bool {
 			if d != nil {
 				_ = d.Close()
@@ -321,8 +320,7 @@ func (c *Client) Close() {
 
 // needsTCPFallback checks whether a UDP result should be retried over TCP.
 // Caller-side cancellation (resolver first-wins fan-out) is not a transport
-// failure — falling back on it wastes a TCP attempt that fails immediately
-// (M-low).
+// failure — falling back on it wastes a TCP attempt that fails immediately.
 func (c *Client) needsTCPFallback(result *Result, protocol string) bool {
 	if protocol == config.ProtoTCP || errors.Is(result.Error, context.Canceled) {
 		return false

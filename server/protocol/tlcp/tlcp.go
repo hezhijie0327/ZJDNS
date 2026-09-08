@@ -59,9 +59,7 @@ func (s *Server) startDOTServer() error {
 		if err != nil {
 			// Fail fast, matching tls/tls.go and the server's own policy —
 			// a configured endpoint that cannot bind is a configuration
-			// error, not something to skip silently: the previous Warn+
-			// continue let a TLCP DoT listener come up dead while Start
-			// reported success (P-M3).
+			// error and must fail startup.
 			return fmt.Errorf("TLCP DoT listen on %s: %w", addr, err)
 		}
 
@@ -106,7 +104,7 @@ func (s *Server) serveDOT(listener net.Listener) {
 			continue
 		}
 		// Track the conn so Shutdown can close it and unblock the blocking
-		// read loop (M-3-5).
+		// read loop.
 		s.listenerMu.Lock()
 		s.dotConns[conn] = struct{}{}
 		s.listenerMu.Unlock()
@@ -230,7 +228,7 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 
 		// Pooled read path (mirrors tls.go): the pooled buffer outlives
 		// ServeDNS because the pre-packed pipeline re-reads req.Data
-		// inside processing (P-M5).
+		// inside processing.
 		var pooledBuf []byte
 		var msgBuf []byte
 		if int(msgLength) <= pool.SecureBufferSize {
@@ -280,7 +278,7 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 			}()
 
 			resp := s.handler.ServeDNS(query, edns.RequestMeta{ClientIP: clientIP, ClientName: clientName, IsSecure: true, Protocol: config.ProtoTLCP})
-			if resp == query { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+			if resp == query { //nolint:revive // identity guard: ServeDNS must never return the request
 				resp = nil
 			}
 			if resp == nil {
@@ -309,7 +307,7 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 func buildDOTFrame(resp *dns.Msg) (frame []byte, fromPool, ok bool) {
 	// Pre-packed wire (cache-hit direct-send path) skips the Pack entirely;
 	// only synthetic responses pack here.  The 2-byte frame comes out of the
-	// buffer pool instead of a per-response allocation (P-M5).
+	// buffer pool instead of a per-response allocation.
 	wire := resp.Data
 	if len(wire) == 0 {
 		if err := resp.Pack(); err != nil {

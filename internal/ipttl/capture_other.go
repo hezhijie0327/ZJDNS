@@ -38,7 +38,7 @@ func (c *Capture) ReadFrom(buf []byte) (n int, ttl uint8, err error) {
 		}
 	default:
 		// Zero-value Capture (neither pc4 nor pc6) — New always wires one,
-		// but a hand-constructed Capture must not nil-deref (M-low).
+		// but a hand-constructed Capture must not nil-deref.
 		return 0, 0, ErrNoControlMessage
 	}
 	return n, ttl, err

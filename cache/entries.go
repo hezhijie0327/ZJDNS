@@ -66,7 +66,7 @@ func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption) (
 			entry, found, expired := s.buildEntry(ce, ce.ts, ce.ttl, ce.validated, ce.msgWire, qname, qtype)
 			if !found {
 				// Corrupt BLOB — self-heal instead of warn-per-read: the
-				// next query for this key re-fetches from upstream (D8).
+				// next query for this key re-fetches from upstream.
 				s.entries.DeleteNoEvict(key) // self-heal: OnEvict would re-spill the corrupt copy
 			}
 			return entry, found, expired
@@ -126,7 +126,7 @@ func (s *Cache) buildEntry(ce *cacheEntry, ts int64, entryTTL int, validated boo
 	// structural checks (table fit; every offset addressing a full TTL
 	// field inside the FINAL wire, post-decompression) reject
 	// raw/misparsed wires and accept the writer's full domain, including
-	// entries with more than 255 RRs (D3).
+	// entries with more than 255 RRs.
 	if msgWire[0] != cacheFormatPrePacked {
 		return nil, false, false
 	}
@@ -169,7 +169,7 @@ func (s *Cache) buildEntry(ce *cacheEntry, ts int64, entryTTL int, validated boo
 			decompressBufPool.Put(dbuf)
 			// Debug, not Warn: a corrupt BLOB is dropped by the caller
 			// (self-healing delete), so this fires once per corrupt entry,
-			// not per read (2026-09 C-M3).
+			// not per read.
 			log.Debugf("CACHE: decompress wire for entry (name=%s type=%d): %v", qname, qtype, err)
 			return nil, false, false
 		}
@@ -185,16 +185,15 @@ func (s *Cache) buildEntry(ce *cacheEntry, ts int64, entryTTL int, validated boo
 		// *cacheEntry per LRU slot) and the serve path mutates it in place
 		// (buildFromPrePacked deducts TTLs via the offset table) — handing
 		// out the shared slice would let one query corrupt another's TTLs
-		// and race its writes.  Copy per hit into the pooled wire class
-		// (H7/H10); the copy is recycled by Message.Put after the response
-		// is written.
+		// and race its writes.  Copy per hit into the pooled wire class;
+		// the copy is recycled by Message.Put after the response is written.
 		owned = pool.AcquireWire(len(wire))
 		copy(owned, wire)
 	}
 	// Each offset must address a complete TTL field (4 bytes) inside the
 	// FINAL wire (post-decompression — the table indexes the uncompressed
 	// layout).  A corrupt value degrades to a cache miss, never a
-	// slice-bounds panic on the serve path (2026-09 H-M2).
+	// slice-bounds panic on the serve path.
 	for _, off := range offsets {
 		if int(off)+4 > len(owned) {
 			ReleaseTTLOffsets(offsets)
@@ -245,7 +244,7 @@ func (s *Cache) buildEntry(ce *cacheEntry, ts int64, entryTTL int, validated boo
 			}
 		}
 		if err := entry.Unpack(); err != nil {
-			log.Debugf("CACHE: latency sort unpack failed (name=%s type=%d): %v", qname, qtype, err) // corrupt wire — served unsorted (E9)
+			log.Debugf("CACHE: latency sort unpack failed (name=%s type=%d): %v", qname, qtype, err) // corrupt wire — served unsorted
 		}
 		if s.sortAnswerByLatency(entry) && len(entry.Answer) > 0 {
 			entry.rebuildResponseWire()
@@ -368,7 +367,7 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 
 	// hasDNSSEC must be computed BEFORE the Put below — Message.Put zeroes
 	// the struct (*msg = dns.Msg{}), so msg.Data reads as nil afterwards
-	// and the flag would never be set (2026-09 D1).
+	// and the flag would never be set.
 	hasDNSSEC := WireHasDNSSEC(msg.Data)
 
 	// Build the pre-packed BLOB:

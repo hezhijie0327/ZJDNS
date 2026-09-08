@@ -73,7 +73,7 @@ func addPadding(msg *dns.Msg, isSecureConnection bool, blockSize int, clientWant
 		if err := msg.Pack(); err != nil {
 			// Drop the padding so the next pack yields a valid wire —
 			// returning with the option still attached would leave msg.Data
-			// stale and bridge.go would serve the old unpadded pack (R2).
+			// stale and bridge.go would serve the old unpadded pack.
 			msg.Pseudo = msg.Pseudo[:len(msg.Pseudo)-1]
 			return 0
 		}

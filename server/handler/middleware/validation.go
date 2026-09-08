@@ -138,7 +138,7 @@ func (m *Validation) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// Build REFUSED response with EDE.  A name whose wire length is
 		// invalid (a >63-byte label fails wireNameLength while passing the
 		// presentation-form checks) is an invalid-domain rejection, not an
-		// unsupported-qtype one (H-L10).
+		// unsupported-qtype one.
 		if len(qname) > config.MaxDomainLength || !dnsutil.IsName(qname) || wireNameLength(qname) < 0 {
 			if log.IsDebug() {
 				log.Debugf("QUERY: rejecting invalid domain %q (len=%d) with REFUSED", qname, len(qname))

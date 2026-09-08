@@ -77,17 +77,15 @@ type Server struct {
 	dohHandler     eHTTP.Handler  // shared-port DOH handler (wraps ServeHTTP for eHTTP)
 	ctx            context.Context
 	cancel         context.CancelCauseFunc
-	// groups holds one errgroup per secure-protocol family.  They used to
-	// share a single SetLimit(DefaultServerGoroutineLimit) group: 256
-	// long-lived DoT clients exhausted the budget and then blocked the
-	// other protocols' accepts (serverGroup.Go parks when full), so a
-	// connection flood on one transport starved the rest.
+	// groups holds one errgroup per secure-protocol family — a single
+	// shared group would let one transport's long-lived connections starve
+	// the others' accepts.
 	groups      *protocolGroups
-	quicConnSem chan struct{} // admission cap for concurrent QUIC connections (DoQ/DoH3) — half the errgroup limit so a QUIC flood cannot starve the DoT/DTLS/DoH listeners of goroutine slots (M-low)
+	quicConnSem chan struct{} // admission cap for concurrent QUIC connections (DoQ/DoH3) — half the errgroup limit so a QUIC flood cannot starve the DoT/DTLS/DoH listeners of goroutine slots
 
 	listenerMu    sync.Mutex // protects all listener/conn slice fields below
 	dotListeners  []net.Listener
-	dotConns      map[net.Conn]struct{} // active DoT conns — woken on Shutdown (M-3-5)
+	dotConns      map[net.Conn]struct{} // active DoT conns — woken on Shutdown
 	doqConns      []*net.UDPConn
 	doqTransports []*quic.Transport
 	doqListeners  []*quic.EarlyListener
@@ -424,7 +422,7 @@ func (s *Server) Shutdown() error {
 	// Wake active DoT connections: their read loops block in io.ReadFull
 	// with a 60s idle deadline refreshed only on success, so serverGroup.Wait
 	// below would otherwise stall up to 60s per connection. A zero deadline
-	// makes every blocked Read return a timeout immediately (M-3-5).
+	// makes every blocked Read return a timeout immediately.
 	s.listenerMu.Lock()
 	for conn := range s.dotConns {
 		_ = conn.SetReadDeadline(time.Unix(1, 0))

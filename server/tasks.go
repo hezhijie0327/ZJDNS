@@ -55,7 +55,7 @@ func (s *Server) startStateMaintenance() {
 			compactSpill(spill, cc.SpillCap())
 		}
 		if latencyPath != "" {
-			// Physical expiry cleanup — gated on the latency state file (M7):
+			// Physical expiry cleanup — gated on the latency state file:
 			// the cache-file branch is not the right owner, and a
 			// latency-only deployment must still reap dead entries.
 			cc.CleanupLatency()
@@ -268,7 +268,7 @@ func (s *Server) shutdownServer() {
 		defer cancel()
 		if err := s.dnscryptServer.Shutdown(ctx); err != nil {
 			// ErrServerNotStarted is benign: a signal can arrive between
-			// New() and listener start (M-low).
+			// New() and listener start.
 			if errors.Is(err, dnscryptcrypto.ErrServerNotStarted) {
 				log.Debugf("DNSCRYPT: server not started, skipping shutdown")
 			} else {
@@ -354,7 +354,7 @@ func (s *Server) shutdownServer() {
 		// Push the in-memory tiers to their spill stores before closing
 		// (entries + latency; the delegation spill flushes in the resolver's
 		// own shutdown hook).  Bounded by DefaultShutdownTimeout: a stalled
-		// disk must not hang shutdown forever (L3).
+		// disk must not hang shutdown forever.
 		saveDone := make(chan struct{})
 		go func() {
 			defer zdnsutil.HandlePanic("Shutdown state save")
@@ -376,7 +376,7 @@ func (s *Server) shutdownServer() {
 
 	if s.shutdown != nil {
 		// Idempotent: the signal handler and the shutdown-timeout path can
-		// both reach here — a second close would panic (M-3-6).
+		// both reach here — a second close would panic.
 		s.shutdownOnce.Do(func() { close(s.shutdown) })
 	}
 

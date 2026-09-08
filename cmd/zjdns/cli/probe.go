@@ -31,7 +31,7 @@ const (
 )
 
 // Probe port defaults are the config package's constants — duplicated
-// literals here would drift (M-3-6).
+// literals here would drift.
 var (
 	defaultProbePort    = mustPort(config.DefaultUDPPort)
 	defaultProbeTLSPort = mustPort(config.DefaultTLSPort)
@@ -105,7 +105,7 @@ func dialProbeTarget(addr string) (net.Conn, error) {
 			CurvePreferences:   []eTLS.CurveID{},
 		}
 		// Bound the connect itself — a black-holed target would otherwise
-		// block far beyond probeDialTimeout (R3-L10).
+		// block far beyond probeDialTimeout.
 		tcpConn, err := net.DialTimeout("tcp", host, probeDialTimeout)
 		if err != nil {
 			return nil, err
@@ -210,9 +210,8 @@ func isTimeoutOrEOF(err error) bool {
 	if ok && netErr.Timeout() {
 		return true
 	}
-	// EPIPE (local peer closed) and ECONNRESET (remote reset) cover the
-	// "connection died mid-pipeline" probes. String matching for "broken
-	// pipe" was previously needed for wrapped errors; errors.Is unwraps.
+	// EPIPE (local peer closed) and ECONNRESET (remote reset) cover
+	// mid-pipeline death; errors.Is unwraps wrapped errors.
 	return errors.Is(err, io.EOF) || errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)
 }
 
@@ -455,8 +454,7 @@ func probeIdleTimeout(addr string) error {
 				continue
 			}
 			// Only EOF/reset is a server-side close — any other read error
-			// (protocol violation, RST mid-frame) must not be mislabeled
-			// (R3-L12).
+			// (protocol violation, RST mid-frame) must not be mislabeled.
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				fmt.Printf("\nConnection closed by server after %.1fs\n", time.Since(start).Seconds())
 				return nil

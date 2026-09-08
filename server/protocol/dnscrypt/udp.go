@@ -69,7 +69,7 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 
 	// Add under s.mu: Shutdown swaps s.wg under the same lock, so Add either
 	// joins the waited group or the fresh (cancelled) one — never races the
-	// previous group's Wait (R3-M2, same discipline as the wg.Go calls below).
+	// previous group's Wait — same discipline as the wg.Go calls below.
 	s.mu.Lock()
 	s.wg.Add(1)
 	s.mu.Unlock()
@@ -152,7 +152,7 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 // answered SERVFAIL, the handshake served from the current cert window.
 func (s *Server) handleSaturated(ctx context.Context, b []byte, addr net.Addr, pc net.PacketConn) {
 	if len(b) < dnscryptcrypto.MinDNSPacketSize {
-		return // short-datagram gate, mirrors processUDPPacket (P2)
+		return // short-datagram gate, mirrors processUDPPacket
 	}
 	if !s.hasClientMagic(b[:dnscryptcrypto.ClientMagicSize]) && !bytes.Equal(b[:dnscryptcrypto.PQResumeMagicLen], dnscryptcrypto.PQResumeMagic[:]) {
 		// Certificate handshake — cheap, serve it (dropping on anti-
@@ -196,9 +196,8 @@ func (s *Server) handleSaturated(ctx context.Context, b []byte, addr net.Addr, p
 func (s *Server) processUDPPacket(ctx context.Context, b []byte, src net.Addr, pc net.PacketConn) {
 	// Length gate FIRST: the shared-port demux routes any datagram that
 	// structurally matches no other protocol here — including 1-byte
-	// datagrams, which sliced straight into b[:ClientMagicSize] panicked
-	// the per-client drain goroutine and blackholed that source address
-	// (2026-09 P2).  Mirrors the standalone path's MinDNSPacketSize drop.
+	// datagrams, which a slice into b[:ClientMagicSize] must never see.
+	// Mirrors the standalone path's MinDNSPacketSize drop.
 	if len(b) < dnscryptcrypto.MinDNSPacketSize {
 		return
 	}

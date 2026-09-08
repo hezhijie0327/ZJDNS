@@ -153,7 +153,7 @@ func (r *Recursive) getRootServers() []string {
 	// latency, so the fastest servers were never actually queried first.
 	sorted := r.sortAddrsByLatency(all)
 
-	// Memoize for DefaultRootCacheTTL (M6): concurrent queries race to fill
+	// Memoize for DefaultRootCacheTTL: concurrent queries race to fill
 	// the cache; the loser's work is discarded, both serve the winner's set.
 	r.rootCacheMu.Lock()
 	r.rootCache = sorted
@@ -249,7 +249,7 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) [
 	// never carry ECS).
 	entries, found, expired := r.cache.GetTypes(nsName, dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA})
 	// GetTypes hands out pool-owned TTL-offset slices — return them exactly
-	// once on every exit path (M1; the recursive hot path would otherwise
+	// once on every exit path (the recursive hot path would otherwise
 	// permanently drain the ttloOffsetsPool).
 	defer func() {
 		for _, e := range entries {

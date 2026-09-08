@@ -353,7 +353,7 @@ func probeHTTP(ctx context.Context, ip net.IP, port int, useTLS, useHTTP3 bool, 
 	}
 	// Drain before Close: an unread body resets the HTTP/2/3 stream and
 	// defeats the pooled client's connection reuse — every probe would pay
-	// a fresh transport setup (F17).  HEAD bodies are empty; the drain is
+	// a fresh transport setup.  HEAD bodies are empty; the drain is
 	// bounded anyway.
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	defer func() { _ = resp.Body.Close() }()

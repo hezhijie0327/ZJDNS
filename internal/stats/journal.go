@@ -69,13 +69,12 @@ type Journal struct {
 
 // maxRcodeBucket is the fold-in bucket for all extended RCODEs (24..4095,
 // e.g. bits carried by the OPT record).  Bounding the bucket space keeps the
-// journal immune to attacker-influenced RCODE diversity (M2).
+// journal immune to attacker-influenced RCODE diversity.
 const maxRcodeBucket = 24
 
 // Result dimension indices.  "any" (RFC 8482) and "acl" (REFUSED by access
-// control) are real classifications set by the middleware — they previously
-// only reached the derived total; as explicit slots every query is now
-// counted in exactly one result bucket.
+// control) are explicit slots so every query is counted in exactly one
+// result bucket.
 const (
 	idxResultHit = iota
 	idxResultMiss
@@ -128,7 +127,7 @@ const (
 
 // rcodeBucket folds an extended RCODE into the bounded bucket space: the
 // standard RCODEs 0-23 keep their own journal, everything else shares one
-// bucket so the map can never grow with RCODE diversity (M2).
+// bucket so the map can never grow with RCODE diversity.
 func rcodeBucket(rcode int) int {
 	if rcode > maxRcodeBucket {
 		return maxRcodeBucket

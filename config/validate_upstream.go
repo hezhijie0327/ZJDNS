@@ -59,7 +59,7 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 					if protocol == ProtoHTTPS || protocol == ProtoHTTP3 ||
 						protocol == ProtoHTTPTLCP {
 						// url.Parse accepts empty strings and scheme-less
-						// hosts — both silently dial ':443' later (R3-M10).
+						// hosts — both silently dial ':443' later.
 						u, err := url.Parse(server.Address)
 						if err != nil || u.Scheme == "" || u.Host == "" {
 							return fmt.Errorf("upstream server %d address invalid for %s: %q", i, protocol, server.Address)

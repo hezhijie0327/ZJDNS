@@ -47,7 +47,7 @@ func (q *protocolQueue) Accept() (net.Conn, error) {
 // Close shuts down the queue, causing pending and future Accept calls
 // to return net.ErrClosed.  Connections already buffered in the queue are
 // closed here — nothing else owns them once both the demux pusher and the
-// protocol Accept loop are gone (F8).
+// protocol Accept loop are gone.
 func (q *protocolQueue) Close() error {
 	q.cancel(net.ErrClosed)
 	for {

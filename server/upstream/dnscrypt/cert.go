@@ -84,7 +84,7 @@ func (c *Client) fetchCertUDP(ctx context.Context, addr string, query []byte, se
 				resp.Data = respPayload
 				unpackErr := resp.Unpack()
 				resp.Data = nil
-				// Return the tiered-pool payload buffer (M-3-6) — the response
+				// Return the tiered-pool payload buffer — the response
 				// records were copied out by the copy-based Unpack.
 				zpool.ReleaseUDPPayload(respPayload)
 				if unpackErr == nil {
@@ -125,7 +125,7 @@ func (c *Client) fetchCertTCP(ctx context.Context, addr string, query []byte, se
 			respPayload, err := rc.Exchange(ctx, query, string(query[:2]))
 			if err == nil {
 				resp, unpackErr := unpackCertResponse(respPayload)
-				// Return the tiered-pool payload buffer (M-3-6) — Unpack copied
+				// Return the tiered-pool payload buffer — Unpack copied
 				// the records out and cleared the alias.
 				zpool.ReleaseUDPPayload(respPayload)
 				if unpackErr == nil {
@@ -194,7 +194,7 @@ func fetchCertOverUDP(ctx context.Context, addr string, query []byte) (*dns.Msg,
 func fetchCertOverTCP(ctx context.Context, addr string, query []byte) (*dns.Msg, error) {
 	// DialContext, not net.Dial: the connect itself must honor the query
 	// budget — a black-holed peer (dropped SYN) would otherwise block far
-	// beyond the caller's ctx deadline (M3).
+	// beyond the caller's ctx deadline.
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {

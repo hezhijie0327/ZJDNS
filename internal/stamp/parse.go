@@ -40,8 +40,8 @@ func readVLP(bin []byte, pos, binLen int) (elements [][]byte, newPos int, err er
 // normaliseStampAddr validates the host:port shape of a parsed stamp address
 // and appends defPort when the port is missing (requirePort=false) or
 // rejects a missing port (requirePort=true, relay stamps).  Shared by the
-// plain, DNSCrypt and relay parsers — the three copies had already drifted
-// on the bound operator (F7).
+// plain, DNSCrypt and relay parsers — the bound operator must not diverge
+// between them.
 func (s *DNSStamp) normaliseStampAddr(label string, defPort int, requirePort bool) error {
 	colIndex := strings.LastIndex(s.Address, ":")
 	if bracketIndex := strings.LastIndex(s.Address, "]"); colIndex < bracketIndex {

@@ -32,7 +32,7 @@ func (c *Client) ExecuteTLS(ctx context.Context, msg *dns.Msg, server *config.Up
 	if c.dotPool != nil {
 		pc, err := c.dotPool.Acquire(ctx, key, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
 			// Config built only on dial — the pool-hit path (the common
-			// case) skips the per-query config Clone (M-3-6).
+			// case) skips the per-query config Clone.
 			dotConfig := c.eTLSClientConfig(server).Clone()
 			dotConfig.NextProtos = config.NextProtoDOT
 			return c.dialTLSConn(dialCtx, addr, dotConfig, proxyDialer)

@@ -54,7 +54,7 @@ var socks5ReadBufPool = sync.Pool{
 //
 // For callers that need a net.Conn instead (e.g. DNSCrypt), use DialUDP which
 // returns a socks5UDPConn with Read/Write semantics.
-// NOTE(M20): caller must Close() the returned PacketConn to stop the monitor
+// NOTE: caller must Close() the returned PacketConn to stop the monitor
 // goroutine and release TCP/UDP relay resources. Dropping without Close() leaks.
 func (d *Dialer) ListenPacket(ctx context.Context) (net.PacketConn, error) {
 	// Create a fresh, independent dialer so the relay is not shared.
@@ -270,7 +270,7 @@ func (c *socks5PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 		return 0, nil, errors.New("socks5 read buffer pool type error")
 	}
 	nr, err := c.conn.Read((*buf))
-	// Zero only the used prefix, not the whole 64KB buffer (R3-L13).
+	// Zero only the used prefix, not the whole 64KB buffer.
 	defer func() { clear((*buf)[:nr]); socks5ReadBufPool.Put(buf) }()
 	if err != nil {
 		// Keep the net.Error identity (timeout) intact: gotlcp's DTLCP
@@ -363,7 +363,7 @@ func (c *socks5UDPConn) Read(p []byte) (n int, err error) {
 		return 0, errors.New("socks5 read buffer pool type error")
 	}
 	nr, err := c.conn.Read((*buf))
-	// Zero only the used prefix, not the whole 64KB buffer (R3-L13).
+	// Zero only the used prefix, not the whole 64KB buffer.
 	defer func() { clear((*buf)[:nr]); socks5ReadBufPool.Put(buf) }()
 	if err != nil {
 		return 0, fmt.Errorf("socks5: read: %w", err)

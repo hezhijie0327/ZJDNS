@@ -83,8 +83,7 @@ type callEntry[K comparable, V any] struct {
 // Token identifies the leader's own entry in the group.  Join returns it
 // when the caller becomes the leader, and Done must receive the same token
 // back — publishing or deleting by key instead would let an evicted
-// leader's result land in a replacement entry installed for the same key
-// (M6).
+// leader's result land in a replacement entry installed for the same key.
 type Token[K comparable, V any] struct {
 	entry *callEntry[K, V]
 }
@@ -174,16 +173,9 @@ func NewResultGroup[K comparable, V any]() *ResultGroup[K, V] {
 // callers with the same key wait for the leader's result and receive
 // (val, err, false).
 //
-// A follower whose ctx expires while the leader is still running returns
-// ctx.Err immediately — it NEVER runs fn itself.  Running the shared work
-// from a timed-out follower (the old promotion path) multiplied the work
-// under load: every follower re-ran the full fn with a deadline-stripped
-// context, so any slow leader (slow spill-tier reads, slow network) turned one
-// in-flight key into hundreds of duplicate runs with no overall deadline —
-// a goroutine explosion that also permanently leaked the dnscrypt cert
-// fetch (conn.Read with no socket deadline).  The follower's caller has
-// already exhausted its own budget; failing it is the correct, bounded
-// behaviour.
+// A follower whose ctx expires returns ctx.Err immediately and never runs
+// fn — re-running the shared work per timed-out follower multiplies load
+// without a deadline.
 //
 // A leader panic is contained: the entry is closed with the panic error and
 // removed so followers wake with an error and future callers become leaders
@@ -283,7 +275,7 @@ func (g *CallGroup[K, V]) Join(key K) (Token[K, V], V, error, bool) {
 		// existing.Err has no happens-before edge with this branch (the
 		// close(existing.Done) only synchronizes receivers of that channel),
 		// so reading it here is a data race.  The follower timed out — the
-		// leader's error would be misattributed anyway (H1).
+		// leader's error would be misattributed anyway.
 		var zero V
 		return Token[K, V]{}, zero, ErrTimeout, true
 	}
@@ -314,6 +306,6 @@ func (g *CallGroup[K, V]) Done(tok Token[K, V], val V, err error) {
 	})
 	// Delete the leader's own entry only — a replacement call for the same
 	// key (installed by a concurrent Join after this entry was LRU-evicted)
-	// is never published into or deleted by a stale leader (M6).
+	// is never published into or deleted by a stale leader.
 	g.mmap.CompareAndDelete(entry.key, entry)
 }

@@ -150,7 +150,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	response := s.handler.ServeDNS(req, edns.RequestMeta{ClientIP: clientIP, ClientName: clientName, IsSecure: true, Protocol: protocol})
-	if response == req { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+	if response == req { //nolint:revive // identity guard: ServeDNS must never return the request
 		response = nil
 	}
 	if response != nil {

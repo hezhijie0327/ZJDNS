@@ -324,8 +324,7 @@ func (r *Recursive) resolveChildNameservers(ctx context.Context, nameservers []s
 	// Thread the caller's depth instead of resetting to 0: the zone-cut
 	// path re-enters resolve → processAnswerWithDNSSEC → resolveZoneCut,
 	// and a reset depth would let self-referentially-signed delegation
-	// chains nest past DefaultMaxRecursionDepth within the resolve window
-	// (2026-09 R3).
+	// chains nest past DefaultMaxRecursionDepth within the resolve window.
 	return r.resolveNSAddressesConcurrent(ctx, nsRecords, qname, depth, forceTCP)
 }
 

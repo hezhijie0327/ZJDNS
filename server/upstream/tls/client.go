@@ -302,8 +302,8 @@ func (c *Client) WarmUpQUIC(ctx context.Context, server *config.UpstreamServer) 
 				}
 				// quic-go never closes a caller-provided PacketConn —
 				// the SOCKS5 UDP relay (2 fds + monitor goroutine) leaks
-				// on every connection teardown otherwise (2026-09 U4,
-				// same hook as ExecuteQUIC).
+				// on every connection teardown otherwise (same hook as
+				// ExecuteQUIC).
 				done := conn.Context().Done()
 				go func() {
 					defer zdnsutil.HandlePanic("QUIC proxy relay release")

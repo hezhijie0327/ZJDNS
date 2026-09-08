@@ -13,7 +13,7 @@ import (
 )
 
 // decompressBufPool reuses byte slices for zstd decompression on the
-// cache-hit hot path, reducing GC pressure (P3).
+// cache-hit hot path, reducing GC pressure.
 var decompressBufPool = sync.Pool{
 	New: func() any { b := make([]byte, decompressBufCap); return &b },
 }
@@ -80,7 +80,7 @@ func scanTTLOffsets(wire []byte, questionEnd int) []uint16 {
 // served directly.
 func WireHasDNSSEC(wire []byte) bool {
 	// buildEntry only guarantees len >= 3 — a corrupt/truncated wire must
-	// not index out of range (M-low).
+	// not index out of range.
 	if len(wire) < 12 {
 		return false
 	}

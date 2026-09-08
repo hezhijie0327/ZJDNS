@@ -308,7 +308,7 @@ func (c *Client) executeOnce(
 		ESVersion: state.esVersion,
 	}
 	// Decrypt copies the payload out — the pooled response buffer can be
-	// returned now, regardless of decrypt success (M-3-6).  Capture the wire
+	// returned now, regardless of decrypt success.  Capture the wire
 	// size first: the estimator below runs after the buffer is released.
 	respLen := len(respPayload)
 	decrypted, err := resp.Decrypt(respPayload, sharedKey, clientNonce)
@@ -358,7 +358,7 @@ func (c *Client) executeOnce(
 		return nil, false, fmt.Errorf("unpacking dnscrypt response: %w", err)
 	}
 	response.Data = nil
-	// Reject ID mismatches like the other transports (M7 family, R3-L14) —
+	// Reject ID mismatches like the other transports —
 	// a misbehaving upstream returning a stale datagram must not be served.
 	if response.ID != msg.ID {
 		pool.DefaultMessage.Put(response)

@@ -27,8 +27,7 @@ type keyEntry struct {
 	pair *dnscryptcrypto.CertPair
 
 	// Precomputed handshake artifacts: the certificate is immutable once
-	// minted, but every cert fetch used to re-marshal (~1.3 KB PQ cert),
-	// backslash-escape and re-chunk it per query.
+	// minted; the TXT chunks and wire size are precomputed once.
 	classicalTXT []string
 	pqTXT        []string
 	pqWireSize   int
@@ -53,7 +52,7 @@ func newKeyEntry(pair *dnscryptcrypto.CertPair) keyEntry {
 func (s *Server) ResetKeys() error {
 	now := dnscryptcrypto.NowUnix32()
 	// Serialized with updateKeys (renewal ticker) under s.mu — concurrent
-	// minting from the same previous produced duplicate windows (M-3-5).
+	// minting from the same previous produces duplicate windows.
 	s.mu.Lock()
 	// Passing nil previous breaks the seed chain: the reset window starts
 	// a new chain from a fresh random seed.
@@ -169,7 +168,7 @@ func (s *Server) updateKeys() {
 	// Window minting is serialized under s.mu: ResetKeys (CHAOS handler)
 	// and the renewal ticker can otherwise run concurrently, both deriving
 	// from the same previous and minting duplicate windows for the same
-	// tsStart (M-3-5).  deriveAndSign is ~ms-scale (signing) and runs at
+	// tsStart.  deriveAndSign is ~ms-scale (signing) and runs at
 	// startup/ticker frequency — blocking decrypts briefly is acceptable.
 	s.mu.Lock()
 

@@ -28,7 +28,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	clientIP := net.ParseIP(dnsutil.RemoteIP(w))
 
 	response := s.handler.ServeDNS(req, edns.RequestMeta{ClientIP: clientIP, Protocol: config.ProtoUDP})
-	if response == req { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+	if response == req { //nolint:revive // identity guard: ServeDNS must never return the request
 		response = nil
 	}
 	if response != nil {
@@ -36,7 +36,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		// carry Data and skip the pack.
 		if len(response.Data) == 0 {
 			if err := packSafe(response); err != nil {
-				// RemoteAddr().String() allocates — gate it (C-L5).
+				// RemoteAddr().String() allocates — gate it.
 				if log.IsDebug() {
 					log.Debugf("SERVER: UDP pack error for %s: %v", w.RemoteAddr().String(), err)
 				}
@@ -71,7 +71,7 @@ func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 		// UDP socket is unconnected (ListenUDP, not DialUDP).
 		// w.Write() would fail with "destination address required".
 		if _, err := response.WriteTo(w); err != nil {
-			if log.IsDebug() { // RemoteAddr().String() allocates — gate it (C-L5)
+			if log.IsDebug() { // RemoteAddr().String() allocates — gate it
 				log.Debugf("SERVER: UDP write error for %s: %v", w.RemoteAddr().String(), err)
 			}
 		}

@@ -47,7 +47,7 @@ func GenerateRandomKeyPair() (secretKey, publicKey [KeySize]byte, err error) {
 func X25519KeyPairFromSeed(seed [32]byte) (secretKey, publicKey [KeySize]byte) {
 	var sk, pk x25519.Key
 	copy(sk[:], seed[:])
-	x25519.KeyGen(&pk, &sk) // x25519.KeyGen cannot fail (F16)
+	x25519.KeyGen(&pk, &sk) // x25519.KeyGen cannot fail
 	secretKey = [KeySize]byte(sk)
 	publicKey = [KeySize]byte(pk)
 	return secretKey, publicKey

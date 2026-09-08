@@ -216,16 +216,8 @@ func (r *Recursive) ensureZoneDNSKEYs(ctx context.Context, nameservers []string,
 		return
 	}
 
-	// Singleflight per zone: each walk fetches DNSKEYs for the zones it
-	// crosses, and the zone-key cache (CacheZoneKeys) deduplicates across
-	// walks once a fetch succeeds — but the cache only helps AFTER the first
-	// fetch completes.  Without a flight, a cold-cache burst of N concurrent
-	// walks each fires its own multi-NS DNSKEY query (N×len(nameservers)
-	// parallel upstream queries, contexts, timers and pool buffers), which
-	// amplified traffic bursts into multi-hundred-MB heap spikes (pprof
-	// evidence, 2026-08).  ResultGroup gives wait-for-result semantics: one
-	// leader fetches+verifies+caches; concurrent walkers receive the verified
-	// keys without duplicating the fetch.
+	// Singleflight per zone: without a flight, N cold walks each fire
+	// N×len(nameservers) DNSKEY queries.  One leader fetches+verifies+caches.
 	r.dnskeyFlightOnce.Do(func() {
 		r.dnskeyFlight = pending.NewResultGroup[string, []*dns.DNSKEY]()
 	})

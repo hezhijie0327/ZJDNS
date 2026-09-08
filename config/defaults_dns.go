@@ -101,21 +101,16 @@ const (
 	// shorter caller budget still cuts the flight.
 	DefaultNSAddrFlightTimeout = 1 * time.Second
 
-	// Recursive fan-out batching: the walk races the latency-ranked first
-	// DefaultFanoutFirstBatch authorities immediately and widens to every
-	// remaining one DefaultFanoutWidenDelay later if none answered — the
-	// first responder usually lands inside the first batch, and a burst of
-	// unique qnames no longer multiplies goroutines/context/timers by
-	// 13-26 (root) per level per walk.  Unlike the rejected errgroup
-	// SetLimit cap, widening is timer-driven: slow batch members never
-	// hold slots the rest queue behind.
+	// Recursive fan-out batching: race the latency-ranked first batch
+	// immediately, widen to all authorities after the delay; widening is
+	// timer-driven so slow batch members never hold slots.
 	DefaultFanoutFirstBatch = 6
 
 	// DefaultInfraFanoutFirstBatch is the first-batch size for narrow
 	// (infrastructure-walk) fan-outs: NS-address resolution queries against
 	// root/TLD servers, which answer from any racer — extra candidates were
 	// measured as cancel-and-dial churn dominating syscall volume under
-	// recursive load (2026-09).
+	// recursive load.
 	DefaultInfraFanoutFirstBatch = 3
 
 	DefaultFanoutWidenDelay = 75 * time.Millisecond
@@ -157,23 +152,16 @@ const (
 	DefaultPoisonProbeTimeout = 1 * time.Second
 
 	// DefaultPoisonProbeServers is how many TLD servers the hijack probe
-	// queries concurrently.  A single rate-limited or packet-lossy server
-	// previously stretched the probe to its full timeout even when peers
-	// answered instantly.
+	// queries concurrently so one slow server does not set the probe latency.
 	DefaultPoisonProbeServers = 3
 
 	// DefaultNXDOMAINDeferralWindow bounds how long an all-NXDOMAIN fan-out
 	// waits for a real NOERROR to race a (possibly injected) NXDOMAIN after
-	// the first NXDOMAIN arrives.  0 serves the first NXDOMAIN immediately:
-	// the fan-out queries every server concurrently, so the fastest server's
-	// answer is accepted without waiting for the slowest (a rate-limited or
-	// packet-lossy server previously stretched every all-NXDOMAIN fan-out to
-	// its full tail — measured 41ms→382ms on a 15-server recursive batch;
-	// one hung forwarding upstream previously delayed NXDOMAIN answers by
-	// its whole 9s timeout).  The recursive walk's poisonguard verdict +
-	// TCP fallback still gate poisoned responses; forwarding spoofguard
-	// covers the A/AAAA injection case.  Raise to ~150ms to restore the
-	// NOERROR race at the cost of that fixed delay on censored domains.
+	// the first NXDOMAIN arrives.  0 serves the first NXDOMAIN immediately
+	// (the fan-out is concurrent); raise to ~150ms to restore the NOERROR
+	// race at a fixed delay on censored domains.  The recursive walk's
+	// poisonguard verdict + TCP fallback still gate poisoned responses;
+	// forwarding spoofguard covers the A/AAAA injection case.
 	DefaultNXDOMAINDeferralWindow = 0 * time.Second
 
 	// DefaultFallbackTimeout is the adoption gate for fallback upstreams
@@ -191,10 +179,9 @@ const (
 
 	// DefaultUDPRetransmitInterval is the silence window before a pooled UDP
 	// query retransmits the same datagram (same ID — the response still
-	// matches the in-flight key).  A single lost packet previously made the
-	// server wait out the whole context deadline (3s per recursive level);
-	// one retransmit converts the loss into a ~1s penalty (RFC 1035 §4.2.1:
-	// a resolver SHOULD retransmit after a timeout).
+	// matches the in-flight key).  A single lost packet must not consume the
+	// whole context deadline; one retransmit converts it to a ~1s penalty
+	// (RFC 1035 §4.2.1).
 	DefaultUDPRetransmitInterval = 1 * time.Second
 
 	// DefaultUDPRetransmitCount bounds retransmissions per pooled UDP query
@@ -279,12 +266,11 @@ const (
 	DefaultCapsGuardWarnEvery = 100
 
 	// DefaultECSMismatchWarnEvery samples the ECS response-mismatch Warn —
-	// a consistently mismatching upstream triggers it at full query rate
-	// (2026-09 C-M1).
+	// a consistently mismatching upstream triggers it at full query rate.
 	DefaultECSMismatchWarnEvery = 100
 
 	// DefaultChaosDenialWarnEvery samples the destructive-CHAOS denial
-	// Warn — remotely triggerable at packet rate (2026-09 C-M2).
+	// Warn — remotely triggerable at packet rate.
 	DefaultChaosDenialWarnEvery = 100
 	// DefaultCapsGuardDowngradeAfter / DefaultCapsGuardRetryAfter bound the
 	// per-upstream 0x20 downgrade: an authority (or an on-path attacker
@@ -296,11 +282,11 @@ const (
 	DefaultCapsGuardDowngradeAfter = 8
 
 	// DefaultCapsGuardDowngradeMapCapacity bounds the per-address 0x20
-	// downgrade stat map (2026-09 U6).
+	// downgrade stat map.
 	DefaultCapsGuardDowngradeMapCapacity = 1024
 
 	// DefaultHopGuardWarnedMapCapacity bounds the per-address
-	// capture-unavailable notice map (2026-09 S5).
+	// capture-unavailable notice map.
 	DefaultHopGuardWarnedMapCapacity = 512
 	DefaultCapsGuardRetryAfter       = 10 * time.Minute
 )

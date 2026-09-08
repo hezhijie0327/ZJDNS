@@ -103,7 +103,7 @@ func (p *QUIC) Acquire(ctx context.Context, key string, dialFunc func(context.Co
 			live = append(live, pc)
 		}
 	}
-	p.total -= len(p.conns[key]) - len(live) // dead-filter accounting (U1)
+	p.total -= len(p.conns[key]) - len(live) // dead-filter accounting
 	p.conns[key] = live
 
 	if len(live) > 0 {
@@ -143,7 +143,7 @@ func (p *QUIC) Acquire(ctx context.Context, key string, dialFunc func(context.Co
 		}
 		p.conns[key] = append(p.conns[key], pc)
 		p.total++
-		// Global cap (H1): a flood of distinct upstream keys must not grow
+		// Global cap: a flood of distinct upstream keys must not grow
 		// the connection working set without bound.  Evict connections to
 		// make room — dead ones first, then the least-recently-used — and
 		// close them after unlocking.
@@ -313,10 +313,9 @@ func (p *QUIC) Put(key string, conn *quic.Conn) {
 	pc.lastUsed.Store(log.NowUnix())
 	p.conns[key] = append(p.conns[key], pc)
 	p.total++
-	// Same global-cap eviction as the Acquire dial path — Put-inserted
-	// connections previously bypassed the cap entirely and drifted the
-	// accounting (every Remove→Put cycle double-decremented p.total),
-	// while the zero lastUsed made fresh connections evict first (U3).
+	// Put-inserted connections are subject to the same global-cap eviction
+	// as the Acquire dial path, and lastUsed is set so fresh connections do
+	// not evict first.
 	var evicted []*QUICConn
 	for p.total > p.maxTotal {
 		victim, removed := p.evictOne(pc)

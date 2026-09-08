@@ -43,7 +43,7 @@ const pendingRequestCapacity = 10000 // safety bound against unbounded growth
 
 // errPendingEvicted is delivered to followers when their in-flight leader
 // call is LRU-evicted before completion — the query must surface as SERVFAIL
-// rather than being silently dropped (R3-M4).
+// rather than being silently dropped.
 var errPendingEvicted = errors.New("pending request evicted before completion")
 
 // NewPendingRequests creates a PendingRequests ready for use.
@@ -92,8 +92,8 @@ func (p *PendingRequests) Join(qname string, qtype, qclass uint16, ecsOpt *edns.
 }
 
 // Done stores the result and wakes all waiting followers under the leader
-// token from Join (M6 — publishing by key would let an evicted leader's
-// result land in a replacement entry).
+// token from Join — publishing by key would let an evicted leader's
+// result land in a replacement entry.
 func (p *PendingRequests) Done(tok pending.Token[PendingKey, *resolver.QueryResult], result *resolver.QueryResult) {
 	p.cg.Done(tok, result, nil)
 }
@@ -107,10 +107,8 @@ func (p *PendingRequests) DoJoin(qname string, qtype, qclass uint16, ecsOpt *edn
 		return qr
 	}
 	// Panic containment (mirrors ResultGroup.Do): a panicking leader must
-	// still publish an error result and release the key — otherwise the
-	// callEntry stays open forever, every later query for the key joins as
-	// a follower and eats the full 60s follower timeout, and the constant
-	// joins LRU-refresh the entry so it never even evicts (2026-09 H1).
+	// still publish an error and release the key — otherwise the entry
+	// never completes and later queries eat the full follower timeout.
 	// The panic is re-raised for the bridge's HandlePanic.
 	defer func() {
 		if r := recover(); r != nil {

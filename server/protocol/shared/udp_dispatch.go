@@ -99,7 +99,7 @@ func (m *Mux) startUDPGroup(g *UDPGroup) error {
 				}
 			}
 
-			// Flood bound for per-client handler goroutines (P3) — shared
+			// Flood bound for per-client handler goroutines — shared
 			// across shards.
 			rt.clientSem = clientSem
 
@@ -210,7 +210,7 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 	// silently truncates larger datagrams; QUIC initial packets are ≤1280
 	// by design and DNSCrypt frames are capped at 4096, so this bound is
 	// safe for every multiplexed protocol (standalone DoQ/DoH3 listeners,
-	// where quic-go reads the raw socket itself, are unaffected) (P-L4).
+	// where quic-go reads the raw socket itself, are unaffected).
 	// On a read error the buffer returns to the pool below.
 
 	var pktCount uint32
@@ -218,8 +218,8 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 
 	// Exit sweep: closing every per-client conn unblocks the parked client
 	// goroutines (DNSCrypt drain `<-Ch`, DTLCP handshake reads) — without
-	// this they leaked past Shutdown and stalled the server's background
-	// group wait for its full timeout (2026-09 X4).
+	// this they leak past Shutdown and stall the server's background group
+	// wait for its full timeout.
 	defer reapIdleUDPClients(dtlcpState, dnscryptState, dtlsPL, math.MaxInt64)
 
 	for {
@@ -253,7 +253,7 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 		if pktCount%reapCheckEveryPackets == 0 {
 			// Classification-map bound: checked every gate regardless of the
 			// reap clock — under a spoofed-source flood the map can exceed
-			// peerProtoMax within a single 30s reap window (2026-09 P3).
+			// peerProtoMax within a single 30s reap window.
 			peerMu.Lock()
 			if len(peerProto) >= peerProtoMax {
 				peerProto = make(map[addrKey]string, peerProtoMax)
@@ -329,7 +329,7 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 			if !ok {
 				if !rt.admit() {
 					// Per-client cap reached — spoofed-source flood bound;
-					// drop like a full queue, the client retransmits (P3).
+					// drop like a full queue, the client retransmits.
 					dtlcpState.mu.Unlock()
 					PacketBufPool.Put(pb)
 					continue
@@ -374,7 +374,7 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 			dc, ok := dnscryptState.conns[key]
 			if !ok {
 				if !rt.admit() {
-					// Per-client cap reached — spoofed-source flood bound (P3).
+					// Per-client cap reached — spoofed-source flood bound.
 					dnscryptState.mu.Unlock()
 					PacketBufPool.Put(pb)
 					continue

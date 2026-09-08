@@ -54,7 +54,7 @@ func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
 			pool.DefaultMessage.Put(refused)
 			return nil, fmt.Errorf("packing refused handshake response: %w", packErr)
 		}
-		// Same copy discipline as the success path (M14): res must not alias
+		// Same copy discipline as the success path: res must not alias
 		// refused.Data — the pool zeroes it on Put.
 		res = make([]byte, len(refused.Data))
 		copy(res, refused.Data)
@@ -151,7 +151,7 @@ func (s *Server) handleHandshake(b []byte, isUDP bool) (res []byte, err error) {
 		pool.DefaultMessage.Put(reply)
 		return nil, fmt.Errorf("packing handshake response: %w", err)
 	}
-	// NOTE(M14): res must be a copy of reply.Data, not an alias.  After
+	// res must be a copy of reply.Data, not an alias.  After
 	// pool.DefaultMessage.Put(reply), reply.Data's backing memory is zeroed
 	// and available for reuse by another goroutine.
 	res = make([]byte, len(reply.Data))

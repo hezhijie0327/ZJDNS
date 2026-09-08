@@ -139,7 +139,7 @@ func (c *Client) ExecuteDTLCP(ctx context.Context, msg *dns.Msg, server *config.
 		return nil, fmt.Errorf("dtlcp: unpack response: %w", err)
 	}
 	response.Data = nil
-	// Reject ID mismatches like the TLS/plain-TCP paths (M7).
+	// Reject ID mismatches like the TLS/plain-TCP paths.
 	if response.ID != msg.ID {
 		pool.DefaultMessage.Put(response)
 		return nil, fmt.Errorf("dtlcp: response id mismatch: expected %d, got %d", msg.ID, response.ID)

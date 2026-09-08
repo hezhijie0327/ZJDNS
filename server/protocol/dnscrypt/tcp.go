@@ -57,7 +57,7 @@ func (w *tcpResponseWriter) WriteMsg(_ context.Context, m *dns.Msg) error {
 func (s *Server) serveTCP(ctx context.Context, listener net.Listener) {
 	defer zdnsutil.HandlePanic("DNSCrypt TCP server")
 
-	// Add under s.mu: Shutdown swaps s.wg under the same lock (R3-M2).
+	// Add under s.mu: Shutdown swaps s.wg under the same lock.
 	s.mu.Lock()
 	s.wg.Add(1)
 	s.mu.Unlock()
@@ -187,9 +187,9 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
 
 	// Persistent per-connection workers: frames enter frameCh (bounded —
 	// the read loop applies backpressure on itself when all workers are
-	// busy), so a slow resolution no longer stalls later frames, and the
-	// per-frame goroutine spawn/copy-stack cost of a spawn-per-query model
-	// never appears on this path.
+	// busy).  Frames are pipelined — a slow resolution does not stall
+	// later frames, and the per-frame goroutine spawn/copy-stack cost of
+	// a spawn-per-query model never appears on this path.
 	for range config.DefaultMaxPipe {
 		wg.Go(func() {
 			defer zdnsutil.HandlePanic("DNSCrypt TCP query worker")

@@ -100,8 +100,7 @@ func (h *Handler) ServeDNS(req *dns.Msg, meta edns.RequestMeta) *dns.Msg {
 	// Plain-transport listeners deliver question-only unpacks (listeners set
 	// MsgOptionUnpackQuestion for routing); the chain operates on the fully
 	// parsed message (Pseudo options, EDNS version, flags).  Force the full
-	// unpack once here, at the pipeline entry — this used to hide inside the
-	// EDNS middleware, coupling a transport concern into it.
+	// unpack once here, at the pipeline entry.
 	if err := EnsureFullUnpack(req); err != nil {
 		if log.IsDebug() {
 			log.Debugf("QUERY: full unpack failed: %v", err)
@@ -114,12 +113,10 @@ func (h *Handler) ServeDNS(req *dns.Msg, meta edns.RequestMeta) *dns.Msg {
 	if log.IsDebug() {
 		qname := req.Question[0].Header().Name
 		qtype := dns.RRToType(req.Question[0])
-		if log.IsDebug() {
-			if meta.ClientName != "" {
-				log.Debugf("QUERY: client IP=%s name=%s query=%s type=%s", meta.ClientIP, meta.ClientName, qname, dns.TypeToString[qtype])
-			} else {
-				log.Debugf("QUERY: client IP=%s query=%s type=%s", meta.ClientIP, qname, dns.TypeToString[qtype])
-			}
+		if meta.ClientName != "" {
+			log.Debugf("QUERY: client IP=%s name=%s query=%s type=%s", meta.ClientIP, meta.ClientName, qname, dns.TypeToString[qtype])
+		} else {
+			log.Debugf("QUERY: client IP=%s query=%s type=%s", meta.ClientIP, qname, dns.TypeToString[qtype])
 		}
 	}
 
@@ -154,13 +151,11 @@ func (h *Handler) ServeDNS(req *dns.Msg, meta edns.RequestMeta) *dns.Msg {
 	if qctx.Res != nil && log.IsDebug() {
 		qname := qctx.Qname
 		qtype := qctx.Qtype
-		if log.IsDebug() {
-			log.Debugf("RESULT: %s %s | rcode=%s time=%v answer=%d authority=%d additional=%d ad=%t\n%s",
-				qname, dns.TypeToString[qtype], dns.RcodeToString[qctx.Res.Rcode],
-				time.Duration(log.NowUnixNano()-qctx.StartTime).Truncate(time.Microsecond), len(qctx.Res.Answer), len(qctx.Res.Ns),
-				len(qctx.Res.Extra), qctx.Res.AuthenticatedData,
-				qctx.Res.String())
-		}
+		log.Debugf("RESULT: %s %s | rcode=%s time=%v answer=%d authority=%d additional=%d ad=%t\n%s",
+			qname, dns.TypeToString[qtype], dns.RcodeToString[qctx.Res.Rcode],
+			time.Duration(log.NowUnixNano()-qctx.StartTime).Truncate(time.Microsecond), len(qctx.Res.Answer), len(qctx.Res.Ns),
+			len(qctx.Res.Extra), qctx.Res.AuthenticatedData,
+			qctx.Res.String())
 	}
 
 	return qctx.Res

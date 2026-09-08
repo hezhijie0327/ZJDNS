@@ -61,9 +61,9 @@ type Recursive struct {
 	spill    *spillfile.Store
 	spillCap int // spill record cap (≤0 = unbounded)
 
-	// spillW drains delegation eviction writes off the delegations mutex
-	// (2026-09 D2/R1) — a synchronous WriteAt under that lock would block
-	// every lookupDelegation on the recursive hot path.
+	// spillW drains delegation eviction writes off the delegations mutex —
+	// a synchronous WriteAt under that lock would block every
+	// lookupDelegation on the recursive hot path.
 	spillW *spillfile.AsyncWriter
 
 	spoofguard  bool     // from protocol=recursive upstream
@@ -91,22 +91,17 @@ type Recursive struct {
 	dnskeyFlightOnce sync.Once
 	dnskeyFlight     *pending.ResultGroup[string, []*dns.DNSKEY]
 
-	// nsAddrFlight deduplicates concurrent NS-address walks per (name, qtype).
-	// When a delegation's NS addresses never resolve (unreachable
-	// authoritative servers), every level and every concurrent client query
-	// would otherwise respawn the full walk for the same NS names — one
-	// lookup amplified into ~290k UDP queries (kernel.org →
-	// nsXX.constellix.{com,net} storm, 2026-08).  One leader walks;
-	// followers share the result, bounded by their own context.
+	// nsAddrFlight deduplicates concurrent NS-address walks per (name,
+	// qtype): without it, a delegation whose authorities never resolve
+	// respawns the full walk for every level and client.
 	nsAddrFlightOnce sync.Once
 	nsAddrFlight     *pending.ResultGroup[string, nsAddrFlightResult]
 
 	// nsAddrFmt memoizes the formatted "ip:port" address strings per NS
 	// name.  lookupNSAddrsFromCache otherwise re-runs GetTypes + Unpack +
 	// netip.String + JoinHostPort for every cached NS-name hit on every
-	// walk level — the RR.String() allocation hotspot under recursive load
-	// (pprof alloc_space, 2026-09).  Entries are trusted for
-	// DefaultNSAddrFmtTTL, far inside the underlying records' stale window.
+	// walk level.  Entries are trusted for DefaultNSAddrFmtTTL, far
+	// inside the underlying records' stale window.
 	nsAddrFmt *lrumap.Map[string, *nsAddrFmtEntry]
 
 	// inFlightQueries counts recursive fan-out queries currently in flight
@@ -432,7 +427,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 				// NS records, or no reachable addresses). Force the full
 				// QNAME for the next iteration so the walk leaves the
 				// apexCut branch instead of re-issuing the same minimised
-				// query until minimiseSteps exhausts (M7).
+				// query until minimiseSteps exhausts.
 				minimiseSteps = config.DefaultQnameMinimiseCount
 			}
 			continue

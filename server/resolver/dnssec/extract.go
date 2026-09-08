@@ -209,7 +209,7 @@ func (c *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
 	}
 	// cache.Get returns a pool-owned TTLOffsets slice — release it on every
 	// exit path, or every DNSKEY cache hit (a per-delegation-change hot path)
-	// leaks a pooled slice to the GC (R3-M15, same family as dns64).
+	// leaks a pooled slice to the GC.
 	defer cachedEntry.ReleaseOffsets()
 	// _ = error: an unpack failure leaves Answer nil — treated as a miss.
 	_ = cachedEntry.Unpack()

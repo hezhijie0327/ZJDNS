@@ -288,7 +288,7 @@ func (c *Certificate) Validate() (err error) {
 	case XWingPQ:
 		if len(c.PqPublicKey) != PQPublicKeySize {
 			// Dedicated sentinel, not ErrESVersion — a broken key is a
-			// structural fault, not an unsupported construction (M-low).
+			// structural fault, not an unsupported construction.
 			return ErrPQKeyLength
 		}
 	case XChacha20Poly1305:

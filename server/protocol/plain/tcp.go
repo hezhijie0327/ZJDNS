@@ -285,7 +285,7 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn, handler
 			}()
 
 			response := handler.ServeDNS(query, edns.RequestMeta{ClientIP: ip, Protocol: config.ProtoTCP})
-			if response == query { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+			if response == query { //nolint:revive // identity guard: ServeDNS must never return the request
 				response = nil
 			}
 			if response == nil {

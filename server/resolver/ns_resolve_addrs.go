@@ -184,7 +184,7 @@ func (r *Recursive) resolveNSAddressesConcurrent(ctx context.Context, nsRecords 
 	allMu.Lock()
 	// Global dedup: the same IP reached via different NS names (common with
 	// registrar shared DNS) was queried once per NS name — one query per
-	// unique address is enough (M-low).
+	// unique address is enough.
 	seen := make(map[string]struct{}, len(allAddresses))
 	uniq := allAddresses[:0]
 	for _, addr := range allAddresses {

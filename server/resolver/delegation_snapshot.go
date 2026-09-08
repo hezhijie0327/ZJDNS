@@ -175,7 +175,7 @@ func (r *Recursive) loadDelegationSpill(path string, diskCap, delegationMax int)
 	}
 	// Spill-on-evict registered AFTER the warm-up load; the write runs on
 	// the async writer (lock-free enqueue; a synchronous Put would freeze
-	// every concurrent delegation lookup behind the disk, 2026-09 R1).
+	// every concurrent delegation lookup behind the disk).
 	r.spillW = spillfile.NewAsyncWriter(spill)
 	r.delegations.SetOnEvict(func(zone string, de *delegationEntry) {
 		if de.ts > 0 && !ttl.IsExpired(de.ts, de.ttl) {
@@ -209,7 +209,7 @@ func (r *Recursive) getDelegationFromSpill(zone string) (*delegationEntry, bool)
 // store (shutdown hook).  The queued async writes are drained first (so the
 // Indexed check sees them) and the remaining IO runs OUTSIDE the
 // delegations lock — a synchronous Range+Put would hold the lock that every
-// recursive walk needs for the whole flush (2026-09 R1).
+// recursive walk needs for the whole flush.
 func (r *Recursive) flushDelegationSpill() {
 	if r.spill == nil {
 		return
@@ -232,7 +232,7 @@ func (r *Recursive) flushDelegationSpill() {
 		if rw.de.ts > 0 && !ttl.IsExpired(rw.de.ts, rw.de.ttl) && !r.spill.Indexed(rw.zone, rw.de.ts) {
 			if err := r.spill.Put(rw.zone, rw.de.ts, rw.de.ttl, false, packDelegationEntry(rw.de)); err != nil {
 				// Persistence failures must be visible — a full disk
-				// otherwise silently degrades the disk tier (R2).
+				// otherwise silently degrades the disk tier.
 				log.Warnf("RESOLVER: delegation spill flush %s: %v", rw.zone, err)
 			}
 		}

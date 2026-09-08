@@ -78,13 +78,13 @@ func (s *Server) handleDOTConnections(dotListener net.Listener) {
 		// Bound the pre-handshake phase: a flood of idle TCP connections
 		// that never complete the TLS handshake would otherwise hold a
 		// shared errgroup slot for the full DefaultTCPPoolIdleTimeout,
-		// starving the other TLS-family listeners. The handler clears the
-		// deadline once the handshake completes.
+		// starving the other TLS-family listeners. The handler re-arms
+		// the read deadline after the handshake.
 		_ = conn.SetDeadline(time.Now().Add(config.DefaultTLSHandshakeTimeout))
 
 		// Track the conn so Shutdown can wake it (the read loop blocks in
 		// io.ReadFull with a 60s idle deadline — without this, Shutdown
-		// waits up to 60s per active connection; M-3-5).
+		// waits up to 60s per active connection).
 		s.listenerMu.Lock()
 		s.dotConns[conn] = struct{}{}
 		s.listenerMu.Unlock()
@@ -220,10 +220,9 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		}
 
 		// The first ReadFull triggers the TLS handshake (lazy handshake in
-		// crypto/tls). Use the HANDSHAKE timeout for that first read only —
-		// re-arming it every iteration overwrote the 60s idle deadline below
-		// before it ever governed a read, disconnecting clients that poll
-		// every 15-55s six times more often than designed (M5).
+		// crypto/tls). Use the HANDSHAKE timeout for the first read only —
+		// re-arming it per iteration would override the 60s idle deadline
+		// below.
 		if firstRead {
 			_ = tlsConn.SetReadDeadline(time.Now().Add(config.DefaultTLSHandshakeTimeout))
 		}
@@ -315,7 +314,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			}()
 
 			response := s.handler.ServeDNS(query, meta)
-			if response == query { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+			if response == query { //nolint:revive // identity guard: ServeDNS must never return the request
 				response = nil
 			}
 			if response == nil {

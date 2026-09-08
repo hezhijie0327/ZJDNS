@@ -45,8 +45,8 @@ type TCPDemuxListener struct {
 // defaultSniffConcurrency bounds concurrent sniff goroutines when the
 // caller does not configure one: each accepted connection spawns a sniffer
 // that lives up to sniffTimeout when the peer is silent — an unbounded
-// spawn let a connect flood (port scanners) exhaust goroutines and fds
-// while the downstream LimitListeners only gate post-sniff (P-M6).
+// spawn would let a connect flood (port scanners) exhaust goroutines and
+// fds while the downstream LimitListeners only gate post-sniff.
 const defaultSniffConcurrency = 4096
 
 // NewTCPDemux creates and starts a TCP demux listener.  The accept loop
@@ -132,14 +132,12 @@ func (d *TCPDemuxListener) acceptLoop() {
 		}
 
 		// Sniff off the accept loop: DetectTCPProtocol blocks on the
-		// client's first bytes, and a silent client (scanner, health
-		// check) used to stall the WHOLE shared port — no further
-		// connection was even accepted while one peer sat silent.  The
-		// per-conn goroutine dies with the bounded sniff (or the push);
-		// the queue is channel-based, so concurrent pushes are safe.
-		// Try-acquire the sniff slot first: a flood of silent clients
-		// is dropped at the gate instead of exhausting goroutines/fds
-		// for the full sniffTimeout window (P-M6).
+		// client's first bytes, and a silent client must not stall accepts
+		// on the shared port.  The per-conn goroutine dies with the bounded
+		// sniff (or the push); the queue is channel-based, so concurrent
+		// pushes are safe.  Try-acquire the sniff slot first: a flood of
+		// silent clients is dropped at the gate instead of exhausting
+		// goroutines/fds for the full sniffTimeout window.
 		select {
 		case d.sniffSem <- struct{}{}:
 		default:

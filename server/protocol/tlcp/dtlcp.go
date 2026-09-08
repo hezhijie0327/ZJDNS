@@ -113,8 +113,8 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 
 	// SecureBufferSize, not UDPBufferSize: the dispatcher must accept any
 	// record the client can send (RFC 8094 framing allows 65535; DTLS reads
-	// 8192) — a 1232-byte buffer silently destroyed larger DTLCP datagrams
-	// at the socket read (M-3-5).
+	// 8192) — a 1232-byte buffer silently drops larger DTLCP datagrams
+	// at the socket read.
 	buf := make([]byte, pool.SecureBufferSize)
 
 	for {
@@ -163,7 +163,7 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 			// queue, which unblocks its reads.  Launched OUTSIDE l.mu:
 			// errgroup.Go blocks when the concurrency limit is saturated,
 			// and holding the lock there would freeze datagram dispatch
-			// for all clients and block Close()/Shutdown (H5).
+			// for all clients and block Close()/Shutdown.
 			s.serverGroup.Go(func() error {
 				defer zdnsutil.HandlePanic("DTLCP client connection")
 				s.serveDTLCPClient(l.cfg, dc, src, func() {
@@ -183,7 +183,8 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 		copy(*pb, buf[:n])
 		// Guarded send: the client goroutine's deferred dc.Close() can race
 		// this enqueue (handshake failure, idle timeout, Shutdown) — a bare
-		// channel send here panicked the whole accept loop (2026-09 P1).
+		// channel send here races the deferred Close and panics the accept
+		// loop.
 		if !dc.Send(shared.DemuxPacket{Data: (*pb)[:n], Addr: src}) {
 			shared.PacketBufPool.Put(pb)
 		}
@@ -197,7 +198,7 @@ func (s *Server) ServeDTLCPClient(pc net.PacketConn, src *net.UDPAddr, cleanup f
 	if !ok {
 		// Exported API guard: a foreign PacketConn cannot be served (the
 		// dispatch path depends on the demux queue semantics) — close it
-		// instead of panicking the client goroutine (2026-09 X5).
+		// instead of panicking the client goroutine.
 		log.Warnf("TLCP: ServeDTLCPClient received a non-demux conn %T — closing", pc)
 		_ = pc.Close()
 		return
@@ -323,7 +324,7 @@ func (s *Server) handleDTLCPConnection(conn net.Conn) {
 			defer pool.DefaultBuffer.Put(buf)
 
 			response := s.handler.ServeDNS(query, edns.RequestMeta{ClientIP: clientIP, ClientName: clientName, IsSecure: true, Protocol: config.ProtoDTLCP})
-			if response == query { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+			if response == query { //nolint:revive // identity guard: ServeDNS must never return the request
 				response = nil
 			}
 			if response == nil {

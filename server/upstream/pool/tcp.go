@@ -94,7 +94,7 @@ func (p *ConnPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc f
 						liveConns = append(liveConns, conns[j])
 					}
 				}
-				p.total -= len(conns) - len(liveConns) // dead-filter accounting (U1)
+				p.total -= len(conns) - len(liveConns) // dead-filter accounting
 				storeLive(p.conns, key, liveConns)
 			}
 			p.mu.Unlock()
@@ -108,7 +108,7 @@ func (p *ConnPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc f
 		}
 	}
 	if deadSeen {
-		p.total -= len(conns) - len(liveConns) // dead-filter accounting (U1)
+		p.total -= len(conns) - len(liveConns) // dead-filter accounting
 		storeLive(p.conns, key, liveConns)
 	}
 
@@ -131,7 +131,7 @@ func (p *ConnPool) Acquire(ctx context.Context, key, dialAddr string, dialFunc f
 // This is used to pre-establish connections (e.g. TLS handshakes) so the first
 // real query doesn't pay the dial latency.  When the pool is at capacity the
 // call is a no-op — dead connections are replaced lazily by Acquire's live
-// scan, not here (R3-L15).
+// scan, not here.
 func (p *ConnPool) WarmUp(ctx context.Context, key, dialAddr string, dialFunc func(context.Context, string) (net.Conn, error)) error {
 	p.mu.Lock()
 	if len(p.conns[key]) >= p.maxConns {
@@ -181,7 +181,7 @@ func (p *ConnPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFun
 			return nil, ErrMaxConnsReached
 		}
 		p.conns[key] = append(p.conns[key], c)
-		p.total++ // replaceDead decremented for the dead one — net-zero swap (U2)
+		p.total++ // replaceDead decremented for the dead one — net-zero swap
 		n := len(p.conns[key])
 		p.mu.Unlock()
 		old.close()
@@ -191,7 +191,7 @@ func (p *ConnPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFun
 
 	p.conns[key] = append(p.conns[key], c)
 	p.total++
-	// Global cap (H1): a flood of distinct upstream keys (recursive TCP
+	// Global cap: a flood of distinct upstream keys (recursive TCP
 	// fallbacks, forced-TCP configs) must not grow the connection working
 	// set without bound.  Evict connections to make room — dead ones first,
 	// then the least-recently-used — and close them after unlocking (ABBA
@@ -217,18 +217,10 @@ func (p *ConnPool) dialAndAdd(ctx context.Context, key, dialAddr string, dialFun
 	return c, nil
 }
 
-// evictOne removes one connection from the pool to make room for a new dial,
-// preferring (1) dead connections (already closed — nil victim), (2) idle
-// live connections (nothing in flight) oldest first.  In-flight connections
-// are NEVER evicted: killing a busy connection fails every query waiting on
-// it, and the callers fall through to per-query dials that re-enter the pool
-// — a self-reinforcing dial/evict churn loop under saturation (the remote
-// pprof finding that drove this soft-cap).  When every connection is busy
-// the pool overshoots maxTotal transiently; idle connections self-close via
-// the read-loop idle timeout and ReapDead reclaims their slots.  Must be
-// called with p.mu held; skip is never evicted.  The live victim is returned
-// WITHOUT closing — the caller closes it outside p.mu (ABBA convention, as
-// in Remove/Shutdown).
+// evictOne removes one connection to make room — dead first, then
+// idle-oldest; in-flight connections are never evicted (killing one fails
+// its waiters and triggers dial/evict churn).  Caller closes the victim
+// outside p.mu.
 func (p *ConnPool) evictOne(skip *Conn) (victim *Conn, removed bool) {
 	// (1) Dead connections cost a slot while waiting for the reap —
 	// drop them without closing anything (their readLoop already closed).

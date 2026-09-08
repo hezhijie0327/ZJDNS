@@ -34,21 +34,11 @@ func (s *Server) startDTLSServer() error {
 		}
 
 		listener, err := dtls.ListenAddr("udp", udpAddr,
-			// DTLS 1.3 only.  A dual-stack server [1.2,1.3] still deadlocks
-			// against a dual-stack client (i.e. our own upstream client) in
-			// pion v3.1.3-0.20260829132121: the server's DTLS 1.3 Flight 0
-			// cannot complete its HelloRetryRequest exchange with a client
-			// that is still in version negotiation — server spins re-sending,
-			// client waits, handshake times out. The 1.3-only server path
-			// (prepareHandshakeStart13, no version negotiation) completes the
-			// 1.3 handshake with dual-stack clients fine, so we stay
-			// 1.3-only. Re-verified 2026-08-29 with ZJDNS loopback E2E:
-			// dual server works with {pure-1.2, pure-1.3} clients (1.2
-			// negotiation was fixed upstream since v3.1.3-0.20260821014627)
-			// but still deadlocks with dual-stack clients — and our upstream
-			// client is dual-stack per RFC 9147 §4.2.2, so a dual-stack
-			// server would break ZJDNS-to-ZJDNS DTLS. Revisit when pion
-			// fixes the dual-stack server HRR path.
+			// DTLS 1.3 only: a dual-stack pion server deadlocks against dual-stack
+			// clients (Flight 0 cannot complete the HelloRetryRequest exchange during
+			// version negotiation). Our upstream client is dual-stack (RFC 9147
+			// §4.2.2), so a dual-stack server would break ZJDNS-to-ZJDNS DTLS. Revisit
+			// when pion fixes the dual-stack server HRR path.
 			dtls.WithMinVersion(protocol.Version1_3),
 			dtls.WithMaxVersion(protocol.Version1_3),
 			dtls.WithCertificates(s.stdCert),
@@ -156,11 +146,9 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 		if err != nil {
 			pool.DefaultBuffer.Put(buf)
 			if errors.Is(err, io.ErrShortBuffer) {
-				// pion/dtls does not consume the oversized record — Read
-				// returns ErrShortBuffer on every retry, and the re-armed
-				// deadline made this loop spin at 100% CPU forever.  A
-				// record larger than the buffer from a handshaked client is
-				// a protocol violation: close the connection (H4).
+				// A record larger than the buffer from a handshaked client
+				// is a protocol violation — pion re-returns ErrShortBuffer
+				// forever, so close the connection.
 				log.Debugf("TLS: closing DTLS connection: record too large for buffer from %s", conn.RemoteAddr())
 				return
 			}
@@ -221,7 +209,7 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 			defer pool.DefaultBuffer.Put(buf)
 
 			response := s.handler.ServeDNS(query, edns.RequestMeta{ClientIP: clientIP, IsSecure: true, Protocol: config.ProtoDTLS})
-			if response == query { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+			if response == query { //nolint:revive // identity guard: ServeDNS must never return the request
 				response = nil
 			}
 			if response == nil {
@@ -243,9 +231,8 @@ func (s *Server) handleDTLSConnection(conn net.Conn) {
 // Returns true to continue the connection loop, false to close the connection.
 // The response is always returned to the pool (defer-protected).  The frame
 // path (PMTU truncation preserving the trailing OPT per RFC 6891 §6.2.5,
-// pooled frame buffer) is the shared dnsutil.WriteDTLSFrame — the DTLCP
-// twin previously carried a 95 %-identical copy that destroyed the OPT on
-// truncation and allocated per response (P-M4).
+// pooled frame buffer) is the shared dnsutil.WriteDTLSFrame, used by the
+// DTLCP twin as well.
 func (s *Server) sendDTLSResponse(conn net.Conn, response *dns.Msg) bool {
 	if response == nil {
 		return true

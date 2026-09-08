@@ -129,7 +129,7 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, 
 		return nil, fmt.Errorf("decoding ed25519 private key: %w", err)
 	}
 	// circl ed25519.Sign panics on wrong-length keys and Public() silently
-	// truncates short ones — validate before constructing (H6).
+	// truncates short ones — validate before constructing.
 	if len(skBytes) != ed25519.PrivateKeySize {
 		return nil, fmt.Errorf("dnscrypt: ed25519 private key must be %d bytes, got %d", ed25519.PrivateKeySize, len(skBytes))
 	}
@@ -159,7 +159,7 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, 
 			} else {
 				// _ = error: corrupt persisted windows fall back to a fresh
 				// generation below (windowsFromState returns nil) — logged,
-				// not fatal (R3-L21).
+				// not fatal.
 				persistedWindows, err = decodeWindows(windowsBlob)
 				if err != nil {
 					log.Warnf("DNSCRYPT: corrupt persisted windows, starting fresh: %v", err)
@@ -411,7 +411,7 @@ func (s *Server) serveDNS(ctx context.Context, rw responseWriter, m *dns.Msg, pr
 
 	clientIP := zdnsutil.ClientIPFromAddr(rw.RemoteAddr())
 	resp := s.handler.ServeDNS(m, edns.RequestMeta{ClientIP: clientIP, Protocol: protocol})
-	if resp == m { //nolint:revive // identity guard: ServeDNS must never return the request (L5)
+	if resp == m { //nolint:revive // identity guard: ServeDNS must never return the request
 		resp = nil
 	}
 	if resp == nil {

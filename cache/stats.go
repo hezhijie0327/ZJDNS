@@ -39,9 +39,9 @@ func (s *Cache) FlushDB(target string) (int64, error) {
 			s.statsMgr.ResetJournal()
 		}
 	case "cache":
-		// Detach the evict callback for the wipe: Clear() fires OnEvict per
-		// entry, which would enqueue one spill write each only for the file
-		// below to be truncated right after.
+		// Detach the evict callback for the wipe: Clear() would enqueue a
+		// spill write per entry only for the file to be truncated right
+		// after.
 		s.entries.SetOnEvict(nil)
 		s.entries.Clear()
 		if s.spill != nil {
@@ -69,8 +69,8 @@ func (s *Cache) FlushDB(target string) (int64, error) {
 	case "latency":
 		// Clear in place (lrumap is internally locked) — replacing the map
 		// pointer unsynchronized would race the cache-hit hot path and the
-		// latency-probe goroutines (H4).  Evict callback detached for the
-		// wipe, same reason as the cache tier (2026-09 D5).
+		// latency-probe goroutines.  Evict callback detached for the
+		// wipe, same reason as the cache tier.
 		s.latencies.SetOnEvict(nil)
 		s.latencies.Clear()
 		s.hasLatencyData.Store(false)
@@ -159,9 +159,9 @@ func (s *Cache) UpdateLatency(ip string, latencyMS int) {
 		latencyMS = 0
 	}
 	if net.ParseIP(ip) == nil {
-		// Flag AFTER validation: a non-IP arg previously enabled the
-		// per-hit latency sort with an empty table that can never reorder
-		// anything (D16).
+		// Set the flag only after validation — a non-IP arg must not enable
+		// the per-hit latency sort (an empty table can never reorder
+		// anything).
 		return
 	}
 	s.UpdateLatencyBatch(map[string]int{ip: latencyMS})
@@ -185,9 +185,9 @@ func (s *Cache) UpdateLatencyBatch(values map[string]int) {
 			latencyMS = 0
 		}
 		if net.ParseIP(ip) == nil {
-			// Flag AFTER validation: a non-IP arg previously enabled the
-			// per-hit latency sort with an empty table that can never reorder
-			// anything (D16).
+			// Set the flag only after validation — a non-IP arg must not
+			// enable the per-hit latency sort (an empty table can never
+			// reorder anything).
 			continue
 		}
 		oldLatency, hadOld := -1, false

@@ -26,7 +26,7 @@ import (
 //
 // A nil group (test-only wiring) disables every refresh path: an acquired
 // in-flight gate with no goroutine to release it would block all future
-// refreshes for the key (2026-09 H-M1).
+// refreshes for the key.
 type refreshCoordinator struct {
 	store    cache.Store
 	resolver handler.Resolver
@@ -164,7 +164,7 @@ func (c *refreshCoordinator) serveExpiredWithRefresh(qctx *handler.QueryContext,
 			return nil
 		}) {
 			c.finish(qname, qtype, qclass, ecsOpt) // slot saturated
-			close(done)                            // never closed otherwise — the timer-path closure would block until process exit (M5)
+			close(done)                            // never closed otherwise — the timer-path closure would block until process exit
 		}
 	}
 
@@ -205,7 +205,7 @@ func (c *refreshCoordinator) serveExpiredWithRefresh(qctx *handler.QueryContext,
 			// Heal the cache: resolver.Query never writes entries, and the
 			// timer-path goroutine below only runs when the refresh outlasts
 			// the serve-expired window — a fast refresh would otherwise
-			// leave the entry permanently stale (H11).
+			// leave the entry permanently stale.
 			handler.StoreIfCacheable(c.store, qname, qtype, qclass, ecsOpt, qr)
 			qctx.Result = "miss" // journal rcode: msg.Rcode was aligned to qr.Rcode above
 		} else {

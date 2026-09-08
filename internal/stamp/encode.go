@@ -142,8 +142,7 @@ func stripDefaultPort(s string, defaultPort int) string {
 }
 
 // bracketIPv6 wraps a bare IPv6 literal in square brackets (RFC 3986 §3.2.2).
-// The decoder's splitOptionalPort requires brackets to disambiguate the port —
-// previously the encoder emitted bare IPv6 that its own parser rejected (R3-M16).
+// The decoder's splitOptionalPort requires brackets to disambiguate the port.
 func bracketIPv6(host string) string {
 	if strings.HasPrefix(host, "[") {
 		return host // already bracketed
