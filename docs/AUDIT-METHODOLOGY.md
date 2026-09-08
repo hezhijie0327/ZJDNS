@@ -12,6 +12,7 @@
 |------|------|------|------|------|
 | 1 | 2026-08 | 全内存迁移后首次大审计（SQLite 移除 + 快照持久化），重点：内存泄漏 corner case | `docs/audit/2026-08-memory-audit/` | ✅ 全部修复（21/21）+ pprof 验证通过 |
 | 2 | 2026-09 | 全项目审计（Phase 1 七包级 + Phase 2 四交叉组,约 150 项独立发现）,重点:9/1-9/2 性能轮次后的防御面/池计数/锁内 IO;发现即修复全部 Sprint 1-3 + E2E 全协议验证 + 基线刷新 | `docs/audit/2026-09-full-audit/` | ✅ 全部修复(含 1 项 CRITICAL 防御绕过、11 项 HIGH)+ 14 协议 E2E + pprof 零泄漏 |
+| 3 | 2026-09 | Round 3:上轮后 95 个 perf 提交(2.7 万行)为重点面 + 注释风格专项维度;Phase 1 → Sprint 1-3 发现即修复 → Round B 修复复查+交叉扫描;1 CRITICAL + 8 HIGH + ~28 MEDIUM + ~170 注释噪音清除;E2E 21 场景全过(含无 EDNS TCP 缓存命中——上轮遗留盲区) | `docs/audit/2026-09-round3-audit/` | ✅ 全部修复 + Round B 自查回归 2 项(含测试捕获的 DNSCrypt Start 标志丢失)+ 基线无回归 |
 
 ---
 
@@ -40,6 +41,7 @@
 | **常量提取** | 魔法数字是否抽取为命名常量（含 `config/defaults.go`）；常量值是否符合 RFC/IETF 推荐（默认端口、超时、缓冲区大小）；同一常量是否跨包重复定义（应统一到一处） |
 | **RFC 一致性** | 实现是否偏离 RFC 规范；RFC 要求的边界条件/错误处理是否完整；新引入的 RFC 是否已在 `docs/rfc/` 存档；代码中的 RFC 注释引用是否正确（RFC 编号、章节号是否有效） |
 | **注释准确性** | 注释是否引用已删除/移动/重命名的函数、类型、字段；注释描述的行为是否与当前代码一致；TODO/FIXME/HACK 是否仍然有效还是已过期；注释中的行号引用是否已失效 |
+| **注释风格** | 注释只写约束/理由,不写历史:① 禁止日期引用(`2026-09`、`9/1-9/2`)与审计编号(`(H1)`、`(M-low)`、`(R3-M2)`)—— 来源噪音对后续读者毫无信息量;② 禁止战史叙述(pprof 数据、生产事故复盘、"190M 调用");③ 禁止变更叙述(`previously X`、`no longer Y`、`used to Z`)—— 一律改写为现在时约束;④ 超过 ~4 行的步骤复述式注释压缩为 1-2 行不变量。RFC 章节引用、`//nolint` 机制、导出符号 godoc 不受影响。审计命令:`grep -rnE '\(20[0-9]{2}-[0-9]{2}|\([A-Z]{1,3}-?[0-9]' --include='*.go'` + `grep -rn 'previously'` |
 | **函数排序** | 文件内声明顺序是否严格遵循 `type → const → var → func`（decorder 强制）；同一接收者的方法是否聚合而非散落；构造/初始化函数是否在最靠近类型的位置（即紧跟 var 块之后的第一个 func）；新增函数是否随机插入在无关函数之间 |
 | **Go 版本特性** | 代码是否采用了当前最低 Go 版本的语言/库特性；是否存在可用 `new(expr)`、`errors.AsType[T]`、`slices.Reverse` 等新版标准库替代的手写模式；`go fix` 现代器覆盖的迁移是否已应用 |
 | **流程图覆盖** | `docs/FLOWCHARTS.md` 是否覆盖全部核心功能和协议；新增特性/协议/中间件是否同步更新了流程图；mermaid 语法是否正确可渲染 |
@@ -298,6 +300,9 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 | **Close 非幂等** | `Close()` 可被多次调用（shutdown 重试、defer 链），但实现未用 `sync.Once` 或 atomic 守卫 | `grep -rn 'func.*Close()' --include='*.go'` 检查每个 `Close()` 方法是否有 `sync.Once`、`atomic.CompareAndSwap` 或 nil channel 守卫 |
 | **Goroutine 无 owner** | goroutine 被 `go func()` 启动后无任何机制等待其退出；父函数返回后子 goroutine 成为孤儿 | `grep -rn 'go func' --include='*.go'` 排除 `_test.go`，审计每个 goroutine 是否被 errgroup/WaitGroup/channel 追踪 |
 | **Go 特性滞后** | 代码停留在旧版 Go 风格 — 手写模式已有标准库替代（如 `errors.As` 循环 → `errors.AsType[T]`、手写反向切片 → `slices.Reverse`/`slices.Backward`、`fmt.Errorf("x")` 可受益于新版分配优化） | `go fix ./...` 检查是否有未应用的现代器；`grep -rn 'errors\.As(' --include='*.go'` 检查可否替换为 `errors.AsType[T]`；`grep -rn 'for i := len' --include='*.go'` 检查手写反向迭代 |
+| **预打包响应重 Pack** | 帧写入方(TCP 族/HTTP 族)无条件 `resp.Pack()` 或先覆盖 `resp.Data` — 预打包缓存命中(Data 已置、RR sections 为 nil)被重序列化为 12 字节头帧 | 每个响应写入方必须守护 `len(resp.Data) == 0` 才 Pack,否则原样服务/复制 wire(参考 `dnsutil.PackStreamFrame`、`tlcp.buildDOTFrame`);E2E 必须包含**无 EDNS 客户端的 TCP 缓存命中**场景(带 DNSSEC 的测试域名会走解包路径掩盖此 bug) |
+| **池槽位所有权别名** | 从状态结构返回槽内指针(getter 返回 `s.xxx` 不清槽),调用方持有的引用与后续 `Put(s.xxx)` 形成悬垂/双重归还 | 返回槽内池对象的方法必须清槽(所有权转移),或文档化别名契约;同型 bug 检查:`grep -n 'return s\.' 结合槽位是否可能被 Put` |
+| **错误变量遮蔽** | 内层 `resp, err := ...` 遮蔽外层错误变量,外层错误分支在 err==nil 时执行 `return nil, err` 返回 (nil, nil) | 内外两层错误路径用不同变量名(acqErr/exErr);Review 时对每个 `if err != nil` 检查 err 的声明层级 |
 
 ## 五、审计与修复工具
 
@@ -350,7 +355,10 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 20. **错误包装用 %w 不用 %v**：`fmt.Errorf("context: %w", err)` 保留错误链，`errors.Is`/`As` 可穿透。仅在有意对上层隐藏实现细节时才用 `%v`。审计命令：`grep -rn 'fmt.Errorf.*%v.*err'` |
 21. **每个 goroutine 都要有 owner**：`go func()` 启动后，要么被 errgroup 追踪，要么通过 `done` channel/`ctx.Done()` 被父 goroutine 管理。fire-and-forget goroutine 必须有 `defer HandlePanic`。审计命令：`grep -rn 'go func' --include='*.go'` |
 22. **Close 必须幂等**：`Close()` 多次调用不 panic，不 double-close channel。实现模式：`sync.Once`、`atomic.CompareAndSwapInt32`、或 nil channel 检查 |
-23. **跟踪 Go 版本特性采用**：每次 Go 版本升级后审计：`go fix ./...` 应用现代器；`errors.As` → `errors.AsType[T]`；`slices.Backward` 替代手写反向迭代；`new(expr)` 简化指针构造。通过 `grep -rn 'for i := len.*-1' --include='*.go'` 找手写反向循环 |
+23. **跟踪 Go 版本特性采用**：每次 Go 版本升级后审计：`go fix ./...` 应用现代器；`errors.As` → `errors.AsType[T]`；`slices.Backward` 替代手写反向迭代；`new(expr)` 简化指针构造。通过 `grep -rn 'for i := len.*-1' --include='*.go'` 找手写反向循环
+24. **注释不写出处**：注释记录的是约束和理由,不是变更履历。日期(`2026-09`)、审计编号(`(H1)`)、pprof/事故战史、`previously` 叙述一律不得出现 —— 要么删,要么改写为现在时不变量。全库残留即审计发现
+25. **全量测试必须查退出码**：`go test ... | grep -v '^ok' | head -3` 会因管道截断吞掉 FAIL 行(Round 3 实例:DNSCrypt Start 回归被 head 掩盖了一轮)。CI 判定用 exit code,本地验证用 `echo $?` 或完整落盘检查
+26. **E2E 域名选择影响覆盖面**：全用 DNSSEC-signed 域名(cloudflare.com)测试会把预打包直发路径整个掩盖(RR sections 过滤强制走解包)。协议矩阵必须混入无 DNSSEC 域名 + 无 EDNS 客户端(`dig +noedns`) |
 
 ### 6.2 避免的反模式
 
