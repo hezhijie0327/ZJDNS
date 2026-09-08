@@ -37,9 +37,10 @@ type Cache struct {
 	// ever been written), the per-hit latency lookup is skipped entirely.
 	hasLatencyData atomic.Bool
 
-	// latencyGen is the latency-table generation: bumped on every
-	// UpdateLatency so per-entry sorted-wire caches can detect staleness
-	// without re-reading the latency map.
+	// latencyGen is the latency-table generation: bumped on material
+	// UpdateLatency changes so per-entry
+	// sorted-wire caches can detect staleness without re-reading the
+	// latency map.
 	latencyGen atomic.Uint64
 
 	// latencies holds per-IP latency data — written by background latency
@@ -103,9 +104,10 @@ const (
 	maxSortedWireCache = 1024
 
 	// maxTTLOffsets caps pooled TTL-offset slices: responses beyond this RR
-	// count allocate fresh instead of growing the pool entry (large
-	// DNSSEC/ANY responses exceed it routinely).
-	maxTTLOffsets = 16
+	// count allocate fresh instead of growing the pool entry.  16 made every
+	// DNSSEC response (RRSIG per RRset: 30+ RRs routinely) miss the pool and
+	// allocate per hit; 2 bytes per offset keeps 256 offsets at 512B.
+	maxTTLOffsets = 256
 )
 
 // (<= 0 applies the config defaults).  A non-empty spill path enables the

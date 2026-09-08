@@ -158,7 +158,6 @@ func (s *Cache) buildEntry(ce *cacheEntry, ts int64, entryTTL int, validated boo
 		wire, err = zdnsutil.Decompress(wire, *dbuf)
 		if err != nil {
 			ReleaseTTLOffsets(offsets)
-			clear(*dbuf)
 			decompressBufPool.Put(dbuf)
 			// Debug, not Warn: a corrupt BLOB is dropped by the caller
 			// (self-healing delete), so this fires once per corrupt entry,
@@ -166,9 +165,12 @@ func (s *Cache) buildEntry(ce *cacheEntry, ts int64, entryTTL int, validated boo
 			log.Debugf("CACHE: decompress wire for entry (name=%s type=%d): %v", qname, qtype, err)
 			return nil, false, false
 		}
-		defer func() { clear(*dbuf); decompressBufPool.Put(dbuf) }()
-		// Copy out of the pool buffer — it is cleared when Get() returns.
-		owned = make([]byte, len(wire))
+		defer decompressBufPool.Put(dbuf)
+		// Copy out of the pool buffer into the response-wire pool class.
+		// No clear on either pool: DecodeAll appends at [:0] (never reads
+		// the destination tail) and the copy below overwrites all of owned,
+		// so a memset per decompressed hit (4 KB + 2 KB) was pure cost.
+		owned = pool.AcquireWire(len(wire))
 		copy(owned, wire)
 	} else {
 		// The cache entry's msgWire is SHARED across concurrent Gets (one

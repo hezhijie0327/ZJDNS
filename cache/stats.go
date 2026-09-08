@@ -184,7 +184,7 @@ func (s *Cache) UpdateLatencyBatch(values map[string]int) {
 			oldLatency, hadOld = old.latency, true
 		}
 		s.latencies.Set(ip, latEntry{latency: latencyMS, lastProbe: now})
-		if !hadOld || oldLatency != latencyMS {
+		if !hadOld || materialLatencyChange(oldLatency, latencyMS) {
 			changed = true
 		}
 	}
@@ -193,6 +193,20 @@ func (s *Cache) UpdateLatencyBatch(values map[string]int) {
 		// under an older generation are stale and rebuild on their next hit.
 		s.latencyGen.Add(1)
 	}
+}
+
+// materialLatencyChange reports whether an EWMA update is large enough to
+// plausibly reorder answers.  Probes constantly perturb smoothed latencies
+// by tiny amounts; bumping the generation on every tick made the per-entry
+// sorted-wire version fast path nearly unhittable — every multi-answer
+// A/AAAA hit re-paid Unpack+sort+repack for a sort that could not change
+// the order.  A material change is one exceeding 1/8 of the previous value
+// (plus a 1ms floor): one EWMA tick with α=1/2 moves the value by at most
+// half an RTT delta, so sustained RTT shifts cross the threshold promptly
+// while noise cannot accumulate into a bump.
+func materialLatencyChange(old, newMS int) bool {
+	threshold := old/8 + 1
+	return newMS > old+threshold || newMS < old-threshold
 }
 
 // LatencyLastProbe returns the last probe time for an IP. Returns (0, false)
