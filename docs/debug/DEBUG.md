@@ -481,6 +481,10 @@ dig @127.0.0.1 -p 12733 no-such-probe.ippacket.stream A +short
 dig @127.0.0.1 -p 12733 mail-test.ippacket.stream A +noall +comments   # NXDOMAIN, Query time: 0ms
 grep "RFC 8198 synthesized" /tmp/zjdns-dnssec.log
 
+# Wildcard synthesis (RFC 8198 §5.3): a wildcard expansion seen for one name
+# lets other names the covering NSEC denies be answered from cache.
+# dig @127.0.0.1 -p 12733 <any-wildcard-expanded-name> A   # primes the wildcard table
+
 # Opt-Out zones must NOT synthesize (each query resolves upstream):
 dig @127.0.0.1 -p 12733 probe-one-test.de A +noall +comments           # NXDOMAIN
 grep -c "RFC 8198 synthesized.*\.de\." /tmp/zjdns-dnssec.log           # expect 0

@@ -303,6 +303,23 @@ func (c *CryptoValidator) isNODATAValid(response *dns.Msg, qname string, qtype u
 	return c.isDenialOfExistenceValid(response, qname, qtype, verifiedDNSKEYs, "NODATA")
 }
 
+// harvestDenialProof returns the signature-verified NSEC/NSEC3 records in a
+// validated response's authority section — the RFC 8198 §5.3 input for the
+// aggressive-negative index when the answer itself is positive (e.g. the
+// covering proof a wildcard expansion ships with).  Match-level rules are NOT
+// applied: synthesis re-applies them against each future query name.
+func (c *CryptoValidator) harvestDenialProof(response *dns.Msg, verifiedDNSKEYs []*dns.DNSKEY) []dns.RR {
+	authSigs := CollectRRSIGs(response.Ns, response.Extra)
+	verifiedNSEC, _ := c.verifyNSEC(authSigs, findNSEC(response.Ns), verifiedDNSKEYs, "", 0, "")
+	verifiedNSEC3, _ := c.verifyNSEC3(authSigs, findNSEC3(response.Ns), verifiedDNSKEYs, "", 0, "")
+	nsecProof := asProofRRs(verifiedNSEC)
+	nsec3Proof := asProofRRs(verifiedNSEC3)
+	if len(nsecProof) == 0 {
+		return nsec3Proof
+	}
+	return append(nsecProof, nsec3Proof...)
+}
+
 // asProofRRs widens a typed verified NSEC/NSEC3 slice to the record-slice
 // form carried on QueryResult.DenialProof.
 func asProofRRs[T dns.RR](verified []T) []dns.RR {

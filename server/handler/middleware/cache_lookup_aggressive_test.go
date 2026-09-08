@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"net/netip"
 	"testing"
 	"zjdns/cache"
 	"zjdns/server/handler"
@@ -127,3 +128,60 @@ func TestCacheLookup_AggressiveNSECGates(t *testing.T) {
 		t.Fatalf("dns64 A: served rcode = %v, want NXDOMAIN", qctx.Res)
 	}
 }
+
+// RFC 8198 §5.3: a miss whose covering NSEC is cached and whose wildcard
+// expansion was previously seen for another name is synthesized as a
+// validated positive answer without an upstream round trip.
+func TestCacheLookup_SynthesizesWildcardPositive(t *testing.T) {
+	store := testStore(t)
+	defer func() { _ = store.Close() }()
+
+	soa := &dns.SOA{
+		Hdr: dns.Header{Name: "example.org.", Class: dns.ClassINET, TTL: 3600},
+		Ns:  "ns1.example.org.", Mbox: "hostmaster.example.org.", Serial: 1, Minttl: 900,
+	}
+	cover := &dns.NSEC{
+		Hdr:        dns.Header{Name: "avocado.example.org.", Class: dns.ClassINET, TTL: 86400},
+		NextDomain: "zucchini.example.org.",
+		TypeBitMap: []uint16{dns.TypeA, dns.TypeRRSIG},
+	}
+	// Prior validated NXDOMAIN indexes the covering range...
+	proof := []dns.RR{cover}
+	authority := []dns.RR{
+		soa, cover,
+		&dns.RRSIG{Hdr: dns.Header{Name: cover.Hdr.Name, Class: dns.ClassINET, TTL: 86400}, TypeCovered: dns.TypeNSEC},
+	}
+	store.IndexNegative("cat.example.org.", dns.ClassINET, proof, authority)
+	// ...and a prior wildcard expansion for leek feeds the wildcard cache.
+	aRec := &dns.A{Hdr: dns.Header{Name: "leek.example.org.", Class: dns.ClassINET, TTL: 300}, Addr: netipMustParse("192.0.2.7")}
+	aSig := &dns.RRSIG{Hdr: dns.Header{Name: "leek.example.org.", Class: dns.ClassINET, TTL: 300}, TypeCovered: dns.TypeA, Labels: 2}
+	store.IndexWildcard("leek.example.org.", dns.ClassINET, []dns.RR{aRec}, []dns.RR{soa, aSig})
+
+	req := testQuery(t)
+	req.Question[0].Header().Name = "banana.example.org."
+	qctx, nextRan, err := runCacheLookup(t, store, true, false, req, "banana.example.org.", dns.TypeA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nextRan {
+		t.Fatal("next chain invoked despite a synthesizable wildcard expansion")
+	}
+	// The response is served pre-packed (msg.Data) — unpack to inspect sections.
+	if qctx.Res == nil || qctx.Res.Rcode != dns.RcodeSuccess {
+		t.Fatalf("served response = %v, want NOERROR", qctx.Res)
+	}
+	if err := qctx.Res.Unpack(); err != nil {
+		t.Fatal(err)
+	}
+	if len(qctx.Res.Answer) == 0 {
+		t.Fatalf("served response = %v, want a positive wildcard answer", qctx.Res)
+	}
+	if qctx.Res.Answer[0].Header().Name != "banana.example.org." {
+		t.Fatalf("answer owner = %s, want banana.example.org.", qctx.Res.Answer[0].Header().Name)
+	}
+	if qctx.Result != "hit" {
+		t.Fatalf("Result = %q, want hit", qctx.Result)
+	}
+}
+
+func netipMustParse(s string) netip.Addr { return netip.MustParseAddr(s) }

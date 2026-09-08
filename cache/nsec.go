@@ -11,6 +11,7 @@
 package cache
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"zjdns/config"
@@ -63,6 +64,41 @@ type nsecZone struct {
 	params nsec3Params
 	ranges []*nsecRange // sorted by owner
 	lastTS int64        // newest insert — zone-eviction heuristic
+}
+
+// wildcardZoneKey scopes one wildcard table to its apex and class — wildcard
+// expansions are interval-kind agnostic (NSEC and NSEC3 zones share the
+// literal "*.example.org." naming).
+type wildcardZoneKey struct {
+	apex  string
+	class uint16
+}
+
+// wildcardTable caches validated wildcard-expanded RRsets (RFC 8198 §5.3),
+// keyed by the literal wildcard name ("*.example.org.") and qtype, so a later
+// query for any other name the cached NSEC ranges deny can be synthesized
+// from the cache-deduced wildcard.
+type wildcardTable map[wildcardKey]*wildcardEntry
+
+// wildcardKey identifies one cached wildcard-expanded RRset.
+type wildcardKey struct {
+	name  string // canonical wildcard owner ("*.example.org.")
+	qtype uint16
+}
+
+// wildcardEntry is one cached wildcard expansion: rrset holds the expanded
+// records + their RRSIGs exactly as the authority emitted them (owners still
+// carry the previously-expanded name — rewritten at synthesis time).
+type wildcardEntry struct {
+	rrset []dns.RR
+	ts    int64
+	ttl   int
+}
+
+// keyedWildcard pairs a wildcard cache key with its entry (index build helper).
+type keyedWildcard struct {
+	key wildcardKey
+	e   *wildcardEntry
 }
 
 // nsec3OptOutFlag is RFC 5155 §6.1 bit 0x01 of the NSEC3 flags field.
@@ -119,27 +155,16 @@ func (s *Cache) SynthesizeNegative(qname string, qtype, qclass uint16) (rcode ui
 	qname = dnsutil.Canonical(qname)
 	now := log.NowUnix()
 
-	s.nsecMu.RLock()
-	var zone *nsecZone
-	for key, z := range s.nsecZones {
-		if key.class != qclass || !dnsutil.IsBelow(key.apex, qname) {
-			continue
-		}
-		// The most specific (longest) enclosing apex wins — e.g. a name
-		// under a signed sub-zone must not be answered from the parent's
-		// delegation-level table.
-		if zone == nil || len(key.apex) > len(zone.key.apex) {
-			zone = z
-		}
-	}
+	// The most specific (longest) enclosing apex wins — e.g. a name under a
+	// signed sub-zone must not be answered from the parent's delegation-level
+	// table.  Zones are copy-on-write immutable — safe past the read lock.
+	zone := s.nsecZoneFor(qname, qclass)
 	if zone == nil {
-		s.nsecMu.RUnlock()
 		return 0, nil, false
 	}
 	ranges := zone.ranges
 	params := zone.params
 	nsec3 := zone.key.nsec3
-	s.nsecMu.RUnlock()
 
 	var r *nsecRange
 	var isNODATA bool
@@ -169,7 +194,311 @@ func (s *Cache) SynthesizeNegative(qname string, qtype, qclass uint16) (rcode ui
 	return rcode, auth, true
 }
 
-// ── Index build ──────────────────────────────────────────────────────────────
+// SynthesizeWildcard answers a query from the cache-deduced wildcard
+// (RFC 8198 §5.3): the cached NSEC/NSEC3 ranges must prove that qname itself
+// does not exist (RFC 4035 §5.4 covering / RFC 5155 §8.8 next-closer cover),
+// and a previously seen wildcard expansion for "*.closest-encloser" must carry
+// qtype (positive, records rewritten to qname per RFC 4035 §5.3.2) — or the
+// wildcard's own denial records must prove qtype absent (NODATA, RFC 5155
+// §8.7 / RFC 4035 §5.4 bitmap).  ok=false means fall back to resolution.
+func (s *Cache) SynthesizeWildcard(qname string, qtype, qclass uint16) (answer, authority []dns.RR, ok bool) {
+	qname = dnsutil.Canonical(qname)
+	zone := s.nsecZoneFor(qname, qclass)
+	if zone == nil {
+		return nil, nil, false
+	}
+	now := log.NowUnix()
+	if zone.key.nsec3 {
+		return s.synthesizeWildcardNSEC3(qclass, zone, qname, qtype, now)
+	}
+	return s.synthesizeWildcardNSEC(qclass, zone, qname, qtype, now)
+}
+
+// synthesizeWildcardNSEC synthesizes from the cache-deduced wildcard of an
+// NSEC zone: the covering interval proves qname nonexistent, the wildcard
+// table carries the expansion (positive), or the exact NSEC at "*.CE" proves
+// qtype absent (NODATA).
+func (s *Cache) synthesizeWildcardNSEC(qclass uint16, zone *nsecZone, qname string, qtype uint16, now int64) (answer, authority []dns.RR, ok bool) {
+	ranges := zone.ranges
+	if _, exists := nsecExactIndex(ranges, qname); exists {
+		return nil, nil, false // the name exists — no wildcard applies
+	}
+	var covering *nsecRange
+	for _, i := range []int{nsecCoveringIndex(ranges, qname), len(ranges) - 1} {
+		if i < 0 || i >= len(ranges) {
+			continue
+		}
+		r, isNODATA, proven := nsecAppendixB(ranges[i], qname)
+		if !proven || isNODATA {
+			continue // ENTs exist — wildcards never match them
+		}
+		covering = r
+		break
+	}
+	if covering == nil {
+		return nil, nil, false
+	}
+	wildcard := "*." + nsecCommonAncestor(covering.owner, covering.next)
+	// Positive: a previously seen expansion of this exact wildcard carries qtype.
+	if we := s.wildcardEntryFor(zone.key.apex, qclass, wildcard, qtype); we != nil {
+		if remaining := we.ttl - int(now-we.ts); remaining > 0 {
+			return rewriteOwnerSet(we.rrset, qname, remaining),
+				buildProofAuthority(covering, remaining), true
+		}
+	}
+	// Wildcard NODATA: the exact NSEC at the wildcard owner (cached as an
+	// interval of its own) without qtype or CNAME in its bitmap.
+	if i, found := nsecExactIndex(ranges, wildcard); found {
+		if r, isNODATA := nsecNODATA(ranges[i], qtype); isNODATA {
+			remaining := r.ttl - int(now-r.ts)
+			if remaining > 0 && r.soa != nil {
+				auth := buildSynthesizedAuthority(covering, remaining)
+				auth = append(auth, rewriteOwnerSet(r.rrset[1:], wildcard, remaining)...)
+				return nil, auth, true
+			}
+		}
+	}
+	return nil, nil, false
+}
+
+// synthesizeWildcardNSEC3 synthesizes from the cache-deduced wildcard of an
+// NSEC3 zone: the closest-encloser walk proves qname nonexistent (§8.8), the
+// wildcard table carries the expansion (positive), or an exact NSEC3 at
+// H("*.CE") proves qtype absent (NODATA, §8.7) — all in non-Opt-Out space.
+func (s *Cache) synthesizeWildcardNSEC3(qclass uint16, zone *nsecZone, qname string, qtype uint16, now int64) (answer, authority []dns.RR, ok bool) {
+	ranges := zone.ranges
+	params := zone.params
+	hashName := func(name string) string {
+		if params.hash != dns.SHA1 || params.iterations > config.DefaultMaxNSEC3Iterations {
+			return ""
+		}
+		return strings.ToLower(dnsutil.NSEC3Name(name, params.salt, params.iterations))
+	}
+	h := hashName(qname)
+	if h == "" {
+		return nil, nil, false
+	}
+	if _, exists := nsec3ExactIndex(ranges, h); exists {
+		return nil, nil, false // the name exists — no wildcard applies
+	}
+	ce, cover, walkOK := nsec3ClosestEncloser(ranges, hashName, qname)
+	if !walkOK || cover.optOut {
+		return nil, nil, false
+	}
+	wildcard := "*." + ce
+	// Positive: a previously seen expansion of this exact wildcard carries qtype.
+	if we := s.wildcardEntryFor(zone.key.apex, qclass, wildcard, qtype); we != nil {
+		if remaining := we.ttl - int(now-we.ts); remaining > 0 {
+			return rewriteOwnerSet(we.rrset, qname, remaining),
+				buildProofAuthority(cover, remaining), true
+		}
+	}
+	// Wildcard NODATA (§8.7): the exact NSEC3 at H(wildcard) without qtype.
+	wh := hashName(wildcard)
+	if wh == "" {
+		return nil, nil, false
+	}
+	if i, found := nsec3ExactIndex(ranges, wh); found {
+		r := ranges[i]
+		if !r.optOut {
+			if nsec3, _ := r.rrset[0].(*dns.NSEC3); nsec3 != nil &&
+				(slices.Contains(nsec3.TypeBitMap, dns.TypeSOA) ||
+					!slices.Contains(nsec3.TypeBitMap, dns.TypeNS)) &&
+				!slices.Contains(nsec3.TypeBitMap, dns.TypeCNAME) &&
+				!slices.Contains(nsec3.TypeBitMap, qtype) {
+				remaining := r.ttl - int(now-r.ts)
+				if remaining > 0 && r.soa != nil {
+					auth := buildSynthesizedAuthority(cover, remaining)
+					auth = append(auth, rewriteOwnerSet(r.rrset[1:], nsec3.Hdr.Name, remaining)...)
+					return nil, auth, true
+				}
+			}
+		}
+	}
+	return nil, nil, false
+}
+
+// nsecZoneFor returns the zone table with the most specific apex containing
+// qname (nil when none does).  Zones are copy-on-write immutable — safe to
+// use after the read lock is released.
+func (s *Cache) nsecZoneFor(qname string, qclass uint16) *nsecZone {
+	s.nsecMu.RLock()
+	defer s.nsecMu.RUnlock()
+	var zone *nsecZone
+	for key, z := range s.nsecZones {
+		if key.class != qclass || !dnsutil.IsBelow(key.apex, qname) {
+			continue
+		}
+		if zone == nil || len(key.apex) > len(zone.key.apex) {
+			zone = z
+		}
+	}
+	return zone
+}
+
+// wildcardEntryFor returns the cached expansion for one wildcard name and
+// qtype (nil when absent).  Tables are copy-on-write immutable — safe past
+// the read lock.
+func (s *Cache) wildcardEntryFor(apex string, qclass uint16, wildcard string, qtype uint16) *wildcardEntry {
+	s.nsecMu.RLock()
+	defer s.nsecMu.RUnlock()
+	tbl := s.nsecWild[wildcardZoneKey{apex: apex, class: qclass}]
+	if tbl == nil {
+		return nil
+	}
+	return (*tbl)[wildcardKey{name: wildcard, qtype: qtype}]
+}
+
+// buildProofAuthority clones a range's NSEC/NSEC3 rrset (no SOA — the proof
+// section of a synthesized POSITIVE response; the SOA marks a negative).
+func buildProofAuthority(r *nsecRange, remaining int) []dns.RR {
+	return rewriteOwnerSet(r.rrset, r.rrset[0].Header().Name, remaining)
+}
+
+// rewriteOwnerSet clones records with the owner name and TTL rewritten —
+// the RFC 4035 §5.3.2 wildcard-expansion form (the RRSIG Labels field is
+// untouched: validators strip qname's labels back to the wildcard name).
+func rewriteOwnerSet(rrs []dns.RR, name string, ttl int) []dns.RR {
+	out := make([]dns.RR, len(rrs))
+	for i, rr := range rrs {
+		c := rr.Clone()
+		c.Header().Name = name
+		c.Header().TTL = uint32(ttl) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+		out[i] = c
+	}
+	return out
+}
+
+// ── Wildcard index (RFC 8198 §5.3, RFC 4035 §5.3.4) ──────────────────────────
+
+// IndexWildcard feeds one validated positive answer's wildcard expansions into
+// the wildcard cache.  An RRset whose owner has more labels than its covering
+// RRSIG's Labels field was created by wildcard expansion (RFC 4035 §5.3.4) —
+// the expanded records plus their RRSIGs are cached under the literal wildcard
+// name so other names the cached NSEC ranges deny can be synthesized from it.
+func (s *Cache) IndexWildcard(qname string, qclass uint16, answer, authority []dns.RR) {
+	if len(answer) == 0 {
+		return
+	}
+	soa := firstSOA(authority)
+	if soa == nil {
+		return
+	}
+	apex := dnsutil.Canonical(soa.Hdr.Name)
+	if !dnsutil.IsBelow(apex, qname) {
+		return
+	}
+	now := log.NowUnix()
+
+	var entries []keyedWildcard
+	seen := make(map[wildcardKey]bool)
+	for _, rr := range answer {
+		typ := dns.RRToType(rr)
+		if typ == dns.TypeRRSIG {
+			continue
+		}
+		owner := rr.Header().Name
+		ownerLabels := dnsutil.Labels(dnsutil.Canonical(owner))
+		for _, cand := range authority {
+			sig, ok := cand.(*dns.RRSIG)
+			// RFC 4035 §5.3.4: owner labels > RRSIG Labels ⇔ wildcard expansion.
+			if !ok || sig.TypeCovered != typ || !dns.EqualName(sig.Header().Name, owner) || ownerLabels <= int(sig.Labels) {
+				continue
+			}
+			wildcard := "*." + wildcardAncestor(owner, int(sig.Labels))
+			if wildcard == "*." || !dnsutil.IsBelow(apex, wildcard) {
+				break
+			}
+			key := wildcardKey{name: wildcard, qtype: typ}
+			if seen[key] {
+				break
+			}
+			// Positive expansions honor the RRset's own (already
+			// RFC 4035 §5.3.3-capped) TTL — the paired RRSIG remaining
+			// validity keeps the cached expansion from outliving its proof.
+			rrset, ttl := pairedRRset(rr, authority, typ, now,
+				min(int(rr.Header().TTL), config.DefaultMaxCacheableTTL))
+			if len(rrset) < 2 {
+				break // no RRSIG paired — impossible for validated data
+			}
+			seen[key] = true
+			entries = append(entries, keyedWildcard{
+				key: key,
+				e:   &wildcardEntry{rrset: rrset, ts: now, ttl: ttl},
+			})
+			break // one (rrset, RRSIG) pair per record is enough
+		}
+	}
+	if len(entries) == 0 {
+		return
+	}
+	s.insertWildcardEntries(wildcardZoneKey{apex: apex, class: qclass}, entries, now)
+}
+
+// wildcardAncestor keeps the rightmost labels count of owner — the wildcard's
+// parent name its RRSIG Labels field points at (RFC 4034 §3.1.8.1: Labels
+// counts neither the "*" nor the root).  Returns "" when labels covers the
+// whole name (the wildcard would sit above the zone apex).
+func wildcardAncestor(owner string, labels int) string {
+	full := strings.Split(dnsutil.Canonical(owner), ".")
+	full = full[:len(full)-1] // drop the empty string after the trailing dot
+	if labels <= 0 || labels >= len(full) {
+		return ""
+	}
+	return strings.Join(full[len(full)-labels:], ".") + "."
+}
+
+// insertWildcardEntries merges validated wildcard expansions into the zone's
+// wildcard table (copy-on-write, oldest-evicting at the range cap).
+func (s *Cache) insertWildcardEntries(key wildcardZoneKey, entries []keyedWildcard, now int64) {
+	s.nsecMu.Lock()
+	defer s.nsecMu.Unlock()
+	if s.nsecWild == nil {
+		s.nsecWild = make(map[wildcardZoneKey]*wildcardTable)
+	}
+	if len(s.nsecWild) >= config.DefaultAggressiveNSECZones {
+		s.evictWildcardZoneLocked()
+	}
+	tbl := s.nsecWild[key]
+	if tbl != nil {
+		snapshot := make(wildcardTable, len(*tbl))
+		maps.Copy(snapshot, *tbl)
+		tbl = &snapshot
+	} else {
+		t := make(wildcardTable, len(entries))
+		tbl = &t
+	}
+	for _, kw := range entries {
+		(*tbl)[kw.key] = kw.e
+	}
+	for k, e := range *tbl {
+		if e.ts+int64(e.ttl) <= now { //nolint:gosec // G115: unix seconds fit int64
+			delete(*tbl, k)
+		}
+	}
+	for len(*tbl) > config.DefaultAggressiveNSECRangePerZone {
+		var oldest wildcardKey
+		oldestTS := now
+		first := true
+		for k, e := range *tbl {
+			if first || e.ts < oldestTS {
+				oldest, oldestTS, first = k, e.ts, false
+			}
+		}
+		delete(*tbl, oldest)
+	}
+	s.nsecWild[key] = tbl
+}
+
+// evictWildcardZoneLocked drops an arbitrary wildcard table when the zone cap
+// is reached (map iteration order is random — every table is equally fresh;
+// entries are TTL-bound and re-learned from traffic).
+func (s *Cache) evictWildcardZoneLocked() {
+	for k := range s.nsecWild {
+		delete(s.nsecWild, k)
+		return
+	}
+}
 
 // buildNSECRange pairs one verified NSEC with its RRSIGs and the negative TTL.
 func buildNSECRange(n *dns.NSEC, soa dns.RR, authority []dns.RR, now int64, negTTL int) *nsecRange {
@@ -443,6 +772,12 @@ func nsecNODATA(r *nsecRange, qtype uint16) (*nsecRange, bool) {
 	if slices.Contains(nsec.TypeBitMap, dns.TypeNXNAME) {
 		return r, false
 	}
+	// RFC 6840 §4.1: an NS-without-SOA bitmap is a delegation point's record —
+	// it proves "no DS at the cut" and nothing about the other types the child
+	// zone may serve at this very name (e.g. a DS negative indexed it).
+	if slices.Contains(nsec.TypeBitMap, dns.TypeNS) && !slices.Contains(nsec.TypeBitMap, dns.TypeSOA) {
+		return nil, false
+	}
 	if slices.Contains(nsec.TypeBitMap, dns.TypeCNAME) {
 		return nil, false // a CNAME exists — the name resolves (RFC 6840 §4.3)
 	}
@@ -506,38 +841,53 @@ func synthesizeNSEC3(ranges []*nsecRange, params nsec3Params, qname string, qtyp
 		if slices.Contains(nsec3.TypeBitMap, dns.TypeNXNAME) {
 			return r, false
 		}
+		// RFC 6840 §4.1: a delegation point's NSEC3 (NS set, SOA absent)
+		// proves no DS at the cut — not the child zone's types at this name.
+		if slices.Contains(nsec3.TypeBitMap, dns.TypeNS) && !slices.Contains(nsec3.TypeBitMap, dns.TypeSOA) {
+			return nil, false
+		}
 		if slices.Contains(nsec3.TypeBitMap, dns.TypeCNAME) || slices.Contains(nsec3.TypeBitMap, qtype) {
 			return nil, false
 		}
 		return r, true
 	}
 
-	// RFC 5155 §8.3/§8.4: closest-encloser walk.  nextCloserCover tracks the
-	// interval covering the previous (longer) candidate — the next closer
-	// once the walk finds the closest existing encloser.
+	// RFC 5155 §8.3/§8.4: closest-encloser walk.
+	ce, cover, ok := nsec3ClosestEncloser(ranges, hashName, qname)
+	if !ok {
+		return nil, false
+	}
+	// RFC 5155 §8.4 step 2: the wildcard at the closest encloser must be
+	// covered too — otherwise it might exist and match.
+	wc := nsec3Covering(ranges, hashName("*."+ce))
+	if wc == nil || wc.optOut || cover.optOut {
+		return nil, false
+	}
+	return cover, false
+}
+
+// nsec3ClosestEncloser implements the RFC 5155 §8.3 closest-encloser walk over
+// the cached table: it returns the closest encloser (the longest ancestor of
+// qname with an exact NSEC3) and the interval covering the "next closer" name
+// toward qname — the proof that qname itself does not exist (§8.4/§8.8).
+func nsec3ClosestEncloser(ranges []*nsecRange, hashName func(string) string, qname string) (ce string, nextCloserCover *nsecRange, ok bool) {
 	sname := qname
-	var nextCloserCover *nsecRange
+	var covered *nsecRange
 	for {
 		hs := hashName(sname)
 		if hs == "" {
-			return nil, false
+			return "", nil, false
 		}
 		if _, exact := nsec3ExactIndex(ranges, hs); exact {
-			if nextCloserCover == nil {
-				return nil, false // match without prior cover — incomplete proof (§8.3)
+			if covered == nil {
+				return "", nil, false // match without prior cover — incomplete proof (§8.3)
 			}
-			// RFC 5155 §8.4 step 2: the wildcard at the closest encloser
-			// must be covered too — otherwise it might exist and match.
-			wc := nsec3Covering(ranges, hashName("*."+sname))
-			if wc == nil || wc.optOut || nextCloserCover.optOut {
-				return nil, false
-			}
-			return nextCloserCover, false
+			return sname, covered, true
 		}
-		nextCloserCover = nsec3Covering(ranges, hs)
+		covered = nsec3Covering(ranges, hs)
 		idx := strings.IndexByte(sname, '.')
 		if idx < 0 || idx == len(sname)-1 {
-			return nil, false
+			return "", nil, false
 		}
 		sname = sname[idx+1:]
 	}

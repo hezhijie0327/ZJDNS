@@ -1097,12 +1097,14 @@ Client ⇄ DTLS 记录 [DNS消息] ⇄ Server  (UDP 数据报)
 **利用缓存的 NSEC/NSEC3 范围推导否定回答（2026-09 实现缓存侧合成）。**
 
 - 范围覆盖/通配符证明已在 `dnssec/nsec.go`/`nsec3.go` 实现并用于响应验证（含 RFC 4035 §5.4 通配符不存在证明，2026-09 补齐 NSEC 侧）
-- **缓存侧合成**（`cache/nsec.go`）：递归验证过的否定应答把 RRSIG 验证过的 NSEC/NSEC3 记录（`QueryResult.DenialProof`，经 CNAME 链 `cname.go` 透传）喂入 per-zone 区间索引（copy-on-write 排序表，RLock 读）；CacheLookup miss 命中区间直接合成 NXDOMAIN/NODATA（authority = SOA + 证明 RRset），并写入普通负缓存使后续同查询走快路径
+- **缓存侧合成**（`cache/nsec.go`）：递归验证过的应答把 RRSIG 验证过的 NSEC/NSEC3 记录喂入 per-zone 区间索引（copy-on-write 排序表，RLock 读）——否定应答走 `QueryResult.DenialProof`（经 CNAME 链 `cname.go` 透传），正向应答（通配符展开所附带的 covering 证明）由 `harvestDenialProof` 收割；CacheLookup miss 命中区间直接合成 NXDOMAIN/NODATA（authority = SOA + 证明 RRset），并写入普通负缓存使后续同查询走快路径
+- **通配符合成**（§5.3，2026-09 补齐）：验证器按 RFC 4035 §5.3.4（owner 标签数 > RRSIG Labels）从验证过的正向应答中收割通配符展开，缓存到 per-apex 通配符表；后续查询被区间证明不存在且 `*.closest-encloser` 命中通配符表时，正向应答（owner 改写至查询名，RRSIG Labels 不变——RFC 4035 §5.3.2）或通配符 NODATA（NSEC bitmap / RFC 5155 §8.7 `H(*.CE)` exact）直接本地合成；NSEC3 按 §8.8 要求 next-closer 覆盖非 Opt-Out
 - **安全门控**：仅递归路径的加密验证结果参与（转发的 AD 启发式不算，§9）；NSEC3 Opt-Out 区间一律不合成（§5.2）；NSEC 按附录 B 判定 NXDOMAIN vs ENT（parent-zone NS-bit 丢弃）；NXDOMAIN 需通配符不存在证明（`*.closest-encloser` 被覆盖）；CD 位查询不合成（附录 A）；RFC 9824 NXNAME 压缩形式（exact-match NSEC 带 TYPE128）合成 NXDOMAIN
 - **TTL**（§5.4）：合成/索引 TTL = min(SOA TTL, MINIMUM, 10800, 配对 RRSIG 剩余有效期)，响应 TTL 随时间扣减
-- **已知限制**：通配符正向合成（§5.3 SHOULD）未实现——命中通配符区间的名字回退正常解析；索引仅内存不持久化，重启后随查询重建
+- **RFC 6840 §4.1 守卫**：NS 位无 SOA 的委派点记录（如 DS 否定查询索引进的 NSEC3）不参与 exact-match NODATA 合成——委派名下的类型由子域声明
+- **已知限制**：索引仅内存不持久化，重启后随查询重建
 - **配置**：`features.cache.aggressive_nsec`（默认 true）；DNS64 启用时 AAAA 查询跳过合成（保 RFC 6147 §5.1.2 的 A 兜底合成）
-- 回归：`TestSynthesizeNegative_*`（`cache/nsec_test.go`）、`TestCacheLookup_SynthesizesNegative` / `TestCacheLookup_AggressiveNSECGates`（middleware）
+- 回归：`TestSynthesizeNegative_*` / `TestSynthesizeWildcard_*`（`cache/nsec_test.go`）、`TestCacheLookup_SynthesizesNegative` / `TestCacheLookup_SynthesizesWildcardPositive` / `TestCacheLookup_AggressiveNSECGates`（middleware）
 
 ---
 

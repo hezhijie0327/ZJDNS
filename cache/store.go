@@ -63,6 +63,9 @@ type Cache struct {
 	// slices; writes replace tables under the write lock.
 	nsecMu    sync.RWMutex
 	nsecZones map[nsecZoneKey]*nsecZone
+	// nsecWild tables are guarded by nsecMu and copy-on-written like the
+	// interval tables (RFC 8198 §5.3 cache-deduced wildcard expansions).
+	nsecWild map[wildcardZoneKey]*wildcardTable
 
 	closeOnce sync.Once
 }

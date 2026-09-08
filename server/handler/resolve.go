@@ -75,5 +75,10 @@ func StoreIfCacheable(store cache.Store, qname string, qtype, qclass uint16, ecs
 	if qr.DenialProof != nil {
 		store.IndexNegative(qname, qclass, qr.DenialProof, qr.Authority)
 	}
+	// RFC 8198 §5.3: a validated positive answer's wildcard expansions
+	// (RFC 4035 §5.3.4, owner labels > RRSIG Labels) feed the wildcard cache.
+	if qr.Validated && len(qr.Answer) > 0 {
+		store.IndexWildcard(qname, qclass, qr.Answer, qr.Authority)
+	}
 	return true
 }

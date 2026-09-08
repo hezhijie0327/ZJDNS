@@ -25,6 +25,11 @@ type StoreReader interface {
 	// name.  Returns the rcode plus authority records (SOA + proof) for a
 	// synthesizable denial; ok=false means "not covered — resolve normally".
 	SynthesizeNegative(qname string, qtype, qclass uint16) (rcode uint16, authority []dns.RR, ok bool)
+	// SynthesizeWildcard answers from the RFC 8198 §5.3 cache-deduced
+	// wildcard: the cached ranges prove qname nonexistent and a previously
+	// seen wildcard expansion (or its NODATA denial) covers it.  Returns the
+	// answer (positive only) and authority proof records.
+	SynthesizeWildcard(qname string, qtype, qclass uint16) (answer, authority []dns.RR, ok bool)
 	LatencyLastProbe(ip string) (int64, bool)
 }
 
@@ -36,6 +41,9 @@ type StoreWriter interface {
 	// IndexNegative feeds one validated negative answer's RRSIG-verified
 	// NSEC/NSEC3 proof records into the RFC 8198 aggressive-negative index.
 	IndexNegative(qname string, qclass uint16, proof, authority []dns.RR)
+	// IndexWildcard feeds one validated positive answer's wildcard expansions
+	// (RFC 4035 §5.3.4: owner labels > RRSIG Labels) into the wildcard cache.
+	IndexWildcard(qname string, qclass uint16, answer, authority []dns.RR)
 	RecordRequest(r *stats.RequestRecord)
 	UpdateLatency(ip string, latencyMS int)
 	UpdateLatencyBatch(values map[string]int)

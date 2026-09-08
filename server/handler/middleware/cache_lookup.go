@@ -91,31 +91,42 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 	})
 }
 
-// synthesizeNegative answers a cache miss from the RFC 8198 aggressive-negative
-// index when a cached, signature-verified NSEC/NSEC3 range already denies the
-// name.  The synthesized denial is written through the normal cache path so
-// repeat queries take the plain hit path; any gap (feature off, CD bit, DNS64
-// AAAA, index miss, store race) falls back to normal resolution — RFC 8198
-// App. A: "If errors happen in an aggressive negative caching algorithm,
-// resolvers MUST fall back to resolve the query as usual."
+// synthesizeNegative answers a cache miss from the RFC 8198 aggressive index:
+// a cached, signature-verified NSEC/NSEC3 range may deny the name outright, or
+// the cache-deduced wildcard (§5.3) may carry the answer.  Synthesized
+// responses are written through the normal cache path so repeat queries take
+// the plain hit path; any gap (feature off, CD bit, DNS64 AAAA, index miss,
+// store race) falls back to normal resolution — RFC 8198 App. A: "If errors
+// happen in an aggressive negative caching algorithm, resolvers MUST fall back
+// to resolve the query as usual."
 func (m *CacheLookup) synthesizeNegative(ctx context.Context, qctx *handler.QueryContext, next handler.QueryHandler) error {
 	if m.aggressiveNSEC &&
 		!qctx.Req.CheckingDisabled && // RFC 8198 App. A: CD-set queries resolve normally
 		qctx.Qclass == dns.ClassINET &&
 		(!m.dns64 || qctx.Qtype != dns.TypeAAAA) {
 		if rcode, authority, ok := m.store.SynthesizeNegative(qctx.Qname, qctx.Qtype, qctx.Qclass); ok {
-			// Persist as a regular validated negative entry (the SOA carries
-			// the RFC 2308 §5 negative TTL) so the next identical query serves
-			// from the plain cache without re-synthesizing.
-			m.store.Set(qctx.Qname, qctx.Qtype, qctx.Qclass, qctx.ECSOpt,
-				nil, authority, nil, true, rcode)
-			if entry, found, expired := m.store.Get(qctx.Qname, qctx.Qtype, qctx.Qclass, qctx.ECSOpt); found && !expired {
-				qctx.Res = buildCacheResponse(qctx, entry, false)
-				qctx.Result = "hit"
-				return nil
-			}
-			// Store race (eviction, ECS key collision) — resolve as usual.
+			return m.serveSynthesized(ctx, qctx, nil, authority, rcode, next)
 		}
+		if answer, authority, ok := m.store.SynthesizeWildcard(qctx.Qname, qctx.Qtype, qctx.Qclass); ok {
+			// A synthesized wildcard answer is a validated positive — no
+			// rcode override; AD follows the serve-path gates (RFC 6840 §5.8).
+			return m.serveSynthesized(ctx, qctx, answer, authority, dns.RcodeSuccess, next)
+		}
+	}
+	return next.ServeDNS(ctx, qctx)
+}
+
+// serveSynthesized persists a synthesized response as a regular validated
+// cache entry (the SOA carries the RFC 2308 §5 negative TTL where present) and
+// serves it via the plain cache-hit path; a store race (eviction, ECS key)
+// falls through to normal resolution.
+func (m *CacheLookup) serveSynthesized(ctx context.Context, qctx *handler.QueryContext, answer, authority []dns.RR, rcode uint16, next handler.QueryHandler) error {
+	m.store.Set(qctx.Qname, qctx.Qtype, qctx.Qclass, qctx.ECSOpt,
+		answer, authority, nil, true, rcode)
+	if entry, found, expired := m.store.Get(qctx.Qname, qctx.Qtype, qctx.Qclass, qctx.ECSOpt); found && !expired {
+		qctx.Res = buildCacheResponse(qctx, entry, false)
+		qctx.Result = "hit"
+		return nil
 	}
 	return next.ServeDNS(ctx, qctx)
 }

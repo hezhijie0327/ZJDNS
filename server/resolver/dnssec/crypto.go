@@ -447,7 +447,15 @@ func (c *CryptoValidator) IsResponseValid(response *dns.Msg, zonename string, ve
 	rcode := response.Rcode
 	if rcode == dns.RcodeSuccess && len(response.Answer) > 0 {
 		v, s, err := c.isAnswerSectionValid(response.Answer, response.Extra, verifiedDNSKEYs)
-		return v, s, nil, err
+		if !v {
+			return v, s, nil, err
+		}
+		// RFC 8198 §5.3: a validated answer's authority may carry the signed
+		// denial proofs a wildcard expansion ships with (RFC 4035 §3.1.3) —
+		// harvest the signature-verified subset so the aggressive-negative
+		// index learns the range for later syntheses (the covering rules are
+		// re-applied against each future query name at synthesis time).
+		return v, s, c.harvestDenialProof(response, verifiedDNSKEYs), err
 	}
 
 	// Extract the queried name and type for denial-of-existence validation.
