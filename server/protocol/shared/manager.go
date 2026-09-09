@@ -39,6 +39,10 @@ type TCPGroup struct {
 	// TLCP side: either DOHTLCP (HTTP-level) or DOTTLCP (raw listener).
 	DOHTLCP http.Handler
 	DOTTLCP func(net.Listener)
+	// DOHConnContext is the optional http.Server.ConnContext hook for the
+	// DOHTLCP server — the TLCP package uses it to stash the per-request
+	// *tlcp.Conn so the handler can read the post-handshake SNI.
+	DOHConnContext func(ctx context.Context, c net.Conn) context.Context
 
 	// DNSCrypt TCP (only on HTTPS port).
 	ServeDNSCryptTCP func(ctx context.Context, conn net.Conn)

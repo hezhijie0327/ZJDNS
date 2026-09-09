@@ -188,6 +188,7 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 					s.tlcpServer.SkipDOH = true
 				}
 				g.DOHTLCP = http.HandlerFunc(s.tlcpServer.ServeDOH)
+				g.DOHConnContext = servertlcp.StashConn
 			}
 			if s.dnscryptServer != nil && wantSharedDNSTCP {
 				g.ServeDNSCryptTCP = s.dnscryptServer.HandleSharedTCPConn

@@ -140,6 +140,7 @@ func (m *Mux) startTCPGroup(g *TCPGroup) error {
 				// HTTP-level: http.Server.
 				tlcpSrv := &http.Server{
 					Handler:           g.DOHTLCP,
+					ConnContext:       g.DOHConnContext,
 					ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
 					WriteTimeout:      config.DefaultHTTPServerWriteTimeout,
 					IdleTimeout:       config.DefaultHTTPServerIdleTimeout,

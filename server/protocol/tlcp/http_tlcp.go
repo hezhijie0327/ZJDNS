@@ -1,6 +1,7 @@
 package tlcp
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
@@ -17,6 +18,21 @@ import (
 	"codeberg.org/miekg/dns/dnshttp"
 	"gitee.com/Trisia/gotlcp/tlcp"
 )
+
+// connCtxKey is the request-context key under which StashConn parks the
+// per-connection *tlcp.Conn.  net/http keeps no net.Conn in the request
+// context itself (ServerContextKey holds the *http.Server), and r.TLS is
+// populated only for *crypto/tls.Conn — the TLCP conn must be carried
+// explicitly for the SNI credential read.
+type connCtxKey struct{}
+
+// StashConn is the http.Server.ConnContext hook that parks the underlying
+// connection in each request's context; the handshake has completed by the
+// time the request is served, so ConnectionState() reports the client's
+// ServerName there.
+func StashConn(ctx context.Context, c net.Conn) context.Context {
+	return context.WithValue(ctx, connCtxKey{}, c)
+}
 
 func (s *Server) startDOHServer() error {
 	addrs, err := zdnsutil.ResolveBindAddrs("tcp", s.dohPort)
@@ -39,6 +55,7 @@ func (s *Server) startDOHServer() error {
 
 		dohSrv := &http.Server{
 			Handler:           http.HandlerFunc(s.serveDOH),
+			ConnContext:       StashConn,
 			ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
 			WriteTimeout:      config.DefaultHTTPServerWriteTimeout,
 			IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
@@ -90,11 +107,11 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 	}
 	// SNI fallback: "https://{name}.{domain}{endpoint}" (path form wins).
 	// r.TLS stays nil — net/http only populates it for *crypto/tls.Conn —
-	// so pull the TLCP conn from the request context; the handshake has
-	// completed by the time the request is served, and ConnectionState()
+	// so read the TLCP conn stashed by the ConnContext hook; the handshake
+	// has completed by the time the request is served, and ConnectionState()
 	// then reports the client's ServerName.
 	if clientName == "" {
-		if conn, ok := r.Context().Value(http.ServerContextKey).(net.Conn); ok {
+		if conn, ok := r.Context().Value(connCtxKey{}).(net.Conn); ok {
 			if tc, ok := conn.(*tlcp.Conn); ok {
 				clientName = zdnsutil.ClientNameFromSNI(tc.ConnectionState().ServerName, s.domain)
 			}
