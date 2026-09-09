@@ -360,6 +360,11 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			if mqr, invalid := parseMQResponse(response); mqr != nil && !invalid {
 				r.resolver.warmFromMQResponse(response, queryQuestion.Name, queryQuestion.Qclass, mqr, ecsResponse, cryptoValidated)
 				response.Answer = stripMQBundled(response.Answer, mqr.Types)
+				// The strip mutates the answer the level-gate verdict was
+				// computed over — drop the memo so processAnswerWithDNSSEC
+				// re-verifies the surviving RRsets instead of inheriting a
+				// verdict that may include a bogus bundled RRset.
+				chain.verifyMemo = dnssecVerifyMemo{}
 			}
 		}
 
@@ -447,6 +452,21 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		// Save parent zone before updating — glue name validation uses
 		// the parent zone (the zone that published the delegation),
 		// not the delegated-to zone.
+		//
+		// RFC 1034 §5.3.2 step 3: a referral must name a zone strictly
+		// closer to the answer.  An authority referring to a SHALLOWER
+		// zone (misconfigured or hostile) resets the walk with no
+		// progress guarantee — the referral machinery (DNSKEY prefetch,
+		// DS verification, NS fan-out) would spin until the resolve
+		// timeout.  Reject it outright; the equal-zone case is the lame
+		// delegation handled just above.
+		if !dnsutil.IsBelow(zdnsutil.Canonical(currentDomain), dnsutil.Fqdn(bestMatch)) {
+			pool.DefaultMessage.Put(response)
+			return QueryResult{
+				Cacheable: true, Server: config.ProtoRecursive, ECS: ecsResponse,
+				Err: fmt.Errorf("referral loop: %s referred to non-closer zone %s", currentDomain, bestMatch),
+			}
+		}
 		parentDomain := currentDomain
 		currentDomain = bestMatch
 
