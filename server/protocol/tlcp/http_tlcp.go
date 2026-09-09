@@ -89,8 +89,16 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// SNI fallback: "https://{name}.{domain}{endpoint}" (path form wins).
-	if clientName == "" && r.TLS != nil {
-		clientName = zdnsutil.ClientNameFromSNI(r.TLS.ServerName, s.domain)
+	// r.TLS stays nil — net/http only populates it for *crypto/tls.Conn —
+	// so pull the TLCP conn from the request context; the handshake has
+	// completed by the time the request is served, and ConnectionState()
+	// then reports the client's ServerName.
+	if clientName == "" {
+		if conn, ok := r.Context().Value(http.ServerContextKey).(net.Conn); ok {
+			if tc, ok := conn.(*tlcp.Conn); ok {
+				clientName = zdnsutil.ClientNameFromSNI(tc.ConnectionState().ServerName, s.domain)
+			}
+		}
 	}
 
 	// Validate GET request size before delegation — the base64url parameter

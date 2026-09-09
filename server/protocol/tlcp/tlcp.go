@@ -128,10 +128,10 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 
 	clientIP := zdnsutil.ClientIPFromAddr(conn.RemoteAddr())
 	// Client-name credential: "{name}.{domain}" SNI ("" when absent).
+	// gotlcp's listener hands over the conn with a lazy handshake —
+	// ConnectionState() before the first read returns a zero state, so the
+	// name resolves after the first frame read below.
 	clientName := ""
-	if tc, ok := conn.(*tlcp.Conn); ok {
-		clientName = zdnsutil.ClientNameFromSNI(tc.ConnectionState().ServerName, s.domain)
-	}
 
 	// Short pre-handshake deadline for the first read: a flood of idle TLCP
 	// connections must not hold a shared serverGroup slot for the full 60s
@@ -216,9 +216,18 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 			}
 			return
 		}
-		firstRead = false
-
-		// First read succeeded — extend to the regular idle timeout.
+		// First read succeeded — extend to the regular idle deadline and
+		// resolve the SNI credential once: the lazy TLCP handshake has
+		// completed, so ConnectionState() now reports the client's
+		// ServerName (zero state before this point).  ConnectionState()
+		// takes the handshake mutex and copies the whole state, so
+		// per-frame recomputation is pure hot-path cost.
+		if firstRead {
+			firstRead = false
+			if tc, ok := conn.(*tlcp.Conn); ok {
+				clientName = zdnsutil.ClientNameFromSNI(tc.ConnectionState().ServerName, s.domain)
+			}
+		}
 		_ = conn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 
 		msgLength := binary.BigEndian.Uint16(lengthBuf[:])

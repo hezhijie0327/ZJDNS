@@ -212,6 +212,17 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 
 	workerCap := make(chan struct{}, config.DefaultMaxPipe)
 
+	var clientIP net.IP
+	if addr := tlsConn.RemoteAddr(); addr != nil {
+		if tcpAddr, ok := addr.(*net.TCPAddr); ok {
+			clientIP = tcpAddr.IP
+		}
+	}
+	// Client-name credential: "{name}.{domain}" SNI ("" when absent).
+	// Resolved after the first read completes the lazy handshake —
+	// ConnectionState() before that returns a zero state.
+	clientName := ""
+
 	lengthBuf := make([]byte, zdnsutil.DNSFramePrefixLen)
 	firstRead := true
 	for {
@@ -237,24 +248,16 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 			}
 			return
 		}
-		firstRead = false
 
-		// The first read succeeded — the TLS handshake is complete. Switch
-		// to the long idle deadline for the rest of the connection.
-		_ = tlsConn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
-
-		// Per-connection state, computed once after the handshake: the
-		// former per-query RemoteAddr type-assert and ConnectionState()
-		// (which takes the handshake mutex and copies the whole state)
-		// cost every query on the connection.
-		var clientIP net.IP
-		if addr := tlsConn.RemoteAddr(); addr != nil {
-			if tcpAddr, ok := addr.(*net.TCPAddr); ok {
-				clientIP = tcpAddr.IP
-			}
+		// The first read succeeded — the TLS handshake is complete. Resolve
+		// the per-connection state once: ConnectionState() takes the
+		// handshake mutex and copies the whole state, so per-frame
+		// recomputation is pure hot-path cost.
+		if firstRead {
+			firstRead = false
+			clientName = zdnsutil.ClientNameFromSNI(tlsConn.ConnectionState().ServerName, s.cfg.Domain)
 		}
-		// Client-name credential: "{name}.{domain}" SNI ("" when absent).
-		clientName := zdnsutil.ClientNameFromSNI(tlsConn.ConnectionState().ServerName, s.cfg.Domain)
+		_ = tlsConn.SetReadDeadline(time.Now().Add(config.DefaultTCPPoolIdleTimeout))
 
 		msgLength := binary.BigEndian.Uint16(lengthBuf)
 		if msgLength == 0 || msgLength > dns.MaxMsgSize {
