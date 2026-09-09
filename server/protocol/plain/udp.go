@@ -88,7 +88,7 @@ func (s *Server) startUDP(g Group, ctx context.Context, handler dns.Handler) err
 	}
 	s.udp = l
 	l.start(g)
-	log.Infof("PLAIN: UDP server started on %v (shards=%d workers=%d)", addrs, shards, config.DefaultServerGoroutineLimit)
+	log.Infof("PLAIN: UDP server started on %v", addrs)
 	return nil
 }
 

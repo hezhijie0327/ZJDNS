@@ -326,6 +326,62 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 | `golangci-lint` | 代码质量 |
 | `go test` | 回归验证 |
 | `go test -bench=.` | Benchmark 回归检测（对比基线） |
+| `go tool pprof` | pprof 取证判读（allocs 差分 `-base`、CPU/heap top、`-peek` 调用方归因） |
+
+### 5.3 pprof 性能取证（CPU / 内存 / 分配 / goroutine）
+
+与 §3.3 的 `go test -bench` 互补：bench 是微观回归数字（单路径 ns/op、allocs/op），pprof 是宏观取证证据（CPU 花在哪、分配从哪来、goroutine 形态是否健康）。采集操作入口：`docs/debug/pprof-dual.sh`（双端一键：全协议 E2E + goroutine/heap 采样）与 `docs/benchmark/LOADTEST.md`（直连单端 + CPU/block profile 手法）。本节记录判读方法与已验证的判别实验。
+
+#### 5.3.1 采集矩阵
+
+| 信号 | 采集 | 判读 |
+|------|------|------|
+| CPU | `curl '…/debug/pprof/profile?seconds=N'`（覆盖压测窗口） | top 里 syscall/netpoll/调度占比 vs 应用栈占比（见 5.3.3） |
+| 堆驻留 | `heap`（压测结束、连接回收后采） | `-inuse_space` 看真实驻留；同端两轮压测 inuse **精确一致** = 无泄漏（第一轮增长是 warm-up） |
+| 分配 | `allocs` 差分：负载前后各采一次，`go tool pprof -top -base pre.pb.gz post.pb.gz` | 负载窗口内全部新增分配的调用点归因；总量 ÷ 查询数 = B/查询 |
+| goroutine | `goroutine?debug=1`（总数）+ `goroutineleak`（Go 1.27 泄漏检测） | 总数是**架构基线**（常驻 worker 池是设计内驻留，不是泄漏）；leak 采样必须为空；负载后等待 idle 回落再对比 |
+| block | `block?seconds=N`（客户端侧尤其有用） | 大量阻塞在单一库调用（如 `OpenStreamSync`）= 协议栈配额/等待问题 |
+
+#### 5.3.2 分配归因套路
+
+1. 冒烟预热被测路径（填缓存/池），采 `allocs` 前快照；
+2. 定量负载（benchclient 固定秒数与 workers），采后快照；
+3. `-base` 差分 → 总量 ÷ 查询数 = B/查询，top 节点即分配归因；跨 commit 记录 B/查询数字作回归追踪；
+4. 对可疑节点 `pprof -peek` 找调用方，判断是设计内成本还是缺陷。
+
+分配热点的三类典型：
+
+| 类别 | 特征 | 处置 |
+|------|------|------|
+| 运行时/内核层 | sync.Pool 回补、sockaddr/OOB 转换——每包固定成本 | 确认可避免性（如读路径直入池缓冲消掉一次拷贝）；确属内核固有则记录为平台成本 |
+| 日志格式化 | `fmt.Sprintf` + 日志 sanitize 合计可占 ~35% 分配，吞吐砍半 | 压测与性能对比一律 `log_level=error`（LOADTEST 口径）；生产默认 info 不受影响（热路径日志均为 Debug 级被过滤） |
+| 池回补异常 | 回补 B/查询 ≈ 池对象尺寸的量级 | 走 5.3.4 判别实验定位是池实现问题还是归还路径缺失 |
+
+#### 5.3.3 CPU 判读基准
+
+健康的缓存命中热路径画像：syscall（recvmsg/sendmsg）+ netpoll（kevent）+ 调度等待合计 >90%，应用管线（ServeDNS 中间件链）个位数百分比，`mallocgc` <5%。应用栈占比升高 = 代码瓶颈；syscall 占比高且机器 sys% 高 = 内核/平台墙（见 5.3.5）。
+
+#### 5.3.4 关键判别实验
+
+疑象先做判别实验再归因——本轮取证的两个关键定位（fork 服务循环从不归还缓冲、debug 日志占 35% 分配）都来自下表方法：
+
+| 疑象 | 实验 | 判读 |
+|------|------|------|
+| 池未命中率异常高 | 换一种**强引用**池实现（如 channel free-list）重测 | 依旧高 → 缓冲根本没被归还，查 Get/Put 调用方是否对称（归还路径缺失），而非调池实现 |
+| 疑似 GC 驱动的池排空 | 调 GOGC（如 400）重测分配构成 | 回补率不变 → 与 GC 无关；回补率下降 → GC 频率是根因 |
+| QPS 不随 worker 数上升 | 对比 8/32 workers 的 QPS 与 RTT | QPS ≈ workers/RTT（Little 定律）→ **客户端是瓶颈**，server 未饱和；server 真实上限需多连接饱和（dnsperf 或多 benchclient 进程，各自独立 socket） |
+| 分配差分为 0 / 数字好得可疑 | 查被测端 `zjdns.stats` total 是否与压测 ok 数同量级 | total 不涨 = 负载没到被测端（转发客户端自己的缓存吃掉了固定 qname 负载）——**先证明负载到达，再读数据** |
+| miss 路径打不满 | 固定 qname 全是命中 | `-d` 域名文件轮转 + 周期 `dig zjdns.cache.clear` 制造持续 miss 流 |
+
+#### 5.3.5 平台墙识别
+
+单机 loopback 存在与实现无关的数据报吞吐墙（macOS 实测 ≈10⁵ queries/s，即双倍数据报过栈）。特征：多客户端聚合 QPS 不再上升、server CPU 占总核数比例不高、机器整体 sys ≈50%。识别到墙后 QPS 对比在该平台失效——继续追 QPS 需换 Linux + dnsperf 多连接；此时可比较的是分配 B/查询与 CPU/查询效率。
+
+### 5.4 提交前 checklist（性能相关改动）
+
+1. `go test -bench` 对比基线（§3.3，allocs/op 契约）
+2. E2E 压测门禁（DEBUG.md 双端判定表）：冒烟全过 / fail=0 / goroutineleak 为空 / 两轮 inuse 精确一致 / 0 PANIC / 池 dialed 与 falling back 计数
+3. allocs 差分 B/查询数字记录进提交信息（5.3.2），供跨 commit 回归追踪
 
 ---
 
