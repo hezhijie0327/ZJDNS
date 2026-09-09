@@ -3,19 +3,19 @@ module zjdns
 go 1.27.0
 
 require (
-	codeberg.org/miekg/dns v0.6.110-0.20260906142836-a838437b1950
+	codeberg.org/miekg/dns v0.6.110-0.20260909045117-81471e9b542a
 	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033
-	github.com/cloudflare/circl v1.6.6-0.20260907123956-9ca6fed4e669
+	github.com/cloudflare/circl v1.6.6-0.20260909114340-2ef8bf457d28
 	github.com/emmansun/gmsm v0.44.1
-	github.com/klauspost/compress v1.20.1-0.20260904115809-75489f96c542
-	github.com/pion/dtls/v3 v3.1.3-0.20260904044347-59f4c33b90c5
+	github.com/klauspost/compress v1.20.1-0.20260909075634-5e17c92e03c6
+	github.com/pion/dtls/v3 v3.1.3-0.20260907200456-474c3e2e7a4e
 	github.com/quic-go/quic-go v0.62.1-0.20260907022535-908f9b5fe261
 	gitlab.com/go-extension/http v0.0.0-20260817192224-f5762b77a66a
 	gitlab.com/go-extension/tls v0.0.0-20260817191915-d8b98b0d31de
-	golang.org/x/crypto v0.56.0
-	golang.org/x/net v0.58.0
-	golang.org/x/sync v0.22.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/crypto v0.57.0
+	golang.org/x/net v0.59.0
+	golang.org/x/sync v0.23.0
+	golang.org/x/sys v0.48.0
 )
 
 require (
@@ -35,5 +35,5 @@ require (
 	gitlab.com/go-extension/rand v0.0.0-20240303103951-707937a049b5 // indirect
 	gitlab.com/go-extension/utils v0.0.0-20251006173700-b62b19cda891 // indirect
 	go.uber.org/mock v0.6.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 )
