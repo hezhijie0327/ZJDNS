@@ -84,11 +84,17 @@ type Store struct {
 	// lost at the swap).  Reads never take wmu.
 	wmu sync.Mutex
 
-	mu        sync.Mutex // guards sparse, tailMap, tail, sortedEnd
+	mu        sync.Mutex // guards sparse, tailMap, tail, sortedEnd, gen
 	sparse    []sparseEntry
 	tailMap   map[string]tailEntry
 	tail      int64 // next append offset (== physical EOF)
 	sortedEnd int64 // byte boundary between the sorted and tail regions
+	// gen advances on every visibility mutation (Put/Delete/Compact/
+	// truncate).  Get snapshots it before the unlocked block read and
+	// passes it to rememberMiss: a miss concluded against an older
+	// generation may predate a concurrent Put of the same key and must
+	// not be memoized (the remembered miss would mask the fresh record).
+	gen uint64
 
 	// neg memoizes full-miss keys (repeated ECS-variant misses re-reading
 	// blocks); invalidated by Put/Delete and cleared by Compact/Clear.
@@ -240,6 +246,7 @@ func (s *Store) Put(key string, ts int64, ttl int, validated bool, wire []byte) 
 		return err
 	}
 	s.tail += int64(len(rec))
+	s.gen++
 	s.tailMap[key] = tailEntry{
 		ts: ts, ttl: ttl, validated: validated,
 		wireOff: off + int64(recordHeaderLen+len(key)), wireLen: int32(len(wire)), //nolint:gosec // G115: wire length bounded by maxWireLen
@@ -257,6 +264,7 @@ func (s *Store) Delete(key string) {
 	defer s.wmu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.gen++
 	s.forgetMiss(key)
 	if te, found := s.tailMap[key]; found {
 		te.deleted = true
@@ -292,11 +300,11 @@ func (s *Store) Get(key string) (ts int64, ttl int, validated bool, wire []byte,
 		idx := sort.Search(len(s.sparse), func(i int) bool { return s.sparse[i].firstKey > key })
 		if idx == 0 {
 			s.mu.Unlock()
-			s.rememberMiss(key)
 			return 0, 0, false, nil, false
 		}
 		blk = s.sparse[idx-1]
 	}
+	missGen := s.gen
 	ref := s.fref.Load()
 	s.mu.Unlock()
 
@@ -320,7 +328,7 @@ func (s *Store) Get(key string) (ts int64, ttl int, validated bool, wire []byte,
 	}
 	rts, rttl, rvalidated, rwire, found := lookupInBlock(block, key)
 	if !found {
-		s.rememberMiss(key)
+		s.rememberMiss(key, missGen)
 		return 0, 0, false, nil, false
 	}
 	return rts, rttl, rvalidated, append([]byte(nil), rwire...), true
@@ -335,8 +343,17 @@ func (s *Store) hasMiss(key string) bool {
 }
 
 // rememberMiss memoizes a full miss, bounding the map by wholesale reset —
-// negative results are cheap to re-derive (one block read).
-func (s *Store) rememberMiss(key string) {
+// negative results are cheap to re-derive (one block read).  gen is the
+// store generation observed when the Get STARTED; a miss concluded against
+// an older generation may predate a concurrent Put of the same key, so it
+// is dropped instead of memoized.  mu is held across the insert (lock
+// order mu→negMu, matching Delete's forgetMiss call).
+func (s *Store) rememberMiss(key string, gen uint64) {
+	s.mu.Lock()
+	if s.gen != gen {
+		s.mu.Unlock()
+		return
+	}
 	s.negMu.Lock()
 	if s.neg == nil {
 		s.neg = make(map[string]struct{}, negCacheMax)
@@ -346,6 +363,7 @@ func (s *Store) rememberMiss(key string) {
 	}
 	s.neg[key] = struct{}{}
 	s.negMu.Unlock()
+	s.mu.Unlock()
 }
 
 // forgetMiss drops a memoized miss after a Put or Delete made the key
@@ -446,6 +464,7 @@ func (s *Store) Clear() error {
 	}
 	s.tail = int64(headerLen)
 	s.sortedEnd = int64(headerLen)
+	s.gen++
 	s.sparse = nil
 	s.tailMap = make(map[string]tailEntry)
 	s.resetMisses()

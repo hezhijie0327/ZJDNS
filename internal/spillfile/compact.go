@@ -258,6 +258,7 @@ func (s *Store) Compact(keep func(key string, ts int64, ttl int) bool) error {
 	s.tailMap = make(map[string]tailEntry)
 	s.sortedEnd = tail
 	s.tail = tail
+	s.gen++
 	retired := s.retired
 	s.retired = oldRef // one-generation grace — see the retired field comment
 	s.mu.Unlock()
