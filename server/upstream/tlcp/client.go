@@ -23,10 +23,13 @@ type Client struct {
 	tlcpSessions tlcp.SessionCache
 	dtlcpSession dtlcp.SessionCache
 	httpClient   *lrumap.Map[string, *http.Client] // cached DoH-over-TLCP clients by key
+	// dohEndpoints caches the parsed request URL + client-cache key per
+	// UpstreamServer — built once per upstream instead of once per query.
+	dohEndpoints *lrumap.Map[*config.UpstreamServer, *dohEndpoint]
 
-	// tlcpPool multiplexes pipelined TLCP connections per upstream (RFC 7766).
-	// Previously every query paid a fresh dial + TLCP handshake — a batch of
-	// N queries meant N simultaneous handshakes.  nil in tests.
+	// tlcpPool multiplexes pipelined TLCP connections per upstream (RFC 7766)
+	// so a batch of N queries shares handshakes instead of dialing N
+	// connections.  nil in tests.
 	tlcpPool *zpool.ConnPool
 
 	// dtlcpPool multiplexes pipelined DTLCP connections per upstream, same
@@ -42,6 +45,7 @@ func New(getProxy func(*config.UpstreamServer) *socks5.Dialer, timeout time.Dura
 		tlcpSessions: tlcp.NewLRUSessionCache(config.DefaultTLCPSessionCacheSize),
 		dtlcpSession: dtlcp.NewLRUSessionCache(config.DefaultDTLCPSessionCacheSize),
 		httpClient:   lrumap.New[string, *http.Client](config.DefaultHTTPTLCPClientMax * 2),
+		dohEndpoints: lrumap.New[*config.UpstreamServer, *dohEndpoint](config.DefaultHTTPTLCPClientMax * 2),
 		tlcpPool:     zpool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe, config.DefaultMaxPoolTotalConns),
 		dtlcpPool:    zpool.NewConnPool(config.DefaultMaxConns, config.DefaultMaxPipe, config.DefaultMaxPoolTotalConns),
 	}

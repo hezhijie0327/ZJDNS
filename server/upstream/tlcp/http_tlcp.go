@@ -15,17 +15,22 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
-// ExecuteHTTPTLCP performs a DoH-over-TLCP query using a cached HTTP client
-// whose DialTLSContext establishes TLCP connections. Clients are cached per
-// upstream key to amortize the TLCP handshake cost across queries.
-func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
-	if msg == nil {
-		return nil, errors.New("tlcp: nil query message")
-	}
-	if server == nil {
-		return nil, errors.New("tlcp: nil server config")
-	}
+// dohEndpoint is the immutable per-upstream request target: the parsed URL
+// and the client-cache key are built once per UpstreamServer instead of once
+// per query — the pointer key means reloads register fresh entries and the
+// lookup is allocation-free on the query hot path (same shape as the tls
+// package's endpoint cache).
+type dohEndpoint struct {
+	url *url.URL
+	key string
+}
 
+// dohEndpointFor returns the cached endpoint for server, building it on
+// first use.  Validation errors surface once per upstream, not per query.
+func (c *Client) dohEndpointFor(server *config.UpstreamServer) (*dohEndpoint, error) {
+	if ep, ok := c.dohEndpoints.Get(server); ok {
+		return ep, nil
+	}
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		return nil, fmt.Errorf("parse URL: %w", err)
@@ -40,7 +45,6 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 		// would double-bracket literals like [[2001:db8::1]]:9443.
 		parsedURL.Host = net.JoinHostPort(parsedURL.Hostname(), config.DefaultHTTPTLCPPort)
 	}
-
 	var b strings.Builder
 	b.Grow(len(parsedURL.String()) + len(server.ServerName) + len(server.Proxy) + 20)
 	b.WriteString(parsedURL.String()) // normalized endpoint — default-port variants share one client
@@ -50,7 +54,27 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 	b.WriteString(strconv.FormatBool(server.SkipTLSVerify))
 	b.WriteByte('|')
 	b.WriteString(server.Proxy)
-	key := b.String()
+	ep := &dohEndpoint{url: parsedURL, key: b.String()}
+	c.dohEndpoints.Set(server, ep)
+	return ep, nil
+}
+
+// ExecuteHTTPTLCP performs a DoH-over-TLCP query using a cached HTTP client
+// whose DialTLSContext establishes TLCP connections. Clients are cached per
+// upstream key to amortize the TLCP handshake cost across queries.
+func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+	if msg == nil {
+		return nil, errors.New("tlcp: nil query message")
+	}
+	if server == nil {
+		return nil, errors.New("tlcp: nil server config")
+	}
+
+	ep, err := c.dohEndpointFor(server)
+	if err != nil {
+		return nil, err
+	}
+	key := ep.key
 	var httpClient *http.Client
 	var ok bool
 	if c.httpClient != nil { // Close() never nils the map (client.go) — guarded for symmetry
@@ -60,7 +84,7 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 		tlcpCfg := c.tlcpClientConfig(server).Clone()
 		tlcpCfg.NextProtos = config.NextProtoDOH
 		if tlcpCfg.ServerName == "" {
-			tlcpCfg.ServerName = parsedURL.Hostname()
+			tlcpCfg.ServerName = ep.url.Hostname()
 		}
 		proxyDialer := c.getProxy(server)
 
@@ -96,5 +120,5 @@ func (c *Client) ExecuteHTTPTLCP(ctx context.Context, msg *dns.Msg, server *conf
 		}
 	}
 
-	return zdnsutil.ExecuteDoHRequest(ctx, msg, parsedURL, httpClient, http.MethodGet)
+	return zdnsutil.ExecuteDoHRequest(ctx, msg, ep.url, httpClient, http.MethodGet)
 }
