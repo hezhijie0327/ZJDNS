@@ -142,6 +142,11 @@ func (m *CacheLookup) serveSynthesized(ctx context.Context, qctx *handler.QueryC
 		qctx.Res = buildCacheResponse(qctx, entry, false)
 		qctx.Result = "hit"
 		return nil
+	} else if found {
+		// A store race left an expired (or 0-TTL) entry: release its
+		// pooled slices instead of orphaning them to the GC.
+		entry.ReleaseOffsets()
+		pool.ReleaseWire(entry.ResponseWire)
 	}
 	return next.ServeDNS(ctx, qctx)
 }

@@ -181,12 +181,14 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 				DOHHandler: s.tls.DOHHandler(),
 				WrapConn:   wrapConn,
 			}
-			if s.tlcpServer != nil {
-				if cfg.Server.Protocol.HTTPTLCP.Port == cfg.Server.Protocol.HTTPS.Port {
-					// The mux serves HTTPoverTLCP on this port — the
-					// standalone DoH-TLCP listener would EADDRINUSE.
-					s.tlcpServer.SkipDOH = true
-				}
+			if s.tlcpServer != nil && cfg.Server.Protocol.HTTPTLCP.Port == cfg.Server.Protocol.HTTPS.Port {
+				// The mux serves HTTPoverTLCP on this port — the standalone
+				// DoH-TLCP listener would EADDRINUSE.  DoH-TLCP joins ONLY
+				// when its configured port IS this group's port: attaching it
+				// on a port mismatch would serve TLCP-record connections with
+				// a handler configured for a different port (and wire it even
+				// when HTTPTLCP was never configured at all).
+				s.tlcpServer.SkipDOH = true
 				g.DOHTLCP = http.HandlerFunc(s.tlcpServer.ServeDOH)
 				g.DOHConnContext = servertlcp.StashConn
 			}

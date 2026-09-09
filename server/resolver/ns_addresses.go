@@ -9,6 +9,7 @@ import (
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 	"zjdns/server/resolver/probe"
 
 	"codeberg.org/miekg/dns"
@@ -248,13 +249,14 @@ func (r *Recursive) lookupNSAddrsFromCache(nsName string, refreshEntry func()) [
 	// One query fetches both the A and AAAA entries (NS address lookups
 	// never carry ECS).
 	entries, found, expired := r.cache.GetTypes(nsName, dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA})
-	// GetTypes hands out pool-owned TTL-offset slices — return them exactly
-	// once on every exit path (the recursive hot path would otherwise
-	// permanently drain the ttloOffsetsPool).
+	// GetTypes hands out pool-owned TTL-offset slices and response wires —
+	// return them exactly once on every exit path (the recursive hot path
+	// would otherwise permanently drain both pools).
 	defer func() {
 		for _, e := range entries {
 			if e != nil {
 				e.ReleaseOffsets()
+				pool.ReleaseWire(e.ResponseWire)
 			}
 		}
 	}()

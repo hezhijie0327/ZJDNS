@@ -236,6 +236,21 @@ func (s *spoofguardState) processPacket(raw []byte, n int, query *dns.Msg, addr 
 		if resp == nil {
 			return nil
 		}
+		// Release prior candidates: the baseline can arm mid-round (a
+		// concurrent query's Feed flips Confident between this round's
+		// packets), so earlier-collected candidates may be orphaned here.
+		if s.prev != nil {
+			pool.DefaultMessage.Put(s.prev)
+			s.prev = nil
+		}
+		if s.last != nil {
+			pool.DefaultMessage.Put(s.last)
+			s.last = nil
+		}
+		if s.nonEDNS != nil {
+			pool.DefaultMessage.Put(s.nonEDNS)
+			s.nonEDNS = nil
+		}
 		s.last = resp
 		s.lastTTL = ttl
 		return resp

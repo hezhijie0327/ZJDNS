@@ -10,6 +10,7 @@ import (
 	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 	"zjdns/server/handler"
 	"zjdns/server/resolver"
 
@@ -177,8 +178,10 @@ func (m *CacheStore) buildError(qctx *handler.QueryContext) *dns.Msg {
 			return buildCacheResponse(qctx, entry, isExpired)
 		}
 		// Entry cannot serve stale and is dropped — release the pooled
-		// TTL-offset slice (buildCacheResponse would have released it).
+		// TTL-offset slice and response wire (buildCacheResponse would
+		// have released both).
 		entry.ReleaseOffsets()
+		pool.ReleaseWire(entry.ResponseWire)
 	}
 
 	if log.IsDebug() {
