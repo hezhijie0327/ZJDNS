@@ -62,6 +62,11 @@ func TruncateWire(wire []byte) []byte {
 	truncated[2] |= 0x02
 	truncated[6], truncated[7] = 0, 0 // ANCOUNT
 	truncated[8], truncated[9] = 0, 0 // NSCOUNT
+	// ARCOUNT must reflect what survives: the preserved OPT (count 1) or
+	// nothing.  Leaving the stale count on an OPT-less wire (e.g. MX answers
+	// with glue in Additional) yields an unparseable response — the fork's
+	// Unpack rejects the truncated form outright, breaking the TC retry.
+	truncated[10], truncated[11] = 0, 0 // ARCOUNT
 	if opt != nil {
 		truncated = append(truncated, opt...)
 		binary.BigEndian.PutUint16(truncated[10:12], 1) // ARCOUNT = the OPT
