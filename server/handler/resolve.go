@@ -4,6 +4,9 @@ import (
 	"context"
 	"zjdns/cache"
 	"zjdns/edns"
+	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/pool"
+	"zjdns/internal/ttl"
 	"zjdns/server/resolver"
 	"zjdns/server/resolver/dnssec"
 )
@@ -32,14 +35,24 @@ func (s *Secondary) Lookup(ctx context.Context, qname string, qtype, qclass uint
 	if s.store != nil {
 		if entry, found, isExpired := s.store.Get(qname, qtype, qclass, ecsOpt); found {
 			ok := !isExpired && entry.Unpack() == nil
-			// The pooled TTL-offset slice is released on every path — the
-			// unpacked RR sections do not reference it.
+			// The pooled TTL-offset slice and the pooled response wire are
+			// released on every path — the unpacked RR sections reference
+			// neither.
 			entry.ReleaseOffsets()
+			pool.ReleaseWire(entry.ResponseWire)
 			if ok {
+				// Serve the REMAINING TTL: the stored wire carries original
+				// TTLs and this path skips the offset-table decay the serve
+				// path applies.  Cacheable stays false — the data is already
+				// cached, and re-storing it would reset the entry's TTL
+				// lease without an upstream revalidation.
+				elapsed := ttl.Elapsed(entry.Timestamp)
 				return &resolver.QueryResult{
-					Answer: entry.Answer, Authority: entry.Authority, Additional: entry.Additional,
-					Validated: entry.Validated, Rcode: entry.WireRcode(), Authoritative: entry.WireAuthoritative(),
-					Cacheable: true,
+					Answer:     zdnsutil.ProcessRecords(entry.Answer, elapsed, true, true),
+					Authority:  zdnsutil.ProcessRecords(entry.Authority, elapsed, true, true),
+					Additional: zdnsutil.ProcessRecords(entry.Additional, elapsed, true, true),
+					Validated:  entry.Validated, Rcode: entry.WireRcode(), Authoritative: entry.WireAuthoritative(),
+					Cacheable: false,
 				}
 			}
 		}

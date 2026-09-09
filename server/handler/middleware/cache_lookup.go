@@ -5,6 +5,7 @@ import (
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 	"zjdns/server/handler"
 
 	"codeberg.org/miekg/dns"
@@ -87,8 +88,10 @@ func (m *CacheLookup) Wrap(next handler.QueryHandler) handler.QueryHandler {
 
 		// Expired and cannot serve stale — let the resolver handle it.
 		// The entry is dropped without being served: release the pooled
-		// TTL-offset slice (buildCacheResponse would have released it).
+		// TTL-offset slice and the pooled response wire
+		// (buildCacheResponse would have released both).
 		entry.ReleaseOffsets()
+		pool.ReleaseWire(entry.ResponseWire)
 		return next.ServeDNS(ctx, qctx)
 	})
 }
