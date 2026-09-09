@@ -13,6 +13,7 @@
 | 1 | 2026-08 | 全内存迁移后首次大审计（SQLite 移除 + 快照持久化），重点：内存泄漏 corner case | `docs/audit/2026-08-memory-audit/` | ✅ 全部修复（21/21）+ pprof 验证通过 |
 | 2 | 2026-09 | 全项目审计（Phase 1 七包级 + Phase 2 四交叉组,约 150 项独立发现）,重点:9/1-9/2 性能轮次后的防御面/池计数/锁内 IO;发现即修复全部 Sprint 1-3 + E2E 全协议验证 + 基线刷新 | `docs/audit/2026-09-full-audit/` | ✅ 全部修复(含 1 项 CRITICAL 防御绕过、11 项 HIGH)+ 14 协议 E2E + pprof 零泄漏 |
 | 3 | 2026-09 | Round 3:上轮后 95 个 perf 提交(2.7 万行)为重点面 + 注释风格专项维度;Phase 1 → Sprint 1-3 发现即修复 → Round B 修复复查+交叉扫描;1 CRITICAL + 8 HIGH + ~28 MEDIUM + ~170 注释噪音清除;E2E 21 场景全过(含无 EDNS TCP 缓存命中——上轮遗留盲区) | `docs/audit/2026-09-round3-audit/` | ✅ 全部修复 + Round B 自查回归 2 项(含测试捕获的 DNSCrypt Start 标志丢失)+ 基线无回归 |
+| 4 | 2026-09 | Round 4:手搓 Plain UDP/TCP + Guard 拦截率专项 + 全项目 20 维度;7 并行包级审计(4 HIGH + 14 MEDIUM + ~30 LOW)→ 分 Sprint 修复(22 commits)→ Round C/D 两轮修复面复查(抓获 3 个修复自身引入的回归,含 2 HIGH)→ 确定性注入测试台实测 Guard 矩阵(修复 capsguard 0x20 重试竞态 + 发散 EDNS 随机决胜两个单开缺口,最终单开×组合×三威胁模型全 0 泄漏)→ 14 协议 E2E + 同进程内存收敛精确一致 | `docs/audit/2026-09-round4-audit/` | ✅ 全部修复 + lrumap/spillfile 竞态修复带可复现验证 + 基线仅 2 项已论证的正确性代价 |
 
 ---
 
@@ -303,6 +304,12 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 | **预打包响应重 Pack** | 帧写入方(TCP 族/HTTP 族)无条件 `resp.Pack()` 或先覆盖 `resp.Data` — 预打包缓存命中(Data 已置、RR sections 为 nil)被重序列化为 12 字节头帧 | 每个响应写入方必须守护 `len(resp.Data) == 0` 才 Pack,否则原样服务/复制 wire(参考 `dnsutil.PackStreamFrame`、`tlcp.buildDOTFrame`);E2E 必须包含**无 EDNS 客户端的 TCP 缓存命中**场景(带 DNSSEC 的测试域名会走解包路径掩盖此 bug) |
 | **池槽位所有权别名** | 从状态结构返回槽内指针(getter 返回 `s.xxx` 不清槽),调用方持有的引用与后续 `Put(s.xxx)` 形成悬垂/双重归还 | 返回槽内池对象的方法必须清槽(所有权转移),或文档化别名契约;同型 bug 检查:`grep -n 'return s\.' 结合槽位是否可能被 Put` |
 | **错误变量遮蔽** | 内层 `resp, err := ...` 遮蔽外层错误变量,外层错误分支在 err==nil 时执行 `return nil, err` 返回 (nil, nil) | 内外两层错误路径用不同变量名(acqErr/exErr);Review 时对每个 `if err != nil` 检查 err 的声明层级 |
+| **池归还后读取** | `sync.Pool.Put` 与后续读取交错的"释放后使用"竞态——结构体字面量里 `Rcode: entry.WireRcode()` 这类字段求值发生在同语句更早的 `ReleaseWire` 之后,另一 goroutine 的 Get 可覆盖缓冲 | 归还前先把 wire 派生值读入局部变量;Review 每个 `pool.ReleaseWire/X.Put` 调用点,确认其后不再触碰缓冲或其派生读取器 |
+| **上下文键误用** | 从请求 ctx 取连接/凭据时用错键——`http.ServerContextKey` 存的是 `*http.Server` 不是 `net.Conn`,`r.TLS` 仅对 `*crypto/tls.Conn` 填充 | 断言前先查 stdlib 该键的真实类型;非 stdlib TLS 栈(如 gotlcp)需要显式传递通道(`http.Server.ConnContext` hook);修复后用真实客户端 E2E 验证凭据非空 |
+| **修复引入回归** | 修复提交本身带新缺陷(误用不存在的 API、归还/读取次序、丢条件),修复验证只盯原始发现不看 diff | 每轮修复后必须有一轮"修复面复查"(Round C):逐 commit 读 diff + 全量测试 + 修复声称行为的 E2E 复验;连续两轮复查无新发现才收尾 |
+| **注入测试台保真度** | 防御测试台的伪造包不经意携带真实流量特征,测错威胁模型——`SetReply` 复制查询的 DO 位,fork 的 `Pack` 自动物化 OPT,伪造包变成"EDNS 响应" | 裸 GFW 模型的伪造包必须显式 `Security=false`;测试台应支持多威胁模型开关(bare/case-blind/EDNS-forger)并逐一标注 |
+| **测试台状态泄漏** | 注入台的预热(arm)计数器是全局序号,多场景共用 rig 时预热相位跨场景泄漏;残留的旧实例占端口让新查询打到旧二进制 | 每个测试场景重启 rig 与被测实例;跑前 `pgrep` 清场;对"全拦截"结果抽查日志确认防御路径真实执行过 |
+| **单开 Guard 缺口** | Guard 组合测试全绿掩盖单开缺口——capsguard 0x20 未随机化重试在单读路径接受首包;发散等丰富度 EDNS 候选使 pickBest 成随机决胜 | 矩阵必须含"每个 guard 单开 × 每个威胁模型";失败路径降级(重试/回退)本身是攻击面:降级后的第一包接受逻辑要重新审查 |
 
 ## 五、审计与修复工具
 

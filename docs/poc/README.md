@@ -22,6 +22,17 @@ go run ./poisonguard
 go run ./capsguard
 ```
 
+## Interception-Rate Rig
+
+`interception/` is not a visualization POC but a measurement rig: a DNS
+"upstream" that answers every query with N injected fakes (GFW-model:
+bare non-EDNS single answers, per-packet-varying IPs, case-echoed,
+distinct IP TTL) followed by the real EDNS response after a delay. Point
+a forwarding ZJDNS at it and count attacker-IP vs real-IP answers to
+measure a guard combination's leak rate — see the header comment in
+`interception/main.go` for the full matrix procedure and the three
+threat models (`-fake-case blind`, `-fake-edns`).
+
 All programs clear the terminal and render color output. Run with `-h` for usage.
 
 ## Real-Network Mode
