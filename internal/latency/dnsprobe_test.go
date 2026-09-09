@@ -186,7 +186,8 @@ func startTestDNSServer(t *testing.T, tcp bool) (port int, stop func()) {
 		m.Rcode = dns.RcodeRefused
 		_, _ = m.WriteTo(w)
 	})
-	srv := &dns.Server{Handler: handler}
+	started := make(chan struct{})
+	srv := &dns.Server{Handler: handler, NotifyStartedFunc: func(context.Context) { close(started) }}
 	if tcp {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
@@ -203,5 +204,8 @@ func startTestDNSServer(t *testing.T, tcp bool) (port int, stop func()) {
 		port = pc.LocalAddr().(*net.UDPAddr).Port
 	}
 	go func() { _ = srv.ListenAndServe() }()
+	// Shutdown races the fork's lazy init if the server has not started
+	// listening yet — wait for the started signal first.
+	<-started
 	return port, func() { srv.Shutdown(context.Background()) }
 }
