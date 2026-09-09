@@ -35,6 +35,11 @@ func (s *Secondary) Lookup(ctx context.Context, qname string, qtype, qclass uint
 	if s.store != nil {
 		if entry, found, isExpired := s.store.Get(qname, qtype, qclass, ecsOpt); found {
 			ok := !isExpired && entry.Unpack() == nil
+			// Read everything the wire carries BEFORE releasing it: the
+			// release is a sync.Pool.Put, and another goroutine can
+			// AcquireWire and overwrite the buffer between the Put and
+			// these reads.
+			rcode, authoritative := entry.WireRcode(), entry.WireAuthoritative()
 			// The pooled TTL-offset slice and the pooled response wire are
 			// released on every path — the unpacked RR sections reference
 			// neither.
@@ -51,7 +56,7 @@ func (s *Secondary) Lookup(ctx context.Context, qname string, qtype, qclass uint
 					Answer:     zdnsutil.ProcessRecords(entry.Answer, elapsed, true, true),
 					Authority:  zdnsutil.ProcessRecords(entry.Authority, elapsed, true, true),
 					Additional: zdnsutil.ProcessRecords(entry.Additional, elapsed, true, true),
-					Validated:  entry.Validated, Rcode: entry.WireRcode(), Authoritative: entry.WireAuthoritative(),
+					Validated:  entry.Validated, Rcode: rcode, Authoritative: authoritative,
 					Cacheable: false,
 				}
 			}
