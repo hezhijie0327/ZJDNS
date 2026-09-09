@@ -283,6 +283,7 @@ func (c *Client) Close() {
 
 	c.plainClient.Close()
 	c.tlsClient.Close()
+	c.tlcpClient.Close()
 
 	// The dialer map is intentionally NOT nil'd here: in-flight proxied
 	// queries read c.proxyDialers from proxyDialer (warmup.go) and a nil
