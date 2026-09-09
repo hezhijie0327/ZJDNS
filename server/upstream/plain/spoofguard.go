@@ -8,6 +8,7 @@ package plain
 import (
 	"errors"
 	"math/rand/v2"
+	"strings"
 	"time"
 	"zjdns/config"
 	"zjdns/internal/log"
@@ -46,9 +47,23 @@ type spoofguardState struct {
 	// must only learn from corroborated samples.
 	confirmed bool
 
+	// divergentEDNS marks that this round collected EDNS candidates whose
+	// answers DISAGREE.  Equal-richness divergent candidates make pickBest
+	// a coin flip (an EDNS-capable forger ties the real answer), so the
+	// window path defers to cross-round confirmation instead of serving
+	// the flip outright.
+	divergentEDNS bool
+
 	// copyBuf is reused across processPacket calls within a single
 	// multi-read loop, eliminating per-candidate heap allocations.
 	copyBuf []byte
+}
+
+// candidateSig is one divergent candidate carried across collect rounds
+// for signature-intersection confirmation.
+type candidateSig struct {
+	msg *dns.Msg
+	ttl uint8
 }
 
 // Copy-buffer shrink cadence for spoofguardState.copyBuf: after
@@ -355,6 +370,9 @@ func (s *spoofguardState) collectEDNSCandidate(resp *dns.Msg, ttlConfident bool,
 	if s.prev != nil {
 		pool.DefaultMessage.Put(s.prev)
 	}
+	if s.last != nil && !sameUDPAnswer(s.last, resp) {
+		s.divergentEDNS = true
+	}
 	s.prevTTL = s.lastTTL
 	s.prev = s.last
 	s.prevAns = s.lastAns
@@ -363,6 +381,38 @@ func (s *spoofguardState) collectEDNSCandidate(resp *dns.Msg, ttlConfident bool,
 	s.lastTTL = ttl
 	log.Debugf("UPSTREAM: UDP spoofguard EDNS candidate #%d from %s, answer=%d (ambiguous, collecting more)", s.candidates, addr, s.lastAns)
 	return nil
+}
+
+// takeCandidates removes the EDNS candidate slots (prev + last), keying
+// each by its answer signature — ownership of every returned message moves
+// to the caller.  Used by the divergent-window path: the real answer's
+// signature repeats across re-queries, a per-packet-varying forger's never
+// does.
+func (s *spoofguardState) takeCandidates() map[string]candidateSig {
+	out := make(map[string]candidateSig, 2)
+	for _, c := range [2]struct {
+		msg *dns.Msg
+		ttl uint8
+	}{{s.prev, s.prevTTL}, {s.last, s.lastTTL}} {
+		if c.msg != nil {
+			out[answerSignature(c.msg)] = candidateSig{msg: c.msg, ttl: c.ttl}
+		}
+	}
+	s.prev, s.last = nil, nil
+	return out
+}
+
+// answerSignature formats a candidate's answer section into a comparable
+// string (owner, type, rdata — TTL excluded, matching sameRRData).  Only
+// called on divergent rounds under active injection; the formatting cost is
+// irrelevant there.
+func answerSignature(m *dns.Msg) string {
+	var b strings.Builder
+	for _, rr := range m.Answer {
+		b.WriteString(rr.String())
+		b.WriteByte('|')
+	}
+	return b.String()
 }
 
 // pickBest returns the best candidate together with its TTL, taking

@@ -32,11 +32,16 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 	proxyDialer := c.getProxy(server)
 
 	// GFW only hijacks A/AAAA — skip multi-read for other QTYPEs.
+	// Capsguard rides the collect discipline too: the 0x20 mismatch retry
+	// alone accepts the first datagram of the unrandomized re-query, so a
+	// case-blind injector wins the retry race — with the collect loop the
+	// bare non-EDNS fake lands in the low-priority fallback slot and the
+	// real EDNS echo outranks it.
 	isAQtype := len(msg.Question) > 0 &&
 		(dns.RRToType(msg.Question[0]) == dns.TypeA ||
 			dns.RRToType(msg.Question[0]) == dns.TypeAAAA)
 
-	if isAQtype && (server.Spoofguard || server.HopGuard) {
+	if isAQtype && (server.Spoofguard || server.HopGuard || server.CapsGuard) {
 		if c.udpPool != nil {
 			// Pooled collect mode — readLoop captures the IP TTL via
 			// control messages, so both spoofguard and hopguard run over
@@ -279,6 +284,9 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 	// while the real answer is deterministic — and an ambiguous response is
 	// NEVER served without that confirmation (pure UDP, no TCP fallback).
 	var previous *dns.Msg
+	// prevRoundSigs holds the prior round's divergent EDNS candidates by
+	// answer signature for cross-round confirmation (ownership included).
+	var prevRoundSigs map[string]candidateSig
 
 	for round := 0; ; round++ {
 		trackingID := uc.NextID()
@@ -333,6 +341,9 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 				if previous != nil {
 					pool.DefaultMessage.Put(previous)
 				}
+				for _, c := range prevRoundSigs {
+					pool.DefaultMessage.Put(c.msg)
+				}
 				uc.ReleaseCollect(matchKey)
 				return nil, ctx.Err()
 			case pkt, ok := <-collectCh:
@@ -348,6 +359,9 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					}
 					if previous != nil {
 						pool.DefaultMessage.Put(previous)
+					}
+					for _, c := range prevRoundSigs {
+						pool.DefaultMessage.Put(c.msg)
 					}
 					if sg.last != nil {
 						sg.last.ID = originalID // tracking ID must not escape
@@ -419,11 +433,77 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 				}
 				pollTimer.Reset(next)
 				if sg.last != nil && now.Sub(sg.lastRecv) > sg.collectWindow() {
-					// EDNS candidate — safe, return directly.  Feed the
-					// baseline only when armed or when the window saw a
-					// single datagram (corroborated by silence); two
-					// divergent candidates surviving to the window means
-					// the pick is a coin flip, not a clean sample.
+					// Divergent EDNS candidates: an EDNS-capable forger
+					// ties the real answer on richness and pickBest's
+					// random tie-break is a coin flip.  The real answer is
+					// deterministic across re-queries while the forger
+					// varies per packet — serve only a signature present
+					// in BOTH rounds; comparing picks would just compare
+					// two coin flips.
+					if sg.divergentEDNS && !sg.confirmed {
+						roundsLeft := round+1 < config.DefaultSpoofguardConfirmRounds && !now.After(maxDeadline)
+						sigs := sg.takeCandidates()
+						putAll := func(keep map[string]candidateSig, exclude *dns.Msg) {
+							for _, c := range keep {
+								if c.msg != exclude {
+									pool.DefaultMessage.Put(c.msg)
+								}
+							}
+						}
+						if prevRoundSigs != nil {
+							var match *dns.Msg
+							var matchTTL uint8
+							for sig, c := range sigs {
+								if _, ok := prevRoundSigs[sig]; ok {
+									match, matchTTL = c.msg, c.ttl
+									break
+								}
+							}
+							if match != nil {
+								if hg != nil {
+									hg.Feed(server.Address, matchTTL)
+								}
+								putAll(sigs, match)
+								putAll(prevRoundSigs, nil)
+								if previous != nil {
+									pool.DefaultMessage.Put(previous)
+								}
+								match.ID = originalID
+								uc.ReleaseCollect(matchKey)
+								return match, nil
+							}
+							// No signature repeated across rounds — every
+							// candidate varied, so none is corroborated.
+							putAll(sigs, nil)
+							putAll(prevRoundSigs, nil)
+							prevRoundSigs = nil
+							if previous != nil {
+								pool.DefaultMessage.Put(previous)
+							}
+							if !roundsLeft {
+								uc.ReleaseCollect(matchKey)
+								return nil, errAmbiguousNoConfirm
+							}
+							break collect // fresh divergent round
+						}
+						if !roundsLeft {
+							putAll(sigs, nil)
+							if previous != nil {
+								pool.DefaultMessage.Put(previous)
+							}
+							uc.ReleaseCollect(matchKey)
+							return nil, errAmbiguousNoConfirm
+						}
+						prevRoundSigs = sigs // ownership moves
+						if previous != nil {
+							pool.DefaultMessage.Put(previous)
+						}
+						break collect // re-query in the next round
+					}
+					// Single / repeat-confirmed EDNS candidate — safe,
+					// return directly.  Feed the baseline only when armed
+					// or when the window saw a single datagram (corroborated
+					// by silence); divergent picks never reach here.
 					resp, respTTL := sg.pickBest()
 					if hg != nil && (hg.Confident(server.Address) || sg.packets == 1) {
 						hg.Feed(server.Address, respTTL)

@@ -375,3 +375,52 @@ func TestSpoofguard_NonEDNSQueryResponse_UsesFallbackSlot(t *testing.T) {
 		t.Fatal("bare single-answer A is ambiguous (nonEDNSSafe=false)")
 	}
 }
+
+// TestSpoofguard_DivergentEDNSFlagged verifies the divergentEDNS marker:
+// two EDNS candidates with different answers set it; an identical repeat
+// clears the path via confirmed.
+func TestSpoofguard_DivergentEDNSFlagged(t *testing.T) {
+	fake1 := spoofguardResponse(t, []dns.RR{aRR("66.66.1.1")}, nil, []dns.RR{optRR()}, dns.RcodeSuccess)
+	fake2 := spoofguardResponse(t, []dns.RR{aRR("66.66.2.2")}, nil, []dns.RR{optRR()}, dns.RcodeSuccess)
+
+	s := &spoofguardState{}
+	if resp := s.processPacket(fake1, len(fake1), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp != nil {
+		t.Fatal("first candidate must be collected")
+	}
+	if s.divergentEDNS {
+		t.Fatal("single candidate must not mark divergence")
+	}
+	if resp := s.processPacket(fake2, len(fake2), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp != nil {
+		t.Fatal("divergent second candidate must be collected, not returned")
+	}
+	if !s.divergentEDNS {
+		t.Fatal("disagreeing EDNS candidates must set divergentEDNS")
+	}
+	sigs := s.takeCandidates()
+	if len(sigs) != 2 {
+		t.Fatalf("takeCandidates must carry both candidates, got %d", len(sigs))
+	}
+	if s.prev != nil || s.last != nil {
+		t.Fatal("takeCandidates must clear the slots (ownership moved)")
+	}
+}
+
+// TestSpoofguard_IdenticalRepeatNotDivergent verifies a repeated identical
+// EDNS answer confirms instead of marking divergence.
+func TestSpoofguard_IdenticalRepeatNotDivergent(t *testing.T) {
+	raw := spoofguardResponse(t, []dns.RR{aRR("93.46.8.89")}, nil, []dns.RR{optRR()}, dns.RcodeSuccess)
+	s := &spoofguardState{}
+	if resp := s.processPacket(raw, len(raw), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp != nil {
+		t.Fatal("first candidate must be collected")
+	}
+	resp := s.processPacket(raw, len(raw), spoofguardQuery(), "1.2.3.4:53", false, 64, true)
+	if resp == nil {
+		t.Fatal("identical repeat must confirm and return")
+	}
+	if s.divergentEDNS {
+		t.Fatal("identical repeat must not mark divergence")
+	}
+	if !s.confirmed {
+		t.Fatal("identical repeat must set confirmed")
+	}
+}
