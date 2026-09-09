@@ -664,6 +664,23 @@ dig @127.0.0.1 -p 10533 www.google.com A +short
 pkill -f "poisonguard"
 ```
 
+### No-Cache Marking (EDE 65281, defense-uncertain)
+
+UDP responses served while a guard cannot positively verify them (hopguard
+baseline still learning / TTL capture unavailable; capsguard unrandomized
+retry or downgraded address) carry the ZJDNS-private EDE 65281 and are
+served but never cached — a poisoned answer cannot persist past one query.
+Once hopguard arms (32 corroborated samples), responses lose the mark and
+cache normally.
+
+```bash
+/tmp/zjdns -config docs/debug/defense/hopguard.json &
+sleep 2
+dig @127.0.0.1 -p 10533 warm.test A +edns +comments   # expect "EDE 65281" while learning
+dig @127.0.0.1 -p 15353 zjdns.stats CH TXT +short | grep entries   # stays 0 while learning
+grep -c "defense-uncertain" /tmp/zjdns.log             # mark decisions (debug:UPSTREAM)
+```
+
 ### Recursive Defense (recursive, all five layers)
 
 ```bash
