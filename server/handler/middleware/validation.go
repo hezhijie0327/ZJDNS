@@ -30,6 +30,11 @@ func wireNameLength(name string) int {
 	if !strings.HasSuffix(name, ".") {
 		return -1
 	}
+	// The root name is exactly the root octet — the only legal
+	// zero-length label ("a..b." stays invalid below).
+	if name == "." {
+		return 1
+	}
 	total := 1 // root octet
 	labelLen := 0
 	// Iterate the FULL name: the trailing dot terminates the final label.
