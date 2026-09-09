@@ -39,6 +39,13 @@ type spoofguardState struct {
 	// TTL values for hopguard learning — stored per candidate.
 	lastTTL, prevTTL, nonEDNSTTL uint8
 
+	// confirmed marks that the returned candidate was corroborated by an
+	// identical repeat within this round — the strongest corroboration the
+	// pure-UDP path has (GFW fakes vary per packet, the real answer is
+	// deterministic).  Feed sites consult it: an unarmed hopguard baseline
+	// must only learn from corroborated samples.
+	confirmed bool
+
 	// copyBuf is reused across processPacket calls within a single
 	// multi-read loop, eliminating per-candidate heap allocations.
 	copyBuf []byte
@@ -217,79 +224,14 @@ func (s *spoofguardState) processPacket(raw []byte, n int, query *dns.Msg, addr 
 		log.Debugf("UPSTREAM: UDP spoofguard accepted %s (real server) from %s", dns.RcodeToString[uint16(rcode)], addr)
 	}
 
-	// EDNS-gate: GFW only injects bare A/AAAA records without EDNS and
-	// without CNAME chains.  Non-EDNS responses are a low-priority fallback:
-	// EDNS-bearing candidates always win, and dropping single-answer
-	// non-EDNS outright would block every authority that does not echo EDNS
-	// for the full budget.
-	//
-	// When spoofguard is disabled (HopGuard-only mode), skip the EDNS gate
-	// entirely — HopGuard's TTL validation is the sole filter. The response
-	// has already passed HopGuard validation before entering processPacket.
-	if rcode == dns.RcodeSuccess && query.UDPSize > 0 {
-		if !spoofguardEnabled {
-			resp := s.unpackMatching(raw, n, query)
-			if resp == nil {
-				return nil
-			}
-			s.last = resp
-			s.lastTTL = ttl
-			return resp
-		}
-		resp := s.unpackMatching(raw, n, query)
-		if resp == nil {
-			return nil
-		}
-
-		// EDNS presence is determined from resp.UDPSize, not raw ARCOUNT
-		// (which counts ALL additional records).  This fork's Unpack removes
-		// the OPT RR from Extra and folds its options into Pseudo, setting
-		// Msg.UDPSize only when an OPT was present — so a bare `*dns.OPT`
-		// scan of Extra never matched and the EDNS candidate path was dead.
-		hasEDNS := resp.UDPSize > 0
-		if hasEDNS {
-			// An EDNS response is a legitimate candidate, NOT a spoofguard
-			// target — route it into the ambiguous EDNS-bearing handling
-			// (fast-accept on TTL confidence or collect). Dropping it here
-			// would discard the only response and time the query out.
-			return s.collectEDNSCandidate(resp, ttlConfident, ttl, addr)
-		}
-
-		// Non-EDNS NOERROR responses (single-answer included) are the
-		// low-priority fallback; legitimate authorities that do not echo
-		// EDNS return exactly that shape.  A bare single-answer A/AAAA
-		// is marked ambiguous (nonEDNSSafe=false): executeUDPCollect only
-		// serves it after a matching re-query confirms it (pure-UDP
-		// consistency — GFW fakes vary per packet, the real answer is
-		// deterministic); CNAME-bearing responses are safe to serve
-		// directly (GFW does not inject CNAME chains).
-		hasCNAME := false
-		for _, rr := range resp.Answer {
-			if _, ok := rr.(*dns.CNAME); ok {
-				hasCNAME = true
-				break
-			}
-		}
-		s.nonEDNSSafe = hasCNAME
-		s.rejected++
-		if s.nonEDNS != nil {
-			pool.DefaultMessage.Put(s.nonEDNS)
-		}
-		s.nonEDNS = resp
-		s.nonEDNSAns = len(resp.Answer)
-		s.nonEDNSTTL = ttl
-		log.Debugf("UPSTREAM: UDP spoofguard non-EDNS fallback #%d from %s, answer=%d (collecting, waiting for EDNS)", s.rejected, addr, s.nonEDNSAns)
-		return nil
-	}
-
-	// Ambiguous EDNS-bearing — when TTL is confident, fast-accept
-	// instead of collecting. GFW can't simultaneously forge the correct
-	// TTL and valid EDNS content; the two signals are orthogonal.
-	//
-	// When spoofguard is disabled, the response has already passed
-	// HopGuard TTL validation — return it directly without candidate
-	// collection.
-	if !spoofguardEnabled {
+	// HopGuard-only mode with an ARMED baseline: the TTL fingerprint has
+	// already gated this packet (Validate ran before processPacket), so the
+	// content heuristics are off — return the first matching datagram
+	// directly.  While the baseline is still LEARNING, hopguard-only falls
+	// through to the full spoofguard discipline below instead: an honest
+	// baseline needs corroborated samples, and a first-datagram return under
+	// injection would feed the injector's TTL into the histogram 1:1.
+	if !spoofguardEnabled && ttlConfident {
 		resp := s.unpackMatching(raw, n, query)
 		if resp == nil {
 			return nil
@@ -298,11 +240,59 @@ func (s *spoofguardState) processPacket(raw []byte, n int, query *dns.Msg, addr 
 		s.lastTTL = ttl
 		return resp
 	}
+
 	resp := s.unpackMatching(raw, n, query)
 	if resp == nil {
 		return nil
 	}
-	return s.collectEDNSCandidate(resp, ttlConfident, ttl, addr)
+
+	// Non-NOERROR responses are server verdicts, not injected answers —
+	// route them straight into the EDNS-candidate handling (serve after the
+	// silence window).  The empirical injection shapes are NOERROR answers;
+	// bare no-EDNS NOERROR shapes get the ambiguity treatment below.
+	if rcode != dns.RcodeSuccess {
+		return s.collectEDNSCandidate(resp, ttlConfident, ttl, addr)
+	}
+
+	// EDNS presence is determined from resp.UDPSize, not raw ARCOUNT
+	// (which counts ALL additional records): this fork's Unpack removes
+	// the OPT RR from Extra, folds its options into Pseudo, and sets
+	// Msg.UDPSize only when an OPT was present.
+	hasEDNS := resp.UDPSize > 0
+	if hasEDNS {
+		// An EDNS response is a legitimate candidate, NOT a spoofguard
+		// target — route it into the ambiguous EDNS-bearing handling
+		// (fast-accept on TTL confidence or collect). Dropping it here
+		// would discard the only response and time the query out.
+		return s.collectEDNSCandidate(resp, ttlConfident, ttl, addr)
+	}
+
+	// Non-EDNS NOERROR responses (single-answer included) are the
+	// low-priority fallback; legitimate authorities that do not echo
+	// EDNS return exactly that shape — including every response to a
+	// FORMERR-retried non-EDNS query (RFC 6891 §6.2.2).  A bare
+	// single-answer A/AAAA is marked ambiguous (nonEDNSSafe=false):
+	// executeUDPCollect only serves it after a matching re-query confirms
+	// it (pure-UDP consistency — GFW fakes vary per packet, the real answer
+	// is deterministic); CNAME-bearing responses are safe to serve
+	// directly (GFW does not inject CNAME chains).
+	hasCNAME := false
+	for _, rr := range resp.Answer {
+		if _, ok := rr.(*dns.CNAME); ok {
+			hasCNAME = true
+			break
+		}
+	}
+	s.nonEDNSSafe = hasCNAME
+	s.rejected++
+	if s.nonEDNS != nil {
+		pool.DefaultMessage.Put(s.nonEDNS)
+	}
+	s.nonEDNS = resp
+	s.nonEDNSAns = len(resp.Answer)
+	s.nonEDNSTTL = ttl
+	log.Debugf("UPSTREAM: UDP spoofguard non-EDNS fallback #%d from %s, answer=%d (collecting, waiting for EDNS)", s.rejected, addr, s.nonEDNSAns)
+	return nil
 }
 
 // collectEDNSCandidate handles an EDNS-bearing NOERROR response: fast-accept
@@ -344,6 +334,7 @@ func (s *spoofguardState) collectEDNSCandidate(resp *dns.Msg, ttlConfident bool,
 		s.last = resp
 		s.lastTTL = ttl
 		s.lastAns = len(resp.Answer)
+		s.confirmed = true
 		return resp
 	}
 	if s.prev != nil {

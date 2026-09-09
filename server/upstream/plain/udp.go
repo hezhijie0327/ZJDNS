@@ -139,12 +139,17 @@ func (c *Client) exchangeOneShotUDP(ctx context.Context, msg *dns.Msg, addr stri
 // SOCKS5 proxy when configured.  The pool key includes the proxy so direct
 // and proxied sockets never share a relay, and the ASSOCIATE handshake is
 // paid once per socket instead of per query.  wantTTL requests IP TTL
-// capture on freshly dialed sockets — only hopguard consumes it, so
-// spoofguard-only and plain upstreams dial TTL-free sockets.
+// capture on freshly dialed sockets — it is part of the KEY as well: TTL
+// capture is a per-socket dial-time property, so a TTL-less socket pooled
+// under the same key would silently disable hopguard for every later
+// hopguard-enabled query that reuses it.
 func (c *Client) acquireUDP(ctx context.Context, addr, proxy string, wantTTL bool, proxyDialer *socks5.Dialer) (*zpool.UDPConn, error) {
 	key := addr
 	if proxy != "" {
 		key = addr + "|" + proxy
+	}
+	if wantTTL {
+		key += "|ttl"
 	}
 	return c.udpPool.Acquire(ctx, key, addr, wantTTL, func(dialCtx context.Context, a string) (net.Conn, error) {
 		if proxyDialer != nil {
@@ -358,7 +363,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					if hg.ShouldSampleRejected(server.Address) {
 						hg.Feed(server.Address, pkt.TTL)
 					}
-					pkt.Release() // M8
+					pkt.Release()
 					continue
 				}
 				ttlConfident := hg != nil && hg.Confident(server.Address) && pkt.TTL != 0
@@ -366,7 +371,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 				pkt.Release()
 				if resp != nil {
 					// Safe: fast-return (AN≥2/NS>0/AD=1), TTL-confident EDNS,
-					// or spoofguard-disabled path.
+					// repeat-confirmed, or hopguard-armed direct path.
 					if sg.last != nil && sg.last != resp {
 						pool.DefaultMessage.Put(sg.last)
 					}
@@ -379,7 +384,12 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					if previous != nil {
 						pool.DefaultMessage.Put(previous)
 					}
-					if hg != nil {
+					// Baseline honesty: feed only when the TTL gate is armed
+					// (Validate filtered this packet) or the answer was
+					// corroborated by an identical repeat — the raw
+					// fast-signal bits are forgeable, so feeding them into
+					// an unarmed histogram is how a baseline gets poisoned.
+					if hg != nil && (hg.Confident(server.Address) || sg.confirmed) {
 						hg.Feed(server.Address, pkt.TTL)
 					}
 					resp.ID = originalID
@@ -402,9 +412,13 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 				}
 				pollTimer.Reset(next)
 				if sg.last != nil && now.Sub(sg.lastRecv) > sg.collectWindow() {
-					// EDNS candidate — safe, return directly.
+					// EDNS candidate — safe, return directly.  Feed the
+					// baseline only when armed or when the window saw a
+					// single datagram (corroborated by silence); two
+					// divergent candidates surviving to the window means
+					// the pick is a coin flip, not a clean sample.
 					resp, respTTL := sg.pickBest()
-					if hg != nil {
+					if hg != nil && (hg.Confident(server.Address) || sg.packets == 1) {
 						hg.Feed(server.Address, respTTL)
 					}
 					if previous != nil {
@@ -465,7 +479,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 						return nil, errNoResponse
 					}
 					if safe {
-						if hg != nil {
+						if hg != nil && (hg.Confident(server.Address) || sg.packets == 1) {
 							hg.Feed(server.Address, respTTL)
 						}
 						if previous != nil {

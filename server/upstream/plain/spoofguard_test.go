@@ -43,9 +43,9 @@ func optRR() *dns.OPT {
 	return &dns.OPT{Hdr: dns.Header{Name: "."}}
 }
 
-// TestSpoofguard_NonEDNSSingleAnswer_CollectedAsFallback locks the 2026-08
-// behavior change: a NOERROR single-answer non-EDNS response is collected as
-// the low-priority fallback instead of being dropped as a "GFW signature".
+// TestSpoofguard_NonEDNSSingleAnswer_CollectedAsFallback locks in that a
+// NOERROR single-answer non-EDNS response is collected as the low-priority
+// fallback, never dropped as a "GFW signature".
 // Legitimate authorities that do not echo EDNS return exactly this shape
 // (github.com nsone) — dropping it made every such query block the full 9s
 // budget and SERVFAIL.  pickBest must return the fallback when no EDNS
@@ -291,5 +291,87 @@ func TestSpoofguard_QuestionMismatch_Dropped(t *testing.T) {
 	}
 	if s.last != nil || s.nonEDNS != nil {
 		t.Fatal("no candidate may be retained from a mismatched datagram")
+	}
+}
+
+// TestSpoofguard_HopGuardOnly_LearningUsesCollectDiscipline verifies the
+// hopguard-only mode does NOT return the first matching datagram while the
+// TTL baseline is unarmed: during learning it falls through to the full
+// collect discipline so the baseline can only be fed corroborated samples
+// (window-silence singles or identical repeats) — a first-datagram return
+// under injection would teach the injector's TTL 1:1.
+func TestSpoofguard_HopGuardOnly_LearningUsesCollectDiscipline(t *testing.T) {
+	raw := spoofguardResponse(t, []dns.RR{aRR("93.46.8.89")}, nil, []dns.RR{optRR()}, dns.RcodeSuccess)
+
+	// Unarmed (ttlConfident=false): no direct return — collected.
+	s := &spoofguardState{}
+	if resp := s.processPacket(raw, len(raw), spoofguardQuery(), "1.2.3.4:53", false, 64, false); resp != nil {
+		t.Fatal("hopguard-only learning must not return the first datagram")
+	}
+	if s.last == nil {
+		t.Fatal("the datagram must be collected as a candidate")
+	}
+
+	// Armed (ttlConfident=true): direct return, no content heuristics.
+	s = &spoofguardState{}
+	if resp := s.processPacket(raw, len(raw), spoofguardQuery(), "1.2.3.4:53", true, 64, false); resp == nil {
+		t.Fatal("armed hopguard-only must return the validated datagram directly")
+	}
+}
+
+// TestSpoofguard_FastReturnNotConfirmedWhileUnarmed verifies the fast-signal
+// return path does not mark the sample corroborated: forgeable header bits
+// (AN>=2/NS>0/AD=1) must not feed an unarmed hopguard baseline.
+func TestSpoofguard_FastReturnNotConfirmedWhileUnarmed(t *testing.T) {
+	raw := spoofguardResponse(t, []dns.RR{aRR("93.46.8.89"), aRR("93.46.8.90")}, nil, nil, dns.RcodeSuccess)
+
+	s := &spoofguardState{}
+	resp := s.processPacket(raw, len(raw), spoofguardQuery(), "1.2.3.4:53", false, 64, true)
+	if resp == nil {
+		t.Fatal("fast-signal return expected")
+	}
+	if s.confirmed {
+		t.Fatal("fast-signal return must not count as corroborated (sg.confirmed)")
+	}
+}
+
+// TestSpoofguard_IdenticalRepeatMarksConfirmed verifies the repeat-confirm
+// branch sets sg.confirmed so the unarmed Feed sites accept the sample.
+func TestSpoofguard_IdenticalRepeatMarksConfirmed(t *testing.T) {
+	raw := spoofguardResponse(t, []dns.RR{aRR("93.46.8.89")}, nil, []dns.RR{optRR()}, dns.RcodeSuccess)
+
+	s := &spoofguardState{}
+	if resp := s.processPacket(raw, len(raw), spoofguardQuery(), "1.2.3.4:53", false, 64, true); resp != nil {
+		t.Fatal("first candidate must be collected, not returned")
+	}
+	resp := s.processPacket(raw, len(raw), spoofguardQuery(), "1.2.3.4:53", false, 64, true)
+	if resp == nil {
+		t.Fatal("identical repeat must confirm and return")
+	}
+	if !s.confirmed {
+		t.Fatal("repeat-confirm must set sg.confirmed")
+	}
+}
+
+// TestSpoofguard_NonEDNSQueryResponse_UsesFallbackSlot verifies responses to
+// a non-EDNS query (RFC 6891 §6.2.2 FORMERR retry) go through the non-EDNS
+// fallback slot with ambiguity marking — a bare single-answer response must
+// not be served as an unconfirmed direct candidate.
+func TestSpoofguard_NonEDNSQueryResponse_UsesFallbackSlot(t *testing.T) {
+	raw := spoofguardResponse(t, []dns.RR{aRR("93.46.8.89")}, nil, nil, dns.RcodeSuccess)
+
+	// Query without UDPSize — the FORMERR-retry shape.
+	query := &dns.Msg{}
+	dnsutil.SetQuestion(query, "example.com.", dns.TypeA)
+
+	s := &spoofguardState{}
+	if resp := s.processPacket(raw, len(raw), query, "1.2.3.4:53", false, 64, true); resp != nil {
+		t.Fatal("bare single answer to a non-EDNS query must be collected, not returned")
+	}
+	if s.nonEDNS == nil {
+		t.Fatal("response must land in the non-EDNS fallback slot")
+	}
+	if s.nonEDNSSafe {
+		t.Fatal("bare single-answer A is ambiguous (nonEDNSSafe=false)")
 	}
 }
