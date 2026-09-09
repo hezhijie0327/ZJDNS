@@ -1,5 +1,5 @@
 // The file store persists the DNSCrypt provider identity and cert
-// windows to a file, replacing the former SQLite dnscrypt_state table.
+// windows to a file.
 package dnscrypt
 
 import (

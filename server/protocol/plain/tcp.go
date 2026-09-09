@@ -27,9 +27,7 @@ const tcpConnBufferSize = 4096
 // DoT implementation (server/protocol/tls): pooled frame buffers, a dedicated
 // writer goroutine per connection, and bounded per-query workers — so
 // pipelined TCP clients get out-of-order responses and zero per-frame
-// allocations. The former miekg/dns-managed listener processed each
-// connection strictly inline (read→serve→write), capping single-client
-// throughput at ~1/5 of DoT.
+// allocations.
 func (s *Server) startTCP(g Group, ctx context.Context, handler edns.DNSHandler) error {
 	if s.config.Server.Protocol.TCP == "" {
 		return nil

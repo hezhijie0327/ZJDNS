@@ -203,9 +203,8 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 	peerProto := make(map[addrKey]string)
 	var peerMu sync.RWMutex
 
-	// Read directly into the pooled datagram buffer: the former stack
-	// buffer + copy into a pooled buffer cost one full-packet memcpy per
-	// datagram on the single most contended loop in shared-port mode.
+	// Reads land directly in the pooled datagram buffer (no per-datagram
+	// copy) on the single most contended loop in shared-port mode.
 	// Read bound: 8 KiB (pool.SecureBufferSize).  Go's ReadFromUDP
 	// silently truncates larger datagrams; QUIC initial packets are ≤1280
 	// by design and DNSCrypt frames are capped at 4096, so this bound is

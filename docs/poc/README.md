@@ -56,8 +56,9 @@ upstream server. These injected responses arrive with a different IP-layer TTL
 (Time-to-Live) value.
 
 ### How It Works
-1. **Learning phase:** Collect 32 TTL samples from trusted responses (filtered by
-   Spoofguard first). Build a histogram.
+1. **Learning phase:** Collect 32 corroborated TTL samples — identical repeat,
+   single-datagram silence, or re-query confirm (feed sites gate on
+   armed-or-corroborated). Build a histogram.
 2. **Adaptive threshold:** `threshold = max(mode_frequency / 4, 4)` — the most
    common TTL (mode) always passes; only nearby TTLs meeting the threshold join
    the trusted set.
@@ -93,7 +94,7 @@ Scenario C: anycast reroute (TTL 52→40) → REJECTING… sampled feeds rebuild
 ## Spoofguard — UDP Multi-Read GFW Detection
 
 **File:** `spoofguard/main.go`
-**Source:** `server/upstream/plain/udp.go` (`processPacket`, `pickBest`, `executeUDPCollect`)
+**Source:** `server/upstream/plain/spoofguard.go` (`processPacket`, `pickBest`) · `server/upstream/plain/udp.go` (`executeUDPCollect`)
 
 ### Problem
 The GFW injects fake DNS responses over UDP. Measured pattern: **two** bare

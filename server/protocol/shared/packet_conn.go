@@ -89,9 +89,7 @@ const (
 	// demuxWorkersPerClient bounds concurrent per-client DNSCrypt handler
 	// goroutines on the shared port.  Measured steady state for one
 	// multiplexing client is ~16 in flight at 24k pps; 64 gives 4x headroom
-	// before the inline-saturation fallback engages.  (The former value —
-	// DefaultMaxPipe, 16 — is the TCP/DoT pipelining depth, not a UDP
-	// datagram worker bound; at sustained load it saturated and DROPPED.)
+	// before the inline-saturation fallback engages.
 	demuxWorkersPerClient = 64
 
 	// demuxDispatchQueue bounds the per-client DNSCrypt/DTLCP packet queue.

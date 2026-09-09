@@ -109,8 +109,7 @@ func (k *cacheKey) setECS(ecs *config.ECSOption) {
 	k.ecsPref = ecs.SourcePrefix
 }
 
-// mask zeroes the address bits below prefix in place (inline CIDR mask —
-// the former maskIP + net.IP.String() allocated per fallback candidate).
+// mask zeroes the address bits below prefix in place (inline CIDR mask).
 func (k *cacheKey) mask(prefix int) {
 	bits := int(k.ecsLen) * 8
 	if prefix >= bits {

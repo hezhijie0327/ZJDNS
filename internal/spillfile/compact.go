@@ -97,8 +97,7 @@ func (s *Store) Warm(topN int, keep func(ts int64, ttl int) bool) (entries []War
 // the old tail after the metadata snapshot would lose its record at the
 // swap), but the metadata snapshot releases mu — block reads, the keep
 // filter and the rewrite run WITHOUT the metadata lock, so spill reads
-// (Get/Indexed) proceed throughout.  The former design held mu across the
-// entire file rewrite, pausing every spill read for seconds on large files.
+// (Get/Indexed) proceed throughout.
 func (s *Store) Compact(keep func(key string, ts int64, ttl int) bool) error {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()

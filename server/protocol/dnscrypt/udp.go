@@ -133,8 +133,7 @@ func (s *Server) serveUDP(ctx context.Context, udpConn *net.UDPConn) {
 		// A READ lock suffices: concurrent Adds are safe (WaitGroup is
 		// internally synchronized), and Shutdown's write lock waits for this
 		// critical section before swapping, so the Add can never land on the
-		// swapped-out group after Wait started.  The former write lock
-		// serialized every handler spawn on the whole server.
+		// swapped-out group after Wait started.
 		s.mu.RLock()
 		s.wg.Go(func() {
 			defer zdnsutil.HandlePanic("DNSCrypt UDP handler")

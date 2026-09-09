@@ -53,13 +53,13 @@ type UDPConn struct {
 	idleTimeout time.Duration
 }
 
-// udpPendingPool recycles the per-exchange pending entry and its resultCh
-// (the former make(chan, 1) + struct per query).  A recycled channel is
-// quiescent and empty when pooled: the in-flight entry is deleted under the
-// write lock (Exchange cleanup, close) before the pool put, and readLoop
-// delivers only while the entry is registered — so no send can race a
-// reuse.  Collect-mode pendings are NOT recycled (close() closes collectCh
-// channels; collect mode is the rare spoofguard path).
+// udpPendingPool recycles the per-exchange pending entry and its resultCh.
+// A recycled channel is quiescent and empty when pooled: the in-flight
+// entry is deleted under the write lock (Exchange cleanup, close) before
+// the pool put, and readLoop delivers only while the entry is registered —
+// so no send can race a reuse.  Collect-mode pendings are NOT recycled
+// (close() closes collectCh channels; collect mode is the rare spoofguard
+// path).
 var udpPendingPool = sync.Pool{
 	New: func() any { return &udpPending{resultCh: make(chan []byte, 1)} },
 }

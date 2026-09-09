@@ -173,8 +173,8 @@ func main() {
 	ok := c.ok.Load()
 	fail := c.fail.Load()
 	// Measure the ACTUAL query window, not the configured duration: an
-	// early Ctrl-C exit previously divided by the full configured seconds
-	// and understated QPS (M-3-6).
+	// early Ctrl-C exit must not understate QPS by dividing by the full
+	// configured seconds.
 	elapsed := time.Since(testStart).Seconds()
 	line := fmt.Sprintf("proto=%-10s ok=%-8d fail=%-6d qps=%-10.1f avg=%-8.2fms min=%-8.2fms max=%-8.2fms\n",
 		*proto, ok, fail, float64(ok)/elapsed,

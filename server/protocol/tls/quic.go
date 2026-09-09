@@ -162,8 +162,6 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 
 	// Per-connection state: ConnectionState() and RemoteAddr are stable
 	// after the handshake — compute once instead of per stream/query.
-	// The former per-stream ConnectionState() calls took the QUIC
-	// connection's internal lock and copied the full TLS state per query.
 	clientIP := zdnsutil.ClientIPFromAddr(conn.RemoteAddr())
 	// Client-name credential: "{name}.{domain}" SNI ("" when absent).
 	clientName := zdnsutil.ClientNameFromSNI(conn.ConnectionState().TLS.ServerName, s.cfg.Domain)

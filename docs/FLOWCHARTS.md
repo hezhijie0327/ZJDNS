@@ -530,13 +530,14 @@ graph TD
     CAP -->|Yes| VS{State Exists?}
     VS -->|No| PASS
     VS -->|Yes| ARMED{Armed?}
-    ARMED -->|No| PASS[Accept<br/>Learning Phase]
+    ARMED -->|No| LEARN[Accept<br/>Learning Phase<br/>hopguard-only → spoofguard<br/>collect 纪律]
     ARMED -->|Yes| CHECK{TTL within +-2<br/>of trusted baseline?}
-    CHECK -->|Yes| PASS2[Accept]
+    CHECK -->|Yes| PASS2[Accept<br/>TTL-gated first-datagram]
     CHECK -->|No| REJECT[Reject<br/>Silent Drop]
-    PASS --> SPOOF[Spoofguard verifies<br/>DNS content is clean]
-    PASS2 --> SPOOF
-    SPOOF -->|Clean| FEED[Feed TTL into histogram<br/>1-in-16 拒绝采样恢复]
+    LEARN --> GATE
+    PASS2 --> GATE{"Armed OR corroborated?<br/>identical repeat /<br/>single-datagram silence"}
+    GATE -->|Yes| FEED[Feed TTL into histogram<br/>1-in-16 拒绝采样恢复]
+    GATE -->|No| DONE[Done — 不进基线]
     FEED --> TIMER{"样本 >= 32<br/>或 >= 5min?"}
     TIMER -->|Yes| REBUILD["Rebuild trusted set<br/>×3/4 衰减 · 自适应阈值<br/>max(4, modeCount/4)"]
     REBUILD --> ARM{Trusted 集非空?}
@@ -547,10 +548,10 @@ graph TD
     classDef reject fill:#fee2e2,stroke:#ef4444,color:#991b1b
     classDef learn fill:#fef3c7,stroke:#f59e0b,color:#78350f
     classDef pass fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    class PASS,PASS2,SPOOF,FEED,DONE,ARM ok
+    class PASS,PASS2,FEED,DONE,ARM ok
     class REJECT reject
-    class TIMER,REBUILD,DISARM learn
-    class Q,CAP,VS,ARMED,CHECK pass
+    class TIMER,REBUILD,DISARM,LEARN learn
+    class Q,CAP,VS,ARMED,CHECK,GATE pass
 ```
 
 > 状态存于 256 容量的 LRU（按上游键）。Windows/无 IP TTL 平台自动降级（放行 + 警告）；
@@ -891,8 +892,8 @@ graph TD
 graph LR
     subgraph Client
         Q[Query] --> ROUTE{Route}
-        ROUTE -->|UDP| SPOOF{SpoofGuard?}
-        SPOOF -->|Yes| MULTI[Multi-Read<br/>EDNS Gate + Richness]
+        ROUTE -->|UDP| SPOOF{SpoofGuard /<br/>HopGuard?}
+        SPOOF -->|Yes| MULTI["Multi-Read<br/>key=addr|proxy|ttl (hopguard)<br/>hopguard-only: 学习期 collect 纪律<br/>armed → TTL-gated first datagram"]
         SPOOF -->|No| UDP[UDP Exchange]
         ROUTE -->|TCP| POOL[TCP Connection Pool<br/>RFC 7766 Pipelining]
         POOL -->|SplitGuard| SEG[Segmented Write<br/>1-4 byte chunks]
@@ -948,8 +949,8 @@ graph LR
 ```mermaid
 graph LR
     Q[Query] --> PROXY{Proxy?}
-    PROXY -->|No| POOL[Pooled Direct<br/>key=addr]
-    PROXY -->|Yes| POOLP["Pooled Proxied<br/>key=addr|proxy"]
+    PROXY -->|No| POOL["Pooled Direct<br/>key=addr (+|ttl hopguard)"]
+    PROXY -->|Yes| POOLP["Pooled Proxied<br/>key=addr|proxy (+|ttl hopguard)"]
     POOLP -->|TCP family| TCPR[Relay TCP<br/>Socks Handshake<br/>一次/连接]
     POOLP -->|UDP family| UDPR[UDP ASSOCIATE<br/>relay 绑定<br/>一次/socket]
     POOL --> UP[Upstream]
@@ -964,7 +965,8 @@ graph LR
 ```
 
 > 全部 12 协议客户端支持 SOCKS5：代理连接与直连共用池机制，key 含代理
-> 标识（`addr|proxy`），dialFunc 建立 SOCKS5 ASSOCIATE/TCP relay —— 握手
+> 标识（`addr|proxy`）；hopguard 的 TTL 捕获 socket 在 key 末尾追加
+> `|ttl` 后缀。dialFunc 建立 SOCKS5 ASSOCIATE/TCP relay —— 握手
 > 每 socket 一次而非每查询。证书获取（UDP+TCP）同样走代理池化。裸拨号
 > 仅保留为池不可用时的回退。**guard 兼容性**：spoofguard/splitguard/
 > poisonguard 完全支持（内容/TCP 层机制与传输无关；poisonguard 经

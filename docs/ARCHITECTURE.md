@@ -87,7 +87,8 @@ All outbound protocols multiplex over pooled connections
   workerCap; QUIC connection admission at half (128)
 
 **SOCKS5 proxy support**: all 12 client protocols pool proxied connections —
-the pool key is `addr|proxy`, the dialFunc establishes the SOCKS5
+the pool key is `addr|proxy` (hopguard's TTL-capture sockets append a `|ttl`
+suffix), the dialFunc establishes the SOCKS5
 ASSOCIATE/TCP relay, so the handshake is paid once per socket. Certificate
 fetches pool through the proxy too. Raw per-query dials remain only as
 pool-unavailable fallbacks. DoH/DoH3/HTTP-TLCP proxy via per-key transport
@@ -162,6 +163,10 @@ leak to clients, into the cache, or into subsequent responses (§5.4).
 
 Learns per-upstream TTL baseline from verified responses. After 32 samples,
 enforces ±2 TTL tolerance. State stored in bounded LRU map (capacity 256).
+The baseline learns only from corroborated samples (identical repeat,
+single-datagram silence, or re-query confirm); hopguard-only mode uses the
+spoofguard collect discipline until armed, then serves the TTL-gated first
+datagram.
 
 **Over SOCKS5**: degrades by design — a SOCKS5 UDP relay terminates the IP
 link, so the TTL the client socket observes is the relay-to-client hop, not
@@ -313,8 +318,8 @@ Protocol detection reads the 5-byte TLS record header: major version `0x03` → 
 Protocol detection is structural and deliberately conservative (a wrong positive steals a datagram from the DNSCrypt fallback, whose plaintext cert fetches look random in their first bytes):
 
 1. **Plain-DNS query shape first** (`looksLikePlainDNSQuery`): header flags/counts (QR=0, opcode=0, QDCOUNT=1, ANCOUNT=NSCOUNT=0, ARCOUNT≤1) + one in-bounds question + optional well-formed OPT → falls through to the DNSCrypt fallback before any byte heuristic runs.
-2. **QUIC**: first byte ≥ 0xC0 (long header) AND length ≥ 1200 — a client's first QUIC packet is always an Initial (RFC 9000 §14); the size floor excludes random-ID collisions with plain DNS (~25% of cert fetches were formerly dropped here).
-3. **DTLS**: first byte 0x14–0x18 AND record version exactly 0xFEFF/0xFEFD/0xFEFC; **DTLCP**: version exactly 0x0101 (the former `version ≥ 0x1000` heuristic matched almost any garbage).
+2. **QUIC**: first byte ≥ 0xC0 (long header) AND length ≥ 1200 — a client's first QUIC packet is always an Initial (RFC 9000 §14); the size floor excludes random-ID collisions with plain DNS (~25% of cert fetches land here).
+3. **DTLS**: first byte 0x14–0x18 AND record version exactly 0xFEFF/0xFEFD/0xFEFC; **DTLCP**: version exactly 0x0101.
 
 The detection result is cached per client address (`peerProto` map, capped at 65536 entries and rebuilt on overflow). Per-client state is reaped: DNSCrypt/DTLCP `DemuxPacketConn`s, DTLS clients and DTLCP conns idle for more than 60s are closed and forgotten by an amortised reaper inline in the dispatch loop; the channel send and `Close()` are serialised by a per-conn mutex (handler-side closes must never race a dispatch send — an unguarded send on a closed channel panicked the whole dispatch loop).
 
@@ -353,7 +358,7 @@ For HTTP-based listeners (DoH, DoH3, HTTPTLCP) deployed behind a reverse proxy, 
 
 ## EDNS Extensions & RFC Support
 
-The middleware chain (see AGENTS.md for the full 11-layer pipeline) hosts the
+The middleware chain (see AGENTS.md for the full 12-layer pipeline) hosts the
 recent RFC features:
 
 - **RFC 10029 MQTYPE**: per-upstream `mqtype` config (numeric QTYPE list).

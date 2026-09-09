@@ -169,9 +169,7 @@ func (s *Server) HandleSharedTCPConn(ctx context.Context, conn net.Conn) {
 
 // handleTCPConnection reads length-prefixed DNSCrypt frames and serves each
 // query on a persistent per-connection worker pool (RFC 7766 pipelining);
-// frame writes serialize on a per-connection mutex.  The former inline
-// read→decrypt→resolve→write loop let one slow resolution stall every later
-// frame on the connection.
+// frame writes serialize on a per-connection mutex.
 func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
 	connCtx, connCancel := context.WithCancel(ctx)
 	defer connCancel()

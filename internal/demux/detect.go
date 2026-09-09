@@ -163,8 +163,7 @@ func DetectUDPProtocol(data []byte) string {
 
 	// TLS-family record types: change_cipher_spec(0x14), alert(0x15),
 	// handshake(0x16), application_data(0x17), header(0x18).  The version
-	// must be an exact known record version — the former ">= 0x1000"
-	// heuristic matched almost any garbage.
+	// must be an exact known record version.
 	if first >= 0x14 && first <= 0x18 {
 		// Version field occupies bytes 1–2 (big-endian uint16).
 		switch uint16(data[1])<<8 | uint16(data[2]) {

@@ -604,8 +604,10 @@ sleep 2
 
 dig @127.0.0.1 -p 10533 www.google.com A +short
 
-# IP-layer TTL fingerprint: the first response records a baseline TTL;
-# later responses deviating by more than ±2 are dropped.
+# IP-layer TTL fingerprint: while the baseline is learning, responses run the
+# spoofguard collect discipline and only corroborated samples feed the baseline;
+# once armed, first-datagram serving applies and responses deviating by more
+# than ±2 are dropped.
 # GFW injection points sit closer to the user than the real server, so their
 # TTL differs.
 # Expected log: "UPSTREAM: hopguard TTL/HopLimit capture not available on"
@@ -624,7 +626,8 @@ sleep 2
 dig @127.0.0.1 -p 10533 www.google.com A +short
 
 # TTL check acts as a pre-filter ahead of spoofguard content analysis.
-# TTL mismatch → dropped; TTL match → spoofguard EDNS gate.
+# TTL mismatch → dropped; TTL match → spoofguard content analysis
+# (fast signals AN/NS/AD run before the EDNS gate).
 # The two signals are orthogonal: IP layer (routing topology) + DNS layer
 # (packet format)
 

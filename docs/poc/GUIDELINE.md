@@ -8,7 +8,7 @@
 | POC | 防御层 | 镜像源码 | 关键函数 | `-real` 上游 |
 |-----|--------|----------|----------|-------------|
 | **hopguard** | UDP upstream（IP TTL 指纹） | `server/defense/hopguard.go` | `HopGuard.Validate` / `Feed` | 8.8.8.8:53 |
-| **spoofguard** | UDP upstream（多读注入检测） | `server/upstream/plain/udp.go` | `processPacket` / `pickBest` / `executeUDPCollect` | 8.8.8.8:53 |
+| **spoofguard** | UDP upstream（多读注入检测） | `server/upstream/plain/spoofguard.go` + `udp.go` | `processPacket` / `pickBest` / `executeUDPCollect` | 8.8.8.8:53 |
 | **splitguard** | TCP upstream（DPI 分段规避） | `internal/dnsutil/tcpframe.go` | `WriteTCPMsgSegmented` | 8.8.8.8:53 |
 | **poisonguard** | Recursive（root/TLD 劫持检测） | `server/defense/poisonguard.go` | `Detector.Validate` / `IsPoisonedByTLD` | root/TLD 服务器 |
 | **capsguard** | 所有 upstream（DNS 0x20 随机化） | `server/defense/capsguard.go` + `server/upstream/client.go` | `RandomizeCase` / `ExecuteQuery` | 8.8.8.8:53 |

@@ -48,7 +48,7 @@ var DefaultMessage = NewMessage()
 var DefaultBuffer = NewBuffer(SecureBufferSize, defaultBufferSize)
 
 // wireBufPool backs AcquireWire: per-hit response-wire copies on the
-// cache-hit fast path (the former per-hit slices.Clone).  Buffers up to 2048
+// cache-hit fast path.  Buffers up to 2048
 // bytes come from the pool; larger responses allocate fresh and are GC'd on
 // Put (cap mismatch) — response wires above 2 KB are rare (DNSKEY/RRSIG-heavy).
 var wireBufPool = sync.Pool{New: func() any { b := make([]byte, wireBufferSize); return &b }}

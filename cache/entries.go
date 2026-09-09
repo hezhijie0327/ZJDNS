@@ -40,8 +40,7 @@ type cacheEntry struct {
 func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption) (*Entry, bool, bool) {
 	// ECS fallback candidates from most to least specific — the first hit is
 	// the most specific match.  Stack-allocated (1 exact + up to 4 masked
-	// standard prefixes); the former pooled candidate slice plus per-key
-	// strings.Builder allocation is gone.
+	// standard prefixes).
 	var cand [5]cacheKey
 	cand[0].setECS(ecs)
 	n := 1

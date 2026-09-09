@@ -40,8 +40,7 @@ func ExecuteDoHRequest(ctx context.Context, msg *dns.Msg, u *url.URL, httpClient
 	// "?param=value" on the upstream URL) is replaced, not merged — the dns
 	// parameter is the DoH query.  The wire is encoded straight from
 	// msg.Data: the base64 string owns its bytes, and nothing mutates
-	// msg.Data between Pack and encoding, so the former defensive copy was
-	// dead weight on every request.
+	// msg.Data between Pack and encoding, so no defensive copy is needed.
 	q := *u // shallow copy — caller's URL must not be mutated
 	q.RawQuery = "dns=" + base64.RawURLEncoding.EncodeToString(msg.Data)
 

@@ -190,8 +190,7 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.Encrypte
 	var keysSnapshot []keyEntry
 	var cacheSnapshot *lrumap.Map[[32]byte, [32]byte]
 	// Lock-free snapshot — publishKeys() stores a fresh immutable view under
-	// the write lock at every rotation (the former per-packet RLock was a
-	// global serialization point on the hot path).
+	// the write lock at every rotation.
 	if ks := s.keySnapshot.Load(); ks != nil {
 		keysSnapshot = ks.keys
 		cacheSnapshot = ks.sharedKeyCache

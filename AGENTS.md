@@ -298,8 +298,8 @@ All layers share a mutable `QueryContext`. Any layer may short-circuit by settin
 
 | Mechanism | Layer | Algorithm |
 |-----------|-------|-----------|
-| **Hopguard** | UDP upstream | IP TTL fingerprint: auto-learn baseline, reject responses with TTL outside ±2 range |
-| **Spoofguard** | UDP upstream | Multi-read loop (adaptive window: 150ms single packet, 500ms multi-packet; identical repeats confirm immediately): fast-accept `AN>=2`/`NS>0`/`AD=1`; EDNS responses are candidates (richness tie-break); bare single-answer A/AAAA → collect, re-query-confirm (≤3 rounds) |
+| **Hopguard** | UDP upstream | IP TTL fingerprint: auto-learn baseline, reject responses with TTL outside ±2 range; learns only from corroborated samples (armed baseline or identical-repeat/silence-confirmed); hopguard-only mode runs the spoofguard collect discipline until armed |
+| **Spoofguard** | UDP upstream | Multi-read loop (adaptive window: 150ms single packet, 500ms multi-packet; identical repeats confirm immediately): fast-accept `AN>=2`/`NS>0`/`AD=1`; EDNS responses are candidates (richness tie-break); bare single-answer A/AAAA → collect — a lone response serves directly, ambiguity triggers re-query confirm (≤3 rounds) |
 | **Poisonguard** | Recursive | Zone-authority cross-validation on resolved answers |
 | **Splitguard** | TCP upstream | Random [1,4] payload segmentation (no time jitter) |
 | **Capsguard** | All upstream (per-upstream `capsguard`) | `defense.RandomizeCase` flips the case bit of each ASCII letter in the outbound question (draft-vixie-dnsext-dns0x20 §5.1); `ExecuteQuery` discards responses that don't echo the randomized case and retries once unrandomized (§6.4); after `DefaultCapsGuardDowngradeAfter` (8) mismatches an address skips randomisation outright for `DefaultCapsGuardRetryAfter` (10min) — no doubled query, no per-query timing signature. Upstream-echoed record case is folded to lowercase at the resolver exit (`resolver.Query` → `dnsutil.FoldCase`, §5.4); cache-hit responses patch the stored wire back to the client's case (`handler/response.go` `patchQuestionCase`) |

@@ -170,9 +170,8 @@ const (
 	// this window.  After adoption the primaries keep running in the
 	// background and the first usable result fills the cache.  500ms
 	// mirrors DefaultServeExpiredClientTimeout's order of magnitude:
-	// healthy recursive primaries answer well inside it (cold-walk p90
-	// ≈ 400ms on a 186-domain corpus), while slow/blocked primaries hand
-	// over to the fallback at half the former 1s latency.
+	// healthy recursive primaries answer well inside it, while slow or
+	// blocked primaries hand over to the fallback promptly.
 	DefaultFallbackTimeout = 500 * time.Millisecond
 
 	DefaultRecursiveResolveTimeout = 30 * time.Second // full recursive resolution

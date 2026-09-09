@@ -8,7 +8,7 @@
 //   EDNS-bearing and authority-signal candidates, and never serve a bare
 //   single-answer A/AAAA without confirmation.
 //
-// Detection rules (mirrors server/upstream/plain/udp.go processPacket):
+// Detection rules (mirrors server/upstream/plain/spoofguard.go processPacket):
 //   Fast-return: AN\u22652, NS>0, or AD=1 \u2192 authoritative, return immediately
 //   EDNS-bearing \u2192 collect as candidate (always preferred)
 //   Non-EDNS + CNAME \u2192 safe fallback (GFW does not inject CNAME chains)
@@ -99,13 +99,12 @@ func (s *sgState) processPacket(r *simResp) (result *simResp, verdict string) { 
 		return nil, yellow + "COLLECT" + reset + " (EDNS candidate #" + strconv.Itoa(s.candidates) + ")"
 	}
 	// Non-EDNS NOERROR (single-answer included) \u2192 low-priority fallback.
-	// Previously single-answer non-EDNS was REJECTED outright (the "GFW
-	// injects bare A/AAAA" heuristic) \u2014 but real servers that don't echo
-	// EDNS return the same shape, so those queries blocked the full 9s
-	// budget and SERVFAILed.  pickBest prefers EDNS candidates and the
+	// Bare A/AAAA matches the GFW injection shape, but real servers that
+	// don't echo EDNS return the same shape, so it is never rejected
+	// outright.  pickBest prefers EDNS candidates and the
 	// collect window waits for a second candidate, so a real EDNS response
 	// beats an injected bare A; the fallback is served only when nothing
-	// better arrives (mirrors processPacket in server/upstream/plain/udp.go).
+	// better arrives (mirrors processPacket in server/upstream/plain/spoofguard.go).
 	s.rejected++
 	s.nonEDNS = r
 	return nil, yellow + "FALLBACK" + reset + " (non-EDNS \u2014 collected, EDNS preferred)"
@@ -197,7 +196,7 @@ func sameAnswers(a, b []string) bool {
 // realCollect sends one query and reads every datagram arriving within the
 // spoofguard silence window — 150ms for the first datagram, extended to
 // 500ms once a second one lands (mirrors collectWindow in
-// server/upstream/plain/udp.go), converting each into simResp for the shared
+// server/upstream/plain/spoofguard.go), converting each into simResp for the shared
 // rule engine. On a polluted path this yields multiple candidates (real +
 // GFW fakes, or fakes only).
 func realCollect(server, qname string) []simResp {
@@ -337,15 +336,11 @@ func main() {
 	fmt.Println("  Window:        adaptive \u2014 150ms single datagram / 500ms once a")
 	fmt.Println("                 second datagram arrives (injection signal)")
 	fmt.Println()
-	fmt.Println("  " + bold + "Impact of the 2026-08 change on www.google.com:" + reset)
-	fmt.Println("    BEFORE: fakes #1/#2 \u2192 REJECTED; the REAL EDNS response was ALSO")
-	fmt.Println("            rejected \u2014 this fork's Unpack moves the OPT out of Extra")
-	fmt.Println("            (options \u2192 Pseudo, UDPSize set), and the old gate scanned")
-	fmt.Println("            Extra for *dns.OPT, so hasEDNS never matched and the single")
-	fmt.Println("            A answer was treated as a bare GFW signature. No acceptable")
-	fmt.Println("            response \u2192 www.google.com blocked the full 9s budget.")
-	fmt.Println("    AFTER:  fakes \u2192 low-priority fallback; real EDNS detected via")
-	fmt.Println("            resp.UDPSize \u2192 EDNS candidate \u2192 wins \u2192 CLEAN.")
+	fmt.Println("  " + bold + "EDNS detection on this fork:" + reset)
+	fmt.Println("    Unpack moves the OPT record out of Extra (options \u2192 Pseudo,")
+	fmt.Println("    UDPSize set), so EDNS is detected via resp.UDPSize, not by")
+	fmt.Println("    scanning Extra for *dns.OPT.  Fakes #1/#2 \u2192 low-priority")
+	fmt.Println("    fallback; the real EDNS response \u2192 candidate \u2192 wins \u2192 CLEAN.")
 	printHR()
 
 	for i, r := range scenario1 {

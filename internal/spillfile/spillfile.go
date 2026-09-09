@@ -290,9 +290,8 @@ func (s *Store) Get(key string) (ts int64, ttl int, validated bool, wire []byte,
 	}
 
 	// Metadata phase under mu; the pread runs OUTSIDE the lock against a
-	// snapshotted handle (see fileRef).  The former design held mu across
-	// every pread — Compact's full-file rewrite under the same lock paused
-	// all spill reads for its whole duration.
+	// snapshotted handle (see fileRef), so reads never hold the metadata
+	// lock.
 	s.mu.Lock()
 	te, found := s.tailMap[key]
 	var blk sparseEntry

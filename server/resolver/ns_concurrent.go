@@ -57,17 +57,16 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	g, queryCtx := errgroup.WithContext(queryCtx)
 	// Batched racing: the latency-ranked first DefaultFanoutFirstBatch
 	// authorities launch at t=0 and the rest widen in after
-	// DefaultFanoutWidenDelay without a winner.  Unlike a hard cap
-	// (errgroup SetLimit / semaphore — measured 41ms→382ms→3000ms on a
-	// 15-server batch: slow servers held the slots while fast ones queued
-	// behind the launch loop), widening is timer-driven, so slow batch
-	// members never hold anything the rest queue behind, and the first
+	// DefaultFanoutWidenDelay without a winner.  Widening is timer-driven
+	// rather than a hard cap (errgroup SetLimit / semaphore), so slow batch
+	// members never hold slots the rest queue behind and the first
 	// responder almost always lands in the batch (authorities answer in
-	// tens of ms).  A burst of unique qnames no longer multiplies
-	// goroutines/context/timers by 13-26 (root) per level per walk; the
-	// widen goroutine runs INSIDE the errgroup so g.Wait() cannot race a
-	// late g.Go against the pooled baseMsg return.  The win path's
-	// cancel() aborts the batch, the pending widen and the stragglers.
+	// tens of ms).  Exactly ONE widen goroutine runs per level — a burst
+	// of unique qnames does not multiply goroutines/context/timers per
+	// authority; the widen goroutine runs INSIDE the errgroup so g.Wait()
+	// cannot race a late g.Go against the pooled baseMsg return.  The win
+	// path's cancel() aborts the batch, the pending widen and the
+	// stragglers.
 
 	var poisonRejected atomic.Bool
 	// nxdomainMsg holds the first collected NXDOMAIN (secondary result —
