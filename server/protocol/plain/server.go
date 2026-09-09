@@ -20,7 +20,7 @@ type Group interface {
 // Server manages plain UDP and TCP DNS listeners.
 type Server struct {
 	config       *config.ServerConfig
-	udpServers   []*dns.Server
+	udp          *udpListener
 	tcpMu        sync.Mutex
 	tcpClosed    bool
 	tcpListeners []net.Listener
@@ -47,13 +47,8 @@ func (s *Server) Start(g Group, ctx context.Context, udpHandler dns.Handler, tcp
 
 // Shutdown gracefully stops all UDP and TCP listeners.
 func (s *Server) Shutdown(ctx context.Context) {
-	for _, srv := range s.udpServers {
-		if srv != nil {
-			srv.Shutdown(ctx)
-		}
-	}
-	if len(s.udpServers) > 0 {
-		log.Infof("PLAIN: UDP server(s) shut down")
+	if s.udp != nil {
+		s.udp.stop()
 	}
 	s.shutdownTCP()
 }

@@ -8,13 +8,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// controlReusePort returns a ListenConfig Control that sets SO_REUSEPORT so
+// ReusePortControl returns a ListenConfig Control that sets SO_REUSEPORT so
 // several dispatch sockets can bind the same UDP port and the kernel hashes
 // each flow (4-tuple) to one of them — per-client packet affinity is
 // preserved because one client's 4-tuple always lands on the same shard.
 // Returns a no-op Control on platforms without SO_REUSEPORT (see
 // reuseport_windows.go), where the dispatch shard count collapses to 1.
-func controlReusePort() func(string, string, syscall.RawConn) error {
+func ReusePortControl() func(string, string, syscall.RawConn) error {
 	return func(_, _ string, c syscall.RawConn) error {
 		var serr error
 		err := c.Control(func(fd uintptr) {
@@ -27,6 +27,6 @@ func controlReusePort() func(string, string, syscall.RawConn) error {
 	}
 }
 
-// reusePortSupported reports whether controlReusePort actually enables
+// ReusePortSupported reports whether ReusePortControl actually enables
 // multi-socket binding on this platform.
-func reusePortSupported() bool { return true }
+func ReusePortSupported() bool { return true }

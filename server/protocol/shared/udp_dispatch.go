@@ -61,7 +61,7 @@ func (m *Mux) startUDPGroup(g *UDPGroup) error {
 	// DNSCrypt/DTLCP client maps, classification map) is per shard, which
 	// is sound because a flow's whole lifetime lands on one shard.
 	shards := 1
-	if reusePortSupported() {
+	if ReusePortSupported() {
 		shards = config.DefaultUDPDispatchShards
 	}
 	clientSem := make(chan struct{}, config.DefaultServerGoroutineLimit)
@@ -70,7 +70,7 @@ func (m *Mux) startUDPGroup(g *UDPGroup) error {
 		for shard := 0; shard < shards; shard++ {
 			var lc net.ListenConfig
 			if shards > 1 {
-				lc = net.ListenConfig{Control: controlReusePort()}
+				lc = net.ListenConfig{Control: ReusePortControl()}
 			}
 			pc, err := lc.ListenPacket(m.groupCtx, "udp", addr)
 			if err != nil {
