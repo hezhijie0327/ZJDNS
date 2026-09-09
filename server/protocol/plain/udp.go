@@ -21,15 +21,17 @@ func (s *Server) startUDP(g Group, ctx context.Context, handler dns.Handler) err
 		return fmt.Errorf("UDP address resolution: %w", err)
 	}
 	log.Infof("PLAIN: UDP server started on %v", addrs)
+	msgPool := newDatagramPool(int(pool.UDPBufferSize))
 	for _, addr := range addrs {
 		srv := &dns.Server{
 			Addr:    addr,
 			Net:     config.ProtoUDP,
-			Handler: handler,
+			Handler: recyclingHandler{next: handler, p: msgPool},
 			// pool.UDPBufferSize matches the EDNS0 recommended minimum of 1232
 			// (RFC 6891 §6.2.5 with IPv4/IPv6 overhead subtracted from the
 			// typical 1500-byte path MTU).
 			UDPSize: pool.UDPBufferSize,
+			MsgPool: msgPool,
 		}
 		s.udpServers = append(s.udpServers, srv)
 		g.Go(func() error {
