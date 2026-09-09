@@ -115,9 +115,8 @@ func ReleaseUDPPayload(packet []byte) { releasePacketBuf(packet) }
 // capacity class.  Heap buffers (cap not matching a tier) are left for the GC.
 // No clear: the only writer (readLoop's copy) always fills the consumed
 // range [0:n] before delivery, and the slice length bounds every reader to
-// n — a memset per released packet (up to 16KB on the large tier) was pure
-// cost on the loaded-server profile, same reasoning as spillfile's block
-// buffers.
+// n — clearing would add a memset of up to 16KB per released packet on the
+// large tier, same reasoning as spillfile's block buffers.
 func releasePacketBuf(packet []byte) {
 	switch cap(packet) {
 	case packetBufSmall:
@@ -342,9 +341,9 @@ func (c *UDPConn) readLoop() {
 
 	// Read buffer: 16KB covers every realistic DNS response — DNSSEC-signed
 	// referrals rarely exceed 8KB, oversized responses trigger TC and are
-	// retried over TCP.  The previous 64KB (max UDP payload) cost 4x the
-	// memory per connection, and with recursive resolution holding one
-	// connection per authoritative server, the working set scaled badly.
+	// retried over TCP.  Sizing at the 64KB max UDP payload would cost 4x
+	// the memory per connection, and recursive resolution holds one
+	// connection per authoritative server.
 	buf := make([]byte, packetBufLarge) // one allocation per conn
 
 	for {

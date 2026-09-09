@@ -3,11 +3,11 @@ package pool
 import "errors"
 
 // Sentinel errors returned by the pooled connection/exchange hot paths.
-// Callers classify failures with errors.Is instead of formatting — the
-// per-query fmt.Errorf sites were ~700M allocations on a loaded server
-// (every closed-conn, collision and saturated-pool error built a formatted
-// string nobody consumed).  Dial-time errors keep fmt.Errorf("%w") wraps:
-// the dynamic address context is worth keeping there, and dials are cold.
+// Callers classify failures with errors.Is instead of formatting — per-query
+// errors must not allocate (every closed-conn, collision and saturated-pool
+// failure builds no formatted string).  Dial-time errors keep
+// fmt.Errorf("%w") wraps: the dynamic address context is worth keeping
+// there, and dials are cold.
 var (
 	ErrConnClosed        = errors.New("pool: connection closed")
 	ErrKeyCollision      = errors.New("pool: match key collision")

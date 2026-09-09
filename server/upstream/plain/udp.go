@@ -87,8 +87,9 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 
 // exchangeOneShotUDP is the per-query-dial fallback for pool failures a fresh
 // socket could still fix.  It dials, sends once, and reads until a datagram
-// carrying the query ID arrives or the deadline expires — the same contract
-// the pooled path gives a query, minus the socket reuse.
+// carrying the query ID and echoing the question arrives or the deadline
+// expires — the same contract the pooled path gives a query, minus the socket
+// reuse.
 func (c *Client) exchangeOneShotUDP(ctx context.Context, msg *dns.Msg, addr string) (*dns.Msg, error) {
 	if err := msg.Pack(); err != nil {
 		return nil, err
@@ -131,6 +132,12 @@ func (c *Client) exchangeOneShotUDP(ctx context.Context, msg *dns.Msg, addr stri
 			return nil, fmt.Errorf("unpack: %w", err)
 		}
 		response.Data = nil
+		// Question verification (RFC 7766 §7 discipline) — a stale/duplicated
+		// datagram can carry this query's ID for a different question.
+		if !matchQuestion(response, msg) {
+			pool.DefaultMessage.Put(response)
+			continue
+		}
 		return response, nil
 	}
 }
@@ -528,25 +535,30 @@ func (c *Client) exchangeViaProxyUDP(ctx context.Context, msg *dns.Msg, addr str
 	}
 	defer func() { clear(*respBuf); socks5.ReadPool.Put(respBuf) }()
 
-	n, _, readErr := pconn.ReadFrom(*respBuf)
-	if readErr != nil {
-		return nil, readErr
-	}
+	// Read until a datagram carrying the query ID and echoing the question
+	// arrives — a stray datagram from the relay is read and discarded, never
+	// served as this query's response (RFC 7766 §7 discipline).
+	for {
+		n, _, readErr := pconn.ReadFrom(*respBuf)
+		if readErr != nil {
+			return nil, readErr
+		}
 
-	response := pool.DefaultMessage.Get()
-	response.Data = (*respBuf)[:n]
-	if err := response.Unpack(); err != nil {
-		pool.DefaultMessage.Put(response)
-		return nil, err
+		response := pool.DefaultMessage.Get()
+		response.Data = (*respBuf)[:n]
+		if err := response.Unpack(); err != nil {
+			pool.DefaultMessage.Put(response)
+			return nil, err
+		}
+		response.Data = nil
+		// ID match guards against stale replies for a different query; a
+		// matching ID with a different question is equally foreign.
+		if response.ID != msg.ID || !matchQuestion(response, msg) {
+			pool.DefaultMessage.Put(response)
+			continue
+		}
+		return response, nil
 	}
-	response.Data = nil
-	// Reject ID mismatches like the TCP proxy path — silently rewriting
-	// the ID would accept a datagram that belongs to a different query.
-	if response.ID != msg.ID {
-		pool.DefaultMessage.Put(response)
-		return nil, fmt.Errorf("udp proxy response id mismatch: expected %d, got %d", msg.ID, response.ID)
-	}
-	return response, nil
 }
 
 // dialProxyUDP creates a SOCKS5 UDP ASSOCIATE connection and sends the packed

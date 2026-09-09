@@ -146,7 +146,7 @@ func (d *Dialer) establishUDPRelay(ctx context.Context) error {
 		return fmt.Errorf("%w: non-zero RSV byte %#x", ErrSOCKS5BadReply, resp[2])
 	}
 
-	relay, err := readAddress(ctrlConn, resp[3])
+	relay, err := readAddress(ctx, ctrlConn, resp[3])
 	if err != nil {
 		_ = ctrlConn.Close()
 		return fmt.Errorf("socks5: read relay address: %w", err)
@@ -310,7 +310,7 @@ func (c *socks5PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	}
 
 	var buf []byte
-	if totalLen <= 1500 {
+	if totalLen <= socks5WriteBufSize {
 		bp, ok := socks5WritePool.Get().(*[]byte)
 		if !ok {
 			return 0, errors.New("socks5 write pool type error")
@@ -386,7 +386,7 @@ func (c *socks5UDPConn) Write(p []byte) (n int, err error) {
 	}
 
 	var buf []byte
-	if totalLen <= 1500 {
+	if totalLen <= socks5WriteBufSize {
 		bp, ok := socks5WritePool.Get().(*[]byte)
 		if !ok {
 			return 0, errors.New("socks5 write pool type error")

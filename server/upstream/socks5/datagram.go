@@ -202,8 +202,10 @@ func skipAddress(conn net.Conn, atyp byte) error {
 }
 
 // readAddress parses BND.ADDR + BND.PORT from a SOCKS5 response and returns
-// a *net.UDPAddr. The atyp byte must already have been read.
-func readAddress(conn net.Conn, atyp byte) (*net.UDPAddr, error) {
+// a *net.UDPAddr. The atyp byte must already have been read.  ctx bounds the
+// domain-ATYP resolution and is further tightened by the connection's
+// deadline (set by the caller during negotiation).
+func readAddress(ctx context.Context, conn net.Conn, atyp byte) (*net.UDPAddr, error) {
 	switch atyp {
 	case socks5ATYPIPv4:
 		buf := make([]byte, 4+2)
@@ -236,14 +238,14 @@ func readAddress(conn net.Conn, atyp byte) (*net.UDPAddr, error) {
 		host := string(rest[:domainLen])
 		port := int(binary.BigEndian.Uint16(rest[domainLen:]))
 		// Resolve the relay hostname to IP — SOCKS5 proxies usually return an
-		// IP, but some return a domain. Bound the lookup by the connection's
-		// deadline (set by the caller during negotiation) instead of a fixed
-		// timeout that ignores the caller's context.
-		lookupCtx := context.Background()
+		// IP, but some return a domain. The lookup derives from the caller's
+		// ctx (cancellation propagates) and stays bounded by the connection's
+		// deadline instead of a fixed timeout.
+		lookupCtx := ctx
 		if c, ok := conn.(interface{ Deadline() (time.Time, error) }); ok {
 			if dl, err := c.Deadline(); err == nil && !dl.IsZero() {
 				var cancel context.CancelFunc
-				lookupCtx, cancel = context.WithDeadline(context.Background(), dl)
+				lookupCtx, cancel = context.WithDeadline(ctx, dl)
 				defer cancel()
 			}
 		}

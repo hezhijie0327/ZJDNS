@@ -180,10 +180,10 @@ func (c *Client) state(
 	}
 	log.Debugf("UPSTREAM: DNSCrypt cert cache miss for %s", cacheKey)
 
-	// Singleflight: under a burst of new queries every miss used to re-fetch
-	// the certificate independently (2 RTTs each — UDP then TCP).  One
-	// in-flight fetch serves the whole batch; failures are not cached, so the
-	// next query retries naturally.
+	// Singleflight: a burst of new queries must not each fetch the
+	// certificate independently (2 RTTs each — UDP then TCP).  One in-flight
+	// fetch serves the whole batch; failures are not cached, so the next
+	// query retries naturally.
 	state, err, _ := c.stateGroup.Do(ctx, cacheKey, func(workCtx context.Context) (*State, error) {
 		// Another goroutine may have populated the cache while we queued.
 		c.cacheMu.Lock()

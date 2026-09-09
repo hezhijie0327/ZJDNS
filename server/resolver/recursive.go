@@ -122,7 +122,6 @@ type nsAddrFmtEntry struct {
 }
 
 // resolve walks the root→TLD→authoritative hierarchy for a single question.
-// resolve walks the root→TLD→authoritative hierarchy for one question.
 // infra marks an infrastructure walk (NS-address resolution): its fan-outs
 // race a smaller first batch and never widen — root/TLD servers answer from
 // any racer and the extra candidates were pure cancel churn.

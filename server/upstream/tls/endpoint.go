@@ -1,8 +1,8 @@
 // Per-upstream DoH/DoH3 request targets: the parsed URL, transport-cache key
-// and base TLS configs are built once per UpstreamServer instead of once per
-// query (the former chain did url.Parse + transportKey + a fresh TLS config
-// with its VerifyConnection closure on EVERY request — even on the
-// transport-cache-hit path).
+// and base TLS configs are built once per UpstreamServer, never per query —
+// per-query construction (url.Parse + transportKey + a fresh TLS config with
+// its VerifyConnection closure) would tax every request, including every
+// transport-cache hit.
 
 package tls
 

@@ -85,6 +85,12 @@ func (c *Client) ExecuteDTLCP(ctx context.Context, msg *dns.Msg, server *config.
 		}
 	}
 
+	// A canceled/expired context can never succeed past this point, and a
+	// per-query dial on it burns a handshake nobody waits for.
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	// Non-pooled fallback: manual dial + DTLCP handshake + DNS exchange.
 	conn, err := c.dialDTLCPConn(ctx, server.Address, server, proxyDialer)
 	if err != nil {

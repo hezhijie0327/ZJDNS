@@ -43,6 +43,30 @@ type RawConn struct {
 	idleTimeout time.Duration
 }
 
+// newRawConn wraps a connected socket in a RawConn and starts its read loop.
+func newRawConn(addr string, conn net.Conn, maxPipe int, extractKey func(payload []byte) (string, bool)) *RawConn {
+	if maxPipe <= 0 {
+		maxPipe = config.DefaultMaxPipe
+	}
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		_ = tcpConn.SetKeepAlive(true)
+		_ = tcpConn.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)
+		_ = tcpConn.SetNoDelay(true)
+	}
+	c := &RawConn{
+		conn:        conn,
+		addr:        addr,
+		inflight:    make(map[string]*rawPending),
+		capacity:    make(chan struct{}, maxPipe),
+		maxPipe:     int32(maxPipe),
+		extractKey:  extractKey,
+		idleTimeout: config.DefaultTCPPoolIdleTimeout,
+	}
+	c.lastUsed.Store(log.NowUnix())
+	go c.readLoop()
+	return c
+}
+
 // Exchange sends one length-prefixed frame and waits for the response whose
 // extracted match key equals matchKey.  The returned slice is owned by the
 // caller.
@@ -214,26 +238,3 @@ func (c *RawConn) IsDead() bool { return c.closed.Load() }
 
 // IsFull reports whether the connection has reached its in-flight cap.
 func (c *RawConn) IsFull() bool { return c.inFlight.Load() >= c.maxPipe }
-
-func newRawConn(addr string, conn net.Conn, maxPipe int, extractKey func(payload []byte) (string, bool)) *RawConn {
-	if maxPipe <= 0 {
-		maxPipe = config.DefaultMaxPipe
-	}
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		_ = tcpConn.SetKeepAlive(true)
-		_ = tcpConn.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)
-		_ = tcpConn.SetNoDelay(true)
-	}
-	c := &RawConn{
-		conn:        conn,
-		addr:        addr,
-		inflight:    make(map[string]*rawPending),
-		capacity:    make(chan struct{}, maxPipe),
-		maxPipe:     int32(maxPipe),
-		extractKey:  extractKey,
-		idleTimeout: config.DefaultTCPPoolIdleTimeout,
-	}
-	c.lastUsed.Store(log.NowUnix())
-	go c.readLoop()
-	return c
-}

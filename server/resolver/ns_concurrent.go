@@ -404,6 +404,9 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 			deferralTimer.Stop()
 		}
 	}()
+	// waitErr carries a ctx cancellation that broke the wait loop — it must
+	// surface as the caller's cancellation, not as an authority failure.
+	var waitErr error
 waitLoop:
 	for {
 		select {
@@ -426,6 +429,7 @@ waitLoop:
 		case <-errgroupDone:
 			break waitLoop
 		case <-ctx.Done():
+			waitErr = ctx.Err()
 			break waitLoop
 		}
 	}
@@ -456,6 +460,9 @@ waitLoop:
 
 	if poisonRejected.Load() {
 		verdict = defense.VerdictPoisoned
+	}
+	if waitErr != nil {
+		return nil, verdict, waitErr
 	}
 	log.Debugf("RECURSION: all %d nameservers failed for %s (zone=%s)", len(nameservers), question.Name, currentDomain)
 	return nil, verdict, errors.New("no successful response")

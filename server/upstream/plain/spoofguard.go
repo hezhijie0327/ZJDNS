@@ -60,9 +60,9 @@ const (
 	copyBufShrinkMinCap = 512
 )
 
-// Sentinel errors for the spoofguard/hopguard collect paths — the per-query
-// errors.New sites were ~700M allocations on a loaded server; callers only
-// check err == nil, so the strings carried no information.
+// Sentinel errors for the spoofguard/hopguard collect paths — package-level
+// so the per-query hot path never allocates; callers only check err == nil,
+// so the strings carry no per-query information.
 var (
 	errQuestionMismatch   = errors.New("plain: pooled UDP response question mismatch")
 	errCollectClosed      = errors.New("plain: pooled udp connection closed during spoofguard collect")

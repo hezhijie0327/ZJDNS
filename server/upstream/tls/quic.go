@@ -148,6 +148,12 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 		}
 	}
 
+	// A canceled/expired context can never succeed past this point, and a
+	// fresh dial on it burns a handshake nobody waits for.
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	conn, err := dialQUIC(ctx, key)
 	if err != nil {
 		if errors.Is(err, quic.Err0RTTRejected) {

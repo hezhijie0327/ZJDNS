@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"time"
 	"zjdns/cache"
@@ -257,8 +258,14 @@ func (r *Resolver) ConfigureServers(servers []config.UpstreamServer) {
 			r.recursive.hopguard = r.recursive.hopguard || s.HopGuard
 			r.recursive.capsguard = r.recursive.capsguard || s.CapsGuard
 			// RFC 10029: the recursive walk bundles the configured types via
-			// MQTYPE-Query when querying authorities.
-			r.recursive.mqtype = append(r.recursive.mqtype, s.MQType...)
+			// MQTYPE-Query when querying authorities.  Multiple recursive
+			// upstreams concatenate here — dedup so the outbound
+			// MQTYPE-Query never lists a QTx twice.
+			for _, t := range s.MQType {
+				if !slices.Contains(r.recursive.mqtype, t) {
+					r.recursive.mqtype = append(r.recursive.mqtype, t)
+				}
+			}
 		}
 		active = append(active, s)
 	}

@@ -49,6 +49,12 @@ func (c *Client) ExecuteTLCP(ctx context.Context, msg *dns.Msg, server *config.U
 		}
 	}
 
+	// A canceled/expired context can never succeed past this point, and a
+	// per-query dial on it burns a handshake nobody waits for.
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	// Non-pooled fallback: manual dial + TLCP handshake + DNS exchange.
 	tlcpCfg := c.tlcpClientConfig(server).Clone()
 	tlcpCfg.NextProtos = config.NextProtoDOT

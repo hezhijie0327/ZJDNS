@@ -72,30 +72,21 @@ func parentSideType(qtype uint16) bool {
 	return qtype == dns.TypeDS || qtype == dns.TypeNSEC || qtype == dns.TypeNSEC3
 }
 
-// minDelegationTTL returns the minimum positive TTL across NS and DS records,
-// floored at DefaultTTL and capped at DefaultMaxCacheableTTL.  Mirrors
-// cache.cacheTTL (cache/wire.go).
+// minDelegationTTL returns the minimum NS/DS TTL clamped to
+// [DefaultTTL, DefaultMaxCacheableTTL]: zero/sub-floor record TTLs floor at
+// DefaultTTL, so an all-zero referral caches briefly, never at the 7-day
+// cap.  Mirrors cache.cacheTTL (cache/wire.go).
 func minDelegationTTL(nsRecords []*dns.NS, dsRecords []*dns.DS) int {
 	ttl := config.DefaultMaxCacheableTTL
 	check := func(rrTTL uint32) {
-		if rrTTL > 0 {
-			t := int(rrTTL) //nolint:gosec // G115: DNS TTLs fit in int
-			if t < ttl {
-				ttl = t
-			}
-		}
+		t := max(int(rrTTL), config.DefaultTTL) //nolint:gosec // G115: DNS TTLs fit in int
+		ttl = min(ttl, t)
 	}
 	for _, ns := range nsRecords {
 		check(ns.Header().TTL)
 	}
 	for _, ds := range dsRecords {
 		check(ds.Header().TTL)
-	}
-	if ttl <= 0 || ttl > config.DefaultMaxCacheableTTL {
-		ttl = config.DefaultMaxCacheableTTL
-	}
-	if ttl < config.DefaultTTL {
-		ttl = config.DefaultTTL
 	}
 	return ttl
 }

@@ -49,6 +49,12 @@ func (c *Client) ExecuteTLS(ctx context.Context, msg *dns.Msg, server *config.Up
 		}
 	}
 
+	// A canceled/expired context can never succeed past this point, and a
+	// per-query dial on it burns a handshake nobody waits for.
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	// Non-pooled fallback: manual dial + TLS + DNS exchange.
 	dotConfig := c.eTLSClientConfig(server).Clone()
 	dotConfig.NextProtos = config.NextProtoDOT
@@ -62,7 +68,7 @@ func (c *Client) ExecuteTLS(ctx context.Context, msg *dns.Msg, server *config.Up
 // the first Write would deadlock once the connection enters the pool:
 // newConn() starts a readLoop goroutine that reads from the same conn, and
 // both the readLoop and the lazy handshake block on the underlying TCP Read,
-// neither making progress (confirmed via tls.(*Conn).readFromUntil stack).
+// neither making progress.
 func (c *Client) dialTLSConn(ctx context.Context, addr string, tlsConfig *eTLS.Config, proxyDialer *socks5.Dialer) (net.Conn, error) {
 	var tcpConn net.Conn
 	var err error

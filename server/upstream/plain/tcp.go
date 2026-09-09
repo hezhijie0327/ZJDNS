@@ -43,8 +43,8 @@ func (c *Client) ExecuteTCP(ctx context.Context, msg *dns.Msg, server *config.Up
 		}
 		// segSize is part of the pool key: splitguard and non-splitguard
 		// queries must not share a connection, or one query's segmentation
-		// setting cross-applies to the other's writes (defense degradation,
-		// M-low).  Worst case doubles the per-upstream pool.
+		// setting cross-applies to the other's writes (defense degradation).
+		// Worst case doubles the per-upstream pool.
 		if server.Splitguard {
 			poolKey += "|split"
 		}
