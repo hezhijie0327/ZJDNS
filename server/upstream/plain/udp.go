@@ -82,8 +82,57 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 		return c.exchangeViaProxyUDP(ctx, msg, server.Address, proxyDialer)
 	}
 
-	response, _, err := c.udpClient.Exchange(ctx, msg, config.ProtoUDP, server.Address)
-	return response, err
+	return c.exchangeOneShotUDP(ctx, msg, server.Address)
+}
+
+// exchangeOneShotUDP is the per-query-dial fallback for pool failures a fresh
+// socket could still fix.  It dials, sends once, and reads until a datagram
+// carrying the query ID arrives or the deadline expires — the same contract
+// the pooled path gives a query, minus the socket reuse.
+func (c *Client) exchangeOneShotUDP(ctx context.Context, msg *dns.Msg, addr string) (*dns.Msg, error) {
+	if err := msg.Pack(); err != nil {
+		return nil, err
+	}
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "udp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("dial udp: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	deadline := time.Now().Add(c.timeout)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
+		deadline = dl
+	}
+	_ = conn.SetDeadline(deadline)
+
+	if _, err := conn.Write(msg.Data); err != nil {
+		return nil, fmt.Errorf("write: %w", err)
+	}
+
+	// Protocol-max read bound: the pooled path caps at 16 KiB, but this cold
+	// path would rather over-allocate once than truncate mid-record (a
+	// half-record breaks Unpack where a TC-flagged response would not).
+	buf := make([]byte, dns.MaxMsgSize)
+	for {
+		n, err := conn.Read(buf)
+		if err != nil {
+			return nil, fmt.Errorf("read: %w", err)
+		}
+		// ID match guards against stale replies from a previous query on a
+		// recycled NAT mapping; anything else is read and discarded.
+		if n < 12 || buf[0] != msg.Data[0] || buf[1] != msg.Data[1] {
+			continue
+		}
+		response := pool.DefaultMessage.Get()
+		response.Data = buf[:n]
+		if err := response.Unpack(); err != nil {
+			pool.DefaultMessage.Put(response)
+			return nil, fmt.Errorf("unpack: %w", err)
+		}
+		response.Data = nil
+		return response, nil
+	}
 }
 
 // acquireUDP gets a pooled UDP socket for the server, dialing through the

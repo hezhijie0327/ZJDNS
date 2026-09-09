@@ -16,7 +16,6 @@ import (
 	"zjdns/server/upstream/pool"
 	socks5 "zjdns/server/upstream/socks5"
 
-	"codeberg.org/miekg/dns"
 	"github.com/quic-go/quic-go"
 	eHTTP "gitlab.com/go-extension/http"
 	eTLS "gitlab.com/go-extension/tls"
@@ -25,7 +24,6 @@ import (
 // Client executes DNS queries over encrypted transports: DoT, DoQ, DoH, DoH3,
 // and DTLS.
 type Client struct {
-	tlsClient  *dns.Client
 	dohClient  *eHTTP.Client
 	doh3Client *http.Client
 
@@ -57,7 +55,6 @@ type Client struct {
 
 // New creates a Client for encrypted DNS transports.
 func New(
-	tlsClient *dns.Client,
 	dohClient *eHTTP.Client,
 	doh3Client *http.Client,
 	dotPool *pool.ConnPool,
@@ -69,7 +66,6 @@ func New(
 	timeout time.Duration,
 ) *Client {
 	c := &Client{
-		tlsClient:        tlsClient,
 		dohClient:        dohClient,
 		doh3Client:       doh3Client,
 		dotPool:          dotPool,

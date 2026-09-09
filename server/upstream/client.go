@@ -5,7 +5,6 @@ package upstream
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -77,22 +76,6 @@ type Client struct {
 // protocol selection, proxy).  The pools and caches created here are shared
 // across all upstream servers for efficiency.
 func New() *Client {
-	defaultTransport := &dns.Transport{
-		Dialer: &net.Dialer{
-			Timeout:   config.DefaultDNSQueryTimeout,
-			KeepAlive: config.DefaultTCPKeepAlivePeriod,
-		},
-		ReadTimeout:  config.DefaultDNSQueryTimeout,
-		WriteTimeout: config.DefaultDNSQueryTimeout,
-	}
-
-	// NOTE: Both clients alias the same *dns.Transport. This is safe
-	// because dns.Client only reads Transport config fields (Dialer, timeouts)
-	// and never mutates them. A future change to Transport on one client would
-	// affect both -- clone the Transport if per-client divergence is needed.
-	udpClient := &dns.Client{Transport: defaultTransport}
-	tlsDNSClient := &dns.Client{Transport: defaultTransport}
-
 	dohTransport := &eHTTP.Transport{
 		MaxIdleConns:        config.DefaultMaxIdleConns,
 		MaxIdleConnsPerHost: config.DefaultMaxIdleConnsPerHost,
@@ -134,8 +117,8 @@ func New() *Client {
 		}
 	}
 
-	c.plainClient = plain.New(udpClient, tcpPool, c.proxyDialer, timeout)
-	c.tlsClient = tlsclient.New(tlsDNSClient, dohClient, doh3Client, dotPool, quicPool, sessionCache, quicSessionCache, dtlsSessions, c.proxyDialer, timeout)
+	c.plainClient = plain.New(tcpPool, c.proxyDialer, timeout)
+	c.tlsClient = tlsclient.New(dohClient, doh3Client, dotPool, quicPool, sessionCache, quicSessionCache, dtlsSessions, c.proxyDialer, timeout)
 	c.tlcpClient = tlcpclient.New(c.proxyDialer, timeout)
 	c.dnscryptClient = dnscrypt.New(c.proxyDialer)
 
