@@ -66,11 +66,14 @@ var packBufPool = sync.Pool{
 }
 
 // AcquireWire returns a byte slice of length n backed by the pooled 2048-byte
-// class when n fits, or a fresh allocation otherwise.  Buffers are NOT
-// zeroed on release: the caller must overwrite the full [0,n) range (Pack or
-// copy) before anyone reads it.
+// class when n fits, a fresh allocation when n exceeds it, and nil for a
+// negative n.  Buffers are NOT zeroed on release: the caller must overwrite
+// the full [0,n) range (Pack or copy) before anyone reads it.
 func AcquireWire(n int) []byte {
-	if n > wireBufferSize || n < 0 {
+	if n < 0 {
+		return nil
+	}
+	if n > wireBufferSize {
 		return make([]byte, n)
 	}
 	b := wireBufPool.Get().(*[]byte)

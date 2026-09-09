@@ -52,10 +52,6 @@ func (s *Cache) loadSpill(path string, diskCap, maxEntries int) {
 	log.Infof("CACHE: spill store ready: %d records on disk, %d loaded to memory", onDisk, len(warmed))
 }
 
-// Close flushes and closes the spill stores (the in-memory LRUs need no
-// cleanup).  Idempotent — a second Close returns nil instead of
-// os.ErrClosed from the spill stores.
-
 // getFromSpill reads a spill record by key and promotes it to memory.  An
 // expired record is dropped from the index (the file record lingers until
 // compaction).  Returns (entry, false) on miss or expiry.

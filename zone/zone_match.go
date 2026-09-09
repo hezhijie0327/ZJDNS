@@ -5,7 +5,6 @@ package zone
 
 import (
 	"net"
-	"strconv"
 	"strings"
 	"zjdns/config"
 	"zjdns/internal/log"
@@ -155,6 +154,17 @@ func (e *Evaluator) lookupWildcard(table *zoneTable, qname string, qtype, qclass
 	return best
 }
 
+// quoteTXT quotes a value for DNS TXT rdata. strconv.Quote produces Go
+// escapes (\u, \x) that zone-file parsing does not understand — a non-ASCII
+// value would fail parsing and the record would be dropped. Escaping
+// backslashes and quotes is the DNS master-file convention (RFC 1035 §5.1).
+// Local twin of config.quoteTXT (unexported helpers are not shared across
+// packages).
+func quoteTXT(value string) string {
+	escaped := strings.ReplaceAll(strings.ReplaceAll(value, "\\", "\\\\"), "\"", "\\\"")
+	return "\"" + escaped + "\""
+}
+
 func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicEntry, clientIP net.IP) Result {
 	var contents []string
 	if len(de.configs) == 0 {
@@ -187,7 +197,7 @@ func (e *Evaluator) evalDynamic(qname string, qtype, qclass uint16, de *dynamicE
 		rr := buildRecord(qname, &config.ZoneRecord{
 			Type:    dns.TypeTXT,
 			Class:   dns.ClassCHAOS,
-			Content: strconv.Quote(content),
+			Content: quoteTXT(content),
 		})
 		if rr != nil {
 			result.Answer = append(result.Answer, rr)

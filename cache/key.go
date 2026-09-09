@@ -6,6 +6,13 @@ import (
 	"zjdns/config"
 )
 
+// cacheKey is the exact cache key: (qname, qtype, qclass, ECS address,
+// ECS prefix) as one comparable struct — constructed in place on the lookup
+// path with zero allocations.  ecsAddr holds the address bytes with
+// ecsLen 4 = IPv4 (first 4 bytes), 16 = IPv6, 0 = no ECS.  The key excludes
+// the client's DO bit: outbound queries always carry DO=1 (RFC 6840 §5.9)
+// and DO=0 filtering happens at serve time — a DO-split key would store the
+// identical raw wire twice per name.
 type cacheKey struct {
 	qname   string
 	qtype   uint16
@@ -118,13 +125,3 @@ func (k *cacheKey) mask(prefix int) {
 		}
 	}
 }
-
-// ── Store interface ──────────────────────────────────────────────────────────
-
-// Get retrieves a cached DNS response by decompressing and unpacking the stored
-// wire format. Returns the entry, whether it was found, and whether it's expired.
-// The caller must pass a canonical qname (dnsutil.Canonical).
-//
-// On a memory miss the disk spill tier is consulted; a fresh spill hit is
-// promoted back into memory (which may itself evict the LRU tail — that
-// entry spills to disk in turn).

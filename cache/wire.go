@@ -110,12 +110,6 @@ func WireHasDNSSEC(wire []byte) bool {
 	return false
 }
 
-// New creates a two-tier cache with the given entry and latency capacities
-// (<= 0 applies the config defaults).  A non-empty spill path enables the
-// disk tier for that store: the spill file is opened and its hottest
-// entries (by store timestamp) are loaded into memory, up to the mem cap;
-// the rest stay on disk and are promoted back on a memory miss.
-
 // cacheTTL returns the TTL for a cache entry, or 0 when the response must
 // not be cached at all.
 //

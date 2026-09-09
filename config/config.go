@@ -155,7 +155,6 @@ type CacheSettings struct {
 	AggressiveNSEC *bool `json:"aggressive_nsec,omitzero"`
 }
 
-// AggressiveNSECEnabled resolves the RFC 8198 toggle (default true).
 // CacheStoreSettings bounds and persists one cache-store: a two-tier limit
 // (in-memory + disk spill) and state_file (empty = not persisted, no spill
 // tier).  PreferStale is entries-only — it is ignored by latency/delegation.

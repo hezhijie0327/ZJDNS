@@ -15,6 +15,8 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
+// cacheEntry is one cached DNS response.  msgWire is the pre-packed response
+// (format 0x02) with TTL-offset table.  TTL expiry is checked lazily on read.
 type cacheEntry struct {
 	msgWire   []byte
 	ts        int64 // log.NowUnix() at store
@@ -28,8 +30,8 @@ type cacheEntry struct {
 	sorted atomic.Pointer[latencySortedWire]
 }
 
-// latencySortedWire is the cached latency-sort result for one entry.
-
+// Get retrieves a cached DNS response by decompressing and unpacking the stored
+// wire format. Returns the entry, whether it was found, and whether it's expired.
 // The caller must pass a canonical qname (dnsutil.Canonical).
 //
 // On a memory miss the disk spill tier is consulted; a fresh spill hit is
@@ -197,6 +199,7 @@ func (s *Cache) buildEntry(ce *cacheEntry, ts int64, entryTTL int, validated boo
 	for _, off := range offsets {
 		if int(off)+4 > len(owned) {
 			ReleaseTTLOffsets(offsets)
+			pool.ReleaseWire(owned)
 			log.Debugf("CACHE: corrupt entry (name=%s type=%d) — TTL offset %d out of wire range (%d)", qname, qtype, off, len(owned))
 			return nil, false, false
 		}

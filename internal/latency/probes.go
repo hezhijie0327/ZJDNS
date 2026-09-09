@@ -137,9 +137,8 @@ func probeUDP(ctx context.Context, ip net.IP, port int) error {
 
 	// Send a single-byte datagram — valid per RFC 768 and
 	// universally applicable regardless of the target service. The Read
-	// will return either a response from the service or an ICMP
-	// port-unreachable that manifests as a read error; either way we
-	// get an RTT measurement.
+	// returns either a response from the service or an error — an ICMP
+	// port-unreachable manifests as a read error and fails the step.
 	if _, err := conn.Write([]byte{0}); err != nil {
 		return err
 	}

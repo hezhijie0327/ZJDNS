@@ -23,7 +23,7 @@ import (
 //
 // Optional fields (nil-checked before use):
 //   - ZoneEvaluator, TagMatcher, Prober, PendingReqs, PendingRefrs,
-//     DNS64, ACL, Closed, RefreshGroup, RefreshCtx, Ctx, PrefetchCooldown
+//     DNS64, ACL, Closed, RefreshGroup, RefreshCtx, PrefetchCooldown
 type Dependencies struct {
 	// Core
 	Config        *config.ServerConfig
@@ -48,7 +48,6 @@ type Dependencies struct {
 	Closed           func() bool
 	RefreshGroup     *errgroup.Group
 	RefreshCtx       context.Context
-	Ctx              context.Context
 	PrefetchCooldown *handler.PrefetchCooldown
 }
 

@@ -55,7 +55,7 @@ func isDestructiveChaosName(qname string) bool {
 // rewriteOwnerNames rewrites RR owner names that exactly match from, setting
 // them to the target name — wildcard zone rules store answers under
 // "*.<domain>" and must serve them with the queried name as the owner
-// (RFC 1034 §4.3.3, R3-M7).
+// (RFC 1034 §4.3.3).
 // The RRs are freshly unpacked per query, so in-place mutation is safe.
 func rewriteOwnerNames(rrs []dns.RR, from, to string) []dns.RR {
 	for _, rr := range rrs {

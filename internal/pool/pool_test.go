@@ -152,3 +152,11 @@ func BenchmarkDefaultMessage_GetPut(b *testing.B) {
 		DefaultMessage.Put(msg)
 	}
 }
+
+// TestAcquireWireNegative verifies a negative length returns nil instead of
+// panicking inside make.
+func TestAcquireWireNegative(t *testing.T) {
+	if b := AcquireWire(-1); b != nil {
+		t.Fatalf("AcquireWire(-1) = %v, want nil", b)
+	}
+}

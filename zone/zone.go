@@ -245,8 +245,7 @@ func (e *Evaluator) loadInline(table *zoneTable, rule *config.ZoneRule) (int, er
 	} else {
 		// Sentinel entry for rcode-only, dynamic, and records-less rules.
 		// A records-less Rcode=0 rule is an authoritative NODATA (RFC 9462
-		// §6.4 uses one for resolver.arpa) — previously such rules were
-		// silently dropped by the loader.
+		// §6.4 uses one for resolver.arpa).
 		auth := buildRRs(rule.Name, rule.Authority)
 		addl := buildRRs(rule.Name, rule.Additional)
 		addRule(table, &zoneRule{

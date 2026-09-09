@@ -81,9 +81,6 @@ type Cache struct {
 	closeOnce sync.Once
 }
 
-// cacheEntry is one cached DNS response.  msgWire is the pre-packed response
-// (format 0x02) with TTL-offset table.  TTL expiry is checked lazily on read.
-
 const (
 	defaultStaleMaxAge  = int64(config.DefaultStaleMaxAge)
 	maxLatencyLookupIPs = 64 // cap batched IPs per latency lookup
@@ -110,6 +107,7 @@ const (
 	maxTTLOffsets = 256
 )
 
+// New creates a two-tier cache with the given entry and latency capacities
 // (<= 0 applies the config defaults).  A non-empty spill path enables the
 // disk tier for that store: the spill file is opened and its hottest
 // entries (by store timestamp) are loaded into memory, up to the mem cap;
@@ -138,6 +136,9 @@ func New(entriesLimit, latencyLimit config.LimitSettings, spillPath, latencySpil
 	return c
 }
 
+// Close flushes and closes the spill stores (the in-memory LRUs need no
+// cleanup).  Idempotent — a second Close returns nil instead of
+// os.ErrClosed from the spill stores.
 func (s *Cache) Close() error {
 	var err error
 	s.closeOnce.Do(func() {

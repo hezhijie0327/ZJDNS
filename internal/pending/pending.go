@@ -107,8 +107,12 @@ type CallGroup[K comparable, V any] struct {
 // ---------------------------------------------------------------------------
 
 // maxPending is the capacity of the internal LRU maps — a hard cap to prevent
-// unbounded memory growth.  Old entries are auto‑evicted when the map is full.
+// unbounded memory growth. Old entries are auto‑evicted when the map is full.
 const maxPending = 10000
+
+// defaultFollowerTimeout replaces a non-positive NewCallGroup timeout —
+// time.NewTimer panics on a non-positive duration when a follower calls Join.
+const defaultFollowerTimeout = 5 * time.Second
 
 // ---------------------------------------------------------------------------
 // Variables
@@ -234,6 +238,9 @@ func (g *ResultGroup[K, V]) Do(ctx context.Context, key K, fn func(context.Conte
 func NewCallGroup[K comparable, V any](capacity int, followerTimeout time.Duration, clone func(V) V) *CallGroup[K, V] {
 	if capacity <= 0 {
 		capacity = maxPending
+	}
+	if followerTimeout <= 0 {
+		followerTimeout = defaultFollowerTimeout
 	}
 	cg := &CallGroup[K, V]{
 		mmap:            lrumap.New[K, *callEntry[K, V]](capacity),

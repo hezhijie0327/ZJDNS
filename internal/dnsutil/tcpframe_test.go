@@ -269,3 +269,30 @@ func TestPackStreamFrame_OversizeHeapFallback(t *testing.T) {
 		t.Fatal("oversize wire must be copied into the heap frame")
 	}
 }
+
+// TestPackStreamFrame_ShortDstHeapFallback verifies a dst without room for
+// prefix + wire (cap < 2*DNSFramePrefixLen) must not panic on the aliased
+// slice — the message is packed fresh and copied into a heap frame.
+func TestPackStreamFrame_ShortDstHeapFallback(t *testing.T) {
+	msg := new(dns.Msg)
+	mdnsutil.SetQuestion(msg, "example.com.", dns.TypeA)
+	msg.Response = true
+	msg.Answer = []dns.RR{&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 60}, Addr: netip.MustParseAddr("192.0.2.1")}}
+
+	dst := make([]byte, 2) // no spare capacity for prefix + wire
+	frame, aliased, ok := PackStreamFrame(dst, msg)
+	if !ok || aliased {
+		t.Fatalf("ok=%v aliased=%v, want true/false", ok, aliased)
+	}
+	un := new(dns.Msg)
+	un.Data = frame[DNSFramePrefixLen:]
+	if err := un.Unpack(); err != nil {
+		t.Fatalf("heap frame does not unpack: %v", err)
+	}
+	if len(un.Answer) != 1 {
+		t.Fatalf("unpacked answer count = %d, want 1", len(un.Answer))
+	}
+	if msg.Data != nil {
+		t.Fatal("packed Data must be cleared so Message.Put never releases heap frame memory")
+	}
+}

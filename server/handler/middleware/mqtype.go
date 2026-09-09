@@ -117,9 +117,10 @@ func (m *MQTYPE) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		}
 
 		// Merge locally in every mode — forwarding too.  ZJDNS is a full
-		// resolver: each QTx is resolved through its own upstreams
-		// (m.resolver.Query), so the response supports MQTYPE even when
-		// no hop in the chain does.  The option is never passed through.
+		// resolver: each QTx is resolved through the shared secondary
+		// lookup (m.secondary.Lookup), so the response supports MQTYPE
+		// even when no hop in the chain does.  The option is never passed
+		// through.
 		m.merge(qctx, mqQuery, qtResults)
 		return err
 	})

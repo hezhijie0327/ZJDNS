@@ -38,7 +38,7 @@ func (m *CacheStore) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		// Gate on Res alone — markers like ZoneMatched were redundant here
 		// (both are always accompanied by Res except the records-less zone
 		// rule path, which must reach buildSuccess below or the query is
-		// silently dropped — C3).
+		// silently dropped).
 		if qctx.Res != nil {
 			return err
 		}

@@ -180,7 +180,6 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 		Closed:           func() bool { return isClosed() },
 		RefreshGroup:     cacheRefreshGroup,
 		RefreshCtx:       cacheRefreshCtx,
-		Ctx:              ctx,
 		PrefetchCooldown: prefetchCooldown,
 	}
 

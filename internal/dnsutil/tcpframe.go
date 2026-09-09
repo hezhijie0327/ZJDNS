@@ -68,7 +68,13 @@ func ReadTCPMsg(conn net.Conn) (*dns.Msg, error) {
 func PackStreamFrame(dst []byte, resp *dns.Msg) (frame []byte, aliased, ok bool) {
 	wire := resp.Data
 	if len(wire) == 0 {
-		resp.Data = dst[DNSFramePrefixLen : DNSFramePrefixLen : cap(dst)-DNSFramePrefixLen]
+		// The aliased slice below needs cap(dst)-DNSFramePrefixLen >=
+		// DNSFramePrefixLen; a shorter dst cannot host prefix + wire —
+		// leave Data unset so Pack allocates fresh, and the capacity
+		// check below copies the result into a heap frame.
+		if cap(dst) >= 2*DNSFramePrefixLen {
+			resp.Data = dst[DNSFramePrefixLen : DNSFramePrefixLen : cap(dst)-DNSFramePrefixLen]
+		}
 		if err := resp.Pack(); err != nil {
 			resp.Data = nil
 			return nil, false, false

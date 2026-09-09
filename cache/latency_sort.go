@@ -10,6 +10,7 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
+// latencySortedWire is the cached latency-sort result for one entry.
 type latencySortedWire struct {
 	wire    []byte
 	offsets []uint16
@@ -21,15 +22,6 @@ type latEntry struct {
 	latency   int   // measured latency in ms
 	lastProbe int64 // log.NowUnix() at probe time; 0 = never probed
 }
-
-// cacheKey is the exact cache key: (qname, qtype, qclass, ECS address,
-// ECS prefix) as one comparable struct — constructed in place on the lookup
-// path with zero allocations (the former strings.Builder key allocated on
-// every Get, once per ECS candidate).  ecsAddr holds the address bytes with
-// ecsLen 4 = IPv4 (first 4 bytes), 16 = IPv6, 0 = no ECS.  The key excludes
-// the client's DO bit: outbound queries always carry DO=1 (RFC 6840 §5.9)
-// and DO=0 filtering happens at serve time — a DO-split key would store the
-// identical raw wire twice per name.
 
 // clonePooledOffsets copies an offsets table into a pooled slice for a
 // per-hit Entry (the cached copy stays owned by the entry).

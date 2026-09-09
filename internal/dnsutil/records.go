@@ -17,9 +17,10 @@ func processRR(rr dns.RR, value int64, isElapsed, includeDNSSEC bool) dns.RR {
 			return nil
 		}
 	}
-	// Fast path: no TTL adjustment and no DNSSEC filtering — return as-is
-	// to avoid heap-allocating a clone (common on cache-miss → serve path).
-	if value == 0 && !isElapsed {
+	// Fast path: zero TTL adjustment — an elapsed value of 0 leaves the
+	// TTL untouched, so no clone is needed.  Common on the cache-miss →
+	// serve path.
+	if value == 0 {
 		return rr
 	}
 	newRR := rr.Clone()
@@ -61,7 +62,7 @@ func ProcessRecords(rrs []dns.RR, value int64, isElapsed, includeDNSSEC bool) []
 	return result
 }
 
-// hasDNSSECRecords checks whether the slice contains any DNSSEC record types
+// HasDNSSECRecords checks whether the slice contains any DNSSEC record types
 // that would be filtered by ProcessRecords when includeDNSSEC is false.
 func HasDNSSECRecords(rrs []dns.RR) bool {
 	for _, rr := range rrs {
