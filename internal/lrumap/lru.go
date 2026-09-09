@@ -118,8 +118,12 @@ func (m *Map[K, V]) Get(key K) (V, bool) {
 	if stale {
 		m.mu.Lock()
 		// The entry may have been removed between the RUnlock and this
-		// Lock (eviction/Delete nil the list pointers) — skip if detached.
-		if e.prev != nil {
+		// Lock (eviction/Delete/Clear) — re-check identity under the
+		// write lock, not just pointer detachment: Clear resets the list
+		// sentinels without nil-ing every entry's prev/next, so a stale
+		// detached-looking entry could otherwise re-link into the fresh
+		// list as a ghost (double OnEvict, capacity overshoot).
+		if cur, ok := m.m[key]; ok && cur == e {
 			m.moveToFront(e)
 			e.seen.Store(m.clock.Add(1))
 		}
