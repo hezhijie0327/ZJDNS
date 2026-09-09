@@ -28,8 +28,15 @@ func TestAddResolverInfoRecords(t *testing.T) {
 	addResolverInfoRecords(cfg)
 
 	found := false
+	sentinel := false
 	for _, rule := range cfg.Zone {
 		if rule.Name != "resolver.arpa" {
+			continue
+		}
+		if len(rule.Answer) == 0 {
+			// RFC 9462 §6.4 NODATA sentinel — serves authoritative NODATA
+			// for every non-RESINFO type.
+			sentinel = true
 			continue
 		}
 		if len(rule.Answer) != 1 {
@@ -55,6 +62,9 @@ func TestAddResolverInfoRecords(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("resolver.arpa RESINFO rule not injected")
+	}
+	if !sentinel {
+		t.Fatal("resolver.arpa NODATA sentinel rule not injected (RFC 9462 §6.4)")
 	}
 }
 

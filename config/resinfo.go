@@ -58,6 +58,13 @@ func addResolverInfoRecords(cfg *ServerConfig) {
 		names = append(names, cfg.Server.Certificate.Domain)
 	}
 
+	// RFC 9462 §6.4: resolver.arpa MUST be treated as a locally served
+	// zone — the records-less rule below serves authoritative NODATA for
+	// every non-RESINFO type (A/AAAA/…) instead of forwarding the SUDN
+	// upstream.  The guard must be evaluated BEFORE the loop appends the
+	// RESINFO rule, or it is always false and the sentinel never loads.
+	hadResolverARPARule := hasZoneRule(cfg, "resolver.arpa")
+
 	keys := resinfoKeys(cfg)
 	content := make([]string, 0, len(keys))
 	for _, k := range keys {
@@ -78,11 +85,7 @@ func addResolverInfoRecords(cfg *ServerConfig) {
 			}},
 		})
 	}
-
-	// RFC 9462 §6.4: resolver.arpa itself MUST be treated as a locally
-	// served zone — the records-less rule serves authoritative NODATA for
-	// A/AAAA instead of forwarding the SUDN upstream.
-	if !hasZoneRule(cfg, "resolver.arpa") {
+	if !hadResolverARPARule {
 		cfg.Zone = append(cfg.Zone, ZoneRule{Name: "resolver.arpa"})
 	}
 }
