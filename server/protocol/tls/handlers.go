@@ -59,6 +59,14 @@ func (s *Server) HandleDOTFromListener(listener net.Listener) error {
 // The caller provides a net.PacketConn fed by the dispatch loop.
 func (s *Server) HandleDOQFromPacketConn(pc net.PacketConn) error {
 	addrCache := lrumap.New[string, time.Time](config.DefaultQUICAddrCacheSize)
+	// Publish the cache on the server field: the accept loop marks verified
+	// addresses there (markAddrVerified reads s.doqAddrCache).  Standalone
+	// and shared DoQ are mutually exclusive (SkipDOQ), so the field is free
+	// here — without this, the shared transport's Retry whitelist is never
+	// warmed and every connection pays a Retry round trip (RFC 9000 §8.1.1).
+	s.listenerMu.Lock()
+	s.doqAddrCache = addrCache
+	s.listenerMu.Unlock()
 
 	transport := &quic.Transport{
 		Conn:                pc,
@@ -99,6 +107,12 @@ func (s *Server) HandleDOQFromPacketConn(pc net.PacketConn) error {
 // UDP dispatch loop.
 func (s *Server) HandleHTTP3FromPacketConn(pc net.PacketConn) error {
 	addrCache := lrumap.New[string, time.Time](config.DefaultQUICAddrCacheSize)
+	// Same as HandleDOQFromPacketConn: the request handler marks verified
+	// HTTP/3 peers on s.h3AddrCache — publish this group's cache there or
+	// the Retry whitelist never warms (SkipHTTP3 keeps standalone away).
+	s.listenerMu.Lock()
+	s.h3AddrCache = addrCache
+	s.listenerMu.Unlock()
 
 	transport := &quic.Transport{
 		Conn:                pc,
