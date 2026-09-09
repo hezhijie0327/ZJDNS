@@ -209,104 +209,66 @@ func (s *Server) initProtocolListeners(cfg *config.ServerConfig, h *handler.Hand
 		}
 		sharedCfg.TCPGroups = tcpGroups
 		if wantSharedUDP {
-			// Determine the primary UDP port from QUIC/DTLS/DTLCP.
-			primaryPort := cfg.Server.Protocol.QUIC
-			if primaryPort == "" {
-				primaryPort = cfg.Server.Protocol.DTLS
+			// One group per genuinely shared UDP port (≥2 multiplexed
+			// protocols on it).  Wiring a single "primary" port and
+			// attaching handlers whose configured port differed from it
+			// double-bound ports (REUSEPORT group vs standalone bind) or
+			// served protocols on ports they were not configured for.
+			dtlcpShared := cfg.Server.Protocol.DTLCP != "" &&
+				(dtlsDTLCPShare || quicDTLCPShare ||
+					(wantSharedDNSUDP && cfg.Server.Protocol.DTLCP == cfg.Server.Protocol.DNSCrypt))
+			sharedPorts := make(map[string]struct{}, 2)
+			addSharedPort := func(p string) { sharedPorts[p] = struct{}{} }
+			if quicPortShared {
+				addSharedPort(cfg.Server.Protocol.QUIC)
 			}
-			if primaryPort == "" {
-				primaryPort = cfg.Server.Protocol.DTLCP
+			if dtlsPortShared {
+				addSharedPort(cfg.Server.Protocol.DTLS)
 			}
-			hasQuicDTLSDTLCP := primaryPort != ""
+			if dtlcpShared {
+				addSharedPort(cfg.Server.Protocol.DTLCP)
+			}
+			if wantSharedDNSUDP {
+				addSharedPort(cfg.Server.Protocol.DNSCrypt)
+			}
 
-			// Build UDP groups (pre-allocate capacity 2 so pointers
-			// remain stable after append).
-			udpGroups := make([]shared.UDPGroup, 0, 2)
-
-			if hasQuicDTLSDTLCP {
-				// Primary group: QUIC/DTLS/DTLCP (+ DNSCrypt/HTTP3 if same port).
-				dnsCryptOnPrimary := wantSharedDNSUDP &&
-					cfg.Server.Protocol.DNSCrypt == primaryPort
-
-				// Only create the primary group if there are actual
-				// handlers (i.e. protocols share or DNSCrypt joins).
-				hasPrimaryHandlers := quicPortShared || dtlsPortShared ||
-					dnsCryptOnPrimary || s.tlcpServer != nil
-
-				if hasPrimaryHandlers {
-					primary := shared.UDPGroup{Port: primaryPort}
-					if quicPortShared {
-						primary.DOQHandler = s.tls.HandleDOQFromPacketConn
-					}
-					if dtlsPortShared {
-						primary.DTLSHandler = s.tls.HandleDTLSFromPacketListener
-					}
-					if s.tlcpServer != nil && cfg.Server.Protocol.DTLCP != "" {
-						if cfg.Server.Protocol.DTLCP == primaryPort {
-							// The mux serves DTLCP on this UDP port — skip
-							// the standalone DTLCP bind.
-							s.tlcpServer.SkipDTLCP = true
-						}
-						primary.ServeDTLCP = s.tlcpServer.ServeDTLCPClient
-					}
-					if dnsCryptOnPrimary {
-						primary.ServeDNSCrypt = s.dnscryptServer.HandleSharedUDPPacket
-						primary.ClassifyDNSCrypt = func(data []byte) string {
-							if s.dnscryptServer.HasClientMagic(data) {
-								return "dnscrypt"
-							}
-							return ""
-						}
-						if cfg.Server.Protocol.HTTP3.Port == primaryPort {
-							if quicPortShared {
-								// DoQ and DoH3 initial datagrams are both QUIC
-								// long headers — the demux layer cannot tell
-								// them apart, and the dispatch would route
-								// every datagram to DoQ, silently blackholing
-								// DoH3 on this port.
-								return fmt.Errorf("http3 and quic cannot share UDP port %s: their initial datagrams are indistinguishable", primaryPort)
-							}
-							primary.HTTP3Handler = s.tls.HandleHTTP3FromPacketConn
-						}
-					}
-					udpGroups = append(udpGroups, primary)
+			udpGroups := make([]shared.UDPGroup, 0, len(sharedPorts))
+			for port := range sharedPorts {
+				g := shared.UDPGroup{Port: port}
+				if quicPortShared && cfg.Server.Protocol.QUIC == port {
+					g.DOQHandler = s.tls.HandleDOQFromPacketConn
 				}
-
-				// Secondary group: DNSCrypt (+ HTTP3) on a different port.
-				if wantSharedDNSUDP && !dnsCryptOnPrimary {
-					sec := shared.UDPGroup{
-						Port:          cfg.Server.Protocol.DNSCrypt,
-						ServeDNSCrypt: s.dnscryptServer.HandleSharedUDPPacket,
-						ClassifyDNSCrypt: func(data []byte) string {
-							if s.dnscryptServer.HasClientMagic(data) {
-								return "dnscrypt"
-							}
-							return ""
-						},
-					}
-					if cfg.Server.Protocol.HTTP3.Port == cfg.Server.Protocol.DNSCrypt {
-						sec.HTTP3Handler = s.tls.HandleHTTP3FromPacketConn
-					}
-					udpGroups = append(udpGroups, sec)
+				if dtlsPortShared && cfg.Server.Protocol.DTLS == port {
+					g.DTLSHandler = s.tls.HandleDTLSFromPacketListener
 				}
-			} else if wantSharedDNSUDP {
-				// No QUIC/DTLS/DTLCP — DNSCrypt (+ HTTP3 if same port).
-				g := shared.UDPGroup{
-					Port:          cfg.Server.Protocol.DNSCrypt,
-					ServeDNSCrypt: s.dnscryptServer.HandleSharedUDPPacket,
-					ClassifyDNSCrypt: func(data []byte) string {
+				if s.tlcpServer != nil && dtlcpShared && cfg.Server.Protocol.DTLCP == port {
+					// The mux serves DTLCP on this UDP port — skip the
+					// standalone DTLCP bind.
+					s.tlcpServer.SkipDTLCP = true
+					g.ServeDTLCP = s.tlcpServer.ServeDTLCPClient
+				}
+				if wantSharedDNSUDP && cfg.Server.Protocol.DNSCrypt == port {
+					g.ServeDNSCrypt = s.dnscryptServer.HandleSharedUDPPacket
+					g.ClassifyDNSCrypt = func(data []byte) string {
 						if s.dnscryptServer.HasClientMagic(data) {
 							return "dnscrypt"
 						}
 						return ""
-					},
-				}
-				if cfg.Server.Protocol.HTTP3.Port == cfg.Server.Protocol.DNSCrypt {
-					g.HTTP3Handler = s.tls.HandleHTTP3FromPacketConn
+					}
+					if http3PortShared && cfg.Server.Protocol.HTTP3.Port == port {
+						if cfg.Server.Protocol.QUIC == port && quicPortShared {
+							// DoQ and DoH3 initial datagrams are both QUIC
+							// long headers — the demux layer cannot tell
+							// them apart, and the dispatch would route
+							// every datagram to DoQ, silently blackholing
+							// DoH3 on this port.
+							return fmt.Errorf("http3 and quic cannot share UDP port %s: their initial datagrams are indistinguishable", port)
+						}
+						g.HTTP3Handler = s.tls.HandleHTTP3FromPacketConn
+					}
 				}
 				udpGroups = append(udpGroups, g)
 			}
-
 			sharedCfg.UDPGroups = udpGroups
 		}
 		s.sharedManager = shared.New(s, &sharedCfg)
