@@ -133,10 +133,17 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 	rcode := queryResult.Response.Rcode
 
 	upstreamEDE := captureUpstreamEDE(lastEDE, queryResult.Response, server.Address)
-	// A cascaded ZJDNS marks fallback-served responses with its private EDE
-	// — adopt them as ordinary first-wins results but never cache them (the
-	// marker keeps propagating to our own clients).
-	fallbackMarked := edns.IsFallbackEDE(upstreamEDE)
+	// No-cache marks: a cascaded ZJDNS marks fallback-served responses with
+	// its private EDE, and our own UDP guards flag responses they could not
+	// positively verify (hopguard baseline learning, capsguard unrandomized
+	// retry).  Both are adopted as ordinary results but never cached — the
+	// EDE keeps propagating to our own clients.
+	fallbackMarked := edns.IsZJDNSNoCacheEDE(upstreamEDE)
+	noCacheEDE := upstreamEDE
+	if !fallbackMarked && queryResult.Uncertain {
+		noCacheEDE = edns.DefenseUncertainEDE()
+		fallbackMarked = true
+	}
 
 	// RFC 10029: the configured mqtype list warms the cache with the
 	// upstream's merged records and strips them from the client-facing
@@ -200,7 +207,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 			queryResult.Response.Answer = stripMQBundled(queryResult.Response.Answer, mqr.Types)
 		}
 
-		res := QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Authoritative: queryResult.Response.Authoritative, Cacheable: !server.SkipCache && !fallbackMarked, ECS: ecsResponse, Server: server.Address, UpstreamEDE: upstreamEDE, Truncated: queryResult.Response.Truncated, Rcode: rcode}
+		res := QueryResult{Answer: queryResult.Response.Answer, Authority: queryResult.Response.Ns, Additional: queryResult.Response.Extra, Validated: queryResult.Validated, Authoritative: queryResult.Response.Authoritative, Cacheable: !server.SkipCache && !fallbackMarked, ECS: ecsResponse, Server: server.Address, UpstreamEDE: noCacheEDE, Truncated: queryResult.Response.Truncated, Rcode: rcode}
 		select {
 		case resultChan <- res:
 			remaining := activeConnections.Load() - 1

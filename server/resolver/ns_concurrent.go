@@ -22,6 +22,16 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// nsResponse is one response adopted by the NS fan-out with its
+// defense-provenance flag.
+type nsResponse struct {
+	msg *dns.Msg
+	// uncertain marks a response served without a positive UDP defense
+	// verification (Result.Uncertain) — the walk's terminal result must
+	// inherit it so the answer is marked no-cache.
+	uncertain bool
+}
+
 // withEarlierTimeout derives a timeout context only when it tightens the
 // parent's deadline.  Nested walk levels already carry tighter budgets
 // (fan-out → flight → walk), and the redundant cancelCtx+timer per level
@@ -34,9 +44,9 @@ func withEarlierTimeout(ctx context.Context, d time.Duration) (context.Context, 
 	return context.WithTimeout(ctx, d)
 }
 
-func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector defense.Detector, narrow bool) (*dns.Msg, defense.Verdict, error) {
+func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers []string, question Question, ecs *edns.ECSOption, forceTCP bool, currentDomain string, detector defense.Detector, narrow bool) (*dns.Msg, defense.Verdict, bool, error) {
 	if len(nameservers) == 0 {
-		return nil, defense.VerdictClean, errors.New("no nameservers")
+		return nil, defense.VerdictClean, false, errors.New("no nameservers")
 	}
 
 	// Drop the address family this host cannot reach (probed once at
@@ -45,7 +55,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	// the per-query error log noise.  Ordering (latency-sorted) is kept.
 	nameservers = filterByFamily(nameservers, r.addressFamily)
 	if len(nameservers) == 0 {
-		return nil, defense.VerdictClean, errors.New("no nameservers")
+		return nil, defense.VerdictClean, false, errors.New("no nameservers")
 	}
 
 	deadlineCtx, deadlineCancel := withEarlierTimeout(ctx, config.DefaultRecursiveQueryTimeout)
@@ -53,7 +63,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	queryCtx, cancel := context.WithCancel(deadlineCtx)
 	defer cancel()
 
-	resultChan := make(chan *dns.Msg, 1)
+	resultChan := make(chan nsResponse, 1)
 	g, queryCtx := errgroup.WithContext(queryCtx)
 	// Batched racing: the latency-ranked first DefaultFanoutFirstBatch
 	// authorities launch at t=0 and the rest widen in after
@@ -72,7 +82,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	// nxdomainMsg holds the first collected NXDOMAIN (secondary result —
 	// served only when no NOERROR wins the race or the deferral window
 	// expires).
-	var nxdomainMsg atomic.Pointer[dns.Msg]
+	var nxdomainMsg atomic.Pointer[nsResponse]
 	// nxdomainCh wakes the wait loop on the first NXDOMAIN collection so the
 	// deferral window starts from the earliest possible instant.
 	nxdomainCh := make(chan struct{}, 1)
@@ -240,7 +250,7 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 					}
 
 					select {
-					case resultChan <- result.Response:
+					case resultChan <- nsResponse{msg: result.Response, uncertain: result.Uncertain}:
 						cancel()
 						return nil
 					case <-queryCtx.Done():
@@ -267,7 +277,8 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 						}
 					}
 
-					if !nxdomainMsg.CompareAndSwap(nil, result.Response) {
+					nxReply0 := &nsResponse{msg: result.Response, uncertain: result.Uncertain}
+					if !nxdomainMsg.CompareAndSwap(nil, nxReply0) {
 						pool.DefaultMessage.Put(result.Response)
 					} else {
 						// First NXDOMAIN collected — arm the deferral window
@@ -364,9 +375,9 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 	// NXDOMAIN (if any) to the pool, carries the poison verdict, and drains
 	// orphan responses that slipped into the buffer between the winner's
 	// send and cancel() propagation.
-	serveWinner := func(resp *dns.Msg) (*dns.Msg, defense.Verdict, error) {
+	serveWinner := func(won nsResponse) (*dns.Msg, defense.Verdict, bool, error) {
 		if nx := nxdomainMsg.Load(); nx != nil {
-			pool.DefaultMessage.Put(nx)
+			pool.DefaultMessage.Put(nx.msg)
 		}
 		if poisonRejected.Load() {
 			verdict = defense.VerdictPoisoned
@@ -374,9 +385,9 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 		for {
 			select {
 			case m := <-resultChan:
-				pool.DefaultMessage.Put(m)
+				pool.DefaultMessage.Put(m.msg)
 			default:
-				return resp, verdict, nil
+				return won.msg, verdict, won.uncertain, nil
 			}
 		}
 	}
@@ -409,8 +420,8 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 waitLoop:
 	for {
 		select {
-		case resp := <-resultChan:
-			return serveWinner(resp)
+		case won := <-resultChan:
+			return serveWinner(won)
 		case <-nxdomainCh:
 			if deferralTimer == nil {
 				deferralTimer = time.NewTimer(config.DefaultNXDOMAINDeferralWindow)
@@ -419,12 +430,12 @@ waitLoop:
 		case <-deferralCh:
 			nx := nxdomainMsg.Load()
 			if nx == nil { // unreachable: the channel only fires after a store
-				return nil, verdict, errors.New("no successful response")
+				return nil, verdict, false, errors.New("no successful response")
 			}
 			if poisonRejected.Load() {
 				verdict = defense.VerdictPoisoned
 			}
-			return nx, verdict, nil
+			return nx.msg, verdict, nx.uncertain, nil
 		case <-errgroupDone:
 			break waitLoop
 		case <-ctx.Done():
@@ -438,14 +449,14 @@ waitLoop:
 	// uniformly), and dropping the buffered response here would fall through
 	// to the NXDOMAIN fallback with a wrong answer.
 	select {
-	case resp := <-resultChan:
+	case won := <-resultChan:
 		if nx := nxdomainMsg.Load(); nx != nil {
-			pool.DefaultMessage.Put(nx)
+			pool.DefaultMessage.Put(nx.msg)
 		}
 		if poisonRejected.Load() {
 			verdict = defense.VerdictPoisoned
 		}
-		return resp, verdict, nil
+		return won.msg, verdict, won.uncertain, nil
 	default:
 	}
 
@@ -454,22 +465,22 @@ waitLoop:
 		if poisonRejected.Load() {
 			verdict = defense.VerdictPoisoned
 		}
-		return nx, verdict, nil
+		return nx.msg, verdict, nx.uncertain, nil
 	}
 
 	if poisonRejected.Load() {
 		verdict = defense.VerdictPoisoned
 	}
 	if waitErr != nil {
-		return nil, verdict, waitErr
+		return nil, verdict, false, waitErr
 	}
 	log.Debugf("RECURSION: all %d nameservers failed for %s (zone=%s)", len(nameservers), question.Name, currentDomain)
-	return nil, verdict, errors.New("no successful response")
+	return nil, verdict, false, errors.New("no successful response")
 }
 
 // retryWithoutEDNS attempts a query without EDNS options and sends the result
 // to resultChan. Used as a FORMERR fallback per RFC 6891 §6.2.2.
-func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns.Msg, cancel context.CancelFunc, server *config.UpstreamServer, question Question, nsAddr string, detector defense.Detector, currentDomain, normalizedQname string, poisonRejected *atomic.Bool) {
+func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- nsResponse, cancel context.CancelFunc, server *config.UpstreamServer, question Question, nsAddr string, detector defense.Detector, currentDomain, normalizedQname string, poisonRejected *atomic.Bool) {
 	log.Debugf("RECURSION: ns=%s FORMERR, retrying without EDNS for %s %s", nsAddr, question.Name, dns.TypeToString[question.Qtype])
 
 	bareMsg := pool.DefaultMessage.Get()
@@ -515,7 +526,7 @@ func (r *Recursive) retryWithoutEDNS(ctx context.Context, resultChan chan<- *dns
 	}
 
 	select {
-	case resultChan <- retryResult.Response:
+	case resultChan <- nsResponse{msg: retryResult.Response, uncertain: retryResult.Uncertain}:
 		cancel()
 	case <-ctx.Done():
 		pool.DefaultMessage.Put(retryResult.Response)

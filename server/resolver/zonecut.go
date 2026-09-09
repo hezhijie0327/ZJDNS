@@ -175,7 +175,7 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 	// servers — an attacker-controlled child could answer NODATA and
 	// downgrade a signed delegation to insecure.
 	dsQuestion := Question{Name: dnsutil.Fqdn(childZone), Qtype: dns.TypeDS, Qclass: dns.ClassINET}
-	dsResp, _, dsErr := r.queryNameserversConcurrent(ctx, nameservers, dsQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard, false)
+	dsResp, _, _, dsErr := r.queryNameserversConcurrent(ctx, nameservers, dsQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard, false)
 	if dsErr != nil {
 		return false, fmt.Errorf("DS query for %s failed: %w", childZone, dsErr)
 	}
@@ -252,7 +252,7 @@ func (r *Recursive) resolveZoneCut(ctx context.Context, response *dns.Msg, names
 	}
 
 	dnskeyQuestion := Question{Name: dnsutil.Fqdn(childZone), Qtype: dns.TypeDNSKEY, Qclass: dns.ClassINET}
-	dnskeyResp, _, dnskeyErr := r.queryNameserversConcurrent(ctx, childServers, dnskeyQuestion, ecs, forceTCP, childZone, r.resolver.validator.Poisonguard, false)
+	dnskeyResp, _, _, dnskeyErr := r.queryNameserversConcurrent(ctx, childServers, dnskeyQuestion, ecs, forceTCP, childZone, r.resolver.validator.Poisonguard, false)
 	if dnskeyErr != nil {
 		return false, fmt.Errorf("DNSKEY query for %s failed: %w", childZone, dnskeyErr)
 	}
@@ -308,7 +308,7 @@ func (r *Recursive) resolveChildNameservers(ctx context.Context, nameservers []s
 	if nsRecords == nil {
 		// Fallback: no NS in the merged response — issue a standalone NS query.
 		nsQuestion := Question{Name: dnsutil.Fqdn(childZone), Qtype: dns.TypeNS, Qclass: dns.ClassINET}
-		resp, _, err := r.queryNameserversConcurrent(ctx, nameservers, nsQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard, false) // _ = verdict: poison already gated per-response in queryNameserversConcurrent
+		resp, _, _, err := r.queryNameserversConcurrent(ctx, nameservers, nsQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard, false) // _ = verdict: poison already gated per-response in queryNameserversConcurrent
 		if err != nil || resp == nil {
 			log.Debugf("SECURITY: NS query for child zone %s failed: %v", childZone, err)
 			return nil

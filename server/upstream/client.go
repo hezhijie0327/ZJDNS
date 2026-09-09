@@ -37,6 +37,15 @@ type Result struct {
 	Duration  time.Duration
 	Protocol  string
 	Validated bool
+	// Uncertain marks a UDP response served without a positive defense
+	// verification: hopguard's TTL baseline was not armed for the address
+	// (learning phase, or TTL capture unavailable) or capsguard could not
+	// verify the 0x20 echo (unrandomized retry, downgraded address).  The
+	// resolver marks such results with the ZJDNS defense-uncertain EDE and
+	// never caches them — a poisoned answer's blast radius is one query,
+	// not its TTL.  A positive verification from either guard (armed TTL
+	// fingerprint, successful 0x20 echo) clears the mark.
+	Uncertain bool
 }
 
 // Client manages outbound DNS queries across multiple transport protocols with
@@ -163,6 +172,12 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	// it in place would let concurrent queries overwrite each other's
 	// randomized (or original) name.
 	randomized := false
+	// caseUnverified tracks that this query's response cannot be verified
+	// by the 0x20 echo: randomization was skipped (downgraded address,
+	// no-letter name), the query is PTR-exempt, or the response came from
+	// the §6.4 unrandomized retry.  It feeds the defense-uncertainty mark
+	// below.
+	caseUnverified := false
 	var randName string
 	qtype := uint16(0)
 	if server.CapsGuard && original != "" && !c.capsDisabled(server.Address) {
@@ -187,6 +202,15 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 			// call, or the next ExecuteQuery captures it as the original.
 			msg.Question[0].Header().Name = original
 		}()
+	} else if server.CapsGuard {
+		// Randomization skipped (downgraded address, no-letter name) —
+		// the response cannot carry 0x20 verification.
+		caseUnverified = true
+	}
+	if server.CapsGuard && qtype == dns.TypePTR {
+		// PTR queries are echo-check exempt (middleboxes legitimately
+		// rewrite reverse names) — the response is case-unverified.
+		caseUnverified = true
 	}
 
 	// Log the name actually sent — after CapsGuard randomization, so the
@@ -231,7 +255,23 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 		zpool.DefaultMessage.Put(result.Response)
 		// msg.Question[0] is this call's private copy — safe to restore.
 		msg.Question[0].Header().Name = original
+		caseUnverified = true // the §6.4 retry carries no 0x20 entropy
 		result = c.execute(ctx, msg, server)
+	}
+
+	// Defense-uncertainty mark (UDP only — stream transports cannot be
+	// datagram-injected): a response served without a positive defense
+	// verification is flagged so the resolver serves it but never caches
+	// it, bounding a poisoned answer's blast radius to one query.  An
+	// armed hopguard TTL fingerprint is a positive verification and
+	// clears the mark even when the 0x20 echo was unverifiable.
+	hopArmed := server.HopGuard && c.plainClient.HopGuard().Confident(server.Address)
+	if result.Error == nil && result.Response != nil && result.Protocol == config.ProtoUDP && !hopArmed {
+		if (server.CapsGuard && caseUnverified) || server.HopGuard {
+			result.Uncertain = true
+			log.Debugf("UPSTREAM: defense-uncertain response for %s via %s (caps-unverified=%v) — marked no-cache",
+				original, server.Address, caseUnverified)
+		}
 	}
 
 	result.Duration = time.Since(start)

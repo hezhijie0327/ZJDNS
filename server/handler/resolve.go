@@ -79,7 +79,10 @@ func (s *Secondary) Lookup(ctx context.Context, qname string, qtype, qclass uint
 // QueryResult — the miss path, background refreshes and MQTYPE additional
 // types all funnel through it.
 func StoreIfCacheable(store cache.Store, qname string, qtype, qclass uint16, ecsOpt *edns.ECSOption, qr *resolver.QueryResult) bool {
-	if !qr.Cacheable || !resolver.DNSSECCacheable(qr.Validated, qr.DNSSECEDE) {
+	// Belt-and-suspenders beside qr.Cacheable: a response carrying a
+	// ZJDNS no-cache EDE (fallback provenance, defense uncertainty) is
+	// refused even if a producer forgot to clear Cacheable.
+	if !qr.Cacheable || edns.IsZJDNSNoCacheEDE(qr.UpstreamEDE) || !resolver.DNSSECCacheable(qr.Validated, qr.DNSSECEDE) {
 		return false
 	}
 	// RFC 4035 §5.3.3: cap TTL of authenticated RRsets.

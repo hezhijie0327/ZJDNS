@@ -148,7 +148,7 @@ func TestQueryNameservers_InflightCapDropsQueries(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	_, _, err := r.queryNameserversConcurrent(ctx, []string{"10.0.0.1:53"},
+	_, _, _, err := r.queryNameserversConcurrent(ctx, []string{"10.0.0.1:53"},
 		Question{Name: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET},
 		nil, false, "example.com.", defense.Detector{}, false)
 

@@ -108,7 +108,7 @@ func TestQueryNameservers_NXDOMAINEarlyReturn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	start := time.Now()
-	resp, _, err := r.queryNameserversConcurrent(ctx, []string{"10.0.0.1:53", "10.0.0.2:53"},
+	resp, _, _, err := r.queryNameserversConcurrent(ctx, []string{"10.0.0.1:53", "10.0.0.2:53"},
 		Question{Name: "nonexistent.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET},
 		nil, false, "example.com.", defense.Detector{}, false)
 	elapsed := time.Since(start)
@@ -137,7 +137,7 @@ func TestQueryNameservers_FastNOERRORNotDelayed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	start := time.Now()
-	resp, _, err := r.queryNameserversConcurrent(ctx, []string{"10.0.0.1:53", "10.0.0.2:53"},
+	resp, _, _, err := r.queryNameserversConcurrent(ctx, []string{"10.0.0.1:53", "10.0.0.2:53"},
 		Question{Name: "www.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET},
 		nil, false, "example.com.", defense.Detector{}, false)
 	elapsed := time.Since(start)
@@ -177,7 +177,7 @@ func TestQueryNameservers_SemaphoreDoesNotBlockLaunch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	start := time.Now()
-	resp, _, err := r.queryNameserversConcurrent(ctx, nameservers,
+	resp, _, _, err := r.queryNameserversConcurrent(ctx, nameservers,
 		Question{Name: "ias.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET},
 		nil, false, "example.com.", defense.Detector{}, false)
 	elapsed := time.Since(start)
@@ -289,7 +289,7 @@ func TestQueryNameservers_StragglerCanceled(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	resp, _, err := r.queryNameserversConcurrent(ctx, []string{"10.0.0.1:53", "10.0.0.2:53"},
+	resp, _, _, err := r.queryNameserversConcurrent(ctx, []string{"10.0.0.1:53", "10.0.0.2:53"},
 		Question{Name: "nonexistent.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET},
 		nil, false, "example.com.", defense.Detector{}, false)
 	if err != nil {
@@ -384,7 +384,7 @@ func TestQueryNameserversConcurrent_WidenBeyondFirstBatch(t *testing.T) {
 	r := newPrefetchTestRecursive(&fakeNSClient{handlers: handlers})
 
 	start := time.Now()
-	resp, _, err := r.queryNameserversConcurrent(t.Context(), servers,
+	resp, _, _, err := r.queryNameserversConcurrent(t.Context(), servers,
 		Question{Name: "widen.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false, "test.", defense.Detector{}, false)
 	if err != nil {
 		t.Fatalf("query failed: %v", err)

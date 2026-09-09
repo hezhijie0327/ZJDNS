@@ -139,6 +139,13 @@ func cacheTTL(answer, authority, additional []dns.RR) int {
 			if rr == nil {
 				continue
 			}
+			// RFC 6891 §6.1.2: the OPT pseudo-record's TTL field is not a
+			// TTL — it carries ext-rcode/flags (usually 0).  A non-standard
+			// OPT that survives Unpack in the additional section (e.g.
+			// class < 512) must not zero the whole response's cache TTL.
+			if _, ok := rr.(*dns.OPT); ok {
+				continue
+			}
 			if t := rr.Header().TTL; t == 0 || t&0x80000000 != 0 {
 				return 0
 			} else if minT < 0 || int(t) < minT {

@@ -173,7 +173,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 	// Root-domain query (normalizedQname is empty for the root zone ".").
 	if normalizedQname == "." {
-		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard, infra)
+		response, verdict, hopUncertain, err := r.queryNameserversConcurrent(ctx, nameservers, question, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard, infra)
 		if verdict == defense.VerdictPoisoned {
 			poisonSeen = true
 			// A successful-but-poisoned UDP response for the root zone must
@@ -204,7 +204,9 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		truncated := response.Truncated
 		answer, authority, additional := response.Answer, response.Ns, response.Extra
 		pool.DefaultMessage.Put(response)
-		return QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Rcode: rcode, Validated: cryptoValidated, ECS: ecsResponse, Server: config.ProtoRecursive, Poisoned: poisonSeen, DNSSECEDE: chain.lastEDECode, Truncated: truncated}
+		qr := QueryResult{Cacheable: true, Answer: answer, Authority: authority, Additional: additional, Rcode: rcode, Validated: cryptoValidated, ECS: ecsResponse, Server: config.ProtoRecursive, Poisoned: poisonSeen, DNSSECEDE: chain.lastEDECode, Truncated: truncated}
+		applyDefenseUncertainty(&qr, hopUncertain)
+		return qr
 	}
 
 	// pendingChain is a DNSSEC chain update deferred from the previous
@@ -282,7 +284,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			}()
 		}
 
-		response, verdict, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard, infra)
+		response, verdict, hopUncertain, err := r.queryNameserversConcurrent(ctx, nameservers, queryQuestion, ecs, forceTCP, currentDomain, r.resolver.validator.Poisonguard, infra)
 		// The verify memo deduplicates verifications of ONE response — clear
 		// it as each new response arrives: a Put-and-continue at a later
 		// level recycles the pointer, and a pool Get may hand it back with
@@ -387,6 +389,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		}
 
 		if termRes := r.processAnswerWithDNSSEC(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, chain, &validated, ecsResponse, depth); termRes != nil {
+			applyDefenseUncertainty(termRes, hopUncertain)
 			return *termRes
 		}
 
@@ -415,6 +418,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		bestMatch, bestNSRecords, cont, termRes := r.collectBestNSMatch(response, normalizedQname, queryQuestion.Name, qname, qnameMinimise, validated, ecsResponse)
 		if termRes != nil {
 			termRes.DenialProof = denialProof
+			applyDefenseUncertainty(termRes, hopUncertain)
 			return *termRes
 		}
 		if cont {
@@ -556,5 +560,22 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 		if dnsutil.Labels(dnsutil.Fqdn(currentDomain)) == 1 {
 			tldServers = nameservers
 		}
+	}
+}
+
+// applyDefenseUncertainty marks a terminal walk result that was served
+// without a positive UDP defense verification (hopguard baseline still
+// learning or TTL capture unavailable; capsguard unrandomized retry or
+// downgraded address): the answer is served to the client but never
+// cached, and the ZJDNS-private EDE 65281 tells downstream instances to
+// refuse it too — a poisoned answer's blast radius is one query, not its
+// TTL.
+func applyDefenseUncertainty(qr *QueryResult, uncertain bool) {
+	if qr == nil || !uncertain {
+		return
+	}
+	qr.Cacheable = false
+	if qr.UpstreamEDE == nil {
+		qr.UpstreamEDE = edns.DefenseUncertainEDE()
 	}
 }

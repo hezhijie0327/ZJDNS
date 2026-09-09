@@ -30,7 +30,7 @@ func TestQueryNameservers_InfraWidenOnBlackhole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	start := time.Now()
-	resp, _, err := r.queryNameserversConcurrent(ctx, []string{
+	resp, _, _, err := r.queryNameserversConcurrent(ctx, []string{
 		"10.0.0.1:53", "10.0.0.2:53", "10.0.0.3:53", "10.0.0.4:53",
 	}, Question{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false, "example.com.", defense.Detector{}, true)
 	elapsed := time.Since(start)
@@ -62,7 +62,7 @@ func TestQueryNameservers_InfraWidenCancelledOnWin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	start := time.Now()
-	resp, _, err := r.queryNameserversConcurrent(ctx, []string{
+	resp, _, _, err := r.queryNameserversConcurrent(ctx, []string{
 		"10.0.0.1:53", "10.0.0.2:53", "10.0.0.3:53", "10.0.0.4:53",
 	}, Question{Name: "example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil, false, "example.com.", defense.Detector{}, true)
 	if err != nil {

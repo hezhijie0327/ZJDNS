@@ -47,6 +47,16 @@ func New(tcpPool *pool.ConnPool, getProxy func(*config.UpstreamServer) *socks5.D
 	return c
 }
 
+// HopGuard exposes the shared TTL-fingerprint cache for defense-uncertainty
+// decisions at the ExecuteQuery level (armed baseline = positive UDP
+// verification; learning phase = uncertain).
+func (c *Client) HopGuard() *defense.HopGuard {
+	if c == nil {
+		return nil
+	}
+	return c.hopGuard
+}
+
 // Close shuts down the TCP and UDP pools, stopping all readLoop goroutines.
 func (c *Client) Close() {
 	if c != nil && c.tcpPool != nil {
