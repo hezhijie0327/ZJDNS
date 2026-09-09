@@ -13,10 +13,17 @@
 // Comparison:
 //   Scenario A — 0x20-capable server: randomized case echoed → accept.
 //   Scenario B — case-rewriting middlebox (§6.2, e.g. a lowercasing box):
-//               first response discarded, unrandomized retry accepted.
+//               first response discarded, unrandomized retry accepted.  On
+//               A/AAAA queries the retry is served through the spoofguard
+//               multi-read collect discipline (ExecuteUDP dispatch in
+//               server/upstream/plain/udp.go): a bare injected answer on the
+//               retry lands in the low-priority fallback slot and the real
+//               EDNS echo outranks it — the first datagram is never trusted
+//               on the fallback path.
 //   Scenario C — spoofer (wrong echo): every attempt discarded, SERVFAIL.
 //
-// Algorithm mirror (server/defense/capsguard.go + server/upstream/client.go)
+// Algorithm mirror (server/defense/capsguard.go + server/upstream/client.go
+// + the collect-discipline dispatch in server/upstream/plain/udp.go)
 
 package main
 
@@ -122,7 +129,9 @@ func simulate(name string, srv simServer) []row {
 	}
 	rows = append(rows, row{1, randName, echo, "DISCARD — echo mismatch", false})
 
-	// §6.4: retry once with the original case, no verification.
+	// §6.4: retry once with the original case.  On A/AAAA queries the
+	// retry's response is served through the spoofguard collect discipline
+	// (fallback slot + EDNS preference), never a bare first-datagram accept.
 	echo2, _ := srv(orig)
 	rows = append(rows, row{2, orig, echo2, "ACCEPT — §6.4 baseline retry", true})
 	return rows
@@ -316,7 +325,9 @@ func main() {
 	fmt.Printf("\n  %sTakeaways%s\n", bold, reset)
 	fmt.Printf("  %s•%s A: every query accepted on the first attempt — zero overhead.\n", green, reset)
 	fmt.Printf("  %s•%s B: one extra unrandomized round-trip per query — the §6.4 fallback\n", yellow, reset)
-	fmt.Printf("     keeps service working against case-rewriting middleboxes.\n")
+	fmt.Printf("     keeps service working against case-rewriting middleboxes.  On\n")
+	fmt.Printf("     A/AAAA the retry rides the spoofguard collect discipline, so a\n")
+	fmt.Printf("     case-blind injector cannot win the retry with a bare first answer.\n")
 	fmt.Printf("  %s•%s C: no correct response ever arrives — the spoofer cannot forge\n", red, reset)
 	fmt.Printf("     the per-query random case pattern (2^n bits of entropy).\n")
 	fmt.Printf("  %s•%s D: 8 consecutive mismatches downgrade to plain queries — a\n", yellow, reset)

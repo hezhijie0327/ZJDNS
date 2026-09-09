@@ -9,7 +9,11 @@
 //
 // Comparison:
 //   Scenario A — Google directly (no warm-up): HopGuard starts cold, needs 32
-//               samples to arm. GFW fakes slip through during learning.
+//               corroborated samples to arm. GFW fakes slip through Validate
+//               during learning, but they are never fed into the histogram —
+//               learning samples must be corroborated (armed baseline or an
+//               identical-repeat/silence-confirmed answer), so the baseline
+//               can never arm on attacker TTLs.
 //   Scenario B — Baidu warm-up → Google: HopGuard arms on clean Baidu traffic,
 //               then immediately rejects GFW fakes when querying Google.
 //
@@ -372,7 +376,13 @@ func collectRows(server, domain string, startID, n int, recvTTL bool, st *hgStat
 				ttl := uint8(r.ipTTL) //nolint:gosec // G115: IP TTL is 1–255
 				r.accept = st.validate(ttl)
 				if !r.polluted {
-					st.feed(ttl) // learn only from clean (non-polluted) packets
+					// Corroborated-sample feed gate (mirrors the production
+					// Feed sites in server/upstream/plain/udp.go: feed only
+					// when the baseline is armed or the answer is
+					// corroborated).  This demo's content check stands in
+					// for corroboration — attacker TTLs never enter the
+					// histogram, so learning cannot be poisoned.
+					st.feed(ttl)
 				}
 			}
 			rows = append(rows, r)
@@ -476,6 +486,9 @@ func realTest(server string) {
 	}
 	fmt.Printf("  %sResult: %d/%d GFW fakes PASSED — still learning, can't reject yet%s\n",
 		red, pollutedA-rejectedA, pollutedA, reset)
+	fmt.Println("  Their TTLs were NOT fed into the histogram (corroborated-sample")
+	fmt.Println("  learning — passing Validate is not being learned): the baseline can")
+	fmt.Println("  only arm on corroborated answers, never on attacker TTLs.")
 
 	// ── Scenario B: Baidu warm-up → Google ─────────────────────
 	fmt.Println()
@@ -547,7 +560,11 @@ func main() {
 	// ── Scenario A: Google directly (no warm-up) ─────────────────
 	// HopGuard starts with zero samples. During 20 Google queries,
 	// only ~12 real responses are fed. 12 < 32 → never arms.
-	// All 20 responses (including 8 GFW fakes) are accepted.
+	// All 20 responses (including 8 GFW fakes) are accepted — but the
+	// fakes are NEVER fed: learning samples must be corroborated
+	// (mirrors the corroborated-sample Feed gate in
+	// server/upstream/plain/udp.go), so the baseline can never arm on
+	// attacker TTLs however many fakes arrive.
 
 	cold := newHGState()
 	var coldRows []queryRow
@@ -564,6 +581,8 @@ func main() {
 		wasArmed := cold.armed
 		accept := cold.validate(ttl)
 		if !isGFW {
+			// Corroborated-sample gate: fakes pass Validate but are not
+			// learned — passing Validate is not being learned.
 			cold.feed(ttl)
 		}
 		coldRows = append(coldRows, queryRow{id: i, domain: "www.google.com", ttl: ttl, gfw: isGFW, armed: wasArmed, accept: accept})
@@ -661,6 +680,9 @@ func main() {
 	fmt.Println("  └──────┴─────────────────┴─────┴────────┴──────────┘")
 	fmt.Printf("  %sResult: %d/%d GFW fakes PASSED — still learning, can't reject yet%s\n",
 		red, coldGFWPassed, coldGFWTotal, reset)
+	fmt.Println("  The fakes' TTLs were NOT fed into the histogram (corroborated-sample")
+	fmt.Println("  learning): the baseline can only arm on corroborated answers, never")
+	fmt.Println("  on attacker TTLs — the old lock-in failure mode is closed.")
 
 	// ── Scenario B: Warm start ──────────────────────────────────
 

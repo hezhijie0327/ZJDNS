@@ -18,7 +18,13 @@
 //     \u22652 responses received \u2192 injection suspected \u2192 re-query (pure UDP);
 //       a matching repeat confirms the real answer (GFW fakes vary per
 //       packet, the real answer is deterministic); never served unconfirmed.
-//   After 500ms window: pick richest candidate, random tie-break
+//   After 500ms window: richest candidate wins. DIVERGENT equal-richness
+//   EDNS candidates (an EDNS-capable forger ties the real answer) never
+//   coin-flip — they defer to a confirmation re-query: only an answer
+//   signature present in BOTH rounds is served (the real answer is
+//   deterministic, the forger varies per packet); no intersection fails
+//   closed. Mirrors takeCandidates + the divergent-window path in
+//   server/upstream/plain/udp.go.
 
 package main
 
@@ -54,6 +60,11 @@ type sgState struct {
 	rejected   int
 	candidates int
 	nonEDNS    *simResp
+	// divergentEDNS marks that this round collected EDNS candidates whose
+	// answers DISAGREE — an EDNS-capable forger ties the real answer on
+	// richness, so the window comparison would be a coin flip. Mirrors
+	// spoofguardState.divergentEDNS.
+	divergentEDNS bool
 }
 
 // ── Constants ─────────────────────────────────────────────────────
@@ -93,10 +104,17 @@ func (s *sgState) processPacket(r *simResp) (result *simResp, verdict string) { 
 			s.candidates++
 			return r, green + "CONFIRMED" + reset + " (identical repeat — real server, no window wait)"
 		}
+		if s.last != nil && !sameAnswers(s.last.answers, r.answers) {
+			s.divergentEDNS = true
+		}
 		s.prev = s.last
 		s.last = r
 		s.candidates++
-		return nil, yellow + "COLLECT" + reset + " (EDNS candidate #" + strconv.Itoa(s.candidates) + ")"
+		verdict := yellow + "COLLECT" + reset + " (EDNS candidate #" + strconv.Itoa(s.candidates) + ")"
+		if s.divergentEDNS {
+			verdict += yellow + " [DIVERGENT — candidates disagree]" + reset
+		}
+		return nil, verdict
 	}
 	// Non-EDNS NOERROR (single-answer included) \u2192 low-priority fallback.
 	// Bare A/AAAA matches the GFW injection shape, but real servers that
@@ -110,6 +128,9 @@ func (s *sgState) processPacket(r *simResp) (result *simResp, verdict string) { 
 	return nil, yellow + "FALLBACK" + reset + " (non-EDNS \u2014 collected, EDNS preferred)"
 }
 
+// pickBest resolves the window comparison. DIVERGENT candidate sets never
+// reach it — production bypasses pickBest for them (takeCandidates) and
+// confirms across rounds instead of trusting the random tie-break.
 func (s *sgState) pickBest() *simResp {
 	if s.last == nil {
 		return s.nonEDNS
@@ -568,6 +589,91 @@ func main() {
 		fmt.Printf("  %sNo response.%s\n", red, reset)
 	}
 
+	// ── Scenario 7: EDNS-forger — divergent candidates → cross-round confirmation ──
+
+	fmt.Println()
+	fmt.Println()
+	fmt.Printf("  %sScenario 7:%s EDNS-capable forger — divergent candidates never coin-flip\n", bold, reset)
+	fmt.Printf("  Query: %sA www.google.com%s → forger fakes carry EDNS too\n\n", bold, reset)
+
+	printHR()
+	fmt.Println("  " + bold + "Divergent-Window Cross-Round Confirmation" + reset)
+	fmt.Println()
+	fmt.Println("  Old gate: equal-richness divergent candidates at window expiry →")
+	fmt.Println("           random tie-break — a coin flip the forger wins half the time.")
+	fmt.Println("  New gate: divergent EDNS candidates defer to a confirmation re-query;")
+	fmt.Println("           only an answer signature present in BOTH rounds is served")
+	fmt.Println("           (the real answer is deterministic, the forger varies per")
+	fmt.Println("           packet). No intersection → fail closed.")
+	fmt.Println()
+	printHR()
+
+	scenario7R1 := []simResp{
+		{delay: 30 * time.Millisecond, hasEDNS: true, answers: []string{"A 66.66.1.7"}, label: "R1 Forged EDNS #1 — fake A (EDNS-capable forger)"},
+		{delay: 60 * time.Millisecond, hasEDNS: true, answers: []string{"A 66.66.9.2"}, label: "R1 Forged EDNS #2 — fake A (varies per packet)"},
+		{delay: 110 * time.Millisecond, hasEDNS: true, answers: []string{"A 142.250.80.4"}, label: "R1 Real — EDNS + A"},
+	}
+	scenario7R2 := []simResp{
+		{delay: 30 * time.Millisecond, hasEDNS: true, answers: []string{"A 66.66.4.4"}, label: "R2 Forged EDNS — fake A (new IP again)"},
+		{delay: 110 * time.Millisecond, hasEDNS: true, answers: []string{"A 142.250.80.4"}, label: "R2 Real — same answer as R1"},
+	}
+
+	// runDivergentRound feeds one collect round through the state machine and
+	// returns the round's candidate SET (prev + last) with its divergence
+	// verdict — the divergent-window path replaces pickBest with exactly this
+	// cross-round signature intersection (takeCandidates in spoofguard.go).
+	runDivergentRound := func(scenario []simResp) (cands []*simResp, divergent bool) {
+		state := &sgState{}
+		start := time.Now()
+		for i := range scenario {
+			r := &scenario[i]
+			if elapsed := time.Since(start); r.delay > elapsed {
+				time.Sleep(r.delay - elapsed)
+			}
+			showResponse(i+1, r, time.Since(start))
+			_, verdict := state.processPacket(r)
+			fmt.Printf("           \u2192 %s\n", verdict)
+			fmt.Println()
+		}
+		if state.prev != nil {
+			cands = append(cands, state.prev)
+		}
+		if state.last != nil {
+			cands = append(cands, state.last)
+		}
+		return cands, state.divergentEDNS
+	}
+
+	fmt.Println("  " + bold + "\u2500\u2500 Round 1 (collect window) \u2500\u2500" + reset)
+	fmt.Println()
+	r1cands, r1div := runDivergentRound(scenario7R1)
+	fmt.Printf("  Window expired: %d candidates, divergent=%v \u2192 NO coin flip \u2192 re-query\n\n", len(r1cands), r1div)
+
+	fmt.Println("  " + bold + "\u2500\u2500 Round 2 (confirmation) \u2500\u2500" + reset)
+	fmt.Println()
+	r2cands, _ := runDivergentRound(scenario7R2)
+	fmt.Println()
+	served := (*simResp)(nil)
+	for _, c2 := range r2cands {
+		for _, c1 := range r1cands {
+			if sameAnswers(c1.answers, c2.answers) {
+				served = c2
+				break
+			}
+		}
+		if served != nil {
+			break
+		}
+	}
+	if served != nil {
+		fmt.Printf("  %sSignature intersection hit:%s %s appears in BOTH rounds \u2192 served.\n", green, reset, served.answers[0])
+		fmt.Println("  The forger varied its IP every packet, so no fake signature can")
+		fmt.Println("  repeat across rounds — only the deterministic real answer can.")
+		fmt.Println("  (No intersection at all would fail the query closed after 3 rounds.)")
+	} else {
+		fmt.Printf("  %sNo signature present in both rounds \u2192 query fails, nothing served.%s\n", red, reset)
+	}
+
 	// ── Comparison Table ──
 
 	fmt.Println()
@@ -611,5 +717,9 @@ func main() {
 	fmt.Println("  low-priority candidate; a bare single-answer A/AAAA is ambiguous")
 	fmt.Println("  and is served only after a matching re-query confirms it (pure")
 	fmt.Println("  UDP — GFW fakes vary per packet, the real answer is deterministic).")
+	fmt.Println("  Divergent equal-richness EDNS candidates never coin-flip: they defer")
+	fmt.Println("  to a confirmation re-query and only an answer signature present in")
+	fmt.Println("  BOTH rounds is served — an EDNS-capable forger varies per packet and")
+	fmt.Println("  can never repeat, while the real answer always does.")
 	fmt.Println()
 }
