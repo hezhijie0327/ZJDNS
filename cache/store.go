@@ -141,6 +141,19 @@ func New(entriesLimit, latencyLimit config.LimitSettings, spillPath, latencySpil
 func (s *Cache) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
+		// Join the async writers first (bounded): in-flight eviction
+		// writes must land before the stores close, and a Close without
+		// a preceding Flush would otherwise park the two writer
+		// goroutines on their channels forever.  AsyncWriter.Close is
+		// idempotent, so Flush→Close still works.
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), config.DefaultShutdownTimeout)
+		defer drainCancel()
+		if s.spillW != nil {
+			s.spillW.Close(drainCtx)
+		}
+		if s.spillLatW != nil {
+			s.spillLatW.Close(drainCtx)
+		}
 		if s.spill != nil {
 			if e := s.spill.Close(); e != nil && err == nil {
 				err = e
@@ -183,12 +196,22 @@ func (s *Cache) Flush() {
 			rows = append(rows, row{key, ce})
 			return true
 		})
+		spillFails := 0
 		for _, r := range rows {
 			if r.ce.ts > 0 && ttl.CanServeExpired(r.ce.ts, r.ce.ttl, config.DefaultStaleMaxAge) && !s.spill.Indexed(r.key.encode(), r.ce.ts) {
 				if err := s.spill.Put(r.key.encode(), r.ce.ts, r.ce.ttl, r.ce.validated, r.ce.msgWire); err != nil {
-					log.Debugf("CACHE: spill flush: %v", err)
+					// A failed final flush silently loses cache warmth
+					// across restarts — Warn the first failure (disk
+					// full fails every entry; sample the rest).
+					if spillFails == 0 {
+						log.Warnf("CACHE: spill flush error: %v", err)
+					}
+					spillFails++
 				}
 			}
+		}
+		if spillFails > 1 {
+			log.Warnf("CACHE: spill flush: %d entries failed in total", spillFails)
 		}
 	}
 	if s.spillLat != nil {
