@@ -24,7 +24,6 @@ func (s *Server) startDOHServer() error {
 		return fmt.Errorf("resolve bind addrs: %w", err)
 	}
 
-	log.Infof("TLCP: DoH server started on %v (TLCP HTTP/1.1)", addrs)
 	for _, addr := range addrs {
 		rawListener, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -58,6 +57,7 @@ func (s *Server) startDOHServer() error {
 			return nil
 		})
 	}
+	log.Infof("TLCP: DoH server started on %v (TLCP HTTP/1.1)", addrs)
 	return nil
 }
 
@@ -104,7 +104,7 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 	// Validate GET request size before delegation — the base64url parameter
 	// must be DECODED first (base64 expands ~4/3): comparing the encoded
 	// length rejects valid messages between ~49KB and 64KB that the POST
-	// path and the TLS DoH handler accept (mirrors tls/https.go, R3-L18).
+	// path and the TLS DoH handler accept (mirrors tls/https.go).
 	if r.Method == http.MethodGet {
 		dnsParam := r.URL.Query().Get("dns")
 		decoded, err := base64.RawURLEncoding.DecodeString(dnsParam)

@@ -39,7 +39,6 @@ func (s *Server) startTCP(g Group, ctx context.Context, handler edns.DNSHandler)
 	if err != nil {
 		return fmt.Errorf("TCP address resolution: %w", err)
 	}
-	log.Infof("PLAIN: TCP server started on %v", addrs)
 	s.tcpMu.Lock()
 	s.tcpConns = make(map[net.Conn]struct{})
 	s.tcpMu.Unlock()
@@ -64,6 +63,7 @@ func (s *Server) startTCP(g Group, ctx context.Context, handler edns.DNSHandler)
 			return nil
 		})
 	}
+	log.Infof("PLAIN: TCP server started on %v", addrs)
 	return nil
 }
 
@@ -324,7 +324,11 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn, handler
 				// response in hand — e.g. a server errgroup cancellation
 				// (a startup error elsewhere tears down this ctx).
 				if log.IsDebug() {
-					log.Debugf("PLAIN: TCP response for %s discarded — connection context cancelled", query.Question[0].Header().Name)
+					if len(query.Question) > 0 {
+						log.Debugf("PLAIN: TCP response for %s discarded — connection context cancelled", query.Question[0].Header().Name)
+					} else {
+						log.Debugf("PLAIN: TCP response discarded — connection context cancelled")
+					}
 				}
 				if pooled {
 					pool.DefaultBuffer.Put(writeBuf)

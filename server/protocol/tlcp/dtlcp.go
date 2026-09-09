@@ -80,7 +80,6 @@ func (s *Server) startDTLCPServer() error {
 		return err
 	}
 
-	log.Infof("TLCP: DTLCP server started on %v", addrs)
 	for _, addr := range addrs {
 		udpAddr, err := net.ResolveUDPAddr("udp", addr)
 		if err != nil {
@@ -102,6 +101,7 @@ func (s *Server) startDTLCPServer() error {
 			return nil
 		})
 	}
+	log.Infof("TLCP: DTLCP server started on %v", addrs)
 	return nil
 }
 
@@ -111,12 +111,10 @@ func (s *Server) startDTLCPServer() error {
 func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 	defer zdnsutil.HandlePanic("TLCP DTLCP accept loop")
 
-	// SecureBufferSize, not UDPBufferSize: the dispatcher must accept any
-	// record the client can send (RFC 8094 framing allows 65535; DTLS reads
-	// 8192) — a 1232-byte buffer silently drops larger DTLCP datagrams
-	// at the socket read.
-	buf := make([]byte, pool.SecureBufferSize)
-
+	// Read bound: PacketBufPool buffers are SecureBufferSize-backed — the
+	// dispatcher must accept any record the client can send (RFC 8094
+	// framing allows 65535; DTLS reads 8192) — a 1232-byte buffer silently
+	// drops larger DTLCP datagrams at the socket read.
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -124,8 +122,10 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 		default:
 		}
 
-		n, src, err := l.udpConn.ReadFromUDP(buf)
+		pb := shared.PacketBufPool.Get().(*[]byte)
+		n, src, err := l.udpConn.ReadFromUDP(*pb)
 		if err != nil {
+			shared.PacketBufPool.Put(pb)
 			select {
 			case <-s.ctx.Done():
 				return
@@ -179,8 +179,6 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 
 		// Queue the datagram.  A full queue means the client is flooding —
 		// drop it (UDP semantics; DTLCP retransmits handshake flights).
-		pb := shared.PacketBufPool.Get().(*[]byte)
-		copy(*pb, buf[:n])
 		// Guarded send: the client goroutine's deferred dc.Close() can race
 		// this enqueue (handshake failure, idle timeout, Shutdown) — a bare
 		// channel send here races the deferred Close and panics the accept

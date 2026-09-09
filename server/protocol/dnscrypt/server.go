@@ -301,19 +301,25 @@ func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 	if err != nil {
 		return fmt.Errorf("resolving UDP bind addresses: %w", err)
 	}
-	log.Infof("DNSCRYPT: Listening on UDP %v", udpAddrs)
 	for _, addr := range udpAddrs {
 		uaddr, err := net.ResolveUDPAddr("udp", addr)
 		if err != nil {
+			for _, c := range s.udpConns {
+				_ = c.Close()
+			}
 			return fmt.Errorf("resolving UDP address %s: %w", addr, err)
 		}
 		conn, err := net.ListenUDP("udp", uaddr)
 		if err != nil {
+			for _, c := range s.udpConns {
+				_ = c.Close()
+			}
 			return fmt.Errorf("listening UDP on %s: %w", addr, err)
 		}
 		s.udpConns = append(s.udpConns, conn)
 		go s.serveUDP(s.ctx, conn)
 	}
+	log.Infof("DNSCRYPT: Listening on UDP %v", udpAddrs)
 
 	tcpAddrs, err := zdnsutil.ResolveBindAddrs("tcp", s.port)
 	if err != nil {
@@ -322,7 +328,6 @@ func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 		}
 		return fmt.Errorf("resolving TCP bind addresses: %w", err)
 	}
-	log.Infof("DNSCRYPT: Listening on TCP %v", tcpAddrs)
 	for _, addr := range tcpAddrs {
 		tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
 		if err != nil {
@@ -347,6 +352,7 @@ func (s *Server) Start(dnsHandler edns.DNSHandler) error {
 		s.tcpListeners = append(s.tcpListeners, listener)
 		go s.serveTCP(s.ctx, listener)
 	}
+	log.Infof("DNSCRYPT: Listening on TCP %v", tcpAddrs)
 
 	log.Infof("DNSCRYPT: Provider: %s", s.providerName)
 

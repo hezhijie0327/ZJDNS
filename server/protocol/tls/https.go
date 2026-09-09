@@ -35,7 +35,6 @@ func (s *Server) startDOHServer(port string) error {
 		return fmt.Errorf("DoH address resolution: %w", err)
 	}
 
-	log.Infof("TLS: DoH server started on %v", addrs)
 	for _, addr := range addrs {
 		listener, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -87,6 +86,7 @@ func (s *Server) startDOHServer(port string) error {
 			return nil
 		})
 	}
+	log.Infof("TLS: DoH server started on %v", addrs)
 	return nil
 }
 

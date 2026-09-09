@@ -53,7 +53,6 @@ func (s *Server) startDOTServer() error {
 		return fmt.Errorf("resolve bind addrs: %w", err)
 	}
 
-	log.Infof("TLCP: DoT server started on %v (TLCP)", addrs)
 	for _, addr := range addrs {
 		rawListener, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -77,6 +76,7 @@ func (s *Server) startDOTServer() error {
 			return nil
 		})
 	}
+	log.Infof("TLCP: DoT server started on %v (TLCP)", addrs)
 	return nil
 }
 
@@ -314,31 +314,17 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 // wraps it in a 2-byte length-prefixed frame from the buffer pool. Returns
 // (frame, frameFromPool, ok).
 func buildDOTFrame(resp *dns.Msg) (frame []byte, fromPool, ok bool) {
-	// Pre-packed wire (cache-hit direct-send path) skips the Pack entirely;
-	// only synthetic responses pack here.  The 2-byte frame comes out of the
-	// buffer pool instead of a per-response allocation.
-	wire := resp.Data
-	if len(wire) == 0 {
-		if err := resp.Pack(); err != nil {
-			log.Debugf("TLCP: DoT response pack error: %v", err)
-			return nil, false, false
-		}
-		wire = resp.Data
-	}
-	if len(wire) > dns.MaxMsgSize {
-		log.Debugf("TLCP: dropping DoT response of %d bytes (exceeds 16-bit frame)", len(wire))
-		return nil, false, false
-	}
-
+	// PackStreamFrame serializes synthetic responses straight into the pooled
+	// frame's spare capacity (resp.Data is cleared afterwards so Message.Put
+	// never re-releases the frame buffer) and copies pre-packed cache-hit
+	// wires verbatim — the same helper as the plain and TLS DoT paths.
 	poolBuf := pool.DefaultBuffer.Get()
-	frameOK := len(poolBuf) >= zdnsutil.DNSFramePrefixLen+len(wire)
-	if frameOK {
-		frame = poolBuf[:zdnsutil.DNSFramePrefixLen+len(wire)]
-	} else {
-		frame = make([]byte, zdnsutil.DNSFramePrefixLen+len(wire))
-		pool.DefaultBuffer.Put(poolBuf)
+	frame, fromPool, ok = zdnsutil.PackStreamFrame(poolBuf, resp)
+	if !fromPool {
+		pool.DefaultBuffer.Put(poolBuf) // heap frame in use, or pack/size failure
 	}
-	binary.BigEndian.PutUint16(frame[:zdnsutil.DNSFramePrefixLen], uint16(len(wire))) //nolint:gosec // G115: bounded by the MaxMsgSize check above
-	copy(frame[zdnsutil.DNSFramePrefixLen:], wire)
-	return frame, frameOK, true
+	if !ok {
+		log.Debugf("TLCP: DoT response pack/size error")
+	}
+	return frame, fromPool, ok
 }

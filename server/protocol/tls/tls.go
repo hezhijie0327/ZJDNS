@@ -26,7 +26,6 @@ func (s *Server) startDOTServer() error {
 		return fmt.Errorf("DoT address resolution: %w", err)
 	}
 
-	log.Infof("TLS: DoT server started on %v", addrs)
 	for _, addr := range addrs {
 		listener, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -52,6 +51,7 @@ func (s *Server) startDOTServer() error {
 		})
 	}
 
+	log.Infof("TLS: DoT server started on %v", addrs)
 	return nil
 }
 

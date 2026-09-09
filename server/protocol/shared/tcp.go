@@ -58,29 +58,6 @@ func (m *Mux) startTCPGroup(g *TCPGroup) error {
 		}
 	}
 
-	// Build a log label reflecting the active protocol combination.
-	label := "SHARED"
-	var parts []string
-	if g.DOHHandler != nil || g.DOTHandler != nil {
-		parts = append(parts, "DoT")
-		if g.DOHHandler != nil {
-			parts[0] = "DoH"
-		}
-	}
-	if g.DOHTLCP != nil || g.DOTTLCP != nil {
-		parts = append(parts, "HTTPoverTLCP")
-		if g.DOTTLCP != nil && g.DOHTLCP == nil {
-			parts[len(parts)-1] = "DoT(TLCP)"
-		}
-	}
-	if g.ServeDNSCryptTCP != nil {
-		parts = append(parts, "DNSCrypt")
-	}
-	if len(parts) > 0 {
-		label += ": " + joinStrings(parts, ", ")
-	}
-	log.Infof("%s server started on %v", label, addrs)
-
 	for _, addr := range addrs {
 		rawListener, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -228,6 +205,29 @@ func (m *Mux) startTCPGroup(g *TCPGroup) error {
 			})
 		}
 	}
+
+	// Build a log label reflecting the active protocol combination.
+	label := "SHARED"
+	var parts []string
+	if g.DOHHandler != nil || g.DOTHandler != nil {
+		parts = append(parts, "DoT")
+		if g.DOHHandler != nil {
+			parts[0] = "DoH"
+		}
+	}
+	if g.DOHTLCP != nil || g.DOTTLCP != nil {
+		parts = append(parts, "HTTPoverTLCP")
+		if g.DOTTLCP != nil && g.DOHTLCP == nil {
+			parts[len(parts)-1] = "DoT(TLCP)"
+		}
+	}
+	if g.ServeDNSCryptTCP != nil {
+		parts = append(parts, "DNSCrypt")
+	}
+	if len(parts) > 0 {
+		label += ": " + joinStrings(parts, ", ")
+	}
+	log.Infof("%s server started on %v", label, addrs)
 	return nil
 }
 

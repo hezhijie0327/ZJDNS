@@ -207,15 +207,12 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 	tlsConfig := baseConfig.Clone()
 
 	ctx, cancel := context.WithCancelCause(context.Background())
-	// The derived context is deliberately unused: goroutines derive from
-	// s.ctx (cancelled with an error cause on Shutdown), and errgroup's
-	// first-error cancellation would cancel the whole group on any single
-	// handler error — the per-connection ctxs already handle that.
-	// The errgroup derived context is deliberately unused: goroutines
-	// derive from s.ctx (cancelled with an error cause on Shutdown), and
-	// errgroup's first-error cancellation would cancel the whole group on
-	// any single handler error — the per-connection ctxs already handle
-	// that.  Zero-value groups only provide the limit and Wait.
+	// ctx is stored as s.ctx: all goroutines derive from it, and cancel
+	// carries the shutdown (or startup-failure) cause.  The groups below are
+	// zero-value errgroups — limit and Wait only, no derived context —
+	// because errgroup's first-error cancellation would cancel the whole
+	// group on any single handler error; the per-connection ctxs already
+	// handle that.
 	newGroup := func() *errgroup.Group {
 		g := &errgroup.Group{}
 		g.SetLimit(config.DefaultServerGoroutineLimit)

@@ -13,9 +13,10 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 )
 
-// handleDNSRequest is the protocol bridge for the miekg-managed UDP
-// listeners: it extracts the client IP and delegates to the handler.  (TCP
-// is served by the hand-rolled pipelining listener in server/protocol/plain.)
+// handleDNSRequest is the protocol bridge for the hand-rolled plain UDP
+// listener in server/protocol/plain: it extracts the client IP and delegates
+// to the handler.  (TCP is served by the hand-rolled pipelining listener in
+// the same package.)
 func (s *Server) handleDNSRequest(w dns.ResponseWriter, req *dns.Msg) {
 	defer zdnsutil.HandlePanic("DNS request processing")
 

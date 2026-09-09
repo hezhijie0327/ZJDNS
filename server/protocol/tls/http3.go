@@ -48,7 +48,6 @@ func (s *Server) startDOH3Server(port string) error {
 	}
 	s.listenerMu.Unlock()
 
-	log.Infof("TLS: DoH3 server started on %v", addrs)
 	for _, addr := range addrs {
 		udpAddr, err := net.ResolveUDPAddr("udp", addr)
 		if err != nil {
@@ -89,6 +88,7 @@ func (s *Server) startDOH3Server(port string) error {
 		})
 	}
 
+	log.Infof("TLS: DoH3 server started on %v", addrs)
 	return nil
 }
 

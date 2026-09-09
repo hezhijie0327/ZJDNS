@@ -30,29 +30,6 @@ func (m *Mux) startUDPGroup(g *UDPGroup) error {
 		return err
 	}
 
-	// Build a log label reflecting the active protocol combination.
-	label := "SHARED"
-	var parts []string
-	if g.DOQHandler != nil {
-		parts = append(parts, "DoQ")
-	}
-	if g.HTTP3Handler != nil {
-		parts = append(parts, "DoH3")
-	}
-	if g.DTLSHandler != nil {
-		parts = append(parts, "DTLS")
-	}
-	if g.ServeDTLCP != nil {
-		parts = append(parts, "DTLCP")
-	}
-	if g.ServeDNSCrypt != nil {
-		parts = append(parts, "DNSCrypt")
-	}
-	if len(parts) > 0 {
-		label += ": " + joinStrings(parts, ", ")
-	}
-	log.Infof("%s server started on %v", label, addrs)
-
 	// Dispatch sharding: N sockets on the same port (SO_REUSEPORT), the
 	// kernel hashing each flow to one shard — per-client affinity holds,
 	// the single-goroutine read loop parallelises.  The per-client
@@ -164,6 +141,29 @@ func (m *Mux) startUDPGroup(g *UDPGroup) error {
 			})
 		}
 	}
+
+	// Build a log label reflecting the active protocol combination.
+	label := "SHARED"
+	var parts []string
+	if g.DOQHandler != nil {
+		parts = append(parts, "DoQ")
+	}
+	if g.HTTP3Handler != nil {
+		parts = append(parts, "DoH3")
+	}
+	if g.DTLSHandler != nil {
+		parts = append(parts, "DTLS")
+	}
+	if g.ServeDTLCP != nil {
+		parts = append(parts, "DTLCP")
+	}
+	if g.ServeDNSCrypt != nil {
+		parts = append(parts, "DNSCrypt")
+	}
+	if len(parts) > 0 {
+		label += ": " + joinStrings(parts, ", ")
+	}
+	log.Infof("%s server started on %v", label, addrs)
 	return nil
 }
 
@@ -363,6 +363,7 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 			dc.lastSeen.Store(log.NowUnix())
 			if !dc.Send(DemuxPacket{Data: (*pb)[:n], Addr: src}) {
 				PacketBufPool.Put(pb)
+				noteDispatchDrop("dtlcp")
 			}
 
 		case demux.ProtoDNSCrypt:
