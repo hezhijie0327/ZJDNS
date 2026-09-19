@@ -3,13 +3,13 @@ module zjdns
 go 1.27.0
 
 require (
-	codeberg.org/miekg/dns v0.6.110-0.20260909045117-81471e9b542a
+	codeberg.org/miekg/dns v0.6.110-0.20260916183651-bb7711b96718
 	gitee.com/Trisia/gotlcp v1.5.1-0.20260714024307-912b3a976033
 	github.com/cloudflare/circl v1.6.6-0.20260909114340-2ef8bf457d28
 	github.com/emmansun/gmsm v0.44.1
-	github.com/klauspost/compress v1.20.1-0.20260909075634-5e17c92e03c6
-	github.com/pion/dtls/v3 v3.1.3-0.20260907200456-474c3e2e7a4e
-	github.com/quic-go/quic-go v0.62.1-0.20260907022535-908f9b5fe261
+	github.com/klauspost/compress v1.20.1-0.20260915094655-de8f55df9fb3
+	github.com/pion/dtls/v3 v3.1.3-0.20260918152755-5f3ca8f4031d
+	github.com/quic-go/quic-go v0.62.1-0.20260914161921-fcb5bedbbcd7
 	gitlab.com/go-extension/http v0.0.0-20260817192224-f5762b77a66a
 	gitlab.com/go-extension/tls v0.0.0-20260817191915-d8b98b0d31de
 	golang.org/x/crypto v0.57.0
@@ -20,12 +20,12 @@ require (
 
 require (
 	github.com/RyuaNerin/go-krypto v1.3.0 // indirect
-	github.com/andybalholm/brotli v1.2.3 // indirect
+	github.com/andybalholm/brotli v1.2.4 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cronokirby/saferith v0.33.1-0.20250226174546-1f11f94ce488 // indirect
 	github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d // indirect
 	github.com/pion/logging v0.2.4 // indirect
-	github.com/pion/transport/v4 v4.1.0 // indirect
+	github.com/pion/transport/v5 v5.0.1 // indirect
 	github.com/pmorjan/kmod v1.1.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
