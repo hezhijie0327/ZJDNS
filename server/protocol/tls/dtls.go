@@ -33,12 +33,14 @@ func (s *Server) startDTLSServer() error {
 		}
 
 		listener, err := dtls.ListenAddr("udp", udpAddr,
-			// DTLS 1.3 only: a dual-stack pion server deadlocks against dual-stack
-			// clients (Flight 0 cannot complete the HelloRetryRequest exchange during
-			// version negotiation). Our upstream client is dual-stack (RFC 9147
-			// §4.2.2), so a dual-stack server would break ZJDNS-to-ZJDNS DTLS. Revisit
-			// when pion fixes the dual-stack server HRR path.
-			dtls.WithMinVersion(protocol.Version1_3),
+			// Dual-stack [1.2,1.3]: the pion dual-stack server HRR deadlock
+			// (Flight 0 could not complete the HelloRetryRequest exchange with a
+			// client still in version negotiation) was fixed upstream before
+			// v3.1.3-0.20260907; re-verified 2026-09-19 with a dual-stack probe —
+			// {dual-stack, pure-1.2, pure-1.3} clients all complete against a
+			// dual-stack server. Pure-1.2 clients (e.g. RouteDNS) need the 1.2
+			// floor; our upstream client is dual-stack (RFC 9147 §4.2.2).
+			dtls.WithMinVersion(protocol.Version1_2),
 			dtls.WithMaxVersion(protocol.Version1_3),
 			dtls.WithCertificates(s.stdCert),
 			dtls.WithSessionStore(lrumap.NewDTLSSessionStore(config.DefaultDTLSSessionCacheSize)),

@@ -706,19 +706,10 @@ pkill -f "recursive-defense"
 > RouteDNS can connect. Alternatively, configure ZJDNS with a fixed cert via
 > `certificate.tls.cert_file` / `certificate.tls.key_file`.
 
-> [!WARNING]
-> **ZJDNS serves DTLS 1.3 only** (see `server/protocol/tls/dtls.go`): a
-> dual-stack [1.2,1.3] server still deadlocks against a dual-stack client
-> (i.e. our own upstream client) in pion v3.1.3-0.20260829132121 — the
-> dual-stack server's DTLS 1.3 HelloRetryRequest exchange never completes
-> with a client still in version negotiation, so both sides wait and the
-> handshake times out. The 1.3-only server path works with dual-stack
-> clients (negotiates 1.3) and pure-1.3 clients; pure-1.2 clients (e.g.
-> RouteDNS's default DTLS client) **cannot connect**. ZJDNS ↔ ZJDNS DTLS
-> (loopback) works. Re-verified 2026-08-29: a dual-stack pion server now
-> accepts {pure-1.2, pure-1.3} clients (1.2 negotiation fixed upstream),
-> but the dual-stack-client deadlock remains, so ZJDNS stays 1.3-only.
-> Revisit when pion fixes the dual-stack server HRR path.
+> [!NOTE]
+> ZJDNS serves dual-stack DTLS [1.2,1.3]; RouteDNS's pure-1.2 client
+> interoperates. (Historical: a pion dual-stack HRR deadlock once pinned
+> ZJDNS to 1.3-only — fixed upstream, see `server/protocol/tls/dtls.go`.)
 
 ### Setup (one-time)
 

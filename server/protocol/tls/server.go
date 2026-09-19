@@ -179,7 +179,9 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 		Defaults:         eTLS.Defaults{AllSecureCipherSuites: true, AllSecureCurves: true, AllSupportedExtensions: true},
 		Certificates:     []eTLS.Certificate{eCert},
 		CurvePreferences: []eTLS.CurveID{},
-		MinVersion:       eTLS.VersionTLS13,
+		// Dual-stack [1.2,1.3] (MaxVersion unset = highest): TLS 1.2 clients
+		// stay interoperable. RFC 8998 SM suites are 1.3-only and unaffected.
+		MinVersion: eTLS.VersionTLS12,
 	}
 
 	// QUIC-based TLS config (DoQ, DoH3) — KTLS does not apply.

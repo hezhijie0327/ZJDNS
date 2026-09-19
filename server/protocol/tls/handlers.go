@@ -161,7 +161,10 @@ func (s *Server) HandleHTTP3FromPacketConn(pc net.PacketConn) error {
 // per-client PacketConns deliver demuxed DTLS datagrams.
 func (s *Server) HandleDTLSFromPacketListener(pl dtlsnet.PacketListener) error {
 	listener, err := dtls.NewListener(pl,
-		dtls.WithMinVersion(protocol.Version1_3),
+		// Dual-stack [1.2,1.3], matching the dedicated-port DTLS listener —
+		// the pion HRR deadlock is fixed upstream (see startDTLSServer for
+		// the verification history).
+		dtls.WithMinVersion(protocol.Version1_2),
 		dtls.WithMaxVersion(protocol.Version1_3),
 		dtls.WithCertificates(s.stdCert),
 		dtls.WithSessionStore(lrumap.NewDTLSSessionStore(config.DefaultDTLSSessionCacheSize)),
