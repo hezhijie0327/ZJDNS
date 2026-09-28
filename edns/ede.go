@@ -30,11 +30,6 @@ func DefenseUncertainEDE() *dns.EDE {
 	return &dns.EDE{InfoCode: EDEZJDNSDefenseUncertain, ExtraText: DefenseUncertainEDEText}
 }
 
-// IsFallbackEDE reports whether the EDE marks a ZJDNS fallback response.
-func IsFallbackEDE(ede *dns.EDE) bool {
-	return ede != nil && ede.InfoCode == EDEZJDNSFallback
-}
-
 // IsZJDNSNoCacheEDE reports whether the EDE carries a ZJDNS private
 // do-not-cache mark (fallback provenance or defense uncertainty).  The
 // cache-write gate and the upstream-receive path both refuse these.
