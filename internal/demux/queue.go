@@ -7,7 +7,7 @@ import (
 
 // protocolQueue is a channel-based connection queue that implements net.Listener.
 // The demux accept loop pushes detected connections into the queue; the
-// protocol-specific server (http.Server, eHTTP.Server, etc.) pulls them
+// protocol-specific server (http.Server, DoT accept loop, etc.) pulls them
 // via Accept().  Close() cancels the context, unblocking any pending Accept.
 type protocolQueue struct {
 	ch     chan net.Conn

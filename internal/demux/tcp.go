@@ -30,7 +30,7 @@ type TCPConfig struct {
 // Each accepted connection is inspected via DetectTCPProtocol; the detected
 // protocol selects a route wrapper and a per-protocol queue.  Callers
 // retrieve virtual net.Listeners via Listener() and pass them to
-// http.Server.Serve, eHTTP.Server.Serve, or manual accept loops.
+// http.Server.Serve or manual accept loops.
 type TCPDemuxListener struct {
 	inner  net.Listener
 	routes map[string]func(net.Conn) net.Conn
