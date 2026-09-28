@@ -10,25 +10,18 @@ import (
 	"zjdns/config"
 	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/ktls"
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnshttp"
-	eHTTP "gitlab.com/go-extension/http"
-	eTLS "gitlab.com/go-extension/tls"
 )
 
-// dohResponseWriter adapts an eHTTP.ResponseWriter to net/http.ResponseWriter
-// for bridging between the eHTTP server and the shared ServeHTTP handler.
-type dohResponseWriter struct {
-	w eHTTP.ResponseWriter
-}
-
-func (a *dohResponseWriter) Header() http.Header         { return http.Header(a.w.Header()) }
-func (a *dohResponseWriter) Write(b []byte) (int, error) { return a.w.Write(b) }
-func (a *dohResponseWriter) WriteHeader(code int)        { a.w.WriteHeader(code) }
-
+// startDOHServer starts the dedicated-port DoH server.  Go 1.27 net/http
+// accepts the eTLS backend directly: the ktls listener hands it conns whose
+// ConnectionState is stdlib-compatible, http.Server drives the handshake and
+// dispatches ALPN-negotiated h2 itself.
 func (s *Server) startDOHServer(port string) error {
 	addrs, err := zdnsutil.ResolveBindAddrs("tcp", port)
 	if err != nil {
@@ -44,27 +37,25 @@ func (s *Server) startDOHServer(port string) error {
 		rawListener := &debugListener{Listener: &zdnsutil.TCPKeepAliveListener{Listener: listener, KeepAlivePeriod: config.DefaultTCPKeepAlivePeriod}, name: "DoH"}
 		// http.Server spawns its own per-connection goroutines (not through
 		// serverGroup) — cap concurrent connections at the listener instead.
-		// The cap wraps the RAW listener: the eHTTP fork detects eTLS
-		// connections by conn type (*tls.Conn) in its accept path, so a
-		// wrapper between http.Server and the eTLS listener would break
-		// that assertion and serve TLS bytes as plain HTTP.
+		// The cap wraps the RAW listener: the ktls eTLS layer must sit on top
+		// of it, since http.Server reads the TLS state off the accepted conn —
+		// any wrapper above the eTLS listener would hide ConnectionState.
 		limited := zdnsutil.NewLimitListener(rawListener, config.DefaultServerGoroutineLimit)
 
 		tlsConfig := s.tlsConfig.Clone()
 		tlsConfig.NextProtos = config.NextProtoDOH
 		tlsConfig.GetConfigForClient = s.getConfigForClient(config.NextProtoDOH)
 
-		httpsListener := eTLS.NewListener(limited, tlsConfig)
+		httpsListener := ktls.NewListener(limited, tlsConfig)
 		s.listenerMu.Lock()
 		s.httpsListeners = append(s.httpsListeners, httpsListener)
 		s.listenerMu.Unlock()
 
-		// eHTTP server with native eTLS-aware HTTP/2 — the bundled h2
-		// detects eTLS connections from the listener automatically.
-		dohSrv := &eHTTP.Server{
-			Handler: eHTTP.HandlerFunc(func(w eHTTP.ResponseWriter, r *eHTTP.Request) {
-				s.ServeHTTP(&dohResponseWriter{w}, eHTTP.FromRequest(r))
-			}),
+		// TLSConfig stays nil on the http.Server (the ktls listener already
+		// wraps eTLS), which lets Serve() auto-configure HTTP/2; ALPN "h2"
+		// conns are then dispatched to the bundled h2 server.
+		dohSrv := &http.Server{
+			Handler:           http.HandlerFunc(s.ServeHTTP),
 			ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
 			WriteTimeout:      config.DefaultHTTPServerWriteTimeout,
 			IdleTimeout:       config.DefaultHTTPServerIdleTimeout,
@@ -77,7 +68,7 @@ func (s *Server) startDOHServer(port string) error {
 		capturedListener := httpsListener
 		s.groups.doh.Go(func() error {
 			defer zdnsutil.HandlePanic("DoH server")
-			if err := capturedSrv.Serve(capturedListener); err != nil && !errors.Is(err, eHTTP.ErrServerClosed) {
+			if err := capturedSrv.Serve(capturedListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				if s.ctx.Err() != nil {
 					return nil
 				}

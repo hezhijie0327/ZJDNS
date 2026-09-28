@@ -24,7 +24,6 @@ import (
 
 	"codeberg.org/miekg/dns"
 	stdtls "crypto/tls"
-	eHTTP "gitlab.com/go-extension/http"
 	eTLS "gitlab.com/go-extension/tls"
 )
 
@@ -85,7 +84,7 @@ type Client struct {
 // protocol selection, proxy).  The pools and caches created here are shared
 // across all upstream servers for efficiency.
 func New() *Client {
-	dohTransport := &eHTTP.Transport{
+	dohTransport := &http.Transport{
 		MaxIdleConns:        config.DefaultMaxIdleConns,
 		MaxIdleConnsPerHost: config.DefaultMaxIdleConnsPerHost,
 		MaxConnsPerHost:     config.DefaultMaxIdleConnsPerHost,
@@ -93,7 +92,7 @@ func New() *Client {
 		DisableCompression:  true,
 		ForceAttemptHTTP2:   true,
 	}
-	dohClient := &eHTTP.Client{
+	dohClient := &http.Client{
 		Timeout:   config.DefaultDNSQueryTimeout,
 		Transport: dohTransport,
 	}

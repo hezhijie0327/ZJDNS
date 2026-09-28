@@ -9,11 +9,11 @@ import (
 	"time"
 	"zjdns/config"
 	"zjdns/internal/demux"
+	"zjdns/internal/ktls"
 	"zjdns/internal/log"
 
 	zdnsutil "zjdns/internal/dnsutil"
 
-	eHTTP "gitlab.com/go-extension/http"
 	eTLS "gitlab.com/go-extension/tls"
 )
 
@@ -89,10 +89,11 @@ func (m *Mux) startTCPGroup(g *TCPGroup) error {
 			tlsConfig.GetConfigForClient = sharedTLSConfigForClient(g.TLSCfg, g.NextProtos)
 
 			if g.DOHHandler != nil {
-				// HTTP-level: eTLS.Listener → eHTTP.Server.
-				httpsListener := eTLS.NewListener(limited, tlsConfig)
+				// HTTP-level: ktls listener (eTLS + stdlib-compatible conns) →
+				// net/http Server; ALPN h2 is dispatched by the std server.
+				httpsListener := ktls.NewListener(limited, tlsConfig)
 
-				dohSrv := &eHTTP.Server{
+				dohSrv := &http.Server{
 					Handler:           g.DOHHandler,
 					ReadHeaderTimeout: config.DefaultHTTPReadHeaderTimeout,
 					WriteTimeout:      config.DefaultHTTPServerWriteTimeout,
@@ -104,7 +105,7 @@ func (m *Mux) startTCPGroup(g *TCPGroup) error {
 				capturedLn := httpsListener
 				m.host.Go(func() error {
 					defer zdnsutil.HandlePanic("Shared DoH (TLS) server")
-					if err := capturedSrv.Serve(capturedLn); err != nil && !errors.Is(err, eHTTP.ErrServerClosed) {
+					if err := capturedSrv.Serve(capturedLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 						if m.host.Ctx().Err() != nil {
 							return nil
 						}

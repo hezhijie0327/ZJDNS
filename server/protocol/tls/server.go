@@ -8,17 +8,18 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 	"zjdns/config"
 	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/ktls"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
-	eHTTP "gitlab.com/go-extension/http"
 	eTLS "gitlab.com/go-extension/tls"
 	"golang.org/x/sync/errgroup"
 )
@@ -74,7 +75,7 @@ type Server struct {
 	tlsConfig      *eTLS.Config   // TCP-based TLS (DoT, DoH) with KTLS
 	baseTLSConfig  *eTLS.Config   // base config for per-listener GetConfigForClient clones
 	quicTLSConfig  *stdtls.Config // QUIC-based protocols (DoQ, DoH3)
-	dohHandler     eHTTP.Handler  // shared-port DOH handler (wraps ServeHTTP for eHTTP)
+	dohHandler     http.Handler   // shared-port DOH handler (plain net/http — consumed by the shared-port demux)
 	ctx            context.Context
 	cancel         context.CancelCauseFunc
 	// groups holds one errgroup per secure-protocol family — a single
@@ -89,7 +90,7 @@ type Server struct {
 	doqConns      []*net.UDPConn
 	doqTransports []*quic.Transport
 	doqListeners  []*quic.EarlyListener
-	dohServers    []*eHTTP.Server
+	dohServers    []*http.Server
 	h3Server      *http3.Server
 	// QUIC Retry-whitelist caches (RFC 9000 §8.1): addresses that completed
 	// a handshake skip the next Retry. doqAddrCache is written by the DoQ
@@ -165,8 +166,7 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 	// safe); enable kernel_rx only if your kernel/NIC combination
 	// does not produce "bad record MAC" errors.
 	baseConfig := &eTLS.Config{
-		KernelTX: cfg.KTLS != nil && cfg.KTLS.KernelTX,
-		KernelRX: cfg.KTLS != nil && cfg.KTLS.KernelRX,
+		KernelOptions: ktls.Options(cfg.KTLS != nil && cfg.KTLS.KernelTX, cfg.KTLS != nil && cfg.KTLS.KernelRX),
 		// RFC 8998: offer the SM cipher suites (TLS_SM4_GCM_SM3/CCM_SM3) and
 		// CurveSM2 key exchange by default. eTLS gates them as "extended"
 		// algorithms, so they stay off without these switches. Standard clients
@@ -237,12 +237,10 @@ func New(dnsHandler edns.DNSHandler, cfg *Config) (*Server, error) {
 		dotConns:       make(map[net.Conn]struct{}),
 	}
 
-	// Pre-build the eHTTP handler so the TLCP server can reuse it for
+	// Pre-build the DOH handler so the TLCP server can reuse it for
 	// shared-port HTTPS+HTTPoverTLCP demux (server.go constructs the
 	// demux and passes this handler to the TLS side).
-	s.dohHandler = eHTTP.HandlerFunc(func(w eHTTP.ResponseWriter, r *eHTTP.Request) {
-		s.ServeHTTP(&dohResponseWriter{w}, eHTTP.FromRequest(r))
-	})
+	s.dohHandler = http.HandlerFunc(s.ServeHTTP)
 
 	s.displayCertificateInfo(&eCert)
 
@@ -404,7 +402,7 @@ func (s *Server) Shutdown() error {
 	doqListeners := append([]*quic.EarlyListener(nil), s.doqListeners...)
 	doqConns := append([]*net.UDPConn(nil), s.doqConns...)
 	doqTransports := append([]*quic.Transport(nil), s.doqTransports...)
-	dohServers := append([]*eHTTP.Server(nil), s.dohServers...)
+	dohServers := append([]*http.Server(nil), s.dohServers...)
 	httpsListeners := append([]net.Listener(nil), s.httpsListeners...)
 	h3Listeners := append([]*quic.EarlyListener(nil), s.h3Listeners...)
 	h3Transports := append([]*quic.Transport(nil), s.h3Transports...)

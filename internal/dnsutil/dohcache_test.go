@@ -63,10 +63,10 @@ func TestExecuteDoHRequestAgeTTL(t *testing.T) {
 	resp.Answer = []dns.RR{
 		&dns.A{Hdr: dns.Header{Name: "cached.example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.1")},
 	}
-	opt := &dns.OPT{Hdr: dns.Header{Name: "."}}
-	opt.SetUDPSize(1232)
-	opt.SetSecurity(true) // DO bit — lands in the OPT TTL field on the wire
-	resp.Pseudo = append(resp.Pseudo, opt)
+	// EDNS metadata lives on the Msg fields; Pack materializes the OPT RR
+	// (UDP size in its CLASS, DO bit in its TTL) on the wire.
+	resp.UDPSize = 1232
+	resp.Security = true // DO bit — lands in the OPT TTL field on the wire
 	if err := resp.Pack(); err != nil {
 		t.Fatal(err)
 	}

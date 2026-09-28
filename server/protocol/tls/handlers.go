@@ -7,6 +7,7 @@ import (
 	stdtls "crypto/tls"
 	"crypto/x509"
 	"net"
+	"net/http"
 	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
@@ -18,7 +19,6 @@ import (
 	"github.com/pion/dtls/v3/pkg/protocol"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
-	eHTTP "gitlab.com/go-extension/http"
 	eTLS "gitlab.com/go-extension/tls"
 )
 
@@ -28,10 +28,10 @@ func (s *Server) QUICTLSConfig() *stdtls.Config {
 	return s.quicTLSConfig
 }
 
-// DOHHandler returns the eHTTP.Handler used for DOH requests.
+// DOHHandler returns the net/http handler used for DOH requests.
 // This is consumed by the TLCP server's shared-port demux to serve
 // HTTPS connections on the same TCP port as HTTPoverTLCP.
-func (s *Server) DOHHandler() eHTTP.Handler {
+func (s *Server) DOHHandler() http.Handler {
 	return s.dohHandler
 }
 

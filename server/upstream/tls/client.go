@@ -11,20 +11,20 @@ import (
 	"time"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/ktls"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
 	"zjdns/server/upstream/pool"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"github.com/quic-go/quic-go"
-	eHTTP "gitlab.com/go-extension/http"
 	eTLS "gitlab.com/go-extension/tls"
 )
 
 // Client executes DNS queries over encrypted transports: DoT, DoQ, DoH, DoH3,
 // and DTLS.
 type Client struct {
-	dohClient  *eHTTP.Client
+	dohClient  *http.Client
 	doh3Client *http.Client
 
 	dotPool  *pool.ConnPool
@@ -55,7 +55,7 @@ type Client struct {
 
 // New creates a Client for encrypted DNS transports.
 func New(
-	dohClient *eHTTP.Client,
+	dohClient *http.Client,
 	doh3Client *http.Client,
 	dotPool *pool.ConnPool,
 	quicPool *pool.QUIC,
@@ -82,8 +82,8 @@ func New(
 		timeout:          timeout,
 	}
 	c.dohTransports.SetOnEvict(func(_ string, client *http.Client) {
-		if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
-			ct.CloseIdleConnections()
+		if tr, ok := client.Transport.(*http.Transport); ok {
+			tr.CloseIdleConnections()
 		}
 	})
 	c.doh3Transports.SetOnEvict(func(_ string, client *http.Client) {
@@ -128,8 +128,8 @@ func (c *Client) Close() {
 	// nil write would race those reads. The maps die with the Client.
 	if c.dohTransports != nil {
 		c.dohTransports.Range(func(key string, client *http.Client) bool {
-			if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
-				ct.CloseIdleConnections()
+			if tr, ok := client.Transport.(*http.Transport); ok {
+				tr.CloseIdleConnections()
 			}
 			return true
 		})
@@ -158,8 +158,7 @@ func (c *Client) Close() {
 // (KTLS) for TCP-based upstream protocols (DoT, DoH).
 func (c *Client) eTLSClientConfig(server *config.UpstreamServer) *eTLS.Config {
 	return &eTLS.Config{
-		KernelTX: c.ktlsTX,
-		KernelRX: c.ktlsRX,
+		KernelOptions: ktls.Options(c.ktlsTX, c.ktlsRX),
 		// RFC 8998: offer SM cipher suites (TLS_SM4_GCM_SM3/CCM_SM3) and
 		// CurveSM2 by default — eTLS keeps them off unless asked. Non-SM
 		// upstreams are unaffected (SM ranks last in eTLS preference order).

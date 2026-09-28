@@ -14,7 +14,6 @@ import (
 	"zjdns/internal/resolv"
 
 	"codeberg.org/miekg/dns"
-	eHTTP "gitlab.com/go-extension/http"
 	eTLS "gitlab.com/go-extension/tls"
 )
 
@@ -54,8 +53,8 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 		// the transport for this key — only evict if it is still ours (a
 		// no-op for an uncached client).
 		if c.dohTransports != nil && c.dohTransports.CompareAndDelete(ep.key, client) {
-			if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
-				ct.CloseIdleConnections()
+			if tr, ok := client.Transport.(*http.Transport); ok {
+				tr.CloseIdleConnections()
 			}
 		}
 
@@ -70,8 +69,8 @@ func (c *Client) ExecuteHTTPS(ctx context.Context, msg *dns.Msg, server *config.
 	// caller-side timeouts or cancelled contexts — a healthy connection pool
 	// must survive a slow upstream (http3.go applies the same distinction).
 	if err != nil && !isCallerSideTimeout(err) && c.dohTransports != nil && c.dohTransports.CompareAndDelete(ep.key, client) {
-		if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
-			ct.CloseIdleConnections()
+		if tr, ok := client.Transport.(*http.Transport); ok {
+			tr.CloseIdleConnections()
 		}
 	}
 
@@ -129,24 +128,15 @@ func shouldRetryHTTP(err error) bool {
 
 func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxyURL string, tlsConfig *eTLS.Config) *http.Client {
 	// Extract the transport once — used in both non-cached and cached paths.
-	tr, ok := c.dohClient.Transport.(*eHTTP.Transport)
+	tr, ok := c.dohClient.Transport.(*http.Transport)
 	if !ok {
-		return &http.Client{Timeout: c.dohClient.Timeout, Transport: &eHTTP.CompatableTransport{}}
+		return &http.Client{Timeout: c.dohClient.Timeout, Transport: &http.Transport{}}
 	}
 
-	if c.dohTransports == nil {
-		return &http.Client{Timeout: c.dohClient.Timeout, Transport: &eHTTP.CompatableTransport{Transport: tr}}
-	}
-
-	key := transportKey(host, serverName, skipVerify, proxyURL)
-	if client, ok := c.dohTransports.Get(key); ok {
-		return client
-	}
 	transport := tr.Clone()
 	tlsCfg := tlsConfig.Clone()
 	tlsCfg.NextProtos = config.NextProtoDOH
 	tlsCfg.ServerName = serverName
-	transport.TLSClientConfig = tlsCfg
 
 	if proxyURL != "" {
 		proxyDialer := c.getProxy(&config.UpstreamServer{Proxy: proxyURL})
@@ -173,15 +163,41 @@ func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxy
 		}
 	}
 
+	// net/http hands TLS to the transport via DialTLSContext: dial with the
+	// (optionally proxied) DialContext, run the eTLS handshake, and return a
+	// conn whose ConnectionState is stdlib-compatible — with
+	// ForceAttemptHTTP2 on the base transport, an ALPN h2 conn is upgraded
+	// to HTTP/2 by net/http itself.
+	dial := transport.DialContext
+	transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		tc := eTLS.Client(conn, tlsCfg)
+		if err := tc.HandshakeContext(ctx); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		return tc.Compatible(), nil
+	}
+
+	if c.dohTransports == nil {
+		return &http.Client{Timeout: c.dohClient.Timeout, Transport: transport}
+	}
+
+	key := transportKey(host, serverName, skipVerify, proxyURL)
+	if client, ok := c.dohTransports.Get(key); ok {
+		return client
+	}
+
 	client := &http.Client{
 		Timeout:   c.dohClient.Timeout,
-		Transport: &eHTTP.CompatableTransport{Transport: transport},
+		Transport: transport,
 	}
 	actual, loaded := c.dohTransports.LoadOrStore(key, client)
 	if loaded {
-		if ct, ok := client.Transport.(*eHTTP.CompatableTransport); ok {
-			ct.CloseIdleConnections()
-		}
+		transport.CloseIdleConnections()
 		return actual
 	}
 	return client

@@ -13,7 +13,6 @@ import (
 	"zjdns/config"
 
 	dtlsnet "github.com/pion/dtls/v3/pkg/net"
-	eHTTP "gitlab.com/go-extension/http"
 	eTLS "gitlab.com/go-extension/tls"
 )
 
@@ -33,7 +32,7 @@ type TCPGroup struct {
 	NextProtos []string // TLS NextProtos (e.g. config.NextProtoDOH or config.NextProtoDOT)
 
 	// TLS side: either DOHHandler (HTTP-level) or DOTHandler (raw listener).
-	DOHHandler eHTTP.Handler
+	DOHHandler http.Handler
 	DOTHandler func(net.Listener) error
 
 	// TLCP side: either DOHTLCP (HTTP-level) or DOTTLCP (raw listener).
@@ -82,7 +81,7 @@ type Config struct {
 type tcpRuntime struct {
 	cfg     *TCPGroup
 	demux   tcpDemuxCloser
-	dohSrv  *eHTTP.Server
+	dohSrv  *http.Server
 	tlcpSrv *http.Server
 	tlcpLn  net.Listener
 }
