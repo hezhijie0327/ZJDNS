@@ -20,6 +20,11 @@ import (
 	eTLS "gitlab.com/go-extension/tls"
 )
 
+// warnKTLSNotTCPConn surfaces, once, that kernel TLS offload was requested
+// but the conn under eTLS is not a raw *net.TCPConn — eTLS skips offload
+// silently in that case (see internal/ktls).
+var warnKTLSNotTCPConn sync.Once
+
 func (s *Server) startDOTServer() error {
 	addrs, err := zdnsutil.ResolveBindAddrs("tcp", s.cfg.TLSPort)
 	if err != nil {
@@ -119,6 +124,10 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 	if tcpConn, ok := tlsConn.NetConn().(*net.TCPConn); ok {
 		_ = tcpConn.SetKeepAlive(true)
 		_ = tcpConn.SetKeepAlivePeriod(config.DefaultTCPKeepAlivePeriod)
+	} else if s.cfg.KTLS != nil {
+		warnKTLSNotTCPConn.Do(func() {
+			log.Warnf("KTLS: kernel offload requested but the DoT conn under eTLS is %T (want *net.TCPConn) — offload silently disabled for this path", tlsConn.NetConn())
+		})
 	}
 
 	reader := bufio.NewReaderSize(tlsConn, TLSConnBufferSize)

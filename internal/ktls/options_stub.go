@@ -12,3 +12,8 @@ import (
 func Options(_, _ bool) eTLS.KernelOptions {
 	return eTLS.KernelOptions{}
 }
+
+// requested is always false off Linux/FreeBSD — no offload to warn about.
+func requested(_ *eTLS.Config) bool {
+	return false
+}

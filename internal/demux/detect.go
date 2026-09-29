@@ -65,9 +65,17 @@ func (c *bufferedConn) Read(b []byte) (int, error) {
 	return n, nil
 }
 
-// DetectTCPProtocol reads the first 5 bytes of a TCP connection's record
-// layer header and returns the detected protocol family together with a
-// wrapper connection that replays the buffered bytes on subsequent reads.
+// DetectTCPProtocol sniffs the first 5 bytes of a TCP connection's record
+// layer header and returns the detected protocol family together with the
+// connection to hand to the protocol server.
+//
+// On Linux/FreeBSD (sniff_peek.go) the header is read non-destructively via
+// recvfrom(MSG_PEEK) and the returned connection is conn unchanged, with
+// every byte still queued — eTLS only installs kernel TLS offload when it
+// sits directly on a *net.TCPConn, so a replay wrapper on those platforms
+// would silently disable KTLS.  Other platforms (sniff_read.go) consume the
+// header destructively and return a replay-wrapped connection; KTLS does not
+// exist there, so the wrapper is harmless.
 //
 // Detection rules (first byte → content type vs length prefix):
 //
@@ -81,19 +89,13 @@ func (c *bufferedConn) Read(b []byte) (int, error) {
 //	  here: the DNSCrypt handler's own framing check rejects them and
 //	  closes, which keeps the demux table small without a deny-list.
 //
-// The read is bounded by sniffTimeout: a client that completes the TCP
+// The sniff is bounded by sniffTimeout: a client that completes the TCP
 // handshake but never sends the 5 header bytes (port scanners, health
 // checks, half-open clients) must not pin its connection forever.
 func DetectTCPProtocol(conn net.Conn) (protocol string, detected net.Conn, err error) {
-	header := make([]byte, tcpRecordHeaderLen)
-	if dl, ok := conn.(interface{ SetReadDeadline(time.Time) error }); ok {
-		_ = dl.SetReadDeadline(time.Now().Add(sniffTimeout)) // _ = error: deadline best-effort; a failed set only lengthens the sniff
-	}
-	if _, err = io.ReadFull(conn, header); err != nil {
+	header, detected, err := sniffHeader(conn)
+	if err != nil {
 		return "", nil, err
-	}
-	if dl, ok := conn.(interface{ SetReadDeadline(time.Time) error }); ok {
-		_ = dl.SetReadDeadline(time.Time{}) // _ = error: best-effort clear — the protocol server owns deadlines now
 	}
 
 	first := header[0]
@@ -114,7 +116,25 @@ func DetectTCPProtocol(conn net.Conn) (protocol string, detected net.Conn, err e
 		protocol = ProtoDNSCrypt
 	}
 
-	return protocol, &bufferedConn{Conn: conn, buf: header}, nil
+	return protocol, detected, nil
+}
+
+// sniffHeaderRead is the destructive fallback: it consumes the 5 record-header
+// bytes and returns a replay-wrapped connection.  Used on platforms without
+// peek support, and for conns that cannot be peeked even on Linux/FreeBSD
+// (e.g. net.Pipe in tests).
+func sniffHeaderRead(conn net.Conn) ([]byte, net.Conn, error) {
+	header := make([]byte, tcpRecordHeaderLen)
+	if dl, ok := conn.(interface{ SetReadDeadline(time.Time) error }); ok {
+		_ = dl.SetReadDeadline(time.Now().Add(sniffTimeout)) // _ = error: deadline best-effort; a failed set only lengthens the sniff
+	}
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return nil, nil, err
+	}
+	if dl, ok := conn.(interface{ SetReadDeadline(time.Time) error }); ok {
+		_ = dl.SetReadDeadline(time.Time{}) // _ = error: deadline best-effort clear — the protocol server owns deadlines now
+	}
+	return header, &bufferedConn{Conn: conn, buf: header}, nil
 }
 
 // DetectUDPProtocol inspects the first bytes of a UDP datagram and returns

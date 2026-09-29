@@ -35,18 +35,18 @@ func (s *Server) startDOHServer(port string) error {
 		}
 
 		rawListener := &debugListener{Listener: &zdnsutil.TCPKeepAliveListener{Listener: listener, KeepAlivePeriod: config.DefaultTCPKeepAlivePeriod}, name: "DoH"}
-		// http.Server spawns its own per-connection goroutines (not through
-		// serverGroup) — cap concurrent connections at the listener instead.
-		// The cap wraps the RAW listener: the ktls eTLS layer must sit on top
-		// of it, since http.Server reads the TLS state off the accepted conn —
-		// any wrapper above the eTLS listener would hide ConnectionState.
-		limited := zdnsutil.NewLimitListener(rawListener, config.DefaultServerGoroutineLimit)
 
 		tlsConfig := s.tlsConfig.Clone()
 		tlsConfig.NextProtos = config.NextProtoDOH
 		tlsConfig.GetConfigForClient = s.getConfigForClient(config.NextProtoDOH)
 
-		httpsListener := ktls.NewListener(limited, tlsConfig)
+		// http.Server spawns its own per-connection goroutines (not through
+		// serverGroup) — cap concurrent connections at the listener instead.
+		// The cap sits ABOVE the eTLS layer (ktls.NewLimitListener): eTLS
+		// installs kernel TLS only when it sits directly on the raw
+		// *net.TCPConn, and the limit conn forwards ConnectionState /
+		// HandshakeContext so http.Server still drives the handshake itself.
+		httpsListener := ktls.NewLimitListener(ktls.NewListener(rawListener, tlsConfig), config.DefaultServerGoroutineLimit)
 		s.listenerMu.Lock()
 		s.httpsListeners = append(s.httpsListeners, httpsListener)
 		s.listenerMu.Unlock()

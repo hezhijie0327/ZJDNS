@@ -54,7 +54,7 @@ func (m *Mux) startTCPGroup(g *TCPGroup) error {
 	}
 	if g.ServeDNSCryptTCP != nil {
 		routes[demux.ProtoDNSCrypt] = func(c net.Conn) net.Conn {
-			return c // bufferedConn replays 5 demux bytes
+			return c // sniffed bytes stay queued (peek) or replay by wrapper — DNSCrypt reads from byte 0
 		}
 	}
 
@@ -79,19 +79,23 @@ func (m *Mux) startTCPGroup(g *TCPGroup) error {
 		m.tcpRuntimes = append(m.tcpRuntimes, rt)
 		m.mu.Unlock()
 
-		// TLS side: eTLS.NewListener → handler.
+		// TLS side: eTLS.NewListener → handler.  The demux sniffs
+		// non-destructively on Linux/FreeBSD, so eTLS sits directly on the
+		// raw *net.TCPConn and kernel TLS offload works.
 		tlsListener := d.Listener(demux.ProtoTLS)
 		if tlsListener != nil {
-			limited := zdnsutil.NewLimitListener(tlsListener, config.DefaultServerGoroutineLimit)
-
 			tlsConfig := g.TLSCfg.Clone()
 			tlsConfig.NextProtos = g.NextProtos
 			tlsConfig.GetConfigForClient = sharedTLSConfigForClient(g.TLSCfg, g.NextProtos)
 
 			if g.DOHHandler != nil {
-				// HTTP-level: ktls listener (eTLS + stdlib-compatible conns) →
-				// net/http Server; ALPN h2 is dispatched by the std server.
-				httpsListener := ktls.NewListener(limited, tlsConfig)
+				// HTTP-level: eTLS directly on the demux conn; the admission
+				// cap sits ABOVE the TLS layer — a wrapping cap below eTLS
+				// would break the *net.TCPConn requirement and silently
+				// disable KTLS, and a cap above without interface forwarding
+				// would serve TLS bytes as plain HTTP (ktls.NewLimitListener
+				// forwards ConnectionState/HandshakeContext to net/http).
+				httpsListener := ktls.NewLimitListener(ktls.NewListener(tlsListener, tlsConfig), config.DefaultServerGoroutineLimit)
 
 				dohSrv := &http.Server{
 					Handler:           g.DOHHandler,
@@ -114,8 +118,12 @@ func (m *Mux) startTCPGroup(g *TCPGroup) error {
 					return nil
 				})
 			} else if g.DOTHandler != nil {
-				// Raw listener: eTLS.Listener → DOTHandler.
-				dotListener := eTLS.NewListener(limited, tlsConfig)
+				// Raw listener: eTLS directly on the demux conn.  No
+				// conn-wrapping admission cap here — the DoT accept loop's
+				// errgroup already bounds concurrent handlers (same as the
+				// dedicated DoT listener), and a wrapper under eTLS would
+				// silently disable KTLS.
+				dotListener := eTLS.NewListener(tlsListener, tlsConfig)
 
 				capturedLn := dotListener
 				capturedHandler := g.DOTHandler

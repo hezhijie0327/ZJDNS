@@ -980,6 +980,34 @@ sleep 3 && dig @127.0.0.1 -p 11553 www.baidu.com A +short && pkill -f alidns-tls
 > the DNSpod TLCP test). Cross-library interop (Tongsuo/GmSSL clients) is not
 > covered locally; eTLS is the SM reference peer.
 
+## KTLS (kernel TLS offload) Verification
+
+`features.ktls.kernel_tx` / `kernel_rx` require the eTLS layer to sit directly
+on a raw `*net.TCPConn` — any wrapper conn beneath eTLS silently disables the
+offload (v4.8.19 fixed this: the TCP demux sniffs via `MSG_PEEK` instead of
+consuming + replaying, and connection caps sit above the eTLS layer).
+
+```bash
+# 1. Global counters (same netns as zjdns!). Cumulative since boot —
+#    all-zero after real traffic means offload never engaged.
+cat /proc/net/tls_stat          # TlsTxSw / TlsRxSw > 0 after queries
+
+# 2. Per-connection confirmation (kernel ≥5.4):
+ss --tls-info state established '( sport = :853 or sport = :443 )'
+
+# 3. App-side ground truth (did zjdns even try? did the kernel accept?):
+#    SOL_TCP=6, TLS_TX=38, TLS_RX=39 — look for setsockopt(6, 38/39, ...)
+strace -f -e trace=setsockopt -p <zjdns_pid> 2>&1 | grep -E 'setsockopt\([0-9]+, 6, (38|39)'
+```
+
+> [!WARNING]
+> `/proc/net/tls_stat` is **per network namespace**. In a container deployment
+> read it inside the zjdns netns (`nsenter -n -t <pid> cat /proc/net/tls_stat`)
+> — the host view stays zero even when offload works.
+>
+> KTLS needs a kernel ≥4.13 (1.2) / ≥5.1 (1.3 + AES-256-GCM); cipher support
+> gates per kernel version (eTLS downgrades silently to software crypto).
+
 ## AdGuard DNS Proxy DoH3 Test
 
 Test ZJDNS DoH3 interoperability with [AdGuard DNS Proxy](https://github.com/AdguardTeam/dnsproxy):
