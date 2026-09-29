@@ -36,3 +36,5 @@ require (
 	go.uber.org/mock v0.6.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 )
+
+replace gitlab.com/go-extension/tls => ./.etls-patched

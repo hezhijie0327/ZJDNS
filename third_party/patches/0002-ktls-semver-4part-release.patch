@@ -1,0 +1,25 @@
+diff --git a/kernel_linux.go b/kernel_linux.go
+index 35e6a8b..5009fbd 100644
+--- a/kernel_linux.go
++++ b/kernel_linux.go
+@@ -100,7 +100,19 @@ func init() {
+ 
+ 	kernelVersion, err := semver.Parse(strings.Trim(string(uname.Release[:]), "\x00"))
+ 	if err != nil {
+-		return
++		// LOCAL-PATCH-2: tolerate 4-part vendor kernel releases (e.g. WSL
++		// "6.18.33.2-microsoft-standard-WSL2"): strict semver only accepts
++		// MAJOR.MINOR.PATCH, so these failed the parse and disabled KTLS
++		// outright. Coerce to the first three segments — every capability
++		// threshold below is a minor-version boundary, and the dropped
++		// suffix (.33.2) can never cross one.
++		base := strings.SplitN(strings.Trim(string(uname.Release[:]), "\x00"), "-", 2)[0]
++		if segs := strings.Split(base, "."); len(segs) >= 4 {
++			kernelVersion, err = semver.Parse(segs[0] + "." + segs[1] + "." + segs[2])
++		}
++		if err != nil {
++			return
++		}
+ 	}
+ 	kernelVersion.Pre = nil
+ 	kernelVersion.Build = nil

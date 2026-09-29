@@ -52,7 +52,7 @@ go build ./... && go test ./... -short && golangci-lint run
 | codeberg.org/miekg/dns | codeberg.org/miekg/dns | DNS 消息/类型/解析(fork) |
 | github.com/quic-go/quic-go | github.com/quic-go/quic-go | QUIC/DoQ/DoH3 |
 | github.com/pion/dtls/v3 | github.com/pion/dtls | DTLS 1.2+ 客户端/服务端 |
-| gitlab.com/go-extension/tls | gitlab.com/go-extension/tls | eTLS(crypto/tls fork + KTLS) |
+| gitlab.com/go-extension/tls | **构建时 patch**：`scripts/prepare-etls.sh` → `.etls-patched`（go.mod replace；补丁在 `third_party/patches/`，见其 README.md） | eTLS(crypto/tls fork + KTLS) |
 | gitlab.com/go-extension/http | gitlab.com/go-extension/http | eHTTP(net/http + 原生 eTLS) |
 | github.com/cloudflare/circl | github.com/cloudflare/circl | X-Wing PQ/T KEM(DNSCrypt) |
 | github.com/emmansun/gmsm | github.com/emmansun/gmsm | SM2/SM3/SM4/XTS(TLCP 侧 + DNSSEC SM3 DS) |

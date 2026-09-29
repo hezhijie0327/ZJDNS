@@ -1,0 +1,16 @@
+diff --git a/kernel_linux.go b/kernel_linux.go
+index 8ad24f9..35e6a8b 100644
+--- a/kernel_linux.go
++++ b/kernel_linux.go
+@@ -108,6 +108,11 @@ func init() {
+ 	switch {
+ 	case kernelVersion.GTE(semver.Version{Major: 6, Minor: 19}):
+ 		kernel.TLS_TX_MAX_PAYLOAD = true
++		// LOCAL-PATCH-1: missing upstream `fallthrough` — without it a
++		// >=6.19 kernel matches this first case and the switch exits with
++		// only TLS_TX_MAX_PAYLOAD set: kernel.TLS stays false and KTLS is
++		// silently disabled process-wide (observed on 7.2.8-xanmod).
++		fallthrough
+ 	case kernelVersion.GTE(semver.Version{Major: 6, Minor: 14}):
+ 		kernel.TLS_Version13_KeyUpdate = true
+ 		fallthrough

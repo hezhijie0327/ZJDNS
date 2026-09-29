@@ -48,8 +48,6 @@ gitlab.com/go-extension/hash v0.0.0-20250912170447-263d1d8375e4 h1:SMsGMMkGS9WBY
 gitlab.com/go-extension/hash v0.0.0-20250912170447-263d1d8375e4/go.mod h1:fgbJOB/r2jzfdhIdj6N0Hz6hahFqzSdU5TH1Hpoqq7c=
 gitlab.com/go-extension/rand v0.0.0-20240303103951-707937a049b5 h1:xQA0rfVPqW3G6dnb4qtgBdxr9XLu9vzDfdqKfLqGFXA=
 gitlab.com/go-extension/rand v0.0.0-20240303103951-707937a049b5/go.mod h1:nRmjyZOSF6N/6yuRl7ui9wKb1DjMX9ELGzOwELwWVSU=
-gitlab.com/go-extension/tls v0.0.0-20260927170419-27e30fa54986 h1:W/L5NN64Gx17ARNamReSubYS/M9HabriIdVSljL+YeM=
-gitlab.com/go-extension/tls v0.0.0-20260927170419-27e30fa54986/go.mod h1:DfZvnzYm5sheiAhqP+jDhbBf6864X8dxSGV+85XBBjE=
 gitlab.com/go-extension/utils v0.0.0-20251006173700-b62b19cda891 h1:b45Hl2gyHbV6GANcg/7BSZ0A0JUjq/gBEq+OeJlAuM0=
 gitlab.com/go-extension/utils v0.0.0-20251006173700-b62b19cda891/go.mod h1:Ywd71Frp71RHLytGD2PgcTyxX/nEpGcYh85CPFTz3Mg=
 go.uber.org/mock v0.6.0 h1:hyF9dfmbgIX5EfOdasqLsWD6xqpNZlXblLB/Dbnwv3Y=

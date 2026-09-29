@@ -105,6 +105,11 @@ git reset --soft HEAD~2 && git commit  # or git commit --amend for single commit
 ## Build, Test & Lint
 
 ```bash
+# One-time per clone (and after every eTLS version bump): materialise the
+# patched eTLS replacement dir — go commands fail with
+# "replacement directory ./.etls-patched does not exist" until this has run.
+sh scripts/prepare-etls.sh            # see third_party/patches/README.md
+
 # Build
 go build -o zjdns ./cmd/zjdns
 

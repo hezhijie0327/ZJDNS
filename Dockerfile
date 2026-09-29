@@ -11,14 +11,17 @@ ENV \
 
 RUN \
     wget "https://curl.se/ca/cacert.pem" \
+    && sh scripts/prepare-etls.sh \
     && go get -u codeberg.org/miekg/dns@main \
     && go get -u gitee.com/Trisia/gotlcp@main \
     && go get -u github.com/cloudflare/circl@main \
     && go get -u github.com/klauspost/compress@master \
     && go get -u github.com/pion/dtls/v3@main \
     && go get -u github.com/quic-go/quic-go@master \
-    && go get -u gitlab.com/go-extension/http@master \
+    && go mod edit -dropreplace=gitlab.com/go-extension/tls \
     && go get -u gitlab.com/go-extension/tls@master \
+    && go mod edit -replace=gitlab.com/go-extension/tls=./.etls-patched \
+    && sh scripts/prepare-etls.sh \
     && go mod tidy \
     && BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S_UTC') \
     && COMMIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") \
