@@ -99,7 +99,7 @@ func TestUpstreamClientOffersCertCompression(t *testing.T) {
 	}
 	hello := readClientHello(t, srv)
 	_ = srv.Close()
-	<-handshakeErr
+	<-handshakeErr //nolint:errcheck // drain the buffered result — the handshake is expected to fail (raw listener never answers)
 
 	algs := clientHelloCompressionAlgorithms(hello)
 	want := []uint16{uint16(eTLS.Zlib), uint16(eTLS.Brotli), uint16(eTLS.Zstd)}
