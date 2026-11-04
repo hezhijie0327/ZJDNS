@@ -426,8 +426,20 @@ waitLoop:
 			if config.DefaultNXDOMAINDeferralWindow <= 0 {
 				// Zero window: serve the collected NXDOMAIN immediately —
 				// no per-level timer churn (the channel only fires after a
-				// successful NXDOMAIN store).
+				// successful NXDOMAIN store).  Same drain as the deferred
+				// path below: a NOERROR winner can enter the buffered
+				// channel concurrently with this arm, and the successful
+				// answer outranks the NXDOMAIN.
 				nx := nxdomainMsg.Load()
+				select {
+				case won := <-resultChan:
+					pool.DefaultMessage.Put(nx.msg)
+					if poisonRejected.Load() {
+						verdict = defense.VerdictPoisoned
+					}
+					return won.msg, verdict, won.uncertain, nil
+				default:
+				}
 				if poisonRejected.Load() {
 					verdict = defense.VerdictPoisoned
 				}

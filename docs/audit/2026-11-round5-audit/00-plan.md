@@ -80,3 +80,45 @@ PI8(DoQ credit 顺序)由 protocol agent 与亲审双重对照 quic-go v0.65 源
 6. L/P 批量 → lint + bench
 
 每批:`go fix ./... && golangci-lint run && golangci-lint fmt && go test -short ./...`(零警告、全绿);全部完成后 benchmark 对比 + 全协议 E2E + Round C 修复面复查。
+
+---
+
+## 修复执行记录(2026-11-05)
+
+| 批次 | Commit | 内容 |
+|------|--------|------|
+| A | b50927b5 | C1+M3+M4+M5:65281 递归传播(cname 聚合/AND 覆盖/lame 终端/NXDOMAIN/warm 门)+ 全链路测试 |
+| B | e1207ac1 | H1:sniff_peek 零进展退避 + POLLRDHUP + POLLERR/POLLNVAL(Linux 容器实测 CPU 断言) |
+| C | 2f5ec4be | H2/H3/M8:ExecuteUDP verified 三值 + Result.Verified + per-query 清标矩阵测试 |
+| D | ae506dad | H4:nonEDNSSafe Feed corroborated 门 |
+| E | a9a2ed6e | M1/M2:QTx defer 发送 + merge no-cache 门 |
+| F | f6e4c2c5 | M6/M7/M9:QUIC/HTTP3 端口拒绝 + NSEC covering 存活门 + DoH https URL 强制(SplitHostPort 死代码分支修复) |
+| G | a1223255 | L1-L9/L15/L16/P1/P2/P3 + 审计报告归档 |
+| RC | 945b712f | Round C:mergeRRs dstKeys lockstep 修复(E2E 抓获 P2 引入的越界 panic) |
+
+**未修(记录理由)**:
+- L8(U-5 DoT ALPN 校验):TLCP 路径的 "dot" ALPN 强制是共享端口 demux 需要(TLCP vs HTTPTLCP 同套接字),独立端口 DoT 服务器忽略 ALPN 是合法常态,强制校验会拒绝大量合法上游。
+- F4/RF4(委派缓存 uncertain 门控):设计权衡 — 委派缓存有 DNSSEC 验证 + lame 检测 + poisonguard 交叉验证兜底;硬门控会让学习期委派缓存永不预热。已确认现状为接受的权衡。
+- R5-07(wire 别名不变量):pool.Put 的捕获切片契约已有明确注释,补互指注释属可选加固。
+- L17/L18/L20(PL4/PL5/PL7):pre-existing 低危,记录在案。
+
+## 验证门禁(全部通过)
+
+| 门禁 | 结果 |
+|------|------|
+| go build ./... | ✓ |
+| go test ./... -short(43 包) | ✓ EXIT=0 |
+| go test -race(server+cache) | ✓ |
+| golangci-lint | 0 issues |
+| benchmark vs 基线(-benchmem) | 0 回归(allocs 契约保持) |
+| Linux 容器 demux peek 测试 | 5/5(含停滞 CPU<50ms/400ms 断言、partial+close 快速 EOF) |
+| E2E 14 协议冒烟 | 14/14 |
+| E2E 共享端口 7 组 | 7/7 |
+| MQTYPE 语义 | A 可见/AAAA 剥离/warm 命中 ✓ |
+| 递归独立实例 | cloudflare(DNSSEC)+ baidu(CNAME 链)真网解析 ✓ |
+| PM1 迁移 E2E | DoH 专用口 h2 + http/1.1 + TLS1.2 完整响应 ✓ |
+| 压测 12 协议 | 全部 fail=0(udp 45.3k / tcp 42.9k / DoT 41.9k / DoQ 34.6k / DTLS 39.9k / DoH 37.5k / DoH3 32.2k / TLCP 43.6k / DTLCP 35.2k / DNSCrypt 24.3k qps) |
+| 无 EDNS TCP 缓存命中(预打包直发) | ✓ |
+| 内存收敛(同进程双轮压测) | 77520kB == 77520kB 精确一致 |
+| PANIC | 0(双端) |
+| 65281 递归链路真网验证 | hopguard 学习期 9 次标记、重复查询全 miss(未缓存)✓ |

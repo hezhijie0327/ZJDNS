@@ -14,6 +14,7 @@
 | 2 | 2026-09 | 全项目审计（Phase 1 七包级 + Phase 2 四交叉组,约 150 项独立发现）,重点:9/1-9/2 性能轮次后的防御面/池计数/锁内 IO;发现即修复全部 Sprint 1-3 + E2E 全协议验证 + 基线刷新 | `docs/audit/2026-09-full-audit/` | ✅ 全部修复(含 1 项 CRITICAL 防御绕过、11 项 HIGH)+ 14 协议 E2E + pprof 零泄漏 |
 | 3 | 2026-09 | Round 3:上轮后 95 个 perf 提交(2.7 万行)为重点面 + 注释风格专项维度;Phase 1 → Sprint 1-3 发现即修复 → Round B 修复复查+交叉扫描;1 CRITICAL + 8 HIGH + ~28 MEDIUM + ~170 注释噪音清除;E2E 21 场景全过(含无 EDNS TCP 缓存命中——上轮遗留盲区) | `docs/audit/2026-09-round3-audit/` | ✅ 全部修复 + Round B 自查回归 2 项(含测试捕获的 DNSCrypt Start 标志丢失)+ 基线无回归 |
 | 4 | 2026-09 | Round 4:手搓 Plain UDP/TCP + Guard 拦截率专项 + 全项目 20 维度;7 并行包级审计(4 HIGH + 14 MEDIUM + ~30 LOW)→ 分 Sprint 修复(22 commits)→ Round C/D 两轮修复面复查(抓获 3 个修复自身引入的回归,含 2 HIGH)→ 确定性注入测试台实测 Guard 矩阵(修复 capsguard 0x20 重试竞态 + 发散 EDNS 随机决胜两个单开缺口,最终单开×组合×三威胁模型全 0 泄漏)→ 14 协议 E2E + 同进程内存收敛精确一致 | `docs/audit/2026-09-round4-audit/` | ✅ 全部修复 + lrumap/spillfile 竞态修复带可复现验证 + 基线仅 2 项已论证的正确性代价 |
+| 5 | 2026-11 | Round 5:上轮后 41 提交(demux MSG_PEEK、internal/ktls、eHTTP→net/http 原生迁移、双栈 TLS/DTLS、pion/dtls v4、DoQ stream-credit、EDE 65281)为重点面 + 亲审全部迁移 commit;7 并行包级审计(1 CRITICAL + 4 HIGH + 9 MEDIUM + ~20 LOW + 4 性能)→ 8 commits 修复 → E2E 循环冒烟抓获 mergeRRs dstKeys 越界 panic(修复自身回归,Round C 复核)→ 14 协议 + 共享端口 7 组 + MQTYPE + 递归 + PM1 迁移(h2/http1.1/TLS1.2)全过,12 协议压测 fail=0,内存收敛精确一致,基线 0 回归,65281 递归链路真网验证(学习期 miss 不缓存) | `docs/audit/2026-11-round5-audit/` | ✅ 全部修复(含 3 个防御标记链缺口、demux 嗅探自旋 DoS)+ race 全绿 |
 
 ---
 
@@ -310,6 +311,11 @@ git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
 | **注入测试台保真度** | 防御测试台的伪造包不经意携带真实流量特征,测错威胁模型——`SetReply` 复制查询的 DO 位,fork 的 `Pack` 自动物化 OPT,伪造包变成"EDNS 响应" | 裸 GFW 模型的伪造包必须显式 `Security=false`;测试台应支持多威胁模型开关(bare/case-blind/EDNS-forger)并逐一标注 |
 | **测试台状态泄漏** | 注入台的预热(arm)计数器是全局序号,多场景共用 rig 时预热相位跨场景泄漏;残留的旧实例占端口让新查询打到旧二进制 | 每个测试场景重启 rig 与被测实例;跑前 `pgrep` 清场;对"全拦截"结果抽查日志确认防御路径真实执行过 |
 | **单开 Guard 缺口** | Guard 组合测试全绿掩盖单开缺口——capsguard 0x20 未随机化重试在单读路径接受首包;发散等丰富度 EDNS 候选使 pickBest 成随机决胜 | 矩阵必须含"每个 guard 单开 × 每个威胁模型";失败路径降级(重试/回退)本身是攻击面:降级后的第一包接受逻辑要重新审查 |
+| **水平触发轮询自旋** | poll(2) 是水平触发,与"不消费"的读法(MSG_PEEK)组合后,已排队字节让 POLLIN 恒 ready——部分数据 + 停发的对端把嗅探/等待循环烧满一个核直到超时预算耗尽 | peek 类循环必须做零进展退避(无新字节 → 指数退避 sleep),poll 集订阅 POLLRDHUP/POLLHUP 让半关闭快速终结,并处理 POLLERR/POLLNVAL;测试要断言 CPU(getrusage 差分)而非只断言正确性——正确性测试自己就在自旋中通过 |
+| **聚合点丢标记** | per-hop 安全标记(EDE 65280/65281)在聚合层被丢弃——CNAME 链合并逐字段复制 11 个字段唯独丢 UpstreamEDE/Cacheable,随后外层又无条件覆盖 Cacheable,安全特性在聚合路径整体失效 | 聚合函数要显式传播安全相关字段并 AND 语义(任一 hop 不可缓存 → 聚合不可缓存);E2E 验证必须覆盖**每条特性声称的路径**(65281 首次只在转发路径验证,递归路径靠单测孤立函数全绿而漏网) |
+| **预计算 keys 与增长的容器失步** | 性能优化把循环内的重复计算(如 rr.String)提升为入口预计算 keys 切片,但容器(dst)在循环内 append 增长——内层 range 走到了 keys 长度之外 → 越界 panic | 预计算 keys 与其源容器必须 lockstep 增长(append 时同步 append);单测要覆盖"src 追加后再去重"的场景(dst 不增长的测试全部漏检——Round 5 E2E 实例) |
+| **地址级状态冒充 per-query 验证** | "基线已武装"(地址级 Confident)被当作"本包已验证"——单读降级路径(collect 失败落入)的响应无任何 per-query 验证却被清标进缓存 | 验证标记必须 per-query 传播(返回值/Result 字段),地址级状态只能作为 per-query 验证的输入之一;每列出降级路径,逐条问"降级后的响应凭什么清标" |
+| **校验依赖死代码分支** | `net.SplitHostPort("http://host/path")` 不报错(把 "http" 当 host)——嵌在 `if err != nil` 里的 URL 校验对 scheme 形态地址从不执行,http:// DoH 上游静默明文发出 | URL 族地址校验必须直接 url.Parse 并检查 scheme/host,勿以 SplitHostPort 的失败作为进入 URL 校验的前提;测试用例要含 http:// 形态(死代码分支没有测试就永远不知道自己是死的) |
 
 ## 五、审计与修复工具
 

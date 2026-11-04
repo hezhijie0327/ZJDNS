@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 	"zjdns/config"
+
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // TestHopGuardConfidentDrivesUncertaintyMark verifies the guard-state
@@ -129,5 +132,42 @@ func TestExecuteUDP_SingleReadNotVerified(t *testing.T) {
 	}
 	if !verified2 {
 		t.Fatal("collect-disciplined response must report verified=true")
+	}
+}
+
+// TestExecuteQuery_NonAQtypeArmedCaches pins the qtype scoping of the
+// per-datagram verification requirement: the collect discipline only runs
+// for A/AAAA (the injection targets), so a TXT query against an armed
+// baseline stays cacheable — requiring per-query verification for qtypes
+// that can never run it would mark every non-A response no-cache forever.
+func TestExecuteQuery_NonAQtypeArmedCaches(t *testing.T) {
+	addr, _, shutdown := startFakeEchoUDPServer(t, false)
+	defer shutdown()
+
+	client := New()
+	defer client.Close()
+	server := &config.UpstreamServer{Address: addr, Protocol: config.ProtoUDP, HopGuard: true}
+
+	// Arm the baseline from live A-query traffic.
+	hg := client.plainClient.HopGuard()
+	for range 64 {
+		res := client.ExecuteQuery(context.Background(), queryA("arm.example.com."), server)
+		if res.Error != nil {
+			t.Fatalf("arming query failed: %v", res.Error)
+		}
+	}
+	if !hg.Confident(addr) {
+		t.Fatal("pre-flight: baseline did not arm")
+	}
+
+	txt := new(dns.Msg)
+	txt.ID = 0x1234
+	dnsutil.SetQuestion(txt, "txt.example.com.", dns.TypeTXT, dns.ClassINET)
+	res := client.ExecuteQuery(context.Background(), txt, server)
+	if res.Error != nil {
+		t.Fatalf("ExecuteQuery: %v", res.Error)
+	}
+	if res.Uncertain {
+		t.Fatal("non-A query against an armed baseline must stay cacheable (no collect discipline exists for it)")
 	}
 }

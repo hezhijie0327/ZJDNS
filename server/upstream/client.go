@@ -275,10 +275,16 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	// fingerprint on a collect-disciplined query (a single-read datagram
 	// never captured its TTL — an armed baseline proves the address, not
 	// this datagram's path), or a successful 0x20 echo on this query.
+	// The collect discipline (and thus the per-datagram requirement) only
+	// exists for A/AAAA — the qtypes injection targets; for other qtypes
+	// there is no per-query verification possible and an armed baseline is
+	// the best available signal.
 	hopArmed := server.HopGuard && c.plainClient.HopGuard().Confident(server.Address)
+	collectEligible := len(msg.Question) > 0 &&
+		(dns.RRToType(msg.Question[0]) == dns.TypeA || dns.RRToType(msg.Question[0]) == dns.TypeAAAA)
 	capsEchoVerified := server.CapsGuard && !caseUnverified
 	if result.Error == nil && result.Response != nil && result.Protocol == config.ProtoUDP {
-		if !capsEchoVerified && (!hopArmed || !result.Verified) && (server.CapsGuard || server.HopGuard) {
+		if !capsEchoVerified && (!hopArmed || (collectEligible && !result.Verified)) && (server.CapsGuard || server.HopGuard) {
 			result.Uncertain = true
 			log.Debugf("UPSTREAM: defense-uncertain response for %s via %s (caps-unverified=%v collect-verified=%v) — marked no-cache",
 				original, server.Address, caseUnverified, result.Verified)

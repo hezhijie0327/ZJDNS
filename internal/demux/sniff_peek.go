@@ -99,8 +99,17 @@ func peekHeader(fd int, buf []byte) error {
 			return err
 		}
 		if hup {
-			if n > 0 {
-				return io.ErrUnexpectedEOF
+			// POLLIN and POLLRDHUP arm together when the FIN trails data:
+			// re-peek once before declaring the header incomplete — the
+			// remaining bytes may already sit in the queue.
+			n, _, err = unix.Recvfrom(fd, buf, unix.MSG_PEEK|unix.MSG_DONTWAIT)
+			if err == nil {
+				switch {
+				case n >= len(buf):
+					return nil
+				case n > 0:
+					return io.ErrUnexpectedEOF
+				}
 			}
 			return io.EOF
 		}

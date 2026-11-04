@@ -40,9 +40,10 @@ func (c *Client) dohEndpointFor(server *config.UpstreamServer) (*dohEndpoint, er
 		return nil, err
 	}
 	// net/http only routes scheme "https" through the custom DialTLSContext —
-	// any other scheme would silently dial plaintext.
-	if parsedURL.Scheme != "https" {
-		return nil, fmt.Errorf("doh: upstream %q must use the https scheme (got %q)", server.Address, parsedURL.Scheme)
+	// any other scheme would silently dial plaintext; a scheme-only URL
+	// (no host) would normalize to dialing ':443'.
+	if parsedURL.Scheme != "https" || parsedURL.Hostname() == "" {
+		return nil, fmt.Errorf("doh: upstream %q must be an https URL with a host (got scheme %q)", server.Address, parsedURL.Scheme)
 	}
 	if parsedURL.Port() == "" {
 		// Hostname() strips IPv6 brackets — JoinHostPort on the raw Host
