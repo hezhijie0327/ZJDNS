@@ -255,7 +255,7 @@ func (r *Resolver) processUpstreamResponse(queryResult *upstream.Result, server 
 			Rcode:         dns.RcodeNameError,
 			ECS:           r.edns.ParseFromDNS(queryResult.Response),
 			Server:        server.Address,
-			UpstreamEDE:   upstreamEDE,
+			UpstreamEDE:   noCacheEDE,
 		}
 		if nxdomainResult.CompareAndSwap(nil, &nxRes) {
 			// First NXDOMAIN collected — arm the deferral window in the
@@ -282,7 +282,9 @@ func (r *Resolver) handleRecursiveQuery(recursiveParentCtx context.Context, serv
 	defer recursiveCancel()
 
 	qr := r.cname.resolve(recursiveCtx, question, ecs)
-	qr.Cacheable = !server.SkipCache
+	// The walk already cleared Cacheable for defense-uncertain hops (EDE
+	// 65281) — only AND the user's skip-cache preference in, never reset it.
+	qr.Cacheable = qr.Cacheable && !server.SkipCache
 	if qr.Err != nil {
 		return false
 	}

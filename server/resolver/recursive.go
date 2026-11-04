@@ -356,8 +356,11 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 
 		// RFC 10029: warm the merged types and strip them from the
 		// client-facing answer — the strip uses the completed list, never
-		// r.mqtype, which would remove the primary records.
-		if len(r.mqtype) > 0 {
+		// r.mqtype, which would remove the primary records.  A
+		// defense-uncertain level (hopguard learning / capsguard
+		// unverified) must not warm the cache — the forwarding path applies
+		// the same gate to its MQ warm.
+		if len(r.mqtype) > 0 && !hopUncertain {
 			if mqr, invalid := parseMQResponse(response); mqr != nil && !invalid {
 				r.resolver.warmFromMQResponse(response, queryQuestion.Name, queryQuestion.Qclass, mqr, ecsResponse, cryptoValidated)
 				response.Answer = stripMQBundled(response.Answer, mqr.Types)
@@ -441,6 +444,7 @@ func (r *Recursive) resolve(ctx context.Context, question Question, ecs *edns.EC
 			continue
 		}
 		if termRes := r.checkLameDelegation(response, currentDomain, bestMatch, validated, ecsResponse); termRes != nil {
+			applyDefenseUncertainty(termRes, hopUncertain)
 			return *termRes
 		}
 

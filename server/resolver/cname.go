@@ -195,6 +195,11 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 	var allDNSSECEDE uint16
 	truncated := false
 	var finalDenialProof []dns.RR
+	// A single defense-uncertain hop poisons the whole chain: propagate the
+	// first no-cache EDE and drop aggregate cacheability so the merged
+	// answer keeps the one-query blast radius of its least-verified hop.
+	var noCacheEDE *dns.EDE
+	allCacheable := true
 
 	currentQuestion := question
 	var visitedCNAMEs [config.DefaultMaxCNAMEChain]string
@@ -254,6 +259,12 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 		}
 		if qr.DNSSECEDE != 0 {
 			allDNSSECEDE = qr.DNSSECEDE
+		}
+		if qr.UpstreamEDE != nil && noCacheEDE == nil && edns.IsZJDNSNoCacheEDE(qr.UpstreamEDE) {
+			noCacheEDE = qr.UpstreamEDE
+		}
+		if !qr.Cacheable {
+			allCacheable = false
 		}
 		if qr.Poisoned {
 			poisonOccurred = true
@@ -323,5 +334,5 @@ func (c *CNAME) resolveInner(ctx context.Context, question Question, ecs *edns.E
 	if chainExhausted {
 		log.Debugf("RECURSION: CNAME chain exhausted (max=%d) for %s", config.DefaultMaxCNAMEChain, zdnsutil.Canonical(question.Name))
 	}
-	return QueryResult{Cacheable: true, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Rcode: finalRcode, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Poisoned: poisonOccurred, DNSSECEDE: allDNSSECEDE, Truncated: truncated, DenialProof: finalDenialProof}
+	return QueryResult{Cacheable: allCacheable, Answer: allAnswers, Authority: finalAuthority, Additional: finalAdditional, Rcode: finalRcode, Validated: allValidated, ECS: finalECSResponse, Server: usedServer, Poisoned: poisonOccurred, UpstreamEDE: noCacheEDE, DNSSECEDE: allDNSSECEDE, Truncated: truncated, DenialProof: finalDenialProof}
 }
