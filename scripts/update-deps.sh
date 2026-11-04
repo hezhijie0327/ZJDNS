@@ -29,7 +29,7 @@ run go get -u codeberg.org/miekg/dns@main
 run go get -u gitee.com/Trisia/gotlcp@main
 run go get -u github.com/cloudflare/circl@main
 run go get -u github.com/klauspost/compress@master
-run go get -u github.com/pion/dtls/v3@main
+run go get -u github.com/pion/dtls/v4@main
 run go get -u github.com/quic-go/quic-go@master
 
 # eTLS master dance.

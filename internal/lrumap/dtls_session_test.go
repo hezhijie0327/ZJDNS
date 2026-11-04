@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/pion/dtls/v3"
+	"github.com/pion/dtls/v4"
 )
 
 func TestDTLSSessionStore_SetGet(t *testing.T) {

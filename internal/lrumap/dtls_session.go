@@ -3,7 +3,7 @@ package lrumap
 import (
 	"zjdns/internal/log"
 
-	"github.com/pion/dtls/v3"
+	"github.com/pion/dtls/v4"
 )
 
 // DTLSSessionStore implements dtls.SessionStore using an LRU-map backend.
@@ -19,7 +19,7 @@ func NewDTLSSessionStore(capacity int) *DTLSSessionStore {
 
 // Set saves a DTLS session. For clients, key is the server name; for servers,
 // key is the session ID.
-func (s *DTLSSessionStore) Set(key []byte, sess dtls.Session) error {
+func (s *DTLSSessionStore) Set(key []byte, sess dtls.Session) error { //nolint:gocritic // hugeParam: value param is mandated by pion's SessionStore interface; the v4 Session iface grew past the threshold
 	log.Debugf("UPSTREAM: DTLS session stored (id=%x)", sess.ID)
 	s.cache.Set(string(key), sess)
 	return nil

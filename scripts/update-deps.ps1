@@ -34,7 +34,7 @@ Invoke-Step go get -u codeberg.org/miekg/dns@main
 Invoke-Step go get -u gitee.com/Trisia/gotlcp@main
 Invoke-Step go get -u github.com/cloudflare/circl@main
 Invoke-Step go get -u github.com/klauspost/compress@master
-Invoke-Step go get -u github.com/pion/dtls/v3@main
+Invoke-Step go get -u github.com/pion/dtls/v4@main
 Invoke-Step go get -u github.com/quic-go/quic-go@master
 
 # eTLS master dance; on failure re-add the replace so go.mod stays buildable

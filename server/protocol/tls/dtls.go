@@ -15,8 +15,8 @@ import (
 	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
-	"github.com/pion/dtls/v3"
-	"github.com/pion/dtls/v3/pkg/protocol"
+	"github.com/pion/dtls/v4"
+	"github.com/pion/dtls/v4/pkg/protocol"
 )
 
 // startDTLSServer binds UDP sockets and starts DTLS listeners for DNS-over-DTLS.

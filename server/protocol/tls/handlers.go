@@ -14,9 +14,9 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
 
-	"github.com/pion/dtls/v3"
-	dtlsnet "github.com/pion/dtls/v3/pkg/net"
-	"github.com/pion/dtls/v3/pkg/protocol"
+	"github.com/pion/dtls/v4"
+	dtlsnet "github.com/pion/dtls/v4/pkg/net"
+	"github.com/pion/dtls/v4/pkg/protocol"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	eTLS "gitlab.com/go-extension/tls"

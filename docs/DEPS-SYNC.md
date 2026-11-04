@@ -16,7 +16,7 @@ go list -m -u codeberg.org/miekg/dns github.com/quic-go/quic-go ...  # 全部直
 mkdir -p /tmp/dep-review && cd /tmp/dep-review
 (git clone https://codeberg.org/miekg/dns dns &)           # 或 git fetch 已有克隆
 (git clone https://github.com/quic-go/quic-go &)
-(git clone https://github.com/pion/dtls dtls &)            # master 即 v3
+(git clone https://github.com/pion/dtls dtls &)            # master 即 v4
 (git clone https://gitlab.com/go-extension/tls etls &)
 (git clone https://gitlab.com/go-extension/http ehttp &)
 (git clone https://github.com/cloudflare/circl &)
@@ -51,7 +51,7 @@ go build ./... && go test ./... -short && golangci-lint run
 |------|------|------|
 | codeberg.org/miekg/dns | codeberg.org/miekg/dns | DNS 消息/类型/解析(fork) |
 | github.com/quic-go/quic-go | github.com/quic-go/quic-go | QUIC/DoQ/DoH3 |
-| github.com/pion/dtls/v3 | github.com/pion/dtls | DTLS 1.2+ 客户端/服务端 |
+| github.com/pion/dtls/v4 | github.com/pion/dtls | DTLS 1.2+ 客户端/服务端（v3 线已冻结，2026-11 切 v4：导出面零破坏，SessionStore 接口不变） |
 | gitlab.com/go-extension/tls | **构建时 patch**：`scripts/prepare-etls.{sh,ps1}` → `.etls-patched`（go.mod replace；补丁在 `third_party/patches/`，见其 README.md；依赖刷新统一走 `scripts/update-deps.{sh,ps1}`） | eTLS(crypto/tls fork + KTLS) |
 | gitlab.com/go-extension/http | gitlab.com/go-extension/http | eHTTP(net/http + 原生 eTLS) |
 | github.com/cloudflare/circl | github.com/cloudflare/circl | X-Wing PQ/T KEM(DNSCrypt) |

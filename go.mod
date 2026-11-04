@@ -8,7 +8,7 @@ require (
 	github.com/cloudflare/circl v1.6.6-0.20261103013143-009e98e5d362
 	github.com/emmansun/gmsm v0.45.2
 	github.com/klauspost/compress v1.20.4-0.20261103133652-b660d6de9d90
-	github.com/pion/dtls/v3 v3.1.3-0.20260918152755-5f3ca8f4031d
+	github.com/pion/dtls/v4 v4.0.0-rc.8.0.20261101211820-c20a03f2b3db
 	github.com/quic-go/quic-go v0.65.0
 	gitlab.com/go-extension/tls v0.0.0-20261021190435-364702b25a0c
 	golang.org/x/crypto v0.58.0

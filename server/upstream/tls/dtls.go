@@ -16,8 +16,8 @@ import (
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
-	"github.com/pion/dtls/v3"
-	"github.com/pion/dtls/v3/pkg/protocol"
+	"github.com/pion/dtls/v4"
+	"github.com/pion/dtls/v4/pkg/protocol"
 )
 
 // dtlsStreamConn adapts a pion dtls.Conn to stream semantics for the

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"zjdns/config"
 
-	dtlsnet "github.com/pion/dtls/v3/pkg/net"
+	dtlsnet "github.com/pion/dtls/v4/pkg/net"
 	eTLS "gitlab.com/go-extension/tls"
 )
 
