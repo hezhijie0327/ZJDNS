@@ -798,3 +798,20 @@ func TestMQTYPE_Merge_SkipNoCacheEDE(t *testing.T) {
 		}
 	}
 }
+
+// TestMergeRRs_SrcSelfDedupAcrossAppends pins the dstKeys lockstep: dst
+// grows while src records are appended, and a later src record duplicating
+// an earlier append must still dedup (the precomputed dst slice alone would
+// index out of range on the grown dst).
+func TestMergeRRs_SrcSelfDedupAcrossAppends(t *testing.T) {
+	dst := []dns.RR{aRecord("192.0.2.1")}
+	src := []dns.RR{
+		aaaaRecord("2001:db8::1"),
+		aaaaRecord("2001:db8::1"), // dup of the append above
+		aaaaRecord("2001:db8::2"),
+	}
+	out := mergeRRs(dst, src)
+	if len(out) != 3 {
+		t.Fatalf("merged len = %d, want 3 (src self-duplicate dropped): %+v", len(out), out)
+	}
+}

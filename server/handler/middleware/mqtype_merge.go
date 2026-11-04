@@ -182,17 +182,17 @@ func mergeRRs(dst, src []dns.RR) []dns.RR {
 			srcKeys[i] = foldRRData(rr)
 		}
 	}
-	dstKeys := make([]string, len(dst))
-	for i, rr := range dst {
-		if rr != nil {
-			dstKeys[i] = foldRRData(rr)
-		}
+	dstKeys := make([]string, 0, len(dst)+len(src))
+	for _, rr := range dst {
+		dstKeys = append(dstKeys, foldRRData(rr))
 	}
 	for i, rr := range src {
 		if rr == nil {
 			continue
 		}
 		dup := false
+		// dst grows inside this loop (appends below) — keep dstKeys in
+		// lockstep so later src records dedup against earlier appends.
 		for j, existing := range dst {
 			if existing == rr || (existing != nil &&
 				dns.RRToType(existing) == dns.RRToType(rr) &&
@@ -205,6 +205,7 @@ func mergeRRs(dst, src []dns.RR) []dns.RR {
 		}
 		if !dup {
 			dst = append(dst, rr)
+			dstKeys = append(dstKeys, srcKeys[i])
 		}
 	}
 	return dst
