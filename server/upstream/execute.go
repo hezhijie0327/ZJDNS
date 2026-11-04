@@ -99,7 +99,7 @@ func (c *Client) execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 		if protocol == config.ProtoTCP {
 			result.Response, result.Error = c.plainClient.ExecuteTCP(queryCtx, msg, server)
 		} else {
-			result.Response, result.Error = c.plainClient.ExecuteUDP(queryCtx, msg, server)
+			result.Response, result.Verified, result.Error = c.plainClient.ExecuteUDP(queryCtx, msg, server)
 		}
 
 		result.Protocol = server.Protocol
@@ -129,6 +129,9 @@ func (c *Client) execute(ctx context.Context, msg *dns.Msg, server *config.Upstr
 				result.Response = tcpResp
 				result.Error = nil
 				result.Protocol = config.ProtoTCP
+				// Stream transports are deterministic — a positively
+				// verified result by definition.
+				result.Verified = true
 				log.Debugf("UPSTREAM: TCP fallback succeeded for %s via %s", qname, server.Address)
 			} else {
 				log.Debugf("UPSTREAM: TCP fallback failed for %s via %s: %v", qname, server.Address, tcpErr)

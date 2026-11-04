@@ -21,13 +21,17 @@ import (
 // routing through a SOCKS5 proxy. When server.Spoofguard is true, uses raw
 // socket multi-read to capture both GFW-injected fakes and the real response,
 // returning the best candidate (EDNS preferred, richer answer wins, random
-// tie-break).
-func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+// tie-break).  The boolean reports a positive per-query defense verification:
+// true only when the response was accepted through the pooled collect
+// discipline; single-read fallbacks accept a datagram on ID match alone and
+// report false, so the defense-uncertainty marking at the ExecuteQuery level
+// never mistakes them for verified.
+func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, bool, error) {
 	if msg == nil {
-		return nil, errors.New("plain: nil query message")
+		return nil, false, errors.New("plain: nil query message")
 	}
 	if server == nil {
-		return nil, errors.New("plain: nil server config")
+		return nil, false, errors.New("plain: nil server config")
 	}
 	proxyDialer := c.getProxy(server)
 
@@ -49,15 +53,17 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 			// TTL capture degrades to unavailable over SOCKS5).
 			resp, err := c.executeUDPCollect(ctx, msg, server)
 			if err == nil {
-				return resp, nil
+				return resp, true, nil
 			}
 			// An ambiguity verdict must never reach the single-read pooled
 			// path below — its first ID-matching datagram under injection is
 			// the spoof.  Surface it so the resolver retries over TCP.
 			if errors.Is(err, errAmbiguous) || errors.Is(err, errAmbiguousNoConfirm) {
-				return nil, err
+				return nil, false, err
 			}
-			// Pooled collect failed — fall through to pooled single.
+			// Pooled collect failed — fall through to pooled single.  The
+			// single-read response below runs no defense discipline; its
+			// verified flag stays false.
 		}
 	}
 
@@ -66,7 +72,7 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 	if c.udpPool != nil {
 		resp, err := c.executeUDPPooled(ctx, msg, server)
 		if err == nil {
-			return resp, nil
+			return resp, false, nil
 		}
 		// A canceled/expired context can never succeed past this point,
 		// and the pool's saturation errors exist precisely to bound
@@ -78,16 +84,18 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 			errors.Is(err, zpool.ErrNoAvailableSocket) ||
 			errors.Is(err, zpool.ErrMaxConnsReached) ||
 			errors.Is(err, zpool.ErrPoolShutdown) {
-			return nil, err
+			return nil, false, err
 		}
 	}
 
 	// Pool unavailable or failed — per-query dials.
 	if proxyDialer != nil {
-		return c.exchangeViaProxyUDP(ctx, msg, server.Address, proxyDialer)
+		resp, err := c.exchangeViaProxyUDP(ctx, msg, server.Address, proxyDialer)
+		return resp, false, err
 	}
 
-	return c.exchangeOneShotUDP(ctx, msg, server.Address)
+	resp, err := c.exchangeOneShotUDP(ctx, msg, server.Address)
+	return resp, false, err
 }
 
 // exchangeOneShotUDP is the per-query-dial fallback for pool failures a fresh

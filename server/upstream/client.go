@@ -38,13 +38,22 @@ type Result struct {
 	Validated bool
 	// Uncertain marks a UDP response served without a positive defense
 	// verification: hopguard's TTL baseline was not armed for the address
-	// (learning phase, or TTL capture unavailable) or capsguard could not
-	// verify the 0x20 echo (unrandomized retry, downgraded address).  The
-	// resolver marks such results with the ZJDNS defense-uncertain EDE and
-	// never caches them — a poisoned answer's blast radius is one query,
-	// not its TTL.  A positive verification from either guard (armed TTL
-	// fingerprint, successful 0x20 echo) clears the mark.
+	// (learning phase, or TTL capture unavailable), capsguard could not
+	// verify the 0x20 echo (unrandomized retry, downgraded address), or the
+	// query fell back to a single-read datagram that ran no defense
+	// discipline at all.  The resolver marks such results with the ZJDNS
+	// defense-uncertain EDE and never caches them — a poisoned answer's
+	// blast radius is one query, not its TTL.  A positive verification from
+	// either guard (armed TTL fingerprint on a collect-disciplined query,
+	// successful 0x20 echo) clears the mark.
 	Uncertain bool
+	// Verified reports a positive per-query defense verification: the UDP
+	// response was accepted through the pooled collect discipline
+	// (multi-read with TTL capture), or the transport is a deterministic
+	// stream.  false marks a single-read UDP datagram accepted on ID match
+	// alone — never a positive verification, even with an armed hopguard
+	// baseline (the armed fingerprint is per-address, not per-datagram).
+	Verified bool
 }
 
 // Client manages outbound DNS queries across multiple transport protocols with
@@ -261,15 +270,18 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	// Defense-uncertainty mark (UDP only — stream transports cannot be
 	// datagram-injected): a response served without a positive defense
 	// verification is flagged so the resolver serves it but never caches
-	// it, bounding a poisoned answer's blast radius to one query.  An
-	// armed hopguard TTL fingerprint is a positive verification and
-	// clears the mark even when the 0x20 echo was unverifiable.
+	// it, bounding a poisoned answer's blast radius to one query.  Two
+	// per-query verifications clear the mark: an armed hopguard TTL
+	// fingerprint on a collect-disciplined query (a single-read datagram
+	// never captured its TTL — an armed baseline proves the address, not
+	// this datagram's path), or a successful 0x20 echo on this query.
 	hopArmed := server.HopGuard && c.plainClient.HopGuard().Confident(server.Address)
-	if result.Error == nil && result.Response != nil && result.Protocol == config.ProtoUDP && !hopArmed {
-		if (server.CapsGuard && caseUnverified) || server.HopGuard {
+	capsEchoVerified := server.CapsGuard && !caseUnverified
+	if result.Error == nil && result.Response != nil && result.Protocol == config.ProtoUDP {
+		if !capsEchoVerified && (!hopArmed || !result.Verified) && (server.CapsGuard || server.HopGuard) {
 			result.Uncertain = true
-			log.Debugf("UPSTREAM: defense-uncertain response for %s via %s (caps-unverified=%v) — marked no-cache",
-				original, server.Address, caseUnverified)
+			log.Debugf("UPSTREAM: defense-uncertain response for %s via %s (caps-unverified=%v collect-verified=%v) — marked no-cache",
+				original, server.Address, caseUnverified, result.Verified)
 		}
 	}
 
