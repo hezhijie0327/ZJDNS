@@ -527,13 +527,16 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					resp, respTTL := sg.pickBest()
 					uc.ReleaseCollect(matchKey)
 					if sg.nonEDNSSafe || sg.rejected <= 1 {
-						// CNAME-bearing — GFW does not inject CNAME chains.
-						// Or a single clean response: the empirical GFW
-						// pattern injects TWO bare fakes per query, so a
-						// lone response carries no injection signal and is
-						// safe to serve directly (no confirmation re-query
-						// latency for legitimate no-EDNS servers).
-						if hg != nil {
+						// CNAME-bearing — served directly (no confirmation
+						// re-query latency), but the CNAME shape is forgeable
+						// too: the baseline only learns from corroborated
+						// samples (armed baseline = continued calibration, or
+						// a single datagram corroborated by silence), matching
+						// the pickBest feed gate above.  Or a single clean
+						// response: the empirical GFW pattern injects TWO bare
+						// fakes per query, so a lone response carries no
+						// injection signal.
+						if hg != nil && (hg.Confident(server.Address) || sg.packets == 1) {
 							hg.Feed(server.Address, respTTL)
 						}
 						if previous != nil {
