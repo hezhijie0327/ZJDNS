@@ -18,6 +18,15 @@ import (
 // read path, which works for any net.Conn.
 var errPeekFallback = errors.New("demux: conn does not support MSG_PEEK")
 
+// Backoff bounds for a stalled partial-header peer: poll(2) is level-triggered
+// and MSG_PEEK never consumes, so bytes already queued keep POLLIN permanently
+// ready — without a zero-progress backoff a peer sending 1–4 bytes and stalling
+// spins the loop hot for the whole sniff budget.
+const (
+	peekStallBackoffStart = time.Millisecond
+	peekStallBackoffMax   = 50 * time.Millisecond
+)
+
 // sniffHeader reads the record header non-destructively: recvfrom(MSG_PEEK)
 // leaves every byte queued, so the TLS route can hand the raw *net.TCPConn to
 // eTLS and keep kernel TLS offload working (eTLS's setup() requires a
@@ -34,8 +43,8 @@ func sniffHeader(conn net.Conn) ([]byte, net.Conn, error) {
 
 	header := make([]byte, tcpRecordHeaderLen)
 	var peekErr error
-	// Control runs with exclusive fd access — the conn is fresh off Accept,
-	// nobody else reads it yet.
+	// The conn is fresh off Accept with no other reader — the Control callback
+	// is the only code touching the fd for the duration of the sniff.
 	if ctrlErr := raw.Control(func(fd uintptr) {
 		peekErr = peekHeader(int(fd), header)
 	}); ctrlErr != nil {
@@ -55,9 +64,12 @@ func sniffHeader(conn net.Conn) ([]byte, net.Conn, error) {
 // EAGAIN; poll(2) with the remaining sniff budget covers the wait.  MSG_PEEK
 // always reads from the front of the queue, so a short receive just means the
 // client has not sent the full header yet — loop until all 5 bytes are
-// visible or the deadline passes.
+// visible, the peer half-closes (POLLRDHUP: partial data is
+// ErrUnexpectedEOF, not a timeout burn), or the deadline passes.
 func peekHeader(fd int, buf []byte) error {
 	deadline := time.Now().Add(sniffTimeout)
+	prev := 0
+	backoff := peekStallBackoffStart
 	for {
 		n, _, err := unix.Recvfrom(fd, buf, unix.MSG_PEEK|unix.MSG_DONTWAIT)
 		switch {
@@ -75,31 +87,59 @@ func peekHeader(fd int, buf []byte) error {
 		default:
 			return errPeekFallback
 		}
-		if err := waitReadable(fd, deadline); err != nil {
+		// Progress bookkeeping only while bytes are actually visible (n>0):
+		// an empty queue blocks inside poll until the first data arrives, so
+		// EAGAIN rounds are waits, not stalls.
+		if n > prev {
+			prev = n
+			backoff = peekStallBackoffStart
+		}
+		hup, err := waitReadable(fd, deadline)
+		if err != nil {
 			return err
+		}
+		if hup {
+			if n > 0 {
+				return io.ErrUnexpectedEOF
+			}
+			return io.EOF
+		}
+		if n > 0 && n == prev {
+			// Zero-progress wake: the same partial bytes keep level-triggered
+			// POLLIN hot.  Back off before the next poll round.
+			time.Sleep(backoff)
+			backoff = min(backoff*2, peekStallBackoffMax)
 		}
 	}
 }
 
 // waitReadable blocks until fd is readable or the deadline passes.  Raw
 // poll(2) is used because the Go runtime's SetReadDeadline machinery only
-// governs reads made through the runtime, not raw syscalls.
-func waitReadable(fd int, deadline time.Time) error {
+// governs reads made through the runtime, not raw syscalls.  Reports whether
+// the peer half-closed (POLLHUP/POLLRDHUP) alongside readability.
+func waitReadable(fd int, deadline time.Time) (hup bool, err error) {
+	fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN | unix.POLLRDHUP}} //nolint:gosec // G115: fd is a small non-negative socket handle, fits int32
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return os.ErrDeadlineExceeded
+			return false, os.ErrDeadlineExceeded
 		}
-		n, err := unix.Poll([]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}, int(remaining.Milliseconds())) //nolint:gosec // G115: fd is a small non-negative socket handle on linux, fits int32
+		n, err := unix.Poll(fds, int(remaining.Milliseconds()))
 		if errors.Is(err, unix.EINTR) {
 			continue
 		}
 		if err != nil {
-			return err
+			return false, err
 		}
 		if n == 0 {
-			return os.ErrDeadlineExceeded
+			return false, os.ErrDeadlineExceeded
 		}
-		return nil
+		revents := fds[0].Revents
+		// A closed-under-us fd reports POLLNVAL (and pending socket errors
+		// report POLLERR) — waiting further is pointless either way.
+		if revents&(unix.POLLERR|unix.POLLNVAL) != 0 {
+			return false, os.ErrClosed
+		}
+		return revents&(unix.POLLHUP|unix.POLLRDHUP) != 0, nil
 	}
 }
