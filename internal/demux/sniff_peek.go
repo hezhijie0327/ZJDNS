@@ -90,7 +90,7 @@ func waitReadable(fd int, deadline time.Time) error {
 		if remaining <= 0 {
 			return os.ErrDeadlineExceeded
 		}
-		n, err := unix.Poll([]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}, int(remaining.Milliseconds()))
+		n, err := unix.Poll([]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}, int(remaining.Milliseconds())) //nolint:gosec // G115: fd is a small non-negative socket handle on linux, fits int32
 		if errors.Is(err, unix.EINTR) {
 			continue
 		}

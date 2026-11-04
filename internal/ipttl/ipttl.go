@@ -24,16 +24,18 @@ import (
 // One goroutine (the socket's readLoop) reads from a Capture — the unix
 // path's reused result fields rely on that.
 type Capture struct {
-	pc4    *ipv4.PacketConn
-	pc6    *ipv6.PacketConn
-	raw    syscall.RawConn    // zero-alloc recvmsg path (unix); zero value elsewhere
-	fam    int                // 4 or 6 — expected cmsg level/type for the TTL read
-	oob    []byte             // reused recvmsg control-message buffer (unix only)
-	buf    []byte             // per-read input buffer (unix; set by ReadFrom)
-	n      int                // last read result (unix)
-	ttl    uint8              // last read result (unix)
-	rerr   error              // last read error (unix)
-	readFn func(uintptr) bool // recvmsg closure, built once in New (unix)
+	pc4 *ipv4.PacketConn
+	pc6 *ipv6.PacketConn
+	raw syscall.RawConn // zero-alloc recvmsg path (unix); zero value elsewhere
+	fam int             // 4 or 6 — expected cmsg level/type for the TTL read
+	oob []byte          // reused recvmsg control-message buffer (unix only)
+	// The fields below exist for the unix recvmsg fast path (capture_unix.go)
+	// and are only written there — non-unix builds leave them zero.
+	buf    []byte             //nolint:unused // per-read input buffer, set by unix ReadFrom
+	n      int                //nolint:unused // last unix read result
+	ttl    uint8              //nolint:unused // last unix read result
+	rerr   error              //nolint:unused // last unix read error
+	readFn func(uintptr) bool //nolint:unused // recvmsg closure, built once in unix New
 }
 
 // ErrNoControlMessage is returned when a read produced no TTL/HopLimit
