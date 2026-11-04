@@ -5,7 +5,8 @@ flow instead of a vendored copy:
 
 - `go.mod` pins the upstream version and redirects it with
   `replace gitlab.com/go-extension/tls => ./.etls-patched`.
-- `sh scripts/prepare-etls.sh` copies the pinned version out of the module
+- `sh scripts/prepare-etls.sh` (POSIX/Docker twin; Windows: `pwsh
+  scripts/prepare-etls.ps1`) copies the pinned version out of the module
   cache into the gitignored `./.etls-patched/` and applies every
   `NNNN-*.patch` here in numbered order (`git apply`, zero extra tools).
 - Every build environment runs the script first: the Dockerfile does it
@@ -18,16 +19,17 @@ A patch that no longer applies aborts the script — upstream drifted, see
 ## Version tracking
 
 The Docker build tracks `gitlab.com/go-extension/tls@master` deliberately:
-it drops the replace, `go get`s master, re-adds the replace and re-runs the
-prepare script — so a patch that no longer applies to master HEAD **fails
-the Docker build loudly**.  That failure is the intended drift signal: it
-means the patches need regenerating (or upstream fixed the bugs and the
-whole mechanism can be deleted).  A plain `go get` cannot do this dance —
-with the replace present it silently no-ops the module.
+it runs `sh scripts/update-deps.sh`, which drops the replace, `go get`s
+master, re-adds the replace and re-runs the prepare script — so a patch that
+no longer applies to master HEAD **fails the Docker build loudly**.  That
+failure is the intended drift signal: it means the patches need regenerating
+(or upstream fixed the bugs and the whole mechanism can be deleted).  A
+plain `go get` cannot do this dance — with the replace present it silently
+no-ops the module.
 
 Local/dev builds stay on whatever pseudo-version go.mod pins (updated by the
-same `go mod edit -dropreplace` / `go get` / `go mod edit -replace` /
-`sh scripts/prepare-etls.sh` sequence, or by the weekly dependency review).
+same `scripts/update-deps.sh` / `scripts/update-deps.ps1` weekly dependency
+refresh).
 
 ## Patches
 
@@ -63,9 +65,9 @@ install sequence succeeds and `TlsTxSw` increments.
 
 1. Update the `require` version in `go.mod` (upstream fixed both bugs:
    also delete the patches here, the replace line in `go.mod`, this
-   directory, `scripts/prepare-etls.sh`, the `.gitignore` stanza and the
-   `.etls-patched/README.md` bootstrap, plus the Dockerfile prepare line).
-2. Bump only: `sh scripts/prepare-etls.sh` — if a patch fails to apply,
+   directory, `scripts/prepare-etls.{sh,ps1}`, the `.gitignore` stanza and
+   the `.etls-patched/README.md` bootstrap).
+2. Bump only: `sh scripts/prepare-etls.sh` (or the `.ps1` twin) — if a patch fails to apply,
    regenerate it against the new source (`git diff --no-index` pristine vs
    patched tree, paths relative to the module root) and update the rationale
    above.

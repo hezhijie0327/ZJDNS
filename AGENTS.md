@@ -108,7 +108,12 @@ git reset --soft HEAD~2 && git commit  # or git commit --amend for single commit
 # One-time per clone (and after every eTLS version bump): materialise the
 # patched eTLS replacement dir — go commands fail with
 # "replacement directory ./.etls-patched does not exist" until this has run.
-sh scripts/prepare-etls.sh            # see third_party/patches/README.md
+sh scripts/prepare-etls.sh            # POSIX (Docker/CI) — see third_party/patches/README.md
+pwsh scripts/prepare-etls.ps1         # Windows twin
+
+# Weekly dependency refresh (floats tracked deps to main/master, includes the
+# eTLS dance; Docker build runs the same script)
+sh scripts/update-deps.sh             # Windows twin: pwsh scripts/update-deps.ps1
 
 # Build
 go build -o zjdns ./cmd/zjdns
