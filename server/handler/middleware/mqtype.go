@@ -104,10 +104,14 @@ func (m *MQTYPE) Wrap(next handler.QueryHandler) handler.QueryHandler {
 				defer zdnsutil.HandlePanic("MQTYPE QTx prefetch")
 				qtCtx, qtCancel := context.WithTimeout(context.WithoutCancel(ctx), config.DefaultMQTypeResolveTimeout)
 				defer qtCancel()
-				qtResults <- qtResult{
-					qt: qt,
-					qr: m.secondary.Lookup(qtCtx, qname, qt, qclass, ecsOpt, dnssec),
-				}
+				// Send from a defer: the merge loop below receives exactly
+				// len(types) results unconditionally, so a panic between
+				// spawn and send (recovered by HandlePanic) must still
+				// deliver a nil-result slot or the handler goroutine hangs
+				// forever.
+				res := qtResult{qt: qt}
+				defer func() { qtResults <- res }()
+				res.qr = m.secondary.Lookup(qtCtx, qname, qt, qclass, ecsOpt, dnssec)
 			}()
 		}
 

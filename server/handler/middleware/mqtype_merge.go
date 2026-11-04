@@ -3,6 +3,7 @@ package middleware
 import (
 	"strings"
 	"zjdns/config"
+	"zjdns/edns"
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
 	"zjdns/server/handler"
@@ -103,10 +104,12 @@ func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY, qtResults <-
 			continue
 		}
 		// §3.4: mismatching RCODE or flags — the additional response MUST
-		// NOT be included.
-		if qr.Rcode != primaryRcode || qr.Validated != primaryAD || qr.Authoritative != primaryAA {
+		// NOT be included.  A ZJDNS no-cache EDE (fallback provenance or
+		// defense-uncertain) is the same class of disqualifier: merging its
+		// records would propagate unverified data past the per-query mark.
+		if qr.Rcode != primaryRcode || qr.Validated != primaryAD || qr.Authoritative != primaryAA || edns.IsZJDNSNoCacheEDE(qr.UpstreamEDE) {
 			if log.IsDebug() {
-				log.Debugf("MQTYPE: skipping %s %s — RCODE/flags mismatch (rcode=%d validated=%t aa=%t)", qname, dns.TypeToString[qt], qr.Rcode, qr.Validated, qr.Authoritative)
+				log.Debugf("MQTYPE: skipping %s %s — RCODE/flags mismatch or no-cache mark (rcode=%d validated=%t aa=%t)", qname, dns.TypeToString[qt], qr.Rcode, qr.Validated, qr.Authoritative)
 			}
 			continue
 		}

@@ -758,3 +758,43 @@ func TestMQTYPE_Chain_MissPath_RecursivePseudoServer(t *testing.T) {
 		t.Error("recursive pseudo-server in list must not suppress the merge (MQRESPONSE missing)")
 	}
 }
+
+// TestMQTYPE_Merge_SkipNoCacheEDE verifies the merge gate for ZJDNS
+// no-cache marks: a QTx result carrying EDE 65280 (fallback provenance) or
+// 65281 (defense-uncertain) must not merge its records into the client
+// response — the per-query mark is the only thing bounding that data's
+// blast radius, and a merge would strip it.
+func TestMQTYPE_Merge_SkipNoCacheEDE(t *testing.T) {
+	store := mqTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	fake := &fakeMQResolver{results: map[uint16]*resolver.QueryResult{
+		dns.TypeAAAA: {Answer: []dns.RR{aaaaRecord("2001:db8::bad")}, Rcode: 0, Cacheable: false, UpstreamEDE: edns.DefenseUncertainEDE()},
+	}}
+	m := &MQTYPE{store: store, secondary: handler.NewSecondary(store, fake, nil)}
+	chain := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
+		qctx.Res = handler.BuildResponseMsg(qctx.Req)
+		qctx.Res.Answer = []dns.RR{aRecord("192.0.2.1")}
+		return nil
+	}))
+
+	qctx := (&handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA)}).InitQuestion()
+	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := len(qctx.Res.Answer); got != 1 {
+		t.Errorf("answer count = %d, want 1 (no-cache-marked QTx must not merge)", got)
+	}
+	for _, rr := range qctx.Res.Answer {
+		if a, ok := rr.(*dns.AAAA); ok && a.Addr.String() == "2001:db8::bad" {
+			t.Error("defense-uncertain AAAA leaked into the merged response")
+		}
+	}
+	// §3.4: the option stays present with an empty completed list.
+	for _, rr := range qctx.Res.Pseudo {
+		if mqr, ok := rr.(*dns.MQRESPONSE); ok && len(mqr.Types) != 0 {
+			t.Errorf("MQRESPONSE types = %v, want empty", mqr.Types)
+		}
+	}
+}
