@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	zstamp "zjdns/internal/stamp"
 
@@ -661,5 +662,38 @@ func TestOverlapEntries(t *testing.T) {
 	// Expect: "alice" + both nested CIDR pairs (10.0.0.0/8 ⊃ 10.1.0.0/16, 10.0.0.0/8 == 10.0.0.0/8).
 	if len(overlaps) != 3 {
 		t.Errorf("got %d overlaps (%v), want 3", len(overlaps), overlaps)
+	}
+}
+
+// TestValidateConfig_QUICAndHTTP3SamePortRejected pins the byte-level
+// demux boundary: DoQ and DoH3 are both QUIC and indistinguishable from
+// the first datagram, so sharing one UDP port must fail validation instead
+// of letting two listeners race for the same socket.
+func TestValidateConfig_QUICAndHTTP3SamePortRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	cfg := `{"server":{"protocol":{"udp":"53535","quic":"443","http3":{"port":"443","enabled":true}},"certificate":{"domain":"test.example.com"}},"upstream":[{"address":"8.8.8.8:53"}]}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "cannot share UDP port") {
+		t.Errorf("expected same-port QUIC/HTTP3 rejection, got: %v", err)
+	}
+}
+
+// TestValidateConfig_HTTPSUpstreamPlainSchemeRejected pins the DoH/DoH3
+// scheme gate: an http:// upstream would silently bypass net/http's custom
+// DialTLSContext and query in plaintext.
+func TestValidateConfig_HTTPSUpstreamPlainSchemeRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	cfg := `{"server":{"protocol":{"udp":"53535"},"certificate":{"domain":"test.example.com"}},"upstream":[{"address":"http://dns.example.com/dns-query","protocol":"https","server_name":"dns.example.com"}]}`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "must be an https URL") {
+		t.Errorf("expected non-https scheme rejection, got: %v", err)
 	}
 }

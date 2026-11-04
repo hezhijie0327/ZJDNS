@@ -55,16 +55,21 @@ func validateUpstreamServers(cfg *ServerConfig, rulesetTags map[string]bool) err
 			// Stamp addresses are parsed during normalization — the raw
 			// sdns:// string is not a valid host:port or URL.
 			if !strings.HasPrefix(server.Address, "sdns://") {
-				if _, _, err := net.SplitHostPort(server.Address); err != nil {
-					if protocol == ProtoHTTPS || protocol == ProtoHTTP3 ||
-						protocol == ProtoHTTPTLCP {
-						// url.Parse accepts empty strings and scheme-less
-						// hosts — both silently dial ':443' later.
-						u, err := url.Parse(server.Address)
-						if err != nil || u.Scheme == "" || u.Host == "" {
-							return fmt.Errorf("upstream server %d address invalid for %s: %q", i, protocol, server.Address)
-						}
-					} else {
+				switch protocol {
+				case ProtoHTTPS, ProtoHTTP3, ProtoHTTPTLCP:
+					// URL-form addresses.  net.SplitHostPort is useless
+					// here (it happily splits "http://host/path" into host
+					// "http"), so parse the URL form directly: an https
+					// URL with a host is required — any other scheme
+					// silently bypasses the custom DialTLSContext and
+					// queries in plaintext, and scheme-less forms dial
+					// ':443'.
+					u, err := url.Parse(server.Address)
+					if err != nil || u.Scheme != "https" || u.Host == "" {
+						return fmt.Errorf("upstream server %d address invalid for %s: %q (must be an https URL)", i, protocol, server.Address)
+					}
+				default:
+					if _, _, err := net.SplitHostPort(server.Address); err != nil {
 						return fmt.Errorf("upstream server %d address invalid: %w", i, err)
 					}
 				}

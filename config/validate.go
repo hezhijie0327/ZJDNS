@@ -317,6 +317,13 @@ func validatePorts(cfg *ServerConfig) error {
 				field string
 			}{proto.HTTP3.Port, "server.protocol.http3.port"})
 		}
+		// QUIC (DoQ) and HTTP3 are both QUIC at the byte level — a shared
+		// port cannot demux them, so the combination is rejected outright
+		// instead of forming a group whose two listeners would race for the
+		// same socket.
+		if proto.QUIC != "" && proto.HTTP3.Port != "" && proto.QUIC == proto.HTTP3.Port {
+			return fmt.Errorf("configuration validation failed: server.protocol.quic and server.protocol.http3.port are both QUIC and cannot share UDP port %s (indistinguishable at the byte level)", proto.QUIC)
+		}
 		// Group candidates by port; emit a sharedGroup for each port with ≥2 protocols.
 		portFields := map[string][]string{}
 		for _, c := range candidates {

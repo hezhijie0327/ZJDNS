@@ -658,3 +658,44 @@ func TestSynthesizeNegative_NSEC3_DelegationDS(t *testing.T) {
 		t.Fatal("synthesized DS denial from an Opt-Out NSEC3")
 	}
 }
+
+// TestSynthesizeWildcard_ExpiredCoveringNoSynthesis pins the covering
+// liveness gate on the wildcard path: an interval whose effective TTL
+// elapsed proves nothing about current zone state — the live wildcard
+// expansion alone must not synthesize on top of the expired proof
+// (RFC 8198 §5.3 serves from cached proofs only while they are valid).
+func TestSynthesizeWildcard_ExpiredCoveringNoSynthesis(t *testing.T) {
+	s := New(config.LimitSettings{}, config.LimitSettings{}, "", "")
+	soa := nsecTestSOA("example.com.", 3600, 900)
+	cover := nsecTestNSEC("albatross.example.com.", "elephant.example.com.", dns.TypeA, dns.TypeRRSIG)
+	wildcardProof := nsecTestNSEC("example.com.", "albatross.example.com.", dns.TypeSOA, dns.TypeNS, dns.TypeRRSIG)
+	indexProof(t, s, "cat.example.com.", []dns.RR{cover, wildcardProof},
+		[]dns.RR{soa, cover, nsecTestRRSIG(cover.Hdr.Name, dns.TypeNSEC, 0), wildcardProof})
+
+	// A live wildcard expansion for the covering interval's wildcard arms the
+	// positive path — without the liveness gate it would synthesize.
+	wild := &wildcardEntry{
+		rrset: []dns.RR{&dns.A{Hdr: dns.Header{Name: "boom.example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.9")}},
+		ts:    log.NowUnix(), ttl: 300,
+	}
+	tbl := wildcardTable{wildcardKey{name: "*.example.com.", qtype: dns.TypeA}: wild}
+	if s.nsecWild == nil {
+		s.nsecWild = make(map[wildcardZoneKey]*wildcardTable)
+	}
+	s.nsecWild[wildcardZoneKey{apex: "example.com.", class: dns.ClassINET}] = &tbl
+
+	// Control: with everything live the wildcard path synthesizes.
+	if _, _, ok := s.SynthesizeWildcard("dog.example.com.", dns.TypeA, dns.ClassINET); !ok {
+		t.Fatal("control: live covering + live wildcard entry must synthesize")
+	}
+
+	// Expire every interval by shifting index timestamps past their TTLs.
+	for _, zone := range s.nsecZones {
+		for _, r := range zone.ranges {
+			r.ts -= int64(r.ttl) + 1
+		}
+	}
+	if _, _, ok := s.SynthesizeWildcard("dog.example.com.", dns.TypeA, dns.ClassINET); ok {
+		t.Fatal("SynthesizeWildcard synthesized from an expired covering interval")
+	}
+}

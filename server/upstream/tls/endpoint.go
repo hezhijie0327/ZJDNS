@@ -8,6 +8,7 @@ package tls
 
 import (
 	"crypto/tls"
+	"fmt"
 	"net"
 	"net/url"
 	"zjdns/config"
@@ -37,6 +38,11 @@ func (c *Client) dohEndpointFor(server *config.UpstreamServer) (*dohEndpoint, er
 	parsedURL, err := url.Parse(server.Address)
 	if err != nil {
 		return nil, err
+	}
+	// net/http only routes scheme "https" through the custom DialTLSContext —
+	// any other scheme would silently dial plaintext.
+	if parsedURL.Scheme != "https" {
+		return nil, fmt.Errorf("doh: upstream %q must use the https scheme (got %q)", server.Address, parsedURL.Scheme)
 	}
 	if parsedURL.Port() == "" {
 		// Hostname() strips IPv6 brackets — JoinHostPort on the raw Host

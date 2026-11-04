@@ -171,7 +171,7 @@ func (s *Cache) SynthesizeNegative(qname string, qtype, qclass uint16) (rcode ui
 	if nsec3 {
 		r, isNODATA = synthesizeNSEC3(ranges, params, qname, qtype)
 	} else {
-		r, isNODATA = synthesizeNSEC(ranges, qname, qtype)
+		r, isNODATA = synthesizeNSEC(ranges, qname, qtype, now)
 	}
 	if r == nil {
 		return 0, nil, false
@@ -238,6 +238,12 @@ func (s *Cache) synthesizeWildcardNSEC(qclass uint16, zone *nsecZone, qname stri
 	if covering == nil {
 		return nil, nil, false
 	}
+	// The covering proof must itself be live — an expired interval proves
+	// nothing about the current zone state (the name may have been created
+	// after the interval's evidence went stale).
+	if covering.ttl-int(now-covering.ts) <= 0 {
+		return nil, nil, false
+	}
 	wildcard := nsecWildcardAt(nsecCommonAncestor(covering.owner, covering.next))
 	// Positive: a previously seen expansion of this exact wildcard carries qtype.
 	if we := s.wildcardEntryFor(zone.key.apex, qclass, wildcard, qtype); we != nil {
@@ -283,6 +289,10 @@ func (s *Cache) synthesizeWildcardNSEC3(qclass uint16, zone *nsecZone, qname str
 	}
 	ce, cover, walkOK := nsec3ClosestEncloser(ranges, hashName, qname)
 	if !walkOK || cover.optOut {
+		return nil, nil, false
+	}
+	// The covering proof must itself be live (see synthesizeWildcardNSEC).
+	if cover.ttl-int(now-cover.ts) <= 0 {
 		return nil, nil, false
 	}
 	wildcard := "*." + ce
@@ -690,7 +700,7 @@ func (s *Cache) evictNSECZoneLocked(now int64) {
 
 // synthesizeNSEC applies RFC 4035 §5.4 over the cached interval table and
 // classifies the outcome per RFC 8198 Appendix B (NXDOMAIN vs ENT-NODATA).
-func synthesizeNSEC(ranges []*nsecRange, qname string, qtype uint16) (*nsecRange, bool) {
+func synthesizeNSEC(ranges []*nsecRange, qname string, qtype uint16, now int64) (*nsecRange, bool) {
 	// Exact match — the name exists: NODATA when the bitmap lacks the qtype
 	// (and CNAME, RFC 6840 §4.3).
 	if i, ok := nsecExactIndex(ranges, qname); ok {
@@ -714,7 +724,7 @@ func synthesizeNSEC(ranges []*nsecRange, qname string, qtype uint16) (*nsecRange
 		// RFC 4035 §5.4 step 6: NXDOMAIN additionally requires proof that no
 		// wildcard covers the name — "*.closest-encloser" must fall inside a
 		// cached interval, else a wildcard might exist and match.
-		if nsecWildcardDenied(ranges, r) {
+		if nsecWildcardDenied(ranges, r, now) {
 			return r, false
 		}
 	}
@@ -780,10 +790,15 @@ func nsecAppendixB(r *nsecRange, qname string) (*nsecRange, bool, bool) {
 
 // nsecWildcardDenied checks that "*.closest-encloser" of the covering
 // interval is itself covered by a cached interval (RFC 4035 §5.4 step 6) —
-// the same set-level check the response validator performs.
-func nsecWildcardDenied(ranges []*nsecRange, covering *nsecRange) bool {
+// the same set-level check the response validator performs.  Only live
+// intervals count: an expired interval proves nothing about whether the
+// wildcard exists now.
+func nsecWildcardDenied(ranges []*nsecRange, covering *nsecRange, now int64) bool {
 	wildcard := nsecWildcardAt(nsecCommonAncestor(covering.owner, covering.next))
 	for _, r := range ranges {
+		if r.ttl-int(now-r.ts) <= 0 {
+			continue
+		}
 		if zdnsutil.DomainInRange(wildcard, r.owner, r.next) {
 			return true
 		}
