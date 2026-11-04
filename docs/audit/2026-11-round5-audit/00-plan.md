@@ -122,3 +122,18 @@ PI8(DoQ credit 顺序)由 protocol agent 与亲审双重对照 quic-go v0.65 源
 | 内存收敛(同进程双轮压测) | 77520kB == 77520kB 精确一致 |
 | PANIC | 0(双端) |
 | 65281 递归链路真网验证 | hopguard 学习期 9 次标记、重复查询全 miss(未缓存)✓ |
+
+## Round C 复查批次(2026-11-05,第二轮修复)
+
+| 编号 | 严重度 | Commit | 问题 | 修复 |
+|------|--------|--------|------|------|
+| RC-1 | MEDIUM | 2f5ec4be | per-query 验证要求作用于全部 qtype,但 collect 纪律只对 A/AAAA 存在 — hopguard 下 TXT/MX/SRV/NS/DS/DNSKEY 永久 no-cache,缓存命中率坍塌 | per-datagram 要求限定 collect-eligible(A/AAAA)qtype;非 A 无 per-query 验证可能,armed 基线是最佳可用信号(+回归测试) |
+| RC-2 | LOW | e1207ac1 | POLLRDHUP 捷径用过期 n:POLLIN+RDHUP 同时就绪时(FIN 跟随完整头)误判 ErrUnexpectedEOF | hup 时重 peek 一次,凑满即成功 |
+| RC-3 | LOW | a1223255 | 零窗口 NXDOMAIN 捷径缺 resultChan 排空 — NOERROR winner 50% 概率被 NXDOMAIN 压过且池消息泄漏 | 镜像 deferred 路径的非阻塞排空 |
+| RC-4 | LOW | f6e4c2c5 | DoH 运行时 scheme 门缺 Hostname 判空(编程式构造可绕过) | 与 tlcp 版对齐补判空 |
+
+Round C 同时确认:C1/A/D/E 批次干净;P1 切片别名对照 pool 契约核实安全(FoldCase 原地写是唯一 Put 后写,机制上与池断开)。
+
+## 复验(RC 后)
+
+14 协议 14/14;DoH/DoQ/TLCP 压测 fail=0;内存 75216→75264kB(噪声级);0 PANIC。
