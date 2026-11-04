@@ -252,6 +252,7 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn, handler
 		req := pool.DefaultMessage.Get()
 		req.Data = msgBuf
 		if err := req.Unpack(); err != nil {
+			log.Debugf("PLAIN: TCP unpack error remote=%s: %v", conn.RemoteAddr(), err)
 			pool.DefaultMessage.Put(req)
 			if pooledBuf != nil {
 				pool.DefaultBuffer.Put(pooledBuf)

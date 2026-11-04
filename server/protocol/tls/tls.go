@@ -292,6 +292,7 @@ func (s *Server) handleDOTConnection(conn net.Conn) {
 		req := pool.DefaultMessage.Get()
 		req.Data = msgBuf
 		if err := req.Unpack(); err != nil {
+			log.Debugf("TLS: DoT unpack error remote=%s: %v", conn.RemoteAddr(), err)
 			pool.DefaultMessage.Put(req)
 			if pooledBuf != nil {
 				pool.DefaultBuffer.Put(pooledBuf)

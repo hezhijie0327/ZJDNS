@@ -195,6 +195,8 @@ func (l *udpListener) serveDatagram(w *udpResponseWriter, data []byte) {
 	req.Data = data
 	if err := req.Unpack(); err != nil {
 		// Unparseable: the fork's DefaultMsgInvalidFunc is a noop — drop.
+		// Public-Internet garbage lands here constantly; Debug only.
+		log.Debugf("PLAIN: UDP unpack error from %s: %v", w.RemoteAddr(), err)
 		pool.DefaultMessage.Put(req)
 		return
 	}

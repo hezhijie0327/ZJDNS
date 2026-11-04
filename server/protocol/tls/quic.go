@@ -42,6 +42,10 @@ func (s *Server) startDOQServer() error {
 		Allow0RTT:             true,
 		EnableDatagrams:       true,
 		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
+		// Credit is released by the stream handler wrapper after the query
+		// (incl. the second-query probe) finishes — open/close churn cannot
+		// outrun MaxIncomingStreams (quic-go v0.65).
+		RequireStreamCreditRelease: true,
 	}
 
 	for _, addr := range addrs {
@@ -194,6 +198,9 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 		streamGroup.Go(func() error {
 			defer zdnsutil.HandlePanic("DoQ stream handler")
 			defer func() { _ = stream.Close() }()
+			// RequireStreamCreditRelease: hold the stream slot until this
+			// handler (query + second-query probe) is done.
+			defer stream.ReleaseStreamCredit()
 			s.handleDOQStream(stream, conn, clientIP, clientName, used0RTT)
 			return nil
 		})
@@ -251,6 +258,7 @@ func (s *Server) handleDOQStream(stream *quic.Stream, conn *quic.Conn, clientIP 
 	req := pool.DefaultMessage.Get()
 	req.Data = body
 	if err := req.Unpack(); err != nil {
+		log.Debugf("TLS: DoQ unpack error remote=%s: %v", conn.RemoteAddr(), err)
 		_ = conn.CloseWithError(doq.QUICCodeProtocolError, "invalid DNS message")
 		pool.DefaultMessage.Put(req)
 		return

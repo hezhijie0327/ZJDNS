@@ -86,6 +86,9 @@ func (s *Server) HandleDOQFromPacketConn(pc net.PacketConn) error {
 		Allow0RTT:             true,
 		EnableDatagrams:       true,
 		KeepAlivePeriod:       config.DefaultQUICKeepAlive,
+		// Same as the standalone DoQ config: credit released by the stream
+		// handler wrapper — churn cannot outrun MaxIncomingStreams.
+		RequireStreamCreditRelease: true,
 	}
 
 	listener, err := transport.ListenEarly(quicTLSConfig, quicConfig)
