@@ -213,10 +213,10 @@ const (
 // =============================================================================
 
 var (
-	NextProtoDOT  = []string{"dot"} // RFC 7858: DNS-over-TLS
-	NextProtoDOH  = []string{"h2"}  // RFC 8484: DNS-over-HTTPS (HTTP/2)
-	NextProtoDOQ  = []string{"doq"} // RFC 9250: DNS-over-QUIC
-	NextProtoDOH3 = []string{"h3"}  // DNS-over-HTTP/3
+	NextProtoDOT  = []string{"dot"}            // RFC 7858: DNS-over-TLS
+	NextProtoDOH  = []string{"h2", "http/1.1"} // RFC 8484: DNS-over-HTTPS (h2 preferred, HTTP/1.1 fallback — matching the shared-port listener)
+	NextProtoDOQ  = []string{"doq"}            // RFC 9250: DNS-over-QUIC
+	NextProtoDOH3 = []string{"h3"}             // DNS-over-HTTP/3
 )
 
 // =============================================================================

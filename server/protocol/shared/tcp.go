@@ -43,14 +43,19 @@ func (m *Mux) startTCPGroup(g *TCPGroup) error {
 		return fmt.Errorf("resolve bind addrs: %w", err)
 	}
 
-	// Build the route map; DNSCrypt is optional.
+	// Build the route map; DNSCrypt and TLCP are optional.  Registering a
+	// route without a consumer parks TLCP-shaped connections in the demux
+	// queue (≤64 fds) until shutdown — an unregistered protocol closes its
+	// connection immediately instead.
 	routes := map[string]func(net.Conn) net.Conn{
 		demux.ProtoTLS: func(c net.Conn) net.Conn {
 			return c // eTLS.NewListener below handles the handshake
 		},
-		demux.ProtoTLCP: func(c net.Conn) net.Conn {
+	}
+	if g.DOHTLCP != nil || g.DOTTLCP != nil {
+		routes[demux.ProtoTLCP] = func(c net.Conn) net.Conn {
 			return g.WrapConn(c, g.NextProtos)
-		},
+		}
 	}
 	if g.ServeDNSCryptTCP != nil {
 		routes[demux.ProtoDNSCrypt] = func(c net.Conn) net.Conn {

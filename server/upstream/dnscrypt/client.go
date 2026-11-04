@@ -246,11 +246,17 @@ func (c *Client) executeOnce(
 	}
 
 	var respPayload []byte
+	// pooledPayload marks respPayload as originating from the shared UDP
+	// payload pool — only those buffers go back via ReleaseUDPPayload; the
+	// per-query fallbacks below use private buffers (respBufPool or fresh
+	// allocations) that would corrupt the shared pool if released into it.
+	pooledPayload := false
 	switch {
 	case pooledUDP != nil:
 		// Pooled UDP socket: route by the client-nonce prefix echoed in the
 		// response header.  Decrypt below re-checks the nonce half and the
 		// message ID — a misrouted datagram can never be served.
+		pooledPayload = true
 		respPayload, err = pooledUDP.Exchange(ctx, encrypted, string(clientNonce[:dnscryptcrypto.NonceSize/2]))
 		if err != nil {
 			if pooledUDP.IsDead() {
@@ -263,6 +269,7 @@ func (c *Client) executeOnce(
 		// Pooled TCP: the raw pool frames the encrypted query and routes the
 		// response by the client-nonce prefix — same header shape as UDP.
 		// Decrypt below re-checks the nonce half and the message ID.
+		pooledPayload = true
 		respPayload, err = pooledTCP.Exchange(ctx, encrypted, string(clientNonce[:dnscryptcrypto.NonceSize/2]))
 		if err != nil {
 			if pooledTCP.IsDead() {
@@ -312,7 +319,9 @@ func (c *Client) executeOnce(
 	// size first: the estimator below runs after the buffer is released.
 	respLen := len(respPayload)
 	decrypted, err := resp.Decrypt(respPayload, sharedKey, clientNonce)
-	zpool.ReleaseUDPPayload(respPayload)
+	if pooledPayload {
+		zpool.ReleaseUDPPayload(respPayload)
+	}
 	if err != nil {
 		c.deleteState(stampAddr, providerName)
 		return nil, false, fmt.Errorf("decrypting dnscrypt response: %w", err)

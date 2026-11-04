@@ -16,8 +16,8 @@ import (
 // It is the ONLY recording site: middleware classify their outcome by
 // setting qctx.Result, and this layer turns the classification (plus the
 // final response) into a single RequestRecord.  Rejected-before-classified
-// queries (qctx.Result empty, no error) are not journaled — mirroring the
-// FORMERR gates, which predate the refactor and stayed invisible to stats.
+// queries (qctx.Result empty, no error) are not journaled — same visibility
+// rule as the middleware-chain FORMERR gates.
 //
 // Recording happens once, at the outermost layer, so ResponseTime covers
 // the full chain including EDNS finalisation.

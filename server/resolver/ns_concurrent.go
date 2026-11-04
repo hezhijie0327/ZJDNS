@@ -423,6 +423,16 @@ waitLoop:
 		case won := <-resultChan:
 			return serveWinner(won)
 		case <-nxdomainCh:
+			if config.DefaultNXDOMAINDeferralWindow <= 0 {
+				// Zero window: serve the collected NXDOMAIN immediately —
+				// no per-level timer churn (the channel only fires after a
+				// successful NXDOMAIN store).
+				nx := nxdomainMsg.Load()
+				if poisonRejected.Load() {
+					verdict = defense.VerdictPoisoned
+				}
+				return nx.msg, verdict, nx.uncertain, nil
+			}
 			if deferralTimer == nil {
 				deferralTimer = time.NewTimer(config.DefaultNXDOMAINDeferralWindow)
 				deferralCh = deferralTimer.C
@@ -431,6 +441,18 @@ waitLoop:
 			nx := nxdomainMsg.Load()
 			if nx == nil { // unreachable: the channel only fires after a store
 				return nil, verdict, false, errors.New("no successful response")
+			}
+			// Mirror serveWinner's drain: a NOERROR winner can enter the
+			// buffered channel concurrently with this timer fire, and the
+			// successful answer outranks the deferred NXDOMAIN.
+			select {
+			case won := <-resultChan:
+				pool.DefaultMessage.Put(nx.msg)
+				if poisonRejected.Load() {
+					verdict = defense.VerdictPoisoned
+				}
+				return won.msg, verdict, won.uncertain, nil
+			default:
 			}
 			if poisonRejected.Load() {
 				verdict = defense.VerdictPoisoned
@@ -473,6 +495,12 @@ waitLoop:
 	}
 	if waitErr != nil {
 		return nil, verdict, false, waitErr
+	}
+	// The level deadline can expire while the parent ctx has none — surface
+	// DeadlineExceeded instead of a generic failure so callers can tell a
+	// timeout from an all-servers refusal.
+	if err := deadlineCtx.Err(); err != nil {
+		return nil, verdict, false, err
 	}
 	log.Debugf("RECURSION: all %d nameservers failed for %s (zone=%s)", len(nameservers), question.Name, currentDomain)
 	return nil, verdict, false, errors.New("no successful response")

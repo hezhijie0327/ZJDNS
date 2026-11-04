@@ -149,13 +149,17 @@ func (m *Response) finalizeResponse(qctx *handler.QueryContext, st ednsState) {
 }
 
 // msgHasEDNSOptions reports whether the response already carries EDNS
-// options in its OPT pseudo-record.
+// options in its OPT pseudo-record (including the BADVERS path's zero-byte
+// PADDING carrier — RFC 7830 §4.4 allows at most one PADDING per message).
 func msgHasEDNSOptions(msg *dns.Msg) bool {
 	for _, rr := range msg.Pseudo {
 		if _, ok := rr.(*dns.COOKIE); ok {
 			return true
 		}
 		if _, ok := rr.(*dns.SUBNET); ok {
+			return true
+		}
+		if _, ok := rr.(*dns.PADDING); ok {
 			return true
 		}
 	}

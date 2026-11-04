@@ -387,7 +387,8 @@ func (s *spoofguardState) collectEDNSCandidate(resp *dns.Msg, ttlConfident bool,
 // each by its answer signature — ownership of every returned message moves
 // to the caller.  Used by the divergent-window path: the real answer's
 // signature repeats across re-queries, a per-packet-varying forger's never
-// does.
+// does.  A signature collision (two candidates formatting identically)
+// keeps the newer slot and returns the older message to the pool.
 func (s *spoofguardState) takeCandidates() map[string]candidateSig {
 	out := make(map[string]candidateSig, 2)
 	for _, c := range [2]struct {
@@ -395,7 +396,11 @@ func (s *spoofguardState) takeCandidates() map[string]candidateSig {
 		ttl uint8
 	}{{s.prev, s.prevTTL}, {s.last, s.lastTTL}} {
 		if c.msg != nil {
-			out[answerSignature(c.msg)] = candidateSig{msg: c.msg, ttl: c.ttl}
+			key := answerSignature(c.msg)
+			if old, ok := out[key]; ok {
+				pool.DefaultMessage.Put(old.msg)
+			}
+			out[key] = candidateSig{msg: c.msg, ttl: c.ttl}
 		}
 	}
 	s.prev, s.last = nil, nil
@@ -403,9 +408,11 @@ func (s *spoofguardState) takeCandidates() map[string]candidateSig {
 }
 
 // answerSignature formats a candidate's answer section into a comparable
-// string (owner, type, rdata — TTL excluded, matching sameRRData).  Only
-// called on divergent rounds under active injection; the formatting cost is
-// irrelevant there.
+// string (owner, type, TTL, rdata — rr.String() includes the TTL; an
+// authority serving constant TTLs yields stable signatures, a
+// per-query-decrementing one never intersects and fail-closes to the TCP
+// upgrade).  Only called on divergent rounds under active injection; the
+// formatting cost is irrelevant there.
 func answerSignature(m *dns.Msg) string {
 	var b strings.Builder
 	for _, rr := range m.Answer {

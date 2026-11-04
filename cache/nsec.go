@@ -590,7 +590,16 @@ func (s *Cache) insertRanges(key nsecZoneKey, nsecRanges, nsec3Ranges []*nsecRan
 	if s.nsecZones == nil {
 		s.nsecZones = make(map[nsecZoneKey]*nsecZone)
 	}
-	if len(s.nsecZones) >= config.DefaultAggressiveNSECZones {
+	// One call can insert up to two zones (NSEC + NSEC3 keys differ) — evict
+	// down to cap-len(new)+1 so the table never exceeds the bound.
+	newZones := 0
+	if len(nsecRanges) > 0 {
+		newZones++
+	}
+	if len(nsec3Ranges) > 0 {
+		newZones++
+	}
+	for len(s.nsecZones) > config.DefaultAggressiveNSECZones-newZones {
 		s.evictNSECZoneLocked(now)
 	}
 	if len(nsecRanges) > 0 {

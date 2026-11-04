@@ -32,6 +32,22 @@ func stripCrossZoneRecords(answer, extra []dns.RR, zone string) []dns.RR {
 	if fqZone == "." {
 		return answer
 	}
+	// Unsigned responses are passed through untouched (every record is
+	// unsigned, nothing to compare signers against) — skip the collect and
+	// the two passes with their maps entirely.  Most CN zones are unsigned,
+	// so this is the hot path for terminal answers.
+	anySig := false
+	for _, rrs := range [2][]dns.RR{answer, extra} {
+		for _, rr := range rrs {
+			if _, isSig := rr.(*dns.RRSIG); isSig {
+				anySig = true
+				break
+			}
+		}
+	}
+	if !anySig {
+		return answer
+	}
 	allSigs := dnssec.CollectRRSIGs(answer, extra)
 
 	// Canonicalize each distinct owner name once — dnsutil.Canonical

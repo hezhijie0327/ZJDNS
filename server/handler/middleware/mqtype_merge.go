@@ -173,13 +173,19 @@ func mergeRRs(dst, src []dns.RR) []dns.RR {
 	if len(src) == 0 {
 		return dst
 	}
-	// Precompute each src RR's folded rdata once — the dup check must not
-	// format both RRs (rr.String() allocates) for every (existing, candidate)
-	// pair.
-	keys := make([]string, len(src))
+	// Precompute each side's folded rdata once — the dup check must not
+	// format both RRs (rr.String() allocates) for every (existing,
+	// candidate) pair.
+	srcKeys := make([]string, len(src))
 	for i, rr := range src {
 		if rr != nil {
-			keys[i] = foldRRData(rr)
+			srcKeys[i] = foldRRData(rr)
+		}
+	}
+	dstKeys := make([]string, len(dst))
+	for i, rr := range dst {
+		if rr != nil {
+			dstKeys[i] = foldRRData(rr)
 		}
 	}
 	for i, rr := range src {
@@ -187,12 +193,12 @@ func mergeRRs(dst, src []dns.RR) []dns.RR {
 			continue
 		}
 		dup := false
-		for _, existing := range dst {
+		for j, existing := range dst {
 			if existing == rr || (existing != nil &&
 				dns.RRToType(existing) == dns.RRToType(rr) &&
 				existing.Header().Class == rr.Header().Class &&
 				dns.EqualName(existing.Header().Name, rr.Header().Name) &&
-				foldRRData(existing) == keys[i]) {
+				dstKeys[j] == srcKeys[i]) {
 				dup = true
 				break
 			}

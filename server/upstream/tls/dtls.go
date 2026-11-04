@@ -219,8 +219,8 @@ func (c *Client) dialDTLSConn(ctx context.Context, addr string, server *config.U
 	// the client-side mirror of the dual-stack server deadlock documented in
 	// server/protocol/tls/dtls.go).  Without the bound, one hung handshake
 	// burns the whole 9s query budget; with it, the dial fails fast and the
-	// caller's existing fallback (pool re-acquire, then a fresh dial)
-	// recovers in one round.
+	// caller's existing fallback (a fresh non-pooled dial) recovers in one
+	// round.
 	handshakeCtx, cancelHandshake := context.WithTimeout(ctx, config.DefaultDTLSHandshakeTimeout)
 	defer cancelHandshake()
 	if hc, ok := conn.(interface{ HandshakeContext(context.Context) error }); ok {

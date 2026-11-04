@@ -226,6 +226,11 @@ func (r *Recursive) validateOrRetry(ctx context.Context, response *dns.Msg, name
 
 		if errors.Is(err, dnssec.ErrMissingRRSIG) {
 			if r.tryRRSIGRetry(ctx, response, nameservers, question, currentDomain, ecs, forceTCP, verifiedKeys) {
+				// The retry rewrote response's RR sections in place — the
+				// memo verdict was computed over the pre-rewrite content and
+				// must not outlive its subject (nothing re-verifies this
+				// response at this level today; this pins the invariant).
+				chain.verifyMemo = dnssecVerifyMemo{}
 				return true
 			}
 			chain.lastEDECode = dns.ExtendedErrorRRSIGsMissing

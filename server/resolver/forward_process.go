@@ -32,19 +32,36 @@ func captureUpstreamEDE(lastEDE *atomic.Pointer[dns.EDE], resp *dns.Msg, serverA
 	if resp == nil {
 		return nil
 	}
+	// RFC 8914 §3.2 allows multiple EDE options in one response.  A ZJDNS
+	// private no-cache mark (65280/65281) loses its meaning if it is not
+	// the picked option — two chained ZJDNS instances with a plain
+	// forwarding resolver between them append their own EDE, so scan all
+	// options and prefer the private mark over the positional first.
+	var picked, first *dns.EDE
 	for _, rr := range resp.Pseudo {
-		if ede, ok := rr.(*dns.EDE); ok {
-			// Copy the EDE out of the pooled response — the source server
-			// stays in the Debug log, not in client-facing ExtraText
-			// (RFC 8914 §3: forwarding is implementation dependent).
-			copied := &dns.EDE{InfoCode: ede.InfoCode, ExtraText: ede.ExtraText}
-			lastEDE.Store(copied)
-			log.Debugf("UPSTREAM: captured EDE %d (%s) from %s (rcode=%s)",
-				ede.InfoCode, dns.ExtendedErrorToString[ede.InfoCode], serverAddr, dns.RcodeToString[resp.Rcode])
-			return copied
+		ede, ok := rr.(*dns.EDE)
+		if !ok {
+			continue
+		}
+		// Copy the EDE out of the pooled response — the source server
+		// stays in the Debug log, not in client-facing ExtraText.
+		copied := &dns.EDE{InfoCode: ede.InfoCode, ExtraText: ede.ExtraText}
+		if first == nil {
+			first = copied
+		}
+		if picked == nil && edns.IsZJDNSNoCacheEDE(copied) {
+			picked = copied
 		}
 	}
-	return nil
+	if picked == nil {
+		picked = first
+	}
+	if picked != nil {
+		lastEDE.Store(picked)
+		log.Debugf("UPSTREAM: captured EDE %d (%s) from %s (rcode=%s)",
+			picked.InfoCode, dns.ExtendedErrorToString[picked.InfoCode], serverAddr, dns.RcodeToString[resp.Rcode])
+	}
+	return picked
 }
 
 // isSecureUpstream reports whether an upstream uses an encrypted transport

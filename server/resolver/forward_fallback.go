@@ -106,7 +106,7 @@ func (c *fallbackCoord) maybeBackfill(fill func()) {
 // canonical-case fold, RFC 4035 §5.3.3 TTL cap).
 func (r *Resolver) fillCacheFromResult(coord *fallbackCoord, res *QueryResult) {
 	defer coord.cancelPrimary(errors.New("background fill complete"))
-	if !res.Cacheable || !DNSSECCacheable(res.Validated, res.DNSSECEDE) {
+	if !res.Cacheable || !DNSSECCacheable(res.Validated, res.DNSSECEDE) || edns.IsZJDNSNoCacheEDE(res.UpstreamEDE) {
 		return
 	}
 	zdnsutil.FoldCase(res.Answer)

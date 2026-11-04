@@ -359,7 +359,12 @@ func (s *Server) respondQUIC(stream *quic.Stream, response *dns.Msg) error {
 	binary.BigEndian.PutUint16(writeBuf[:zdnsutil.DNSFramePrefixLen], uint16(len(respBuf))) //nolint:gosec // G115: bounds checked above
 	copy(writeBuf[zdnsutil.DNSFramePrefixLen:], respBuf)
 
+	// Bound the write: a client that stops reading would otherwise pin this
+	// stream handler (and its RequireStreamCreditRelease slot) indefinitely
+	// on a keep-alive connection.
+	_ = stream.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout)) // _ = error: best-effort bound; a failed set only lengthens the write
 	n, err := stream.Write(writeBuf[:zdnsutil.DNSFramePrefixLen+len(respBuf)])
+	_ = stream.SetWriteDeadline(time.Time{}) // _ = error: clear best-effort — the stream closes right after
 	if err != nil {
 		return fmt.Errorf("stream write: %w", err)
 	}
