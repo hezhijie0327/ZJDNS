@@ -8,7 +8,7 @@ This repository is an extension of the golang standard library [crypto/tls](http
 - ARIA cipher
 - CEMALLIA cipher
 - SM4 cipher, CurveSM2
-- Kernel TLS
+- Kernel TLS (KTLS)
 - Encrypt-then-MAC (RFC 7366)
 - TLS 1.3 0-RTT (Early Data)
 - TLS 1.3 FFDHE Key Exchange (RFC 7919)
