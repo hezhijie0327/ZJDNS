@@ -39,14 +39,52 @@ type dtlcpListener struct {
 	cfg     *dtlcp.Config
 	mu      sync.Mutex
 	conns   map[dtlcpAddrKey]*shared.DemuxPacketConn
-	closed  atomic.Bool
+	// admitSem bounds concurrent client goroutines launched from the accept
+	// loop (capacity aligned with the serverGroup limit).  Try-acquire,
+	// never blocking — mirrors the shared-port udpRuntime.admit drop
+	// semantics: a blocking errgroup.Go would freeze datagram dispatch for
+	// a full handshake-timeout window per spoofed-source flood wave
+	// (Round 6 audit P10).
+	admitSem chan struct{}
+	closed   atomic.Bool
 }
+
+// dtlcpAdmitDrops counts datagrams dropped at the dedicated-port DTLCP
+// admission gate.  A drop costs the client a retransmission round, so the
+// count is the port's flood-health signal.
+var dtlcpAdmitDrops atomic.Uint64
 
 func newDTLCPListener(udpConn *net.UDPConn, cfg *dtlcp.Config) *dtlcpListener {
 	return &dtlcpListener{
-		udpConn: udpConn,
-		cfg:     cfg,
-		conns:   make(map[dtlcpAddrKey]*shared.DemuxPacketConn),
+		udpConn:  udpConn,
+		cfg:      cfg,
+		conns:    make(map[dtlcpAddrKey]*shared.DemuxPacketConn),
+		admitSem: make(chan struct{}, config.DefaultServerGoroutineLimit),
+	}
+}
+
+// tryAdmit reserves a client slot without blocking; false means the
+// dedicated port is at its admission cap and the datagram is dropped (the
+// client retransmits — UDP semantics, DTLCP re-sends handshake flights).
+func (l *dtlcpListener) tryAdmit() bool {
+	select {
+	case l.admitSem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// release frees a slot reserved by tryAdmit (run when the client handler
+// exits).
+func (l *dtlcpListener) release() { <-l.admitSem }
+
+// noteDTLCPAdmissionDrop records an admission-gate drop with a sampled
+// warn — an attacker-rate flood must not turn this into a
+// log-amplification vector (mirrors shared.noteDispatchDrop).
+func noteDTLCPAdmissionDrop() {
+	if n := dtlcpAdmitDrops.Add(1); n%1024 == 1 {
+		log.Warnf("TLCP: DTLCP admission gate full, dropped datagram [%dth drop] — client will retransmit", n)
 	}
 }
 
@@ -151,6 +189,15 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 		l.mu.Lock()
 		dc, ok := l.conns[key]
 		if !ok {
+			if !l.tryAdmit() {
+				// Admission cap reached — spoofed-source flood bound; drop
+				// like a full queue (the client retransmits), mirroring the
+				// shared-port dispatch's rt.admit() gate.
+				l.mu.Unlock()
+				shared.PacketBufPool.Put(pb)
+				noteDTLCPAdmissionDrop()
+				continue
+			}
 			dc = &shared.DemuxPacketConn{
 				Shared: l.udpConn,
 				Remote: src,
@@ -163,9 +210,12 @@ func (s *Server) handleDTLCPConnections(l *dtlcpListener) {
 			// queue, which unblocks its reads.  Launched OUTSIDE l.mu:
 			// errgroup.Go blocks when the concurrency limit is saturated,
 			// and holding the lock there would freeze datagram dispatch
-			// for all clients and block Close()/Shutdown.
+			// for all clients and block Close()/Shutdown.  The try-acquire
+			// gate above keeps that block from ever engaging on new-client
+			// floods (admitSem capacity == the group limit).
 			s.serverGroup.Go(func() error {
 				defer zdnsutil.HandlePanic("DTLCP client connection")
+				defer l.release()
 				s.serveDTLCPClient(l.cfg, dc, src, func() {
 					l.mu.Lock()
 					delete(l.conns, key)

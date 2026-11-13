@@ -252,5 +252,8 @@ func looksLikePlainDNSQuery(data []byte) bool {
 		binary.BigEndian.Uint16(data[pos+5:pos+7]) != 41 {
 		return false
 	}
-	return rest == 11+int(binary.BigEndian.Uint16(data[pos+9:pos+11]))
+	// RDLENGTH sits after root(1) + TYPE(2) + class(2) + TTL(4) — pos+9:11
+	// would read the TTL's high bytes instead.  rest>=11 above guarantees
+	// pos+15 stays in bounds.
+	return rest == 11+int(binary.BigEndian.Uint16(data[pos+13:pos+15]))
 }

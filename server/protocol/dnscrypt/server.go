@@ -76,7 +76,7 @@ type Server struct {
 	// retransmits are legitimate, a flood repeating one captured datagram
 	// is not — occurrences beyond DefaultDNSCryptReplayAllow inside the
 	// window are dropped.
-	replayCache *lrumap.Map[string, replayEntry]
+	replayCache *lrumap.Map[replayKey, replayEntry]
 }
 
 // New creates a new DNSCrypt Server from the given configuration.
@@ -219,7 +219,7 @@ func New(certificateCfg *config.DNSCryptCertificate, port, providerName string, 
 		// unified server-side concurrency cap (defaults.go).
 		workerCap:      make(chan struct{}, config.DefaultServerGoroutineLimit),
 		sharedKeyCache: lrumap.New[[32]byte, [32]byte](config.DefaultDNSCryptSharedKeyCacheSize),
-		replayCache:    lrumap.New[string, replayEntry](config.DefaultDNSCryptReplayCacheSize),
+		replayCache:    lrumap.New[replayKey, replayEntry](config.DefaultDNSCryptReplayCacheSize),
 		store:          store,
 	}
 	s.publishKeys()

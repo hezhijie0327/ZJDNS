@@ -46,8 +46,8 @@ func (m *Mux) startUDPGroup(g *UDPGroup) error {
 	for _, addr := range addrs {
 		for shard := 0; shard < shards; shard++ {
 			var lc net.ListenConfig
-			if shards > 1 {
-				lc = net.ListenConfig{Control: ReusePortControl()}
+			if control := UDPListenControl(shards > 1); control != nil {
+				lc = net.ListenConfig{Control: control}
 			}
 			pc, err := lc.ListenPacket(m.groupCtx, "udp", addr)
 			if err != nil {
@@ -410,17 +410,28 @@ func (m *Mux) udpDispatchLoop(rt *udpRuntime) {
 						select {
 						case sem <- struct{}{}:
 						default:
-							capturedHandler(m.host.Ctx(), pkt.Data, pkt.Addr, capturedDC)
-							full := pkt.Data[:cap(pkt.Data)]
-							PacketBufPool.Put(&full)
+							// Return the pooled buffer via defer, registered
+							// BEFORE the handler: a panic recovered by
+							// HandlePanic up the stack must not lose the
+							// 8KiB buffer (pool-return discipline, mirrors
+							// dnscrypt/udp.go's single-defer design).
+							func() {
+								defer func() {
+									full := pkt.Data[:cap(pkt.Data)]
+									PacketBufPool.Put(&full)
+								}()
+								capturedHandler(m.host.Ctx(), pkt.Data, pkt.Addr, capturedDC)
+							}()
 							continue
 						}
 						go func(pkt DemuxPacket) {
 							defer func() { <-sem }()
 							defer zdnsutil.HandlePanic("Shared DNSCrypt UDP query")
+							defer func() {
+								full := pkt.Data[:cap(pkt.Data)]
+								PacketBufPool.Put(&full)
+							}()
 							capturedHandler(m.host.Ctx(), pkt.Data, pkt.Addr, capturedDC)
-							full := pkt.Data[:cap(pkt.Data)]
-							PacketBufPool.Put(&full)
 						}(pkt)
 					}
 				})

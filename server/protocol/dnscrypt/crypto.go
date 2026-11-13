@@ -10,10 +10,16 @@ import (
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
 	"zjdns/internal/lrumap"
+	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
 )
+
+// replayKey is the fixed-size replay-cache key: client magic, client
+// nonce half, client key prefix.  An array key removes the per-query
+// string(kb[:]) allocation the former string key paid on every decrypt.
+type replayKey [dnscryptcrypto.ClientMagicSize + dnscryptcrypto.NonceSize/2 + 8]byte
 
 // replayEntry counts occurrences of one (client magic, client nonce half,
 // client key prefix) inside the replay window.
@@ -211,10 +217,10 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.Encrypte
 			copy(resolverSk[:], k.pair.PQ.PqPrivateKey)
 			decrypted, decErr := query.Decrypt(b, resolverSk)
 			if decErr == nil {
-				// Could use pool.DefaultMessage.Get(); left as &dns.Msg{} — cold path.
-				msg = &dns.Msg{}
+				msg = pool.DefaultMessage.Get()
 				msg.Data = decrypted
 				if unpackErr := msg.Unpack(); unpackErr != nil {
+					pool.DefaultMessage.Put(msg)
 					return nil, nil, fmt.Errorf("unpacking dns message: %w", unpackErr)
 				}
 				if repErr := s.checkReplay(query); repErr != nil {
@@ -250,9 +256,10 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.Encrypte
 				}
 			}
 			if decErr == nil {
-				msg = &dns.Msg{}
+				msg = pool.DefaultMessage.Get()
 				msg.Data = decrypted
 				if unpackErr := msg.Unpack(); unpackErr != nil {
+					pool.DefaultMessage.Put(msg)
 					return nil, nil, fmt.Errorf("unpacking dns message: %w", unpackErr)
 				}
 				if repErr := s.checkReplay(query); repErr != nil {
@@ -339,10 +346,11 @@ func (s *Server) decryptPQResumed(b []byte) (msg *dns.Msg, query *dnscryptcrypto
 	if err != nil {
 		return nil, nil, fmt.Errorf("decrypting resumed payload: %w", err)
 	}
-	msg = &dns.Msg{}
+	msg = pool.DefaultMessage.Get()
 	msg.Data = decrypted
 	err = msg.Unpack()
 	if err != nil {
+		pool.DefaultMessage.Put(msg)
 		return nil, nil, fmt.Errorf("unpacking dns message: %w", err)
 	}
 	if repErr := s.checkReplay(query); repErr != nil {
@@ -361,12 +369,12 @@ func (s *Server) checkReplay(q *dnscryptcrypto.EncryptedQuery) error {
 	if s.replayCache == nil {
 		return nil
 	}
-	var kb [dnscryptcrypto.ClientMagicSize + dnscryptcrypto.NonceSize/2 + 8]byte
+	var kb replayKey
 	copy(kb[:dnscryptcrypto.ClientMagicSize], q.ClientMagic[:])
 	off := dnscryptcrypto.ClientMagicSize
 	off += copy(kb[off:off+dnscryptcrypto.NonceSize/2], q.Nonce[:dnscryptcrypto.NonceSize/2])
 	copy(kb[off:], q.ClientPk[:8])
-	key := string(kb[:])
+	key := kb
 
 	now := log.NowUnix()
 	window := int64(config.DefaultDNSCryptReplayWindow / time.Second)

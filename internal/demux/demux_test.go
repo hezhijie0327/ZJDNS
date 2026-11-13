@@ -1,11 +1,25 @@
 package demux
 
 import (
+	"errors"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
+
+// tempAcceptError satisfies the legacy Temporary() probe with true.
+type tempAcceptError struct{}
+
+// flakyAcceptListener fails the first Accept calls with the given injected
+// errors (temporary and non-temporary), then delegates to the inner
+// listener — it drives the accept loop's error branches deterministically.
+type flakyAcceptListener struct {
+	inner net.Listener
+	errs  []error
+	mu    sync.Mutex
+}
 
 // ---------------------------------------------------------------------------
 // mockConn — minimal net.Conn for testing
@@ -15,6 +29,24 @@ type mockConn struct {
 	data   []byte
 	offset int
 }
+
+func (tempAcceptError) Error() string   { return "injected temporary accept error" }
+func (tempAcceptError) Temporary() bool { return true }
+
+func (f *flakyAcceptListener) Accept() (net.Conn, error) {
+	f.mu.Lock()
+	if len(f.errs) > 0 {
+		err := f.errs[0]
+		f.errs = f.errs[1:]
+		f.mu.Unlock()
+		return nil, err
+	}
+	f.mu.Unlock()
+	return f.inner.Accept()
+}
+
+func (f *flakyAcceptListener) Close() error   { return f.inner.Close() }
+func (f *flakyAcceptListener) Addr() net.Addr { return f.inner.Addr() }
 
 func (c *mockConn) Read(b []byte) (int, error) {
 	if c.offset >= len(c.data) {
@@ -454,5 +486,64 @@ func TestLooksLikePlainDNSQuery_RejectsNoise(t *testing.T) {
 				t.Fatalf("looksLikePlainDNSQuery(%v) = %t, want %t", tc.data, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestTCPDemuxListener_AcceptErrorsDoNotKillLoop pins the Round 6 audit P2
+// fix: a non-temporary Accept error (EPERM, ENOMEM, EBADF, EINVAL) must not
+// silently and permanently kill the shared TCP port's only accept loop.
+// The pre-fix code returned on the first non-temporary error with no log,
+// taking down DoH + DoT(TLS) + DoT(TLCP) + DNSCrypt-TCP until restart.
+// Temporary errors (P7) must also back off rather than spin.
+func TestTCPDemuxListener_AcceptErrorsDoNotKillLoop(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	flaky := &flakyAcceptListener{
+		inner: ln,
+		errs: []error{
+			tempAcceptError{},            // temporary: retry with backoff
+			errors.New("injected EPERM"), // non-temporary: must NOT exit
+		},
+	}
+	d := NewTCPDemux(TCPConfig{
+		Inner:  flaky,
+		Routes: map[string]func(net.Conn) net.Conn{ProtoTLS: func(c net.Conn) net.Conn { return c }},
+	})
+	defer func() { _ = d.Close() }()
+	tlsListener := d.Listener(ProtoTLS)
+
+	// The loop must survive both injected errors: a client connecting after
+	// them is still sniffed and routed.  The two retries cost 2x100ms.
+	accCh := make(chan net.Conn, 1)
+	go func() {
+		c, err := tlsListener.Accept()
+		if err == nil {
+			accCh <- c
+		}
+	}()
+	client, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+	if _, err := client.Write([]byte{0x16, 0x03, 0x01, 0x00, 0x10}); err != nil {
+		t.Fatalf("write TLS record header: %v", err)
+	}
+
+	select {
+	case <-accCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("accept loop died on an injected accept error — shared port silently lost")
+	}
+
+	// Close must still end the loop through the closed branch (Done fires).
+	_ = d.Close()
+	select {
+	case <-d.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("accept loop did not exit after Close")
 	}
 }

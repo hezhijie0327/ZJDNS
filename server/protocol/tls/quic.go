@@ -1,7 +1,6 @@
 package tls
 
 import (
-	"context"
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
@@ -29,8 +28,7 @@ func (s *Server) startDOQServer() error {
 		return fmt.Errorf("DoQ address resolution: %w", err)
 	}
 
-	s.doqAddrCache = lrumap.New[string, time.Time](config.DefaultQUICAddrCacheSize)
-	addrCache := s.doqAddrCache
+	addrCache := lrumap.New[string, time.Time](config.DefaultQUICAddrCacheSize)
 
 	quicTLSConfig := s.QUICTLSConfig().Clone()
 	quicTLSConfig.NextProtos = config.NextProtoDOQ
@@ -82,7 +80,7 @@ func (s *Server) startDOQServer() error {
 		capturedDoQ := listener
 		s.groups.quic.Go(func() error {
 			defer zdnsutil.HandlePanic("DoQ server")
-			s.handleDOQConnections(capturedDoQ)
+			s.handleDOQConnections(capturedDoQ, addrCache)
 			return nil
 		})
 	}
@@ -91,7 +89,12 @@ func (s *Server) startDOQServer() error {
 	return nil
 }
 
-func (s *Server) handleDOQConnections(doqListener *quic.EarlyListener) {
+// handleDOQConnections accepts DoQ connections until shutdown.  addrCache is
+// THIS listener's Retry-whitelist cache — the same instance bound to the
+// transport's VerifySourceAddress — passed as a parameter because shared-port
+// mode runs one handler per UDP dispatch shard and a server field would be
+// last-wins across shards (3/4 of clients would Retry forever).
+func (s *Server) handleDOQConnections(doqListener *quic.EarlyListener, addrCache *lrumap.Map[string, time.Time]) {
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -116,7 +119,7 @@ func (s *Server) handleDOQConnections(doqListener *quic.EarlyListener) {
 		// The handshake completed — the peer owns its source address, so
 		// its next connection skips the Retry (RFC 9000 §8.1.1).
 		if udpAddr, ok := conn.RemoteAddr().(*net.UDPAddr); ok {
-			markAddrVerified(s.doqAddrCache, udpAddr.IP)
+			markAddrVerified(addrCache, udpAddr.IP)
 		}
 
 		log.Debugf("TLS: DoQ connection from %s — cipher=%s resumed=%v 0-RTT=%v",
@@ -145,24 +148,14 @@ func (s *Server) handleDOQConnection(conn *quic.Conn) {
 		return
 	}
 
-	// Graceful close: send CONNECTION_CLOSE with NO_ERROR and wait for the
-	// peer to acknowledge, or fall through on timeout.
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultBackgroundTimeout)
-		defer cancel()
-		_ = conn.CloseWithError(doq.QUICCodeNoError, "")
-
-		done := make(chan struct{})
-		stop := context.AfterFunc(conn.Context(), func() {
-			close(done)
-		})
-		defer stop()
-
-		select {
-		case <-done:
-		case <-ctx.Done():
-		}
-	}()
+	// Graceful close: send CONNECTION_CLOSE with NO_ERROR and trust
+	// quic-go's internal closing/drain state to finish on its own — the
+	// transport owns the conn until the peer ACKs or the drain timer
+	// expires, so there is no premature-GC/UAF window.  Waiting for the
+	// drain here would pin the quicConnSem admission slot for up to
+	// DefaultBackgroundTimeout per vanished client: ~13 silent handshakes/s
+	// exhaust the 128-slot cap and lock out every later DoQ/DoH3 client.
+	defer func() { _ = conn.CloseWithError(doq.QUICCodeNoError, "") }()
 
 	// Per-connection state: ConnectionState() and RemoteAddr are stable
 	// after the handshake — compute once instead of per stream/query.

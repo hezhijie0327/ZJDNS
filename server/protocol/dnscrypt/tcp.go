@@ -10,6 +10,7 @@ import (
 	"zjdns/config"
 	dnscryptcrypto "zjdns/internal/dnscryptcrypto"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 
 	zdnsutil "zjdns/internal/dnsutil"
 
@@ -261,6 +262,10 @@ func (s *Server) handleTCPMsg(ctx context.Context, b []byte, conn net.Conn, writ
 		return fmt.Errorf("decrypting TCP query: %w", err)
 	}
 	log.Debugf("DNSCRYPT: decrypted TCP query from %s", conn.RemoteAddr())
+	// decrypt allocates from pool.DefaultMessage — return it after the
+	// response frame is written (serveDNS/WriteMsg read m until they
+	// return; serveDNS's identity guard already normalised resp == m).
+	defer pool.DefaultMessage.Put(m)
 
 	rw := &tcpResponseWriter{
 		writeMu: writeMu,

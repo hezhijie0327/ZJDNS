@@ -16,7 +16,6 @@ import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/ktls"
 	"zjdns/internal/log"
-	"zjdns/internal/lrumap"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -92,11 +91,10 @@ type Server struct {
 	doqListeners  []*quic.EarlyListener
 	dohServers    []*http.Server
 	h3Server      *http3.Server
-	// QUIC Retry-whitelist caches (RFC 9000 §8.1): addresses that completed
-	// a handshake skip the next Retry. doqAddrCache is written by the DoQ
-	// accept loop; h3AddrCache by the first HTTP/3 request per connection.
-	doqAddrCache   *lrumap.Map[string, time.Time]
-	h3AddrCache    *lrumap.Map[string, time.Time]
+	// QUIC Retry-whitelist caches (RFC 9000 §8.1) live as per-listener
+	// parameters (handleDOQConnections / handleHTTP3Connections), not
+	// server fields: shared-port mode runs one handler per UDP dispatch
+	// shard and a shared field would be last-wins across shards.
 	httpsListeners []net.Listener
 	h3Conns        []*net.UDPConn
 	h3Transports   []*quic.Transport

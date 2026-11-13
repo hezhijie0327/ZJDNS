@@ -488,7 +488,7 @@ func TestHandshakeTC_AllFit_NoTC(t *testing.T) {
 // occurrences, further repetitions inside the window are dropped, and a
 // fresh nonce always passes.
 func TestCheckReplayAllowance(t *testing.T) {
-	s := &Server{replayCache: lrumap.New[string, replayEntry](16)}
+	s := &Server{replayCache: lrumap.New[replayKey, replayEntry](16)}
 	q := &dnscryptcrypto.EncryptedQuery{ClientPk: [dnscryptcrypto.KeySize]byte{1, 2, 3}}
 	copy(q.ClientMagic[:], "12345678")
 	copy(q.Nonce[:dnscryptcrypto.NonceSize/2], "nonce-half!")

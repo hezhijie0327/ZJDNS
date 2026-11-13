@@ -173,6 +173,9 @@ func (s *Server) handleSaturated(ctx context.Context, b []byte, addr net.Addr, p
 	if err != nil {
 		return
 	}
+	// decrypt allocates from pool.DefaultMessage — return it once the
+	// overload response (which reads m via the response writer) is out.
+	defer pool.DefaultMessage.Put(m)
 	resp := &dns.Msg{}
 	dnsutil.SetReply(resp, m)
 	resp.Rcode = dns.RcodeServerFailure
@@ -243,6 +246,11 @@ func (s *Server) processUDPPacket(ctx context.Context, b []byte, src net.Addr, p
 		return
 	}
 	log.Debugf("DNSCRYPT: decrypted UDP query from %s", src)
+	// decrypt allocates from pool.DefaultMessage — return it after the
+	// response is written (serveDNS/WriteMsg read m until they return;
+	// serveDNS's own identity guard already normalises resp == m to nil,
+	// so this Put is the single release of the request message).
+	defer pool.DefaultMessage.Put(m)
 
 	rw := &udpResponseWriter{
 		conn:    pc,

@@ -3,7 +3,9 @@ package demux
 import (
 	"net"
 	"sync"
+	"time"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/log"
 )
 
 // TCPConfig configures a TCP demux listener.
@@ -49,9 +51,16 @@ type TCPDemuxListener struct {
 // fds while the downstream LimitListeners only gate post-sniff.
 const defaultSniffConcurrency = 4096
 
+// acceptRetryDelay mirrors config.DefaultAcceptRetryDelay — internal/
+// packages must not import config (see TCPConfig.SniffConcurrency), so the
+// value is restated locally with the same 100ms backoff as every other
+// accept loop in the tree.
+const acceptRetryDelay = 100 * time.Millisecond
+
 // NewTCPDemux creates and starts a TCP demux listener.  The accept loop
-// runs in a background goroutine and exits when Close() is called or the
-// inner listener returns a non-temporary error.
+// runs in a background goroutine and exits when Close() is called; accept
+// errors are logged and retried with a backoff (it never exits on its
+// own).
 func NewTCPDemux(cfg TCPConfig) *TCPDemuxListener {
 	sniffLimit := cfg.SniffConcurrency
 	if sniffLimit <= 0 {
@@ -123,12 +132,21 @@ func (d *TCPDemuxListener) acceptLoop() {
 			if closed {
 				return
 			}
-			// Temporary errors: retry (mirrors the pattern used by
-			// all other accept loops in the codebase).
+			// Same discipline as every other accept loop in the tree
+			// (plain/tcp.go, tls/tls.go, shared/tcp.go, ...): log, back
+			// off, keep serving.  Returning here would silently kill the
+			// whole shared TCP port until process restart — this loop is
+			// its only accept entry — and a bare continue would spin at
+			// 100% CPU under a sustained EMFILE condition.  A non-temporary
+			// accept error (EPERM, ENOMEM, EBADF, EINVAL) is usually a
+			// transient resource condition, not a reason to die.
 			if ne, ok := err.(interface{ Temporary() bool }); ok && ne.Temporary() {
+				time.Sleep(acceptRetryDelay)
 				continue
 			}
-			return
+			log.Warnf("PLAIN: TCP demux accept error: %v — retrying", err)
+			time.Sleep(acceptRetryDelay)
+			continue
 		}
 
 		// Sniff off the accept loop: DetectTCPProtocol blocks on the

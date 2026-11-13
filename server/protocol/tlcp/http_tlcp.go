@@ -118,16 +118,24 @@ func (s *Server) serveDOH(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Validate GET request size before delegation — the base64url parameter
-	// must be DECODED first (base64 expands ~4/3): comparing the encoded
-	// length rejects valid messages between ~49KB and 64KB that the POST
-	// path and the TLS DoH handler accept (mirrors tls/https.go).
+	// Validate GET request size before delegation — gate on the base64url
+	// encoded upper bound FIRST (no decode allocation); only the ≤4-char
+	// boundary band below EncodedLen(limit) has quantum slack large enough
+	// to decode above the limit, so decode just that band to keep the
+	// exact-wire-size semantics (mirrors tls/https.go; invalid base64 in
+	// shorter parameters still 400s via the dnshttp.Request error path).
 	if r.Method == http.MethodGet {
 		dnsParam := r.URL.Query().Get("dns")
-		decoded, err := base64.RawURLEncoding.DecodeString(dnsParam)
-		if err != nil || len(decoded) > config.DefaultDOHMaxRequestSize {
+		maxEncoded := base64.RawURLEncoding.EncodedLen(config.DefaultDOHMaxRequestSize)
+		if len(dnsParam) > maxEncoded {
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
+		}
+		if len(dnsParam) > maxEncoded-4 {
+			if decoded, err := base64.RawURLEncoding.DecodeString(dnsParam); err != nil || len(decoded) > config.DefaultDOHMaxRequestSize {
+				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
 		}
 	}
 	if r.Method == http.MethodPost {

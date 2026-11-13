@@ -94,3 +94,38 @@ func TestServeDOHTrustedProxyClientIP(t *testing.T) {
 		})
 	}
 }
+
+// TestServeDOHGETSizeGate pins the Round 6 audit P6 decode-free upper-bound
+// gate on the HTTPTLCP copy of the DoH handler (mirrors tls/https.go): a
+// GET dns parameter whose encoded length exceeds the wire limit's encoded
+// form is rejected with 400 without decoding; a normal query still passes.
+func TestServeDOHGETSizeGate(t *testing.T) {
+	s := &Server{handler: &ipCaptureHandler{}}
+	maxEncoded := base64.RawURLEncoding.EncodedLen(config.DefaultDOHMaxRequestSize)
+
+	overWire := base64.RawURLEncoding.EncodeToString(make([]byte, config.DefaultDOHMaxRequestSize+1))
+	if len(overWire) <= maxEncoded {
+		t.Fatalf("test premise: encoded length %d must exceed maxEncoded %d", len(overWire), maxEncoded)
+	}
+	r := httptest.NewRequest(http.MethodGet, config.DefaultQueryPath+"?dns="+overWire, http.NoBody)
+	r.RemoteAddr = "192.0.2.1:443"
+	rec := httptest.NewRecorder()
+	s.ServeDOH(rec, r)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("over-limit GET status = %d, want 400", rec.Code)
+	}
+
+	query := dnsutil.SetQuestion(new(dns.Msg), "example.com.", dns.TypeA)
+	query.ID = 0 // dnshttp GET requires message ID 0 (fork rule)
+	if err := query.Pack(); err != nil {
+		t.Fatal(err)
+	}
+	r = httptest.NewRequest(http.MethodGet,
+		config.DefaultQueryPath+"?dns="+base64.RawURLEncoding.EncodeToString(query.Data), http.NoBody)
+	r.RemoteAddr = "192.0.2.1:443"
+	rec = httptest.NewRecorder()
+	s.ServeDOH(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Errorf("normal GET status = %d, want 200", rec.Code)
+	}
+}

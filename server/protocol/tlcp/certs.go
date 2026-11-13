@@ -5,6 +5,7 @@ import (
 	"crypto/x509/pkix"
 	"fmt"
 	"math/big"
+	"net"
 	"time"
 	"zjdns/config"
 
@@ -67,10 +68,7 @@ func generateSelfSignedSMCerts(domain string) (signCert, encCert tlcp.Certificat
 		MaxPathLen:            1,
 	}
 	serverTemplate := func(caNotAfter time.Time) *smx509.Certificate {
-		return &smx509.Certificate{
-			// "*.domain" covers the "{name}.{domain}" SNI client-name form
-			// (one extra label) on TLCP DoT/DTLCP.
-			DNSNames:     []string{domain, "*." + domain},
+		tmpl := &smx509.Certificate{
 			SerialNumber: new(big.Int),
 			Subject:      pkix.Name{CommonName: config.DefaultProjectName + " TLCP"},
 			NotBefore:    time.Now(),
@@ -80,6 +78,16 @@ func generateSelfSignedSMCerts(domain string) (signCert, encCert tlcp.Certificat
 			KeyUsage:    smx509.KeyUsageDigitalSignature,
 			ExtKeyUsage: []smx509.ExtKeyUsage{smx509.ExtKeyUsageServerAuth},
 		}
+		if ip := net.ParseIP(domain); ip != nil {
+			// IP-literal domain: SM2 clients match the iPAddress SAN — a
+			// DNS-name SAN would never match an IP (mirrors tls/certs.go).
+			tmpl.IPAddresses = []net.IP{ip}
+		} else {
+			// "*.domain" covers the "{name}.{domain}" SNI client-name form
+			// (one extra label) on TLCP DoT/DTLCP.
+			tmpl.DNSNames = []string{domain, "*." + domain}
+		}
+		return tmpl
 	}
 
 	caDER, err := smx509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)

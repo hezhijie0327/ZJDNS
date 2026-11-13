@@ -148,18 +148,7 @@ func (s *Server) handleDOTConn(conn net.Conn) {
 	go func() {
 		defer zdnsutil.HandlePanic("TLCP DoT writer")
 		defer close(writerDone)
-		for task := range writeCh {
-			_ = conn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
-			_, err := conn.Write(task.data)
-			if task.pooled {
-				pool.DefaultBuffer.Put(task.data)
-			}
-			if err != nil {
-				log.Debugf("TLCP: DoT write error to %s: %v", clientIP, err)
-				connCancel()
-				return
-			}
-		}
+		dotWriterLoop(conn, writeCh, clientIP, connCancel)
 	}()
 
 	var wg sync.WaitGroup
@@ -327,4 +316,53 @@ func buildDOTFrame(resp *dns.Msg) (frame []byte, fromPool, ok bool) {
 		log.Debugf("TLCP: DoT response pack/size error")
 	}
 	return frame, fromPool, ok
+}
+
+// dotWriterLoop drains writeCh and flushes queued frames to the gotlcp
+// connection in batched net.Buffers rounds — up to maxWriteBatch frames per
+// flush with ONE write deadline per batch (ported from the plain/TLS DoT
+// writers, plain/tcp.go and tls/tls.go: the loaded-server profile is
+// syscall-bound, and pipelined bursts otherwise pay a deadline-set plus a
+// Write per frame, each producing its own TLCP record).  A flush error
+// aborts the writer after returning every pooled buffer of the batch; the
+// caller's drain path (see handleDOTConn) recovers whatever was still
+// queued behind the failure.
+func dotWriterLoop(conn net.Conn, writeCh <-chan dotWriteTask, clientIP net.IP, connCancel context.CancelFunc) {
+	const maxWriteBatch = 16
+	frames := make(net.Buffers, 0, maxWriteBatch)
+	tasks := make([]dotWriteTask, 0, maxWriteBatch)
+	flush := func() error {
+		_ = conn.SetWriteDeadline(time.Now().Add(config.DefaultDNSQueryTimeout))
+		_, err := frames.WriteTo(conn)
+		for _, t := range tasks {
+			if t.pooled {
+				pool.DefaultBuffer.Put(t.data)
+			}
+		}
+		frames = frames[:0]
+		tasks = tasks[:0]
+		return err
+	}
+	for task := range writeCh {
+		frames = append(frames, task.data)
+		tasks = append(tasks, task)
+	drain:
+		for len(frames) < maxWriteBatch {
+			select {
+			case t, ok := <-writeCh:
+				if !ok {
+					break drain
+				}
+				frames = append(frames, t.data)
+				tasks = append(tasks, t)
+			default:
+				break drain
+			}
+		}
+		if err := flush(); err != nil {
+			log.Debugf("TLCP: DoT write error to %s: %v", clientIP, err)
+			connCancel()
+			return
+		}
+	}
 }

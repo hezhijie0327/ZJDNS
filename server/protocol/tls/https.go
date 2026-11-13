@@ -133,12 +133,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	protocol := config.ProtoHTTPS
 	if strings.HasPrefix(r.Proto, "HTTP/3") {
 		protocol = config.ProtoHTTP3
-		// The HTTP/3 peer completed its QUIC handshake and served a request —
-		// whitelist it so its next connection skips the Retry (RFC 9000
-		// §8.1.1). r.RemoteAddr is the direct QUIC peer (no proxying in h3).
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			markAddrVerified(s.h3AddrCache, net.ParseIP(host))
-		}
+		// Retry whitelisting for HTTP/3 peers happens in
+		// handleHTTP3Connections at accept time, on the shard's own cache.
 	}
 	response := s.handler.ServeDNS(req, edns.RequestMeta{ClientIP: clientIP, ClientName: clientName, IsSecure: true, Protocol: protocol})
 	if response == req { //nolint:revive // identity guard: ServeDNS must never return the request
@@ -155,19 +151,28 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) parseDOHRequest(r *http.Request, w http.ResponseWriter) (msg *dns.Msg, statusCode int) {
 	// Validate GET request size before delegating to the library parser.
-	// The limit bounds the raw DNS wire message (RFC 8484 §4.1/§4.2.1), so
-	// the base64url parameter must be DECODED first — base64 expands ~4/3,
-	// and comparing the encoded length would reject valid messages between
-	// ~49KB and 64KB that the POST path accepts.
+	// The limit bounds the raw DNS wire message (RFC 8484 §4.1/§4.2.1) —
+	// base64 expands ~4/3, so gate on the encoded upper bound FIRST: any
+	// valid base64 parameter longer than EncodedLen(limit) decodes above
+	// the limit, and rejecting it needs no decode allocation.  Only the
+	// ≤4-character boundary band below that bound has quantum slack large
+	// enough to decode above the limit — decode just that band to keep the
+	// exact-wire-size semantics (valid messages between ~49KB and 64KB
+	// pass, matching the POST path); shorter parameters decode strictly
+	// below the limit and are parsed (and re-decoded) by dnshttp.Request.
 	if r.Method == http.MethodGet {
 		dnsParam := r.URL.Query().Get("dns")
 		if dnsParam == "" {
 			return nil, http.StatusBadRequest
 		}
-		if decoded, err := base64.RawURLEncoding.DecodeString(dnsParam); err != nil {
+		maxEncoded := base64.RawURLEncoding.EncodedLen(config.DefaultDOHMaxRequestSize)
+		switch {
+		case len(dnsParam) > maxEncoded:
 			return nil, http.StatusBadRequest
-		} else if len(decoded) > config.DefaultDOHMaxRequestSize {
-			return nil, http.StatusBadRequest
+		case len(dnsParam) > maxEncoded-4:
+			if decoded, err := base64.RawURLEncoding.DecodeString(dnsParam); err != nil || len(decoded) > config.DefaultDOHMaxRequestSize {
+				return nil, http.StatusBadRequest
+			}
 		}
 	}
 	if r.Method == http.MethodPost {

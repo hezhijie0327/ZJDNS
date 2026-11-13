@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 	"zjdns/config"
@@ -109,5 +110,48 @@ func TestServeHTTPTrustedProxyClientIP(t *testing.T) {
 				t.Errorf("client IP = %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestParseDOHRequestGETSizeGate pins the Round 6 audit P6 decode-free
+// upper-bound gate: a GET dns parameter longer than the base64url encoded
+// form of DefaultDOHMaxRequestSize is rejected with 400 without ever
+// decoding (the old gate decoded every parameter just to measure it), a
+// boundary-band parameter that decodes above the wire limit is still
+// rejected, and a normal parameter passes the gate untouched.
+func TestParseDOHRequestGETSizeGate(t *testing.T) {
+	s := &Server{cfg: &Config{}, handler: &ipCaptureHandler{}}
+	maxEncoded := base64.RawURLEncoding.EncodedLen(config.DefaultDOHMaxRequestSize)
+
+	// Valid base64 one byte ABOVE the wire limit (65536 bytes → maxEncoded+2
+	// chars): must be rejected, and the fast path never allocates a decode.
+	overWire := base64.RawURLEncoding.EncodeToString(make([]byte, config.DefaultDOHMaxRequestSize+1))
+	if len(overWire) <= maxEncoded {
+		t.Fatalf("test premise: encoded length %d must exceed maxEncoded %d", len(overWire), maxEncoded)
+	}
+	r := httptest.NewRequest(http.MethodGet, config.DefaultQueryPath+"?dns="+overWire, http.NoBody)
+	if msg, code := s.parseDOHRequest(r, httptest.NewRecorder()); msg != nil || code != http.StatusBadRequest {
+		t.Errorf("over-limit GET: got (%v, %d), want (nil, 400)", msg, code)
+	}
+
+	// Garbage far above the bound: rejected at the gate regardless of
+	// base64 validity.
+	huge := config.DefaultQueryPath + "?dns=" + strings.Repeat("A", maxEncoded+1024)
+	r = httptest.NewRequest(http.MethodGet, huge, http.NoBody)
+	if msg, code := s.parseDOHRequest(r, httptest.NewRecorder()); msg != nil || code != http.StatusBadRequest {
+		t.Errorf("huge GET: got (%v, %d), want (nil, 400)", msg, code)
+	}
+
+	// A normal query passes the gate and parses.
+	query := dnsutil.SetQuestion(new(dns.Msg), "example.com.", dns.TypeA)
+	query.ID = 0 // dnshttp GET requires message ID 0 (fork rule)
+	if err := query.Pack(); err != nil {
+		t.Fatal(err)
+	}
+	r = httptest.NewRequest(http.MethodGet,
+		config.DefaultQueryPath+"?dns="+base64.RawURLEncoding.EncodeToString(query.Data), http.NoBody)
+	msg, code := s.parseDOHRequest(r, httptest.NewRecorder())
+	if msg == nil || code != http.StatusOK {
+		t.Errorf("normal GET: got (%v, %d), want (msg, 200)", msg, code)
 	}
 }

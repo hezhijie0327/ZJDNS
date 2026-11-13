@@ -75,8 +75,8 @@ func (s *Server) startUDP(g Group, ctx context.Context, handler dns.Handler) err
 	for _, addr := range addrs {
 		for range shards {
 			var lc net.ListenConfig
-			if shards > 1 {
-				lc = net.ListenConfig{Control: shared.ReusePortControl()}
+			if control := shared.UDPListenControl(shards > 1); control != nil {
+				lc = net.ListenConfig{Control: control}
 			}
 			pc, err := lc.ListenPacket(ctx, "udp", addr)
 			if err != nil {

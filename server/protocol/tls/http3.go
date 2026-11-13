@@ -22,8 +22,7 @@ func (s *Server) startDOH3Server(port string) error {
 		return fmt.Errorf("DoH3 address resolution: %w", err)
 	}
 
-	s.h3AddrCache = lrumap.New[string, time.Time](config.DefaultQUICAddrCacheSize)
-	addrCache := s.h3AddrCache
+	addrCache := lrumap.New[string, time.Time](config.DefaultQUICAddrCacheSize)
 
 	tlsConfig := s.QUICTLSConfig().Clone()
 	tlsConfig.NextProtos = config.NextProtoDOH3
@@ -83,7 +82,7 @@ func (s *Server) startDOH3Server(port string) error {
 		s.groups.h3.Go(func() error {
 			defer zdnsutil.HandlePanic("DoH3 server")
 			// The accept/admission loop lives in handleHTTP3Connections.
-			s.handleHTTP3Connections(capturedH3)
+			s.handleHTTP3Connections(capturedH3, addrCache)
 			return nil
 		})
 	}
@@ -96,7 +95,11 @@ func (s *Server) startDOH3Server(port string) error {
 // Shared with HandleHTTP3FromPacketConn (shared-port mode) and
 // startDOH3Server (standalone mode) — the single implementation so the
 // stream bounds and admission cap cannot drift between the two paths.
-func (s *Server) handleHTTP3Connections(h3Listener *quic.EarlyListener) {
+// addrCache is THIS listener's Retry-whitelist cache — the same instance
+// bound to the transport's VerifySourceAddress — passed as a parameter
+// because shared-port mode runs one handler per UDP dispatch shard and a
+// server field would be last-wins across shards.
+func (s *Server) handleHTTP3Connections(h3Listener *quic.EarlyListener, addrCache *lrumap.Map[string, time.Time]) {
 	for {
 		conn, err := h3Listener.Accept(s.ctx)
 		if err != nil {
@@ -109,6 +112,14 @@ func (s *Server) handleHTTP3Connections(h3Listener *quic.EarlyListener) {
 		}
 		if conn == nil {
 			continue
+		}
+
+		// The handshake completed — the peer owns its source address, so its
+		// next connection skips the Retry (RFC 9000 §8.1.1).  Marked here
+		// (this shard's cache) rather than in ServeHTTP so the whitelist
+		// pairs with the transport that validates it.
+		if udpAddr, ok := conn.RemoteAddr().(*net.UDPAddr); ok {
+			markAddrVerified(addrCache, udpAddr.IP)
 		}
 
 		// Admission cap: quic.Config only limits streams, not
