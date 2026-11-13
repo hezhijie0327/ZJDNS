@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 	"zjdns/cache"
 	"zjdns/config"
 	"zjdns/edns"
@@ -22,7 +23,20 @@ type fakeMQResolver struct {
 	results          map[uint16]*resolver.QueryResult
 }
 
+// blockingMQResolver stalls every query — used to prove call paths that
+// must NOT consult the resolver.
+type blockingMQResolver struct{}
+
 var errTestNotFound = mqtypeError("not found")
+
+func (b *blockingMQResolver) Query(ctx context.Context, _ handler.Question, _ *edns.ECSOption) *resolver.QueryResult {
+	<-ctx.Done()
+	return &resolver.QueryResult{Err: ctx.Err()}
+}
+
+func (b *blockingMQResolver) UpstreamServers() []*config.UpstreamServer {
+	return []*config.UpstreamServer{{Protocol: config.ProtoRecursive}}
+}
 
 func (f *fakeMQResolver) Query(_ context.Context, q handler.Question, _ *edns.ECSOption) *resolver.QueryResult {
 	if r, ok := f.results[q.Qtype]; ok {
@@ -813,5 +827,49 @@ func TestMergeRRs_SrcSelfDedupAcrossAppends(t *testing.T) {
 	out := mergeRRs(dst, src)
 	if len(out) != 3 {
 		t.Fatalf("merged len = %d, want 3 (src self-duplicate dropped): %+v", len(out), out)
+	}
+}
+
+// TestMQTYPE_LocalRejectionSkipsMerge pins the merge-entry short-circuit: a
+// locally-rejected primary (REFUSED/FORMERR — ACL, validation, zone policy)
+// must return immediately instead of waiting out the QTx resolve budget —
+// the merge's RCODE gate would drop every additional result anyway.
+func TestMQTYPE_LocalRejectionSkipsMerge(t *testing.T) {
+	store := mqTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	// The QTx resolver blocks past the test budget when consulted to the
+	// bitter end — the short-circuit must keep the handler off that path.
+	blocking := &blockingMQResolver{}
+	m := &MQTYPE{store: store, secondary: handler.NewSecondary(store, blocking, nil)}
+	chain := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
+		qctx.Res = handler.BuildResponseMsg(qctx.Req)
+		qctx.Res.Rcode = dns.RcodeRefused // the shape ACL/zone policy produces
+		return nil
+	}))
+
+	qctx := (&handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA)}).InitQuestion()
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- chain.ServeDNS(context.Background(), qctx) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+		if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+			t.Fatalf("rejection took %v — the merge waited for the QTx budget", elapsed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("locally-rejected MQTYPE query never returned — merge is blocked on QTx results")
+	}
+	if qctx.Res.Rcode != dns.RcodeRefused {
+		t.Fatalf("rcode = %d, want REFUSED unchanged", qctx.Res.Rcode)
+	}
+	for _, rr := range qctx.Res.Pseudo {
+		if _, ok := rr.(*dns.MQRESPONSE); ok {
+			t.Error("rejection response must not carry an MQTYPE-Response option")
+		}
 	}
 }

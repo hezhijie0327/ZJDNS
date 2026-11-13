@@ -120,6 +120,21 @@ func (m *MQTYPE) Wrap(next handler.QueryHandler) handler.QueryHandler {
 			return err
 		}
 
+		// A locally-rejected or failed primary (REFUSED from ACL/policy,
+		// FORMERR, SERVFAIL…) is never extended: the merge's RCODE gate
+		// drops every QTx result against such a primary anyway, so waiting
+		// out their budgets would only pin the handler goroutine (and its
+		// pooled QueryContext) for up to DefaultMQTypeResolveTimeout while
+		// the rejection itself costs nothing.  The buffered QTx sends land
+		// in the channel's spare capacity and the goroutines exit on their
+		// own; no result is consumed.
+		if qctx.Res.Rcode != dns.RcodeSuccess && qctx.Res.Rcode != dns.RcodeNameError {
+			if log.IsDebug() {
+				log.Debugf("MQTYPE: primary rcode=%s — skipping additional-type merge", dns.RcodeToString[qctx.Res.Rcode])
+			}
+			return err
+		}
+
 		// Merge locally in every mode — forwarding too.  ZJDNS is a full
 		// resolver: each QTx is resolved through the shared secondary
 		// lookup (m.secondary.Lookup), so the response supports MQTYPE

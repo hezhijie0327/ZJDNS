@@ -41,19 +41,31 @@ func (m *MQTYPE) merge(qctx *handler.QueryContext, mq *dns.MQQUERY, qtResults <-
 	// RFC 10029 §3.4: a truncated primary response MUST NOT be extended —
 	// the additional queries are not merged into this response.  The
 	// MQTYPE-Response option is still returned (empty list) to signal
-	// support, and the already-launched QTx results are drained and written
-	// to the cache so the client's TCP retry finds them warm.
+	// support, and the already-launched QTx results are written to the
+	// cache in a detached drain so the client's TCP retry finds them warm.
+	// The drain is detached because the truncated primary returns in
+	// milliseconds while each QTx pays a full upstream round trip —
+	// consuming inline would only cache results that already finished,
+	// missing virtually every miss-path QTx.
 	if msg.Truncated {
 		if log.IsDebug() {
 			log.Debugf("MQTYPE: primary response truncated — skipping additional types for %s", qctx.Req.Question[0].Header().Name)
 		}
 		msg.Pseudo = append(msg.Pseudo, &dns.MQRESPONSE{})
-		for range len(qtResults) {
-			qtr := <-qtResults
-			if qtr.qr != nil && qtr.qr.Err == nil {
-				handler.StoreIfCacheable(m.store, qctx.Qname, qtr.qt, qctx.Qclass, qctx.ECSOpt, qtr.qr)
+		qname, qclass := qctx.Qname, qctx.Qclass
+		ecsOpt := qctx.ECSOpt
+		types := min(len(mq.Types), config.DefaultMQTypeMaxQTx)
+		go func() { //nolint:gosec // G114: detached by design — mirrors the QTx goroutines' lifecycle (bounded by their own timeouts)
+			defer zdnsutil.HandlePanic("MQTYPE TC drain")
+			// Exactly one send per launched QTx (defer-send contract); the
+			// channel is never closed, so receive by count.
+			for range types {
+				qtr := <-qtResults
+				if qtr.qr != nil && qtr.qr.Err == nil {
+					handler.StoreIfCacheable(m.store, qname, qtr.qt, qclass, ecsOpt, qtr.qr)
+				}
 			}
-		}
+		}()
 		return
 	}
 
