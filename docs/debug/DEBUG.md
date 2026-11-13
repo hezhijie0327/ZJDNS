@@ -575,13 +575,11 @@ pkill -f "spoofguard"
 ### Spoofguard + SOCKS5 (forwarding UDP over proxy)
 
 ```bash
-# Start a SOCKS5 proxy.
-# NOTE: things-go/go-socks5 v0.1.1 ships no cmd/socks5 binary — run its
-# _example server (binds :10800; edit the port to 11080 first):
-#   mkdir -p /tmp/socks5srv && cp $(go env GOMODCACHE)/github.com/things-go/go-socks5@v0.1.1/_example/main.go /tmp/socks5srv/
-#   cd /tmp/socks5srv && go mod init socks5srv && go mod tidy && sed -i 's/:10800/:11080/' main.go && go run .
-# (or any SOCKS5 server listening on 127.0.0.1:11080)
-go run github.com/things-go/go-socks5/cmd/socks5@latest -addr :11080 &
+# Start a SOCKS5 proxy — the repo ships a minimal UDP-ASSOCIATE server
+# (docs/debug/socks5srv; the things-go helper this section used before is
+# gone upstream and its library does not relay UDP).
+go build -o /tmp/socks5srv ./docs/debug/socks5srv
+/tmp/socks5srv &   # listens on 127.0.0.1:11080, no auth
 sleep 1
 
 /tmp/zjdns -config docs/debug/defense/spoofguard-socks5.json &

@@ -142,7 +142,9 @@ func answer(fakePC, realPC net.PacketConn, src net.Addr, q *dns.Msg, fakes int, 
 		Hdr:  dns.Header{Name: q.Question[0].Header().Name, Class: dns.ClassINET, TTL: 300},
 		Addr: netip.MustParseAddr(realAnswer),
 	}}
-	realMsg.Extra = []dns.RR{&dns.OPT{Hdr: dns.Header{Name: ".", Class: dns.ClassINET}}}
+	// EDNS comes from SetReply copying the query's Security bit — the
+	// fork's Pack materialises the OPT; a manual one here would duplicate
+	// it and fail the pack (the real response silently never sent).
 	if err := realMsg.Pack(); err == nil {
 		_, _ = realPC.WriteTo(realMsg.Data, src)
 	}
