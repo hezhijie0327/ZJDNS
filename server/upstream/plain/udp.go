@@ -492,6 +492,9 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 								uc.ReleaseCollect(matchKey)
 								return nil, errAmbiguousNoConfirm
 							}
+							// The next round registers under a fresh matchKey —
+							// this round's registration must not outlive it.
+							uc.ReleaseCollect(matchKey)
 							break collect // fresh divergent round
 						}
 						if !roundsLeft {
@@ -506,6 +509,9 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 						if previous != nil {
 							pool.DefaultMessage.Put(previous)
 						}
+						// The next round registers under a fresh matchKey —
+						// this round's registration must not outlive it.
+						uc.ReleaseCollect(matchKey)
 						break collect // re-query in the next round
 					}
 					// Single / repeat-confirmed EDNS candidate — safe,
