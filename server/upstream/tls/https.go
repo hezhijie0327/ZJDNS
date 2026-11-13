@@ -130,7 +130,14 @@ func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxy
 	// Extract the transport once — used in both non-cached and cached paths.
 	tr, ok := c.dohClient.Transport.(*http.Transport)
 	if !ok {
-		return &http.Client{Timeout: c.dohClient.Timeout, Transport: &http.Transport{}}
+		return &http.Client{
+			Timeout:   c.dohClient.Timeout,
+			Transport: &http.Transport{},
+			// Never follow redirects — same policy as the full client below.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 	}
 
 	transport := tr.Clone()
@@ -183,7 +190,14 @@ func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxy
 	}
 
 	if c.dohTransports == nil {
-		return &http.Client{Timeout: c.dohClient.Timeout, Transport: transport}
+		return &http.Client{
+			Timeout:   c.dohClient.Timeout,
+			Transport: transport,
+			// Never follow redirects — same policy as the cached client below.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 	}
 
 	key := transportKey(host, serverName, skipVerify, proxyURL)
@@ -194,6 +208,13 @@ func (c *Client) createDOHClient(host, serverName string, skipVerify bool, proxy
 	client := &http.Client{
 		Timeout:   c.dohClient.Timeout,
 		Transport: transport,
+		// Never follow redirects: a 3xx would re-send the full DNS query
+		// (dns= URL) to an arbitrary host — query leak + SSRF, and a
+		// redirect to http:// would bypass the eTLS transport entirely
+		// (DialTLSContext is never invoked for plain http).
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 	actual, loaded := c.dohTransports.LoadOrStore(key, client)
 	if loaded {

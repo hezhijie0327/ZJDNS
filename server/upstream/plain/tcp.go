@@ -18,6 +18,11 @@ import (
 	"codeberg.org/miekg/dns"
 )
 
+// errTCPQuestionMismatch rejects a one-shot TCP response whose question
+// section does not echo the query (RFC 7766 §7) — a stale or forged segment
+// must not match on ID alone.
+var errTCPQuestionMismatch = errors.New("plain: TCP response question mismatch")
+
 // ExecuteTCP sends a DNS query over TCP to the upstream server, optionally
 // routing through a SOCKS5 proxy. Uses the pipelined connection pool when
 // available, falling back to a single-shot exchange.
@@ -136,6 +141,13 @@ func (c *Client) exchangeSegmented(ctx context.Context, msg *dns.Msg, addr strin
 	if response.ID != msg.ID {
 		pool.DefaultMessage.Put(response)
 		return nil, fmt.Errorf("response id mismatch: expected %d, got %d", msg.ID, response.ID)
+	}
+	// RFC 7766 §7: verify the question echo like the pooled path
+	// (tcp_conn.go readLoop) and the UDP paths — a mismatched question is a
+	// misrouted or forged segment even with a matching ID.
+	if !matchQuestion(response, msg) {
+		pool.DefaultMessage.Put(response)
+		return nil, errTCPQuestionMismatch
 	}
 	return response, nil
 }

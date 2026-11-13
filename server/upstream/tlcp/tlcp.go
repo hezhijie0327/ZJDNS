@@ -12,6 +12,7 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/internal/resolv"
+	zpool "zjdns/server/upstream/pool"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -30,22 +31,28 @@ func (c *Client) ExecuteTLCP(ctx context.Context, msg *dns.Msg, server *config.U
 	proxyDialer := c.getProxy(server)
 
 	if c.tlcpPool != nil {
-		pc, err := c.tlcpPool.Acquire(ctx, tlcpPoolKey(server), server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
+		pc, acqErr := c.tlcpPool.Acquire(ctx, tlcpPoolKey(server), server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
 			// Config built only on dial — the pool-hit path skips the
 			// per-query SystemCertPool Clone.
 			tlcpCfg := c.tlcpClientConfig(server).Clone()
 			tlcpCfg.NextProtos = config.NextProtoDOT
 			return c.dialTLCPConnForDOT(dialCtx, addr, tlcpCfg, proxyDialer)
 		})
-		if err == nil {
-			response, err := pc.Exchange(ctx, msg)
-			if err == nil {
+		if acqErr == nil {
+			response, exErr := pc.Exchange(ctx, msg)
+			if exErr == nil {
 				return response, nil
 			}
 			if pc.IsDead() {
 				c.tlcpPool.Remove(pc)
 			}
-			log.Debugf("UPSTREAM: pipelined TLCP query to %s failed: %v, falling back", server.Address, err)
+			log.Debugf("UPSTREAM: pipelined TLCP query to %s failed: %v, falling back", server.Address, exErr)
+		} else if errors.Is(acqErr, zpool.ErrNoAvailableSocket) ||
+			errors.Is(acqErr, zpool.ErrMaxConnsReached) ||
+			errors.Is(acqErr, zpool.ErrPoolShutdown) {
+			// The pool's saturation errors exist precisely to bound concurrent
+			// dials — falling through to a per-query dial bypasses the caps.
+			return nil, acqErr
 		}
 	}
 

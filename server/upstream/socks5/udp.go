@@ -366,6 +366,13 @@ func (c *socks5UDPConn) Read(p []byte) (n int, err error) {
 	// Zero only the used prefix, not the whole 64KB buffer.
 	defer func() { clear((*buf)[:nr]); socks5ReadBufPool.Put(buf) }()
 	if err != nil {
+		// Keep the net.Error identity (timeout) intact — same discipline as
+		// ReadFrom above: a consumer that type-asserts read errors with a
+		// bare `err.(net.Error)` (gotlcp's DTLCP client does on its PacketConn
+		// reads) must keep working through this Read too.
+		if _, ok := err.(net.Error); ok { //nolint:errorlint // deliberate: consumers type-assert net.Error — wrapping would break them (same as ReadFrom)
+			return 0, err
+		}
 		return 0, fmt.Errorf("socks5: read: %w", err)
 	}
 

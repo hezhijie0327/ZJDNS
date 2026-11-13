@@ -13,6 +13,7 @@ import (
 	"zjdns/internal/log"
 	"zjdns/internal/pool"
 	"zjdns/internal/resolv"
+	zpool "zjdns/server/upstream/pool"
 	socks5 "zjdns/server/upstream/socks5"
 
 	"codeberg.org/miekg/dns"
@@ -49,18 +50,24 @@ func (c *Client) ExecuteDTLS(ctx context.Context, msg *dns.Msg, server *config.U
 	poolKey := transportKey(server.Address, server.ServerName, server.SkipTLSVerify, server.Proxy)
 
 	if c.dtlsPool != nil {
-		pc, err := c.dtlsPool.Acquire(ctx, poolKey, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
+		pc, acqErr := c.dtlsPool.Acquire(ctx, poolKey, server.Address, func(dialCtx context.Context, addr string) (net.Conn, error) {
 			return c.dialDTLSConn(dialCtx, addr, server, proxyDialer)
 		})
-		if err == nil {
-			response, err := pc.Exchange(ctx, msg)
-			if err == nil {
+		if acqErr == nil {
+			response, exErr := pc.Exchange(ctx, msg)
+			if exErr == nil {
 				return response, nil
 			}
 			if pc.IsDead() {
 				c.dtlsPool.Remove(pc)
 			}
-			log.Debugf("UPSTREAM: pipelined DTLS query to %s failed: %v, falling back", server.Address, err)
+			log.Debugf("UPSTREAM: pipelined DTLS query to %s failed: %v, falling back", server.Address, exErr)
+		} else if errors.Is(acqErr, zpool.ErrNoAvailableSocket) ||
+			errors.Is(acqErr, zpool.ErrMaxConnsReached) ||
+			errors.Is(acqErr, zpool.ErrPoolShutdown) {
+			// The pool's saturation errors exist precisely to bound concurrent
+			// dials — falling through to a per-query dial bypasses the caps.
+			return nil, acqErr
 		}
 	}
 

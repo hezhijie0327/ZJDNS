@@ -217,6 +217,13 @@ func (c *Client) createDOH3Client(key, host, proxyURL string, tlsConfig *tls.Con
 	client := &http.Client{
 		Timeout:   c.doh3Client.Timeout,
 		Transport: transport,
+		// Never follow redirects: a 3xx would re-send the full DNS query
+		// (dns= URL) to an arbitrary host — query leak + SSRF.  http3.Transport
+		// refuses non-https redirect targets, but https→https egress
+		// redirection is still possible.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 	actual, loaded := c.doh3Transports.LoadOrStore(key, client)
 	if loaded {

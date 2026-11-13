@@ -45,7 +45,6 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 	if server == nil {
 		return nil, errors.New("quic: nil server config")
 	}
-	tlsConfig := c.stdTLSConfig(server)
 	key := server.Address
 	// Identity-keyed pool/config keys: two upstreams sharing an address but
 	// differing in ServerName/SkipTLSVerify must not share a pooled QUIC
@@ -55,7 +54,10 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 	proxyDialer := c.getProxy(server)
 
 	dialQUIC := func(dialCtx context.Context, _ string) (*quic.Conn, error) { // _ = poolKey (unused: we dial the real server addr)
-		dialTLS := tlsConfig.Clone()
+		// Config built only on dial — the pool-hit path (the common case)
+		// skips the per-query config allocation, same discipline as DoT's
+		// dial closure (tls.go).
+		dialTLS := c.stdTLSConfig(server).Clone()
 		dialTLS.NextProtos = config.NextProtoDOQ
 		timeoutCtx, cancel := context.WithTimeout(dialCtx, config.DefaultDNSQueryTimeout)
 		defer cancel()
@@ -72,7 +74,7 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 				_ = pconn.Close()
 				return nil, fmt.Errorf("resolve %s: %w", key, err)
 			}
-			conn, err := quic.Dial(timeoutCtx, pconn, remoteAddr, dialTLS, c.getQUICConfig(configKey, tlsConfig.InsecureSkipVerify))
+			conn, err := quic.Dial(timeoutCtx, pconn, remoteAddr, dialTLS, c.getQUICConfig(configKey, server.SkipTLSVerify))
 			if err != nil {
 				// quic-go does not take ownership of a caller-provided
 				// PacketConn on a failed dial — do not leak the UDP socket.
@@ -104,7 +106,7 @@ func (c *Client) ExecuteQUIC(ctx context.Context, msg *dns.Msg, server *config.U
 		if resolved, rErr := resolv.Default.ResolveUDPAddr(timeoutCtx, key); rErr == nil {
 			dialAddr = resolved.String()
 		}
-		conn, err := quic.DialAddrEarly(timeoutCtx, dialAddr, dialTLS, c.getQUICConfig(configKey, tlsConfig.InsecureSkipVerify))
+		conn, err := quic.DialAddrEarly(timeoutCtx, dialAddr, dialTLS, c.getQUICConfig(configKey, server.SkipTLSVerify))
 		if err == nil {
 			log.Debugf("UPSTREAM: DoQ negotiated for %s — cipher=%s resumed=%v 0-RTT=%v",
 				key, tls.CipherSuiteName(conn.ConnectionState().TLS.CipherSuite),
