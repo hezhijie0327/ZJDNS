@@ -36,9 +36,10 @@ func (m *CacheStore) Wrap(next handler.QueryHandler) handler.QueryHandler {
 		err := next.ServeDNS(ctx, qctx)
 
 		// Already handled by an upstream middleware — nothing to do.
-		// Gate on Res alone — every terminal path sets Res except the
-		// records-less zone rule path, which must reach buildSuccess below
-		// or the query is silently dropped.
+		// Gate on Res alone: every short-circuit path sets Res and returns
+		// here (zone rules included — records-less ones set an empty
+		// authoritative response); only a completed Resolution reaches the
+		// build paths below.
 		if qctx.Res != nil {
 			return err
 		}

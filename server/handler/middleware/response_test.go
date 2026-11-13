@@ -99,6 +99,66 @@ func TestResponseMiddleware_PrePackedEDNSPath(t *testing.T) {
 	}
 }
 
+// TestResponseMiddleware_PrePackedUnpackFailure (Round 6 H4): when the
+// pre-packed wire fails to unpack, Data must be cleared (releasing the wire)
+// so bridge.go's packSafe rebuilds a real SERVFAIL wire from the struct —
+// previously the unparseable wire was served verbatim while the stats
+// journal recorded SERVFAIL.
+func TestResponseMiddleware_PrePackedUnpackFailure(t *testing.T) {
+	ednsH, err := edns.NewHandler(config.ECSConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := dnsutil.SetQuestion(new(dns.Msg), "example.com.", dns.TypeA)
+	req.ID = 0xBEEF
+
+	packed := new(dns.Msg)
+	dnsutil.SetReply(packed, req)
+	packed.Answer = []dns.RR{&dns.A{
+		Hdr:  dns.Header{Name: "example.com.", TTL: 300, Class: dns.ClassINET},
+		Addr: netip.MustParseAddr("192.0.2.1"),
+	}}
+	if err := packed.Pack(); err != nil {
+		t.Fatalf("pack pre-packed response: %v", err)
+	}
+	// Corrupt the wire so the answer-section unpack fails: the header still
+	// promises one answer record, but its last 4 bytes (the A rdata) are gone.
+	origLen := len(packed.Data)
+	packed.Data = packed.Data[:origLen-4]
+	packed.Answer = nil // pre-packed: sections unparsed
+	packed.ID = 0x1234  // stale ID from cache Set() time
+
+	next := handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
+		qctx.Res = packed
+		return nil
+	})
+	chain := (&Response{edns: ednsH}).Wrap(next)
+
+	// An EDE forces shouldAddEDNS, driving the unpack-for-modify path.
+	qctx := (&handler.QueryContext{Req: req, EDE: &dns.EDE{InfoCode: dns.ExtendedErrorNetworkError}}).InitQuestion()
+	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+	if qctx.Res.Data != nil {
+		t.Fatal("unpack failure must clear Data so bridge.go re-packs instead of serving the corrupt wire")
+	}
+	if qctx.Res.Rcode != dns.RcodeServerFailure {
+		t.Fatalf("rcode = %d, want SERVFAIL", qctx.Res.Rcode)
+	}
+
+	// Bridge contract: empty Data → packSafe re-packs; the client must
+	// receive a SERVFAIL wire, not the cached rcode in the original bytes.
+	if err := qctx.Res.Pack(); err != nil {
+		t.Fatalf("re-pack SERVFAIL: %v", err)
+	}
+	if got := qctx.Res.Data[3] & 0x0F; got != dns.RcodeServerFailure {
+		t.Fatalf("re-packed wire rcode = %d, want SERVFAIL", got)
+	}
+	if len(qctx.Res.Data) == origLen-4 {
+		t.Fatal("bridge output must not be the original corrupt wire")
+	}
+}
+
 // TestResponseMiddleware_SecurePaddingSinglePack verifies the padding
 // single-pack contract: a secure response gets its PADDING option and the
 // final pack leaves Data populated so bridge.go skips its own packSafe.

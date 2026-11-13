@@ -115,9 +115,13 @@ func encryptPadding(packet []byte, minWireSize int) []byte {
 	)
 	minWire = min((minWire+63)&^63, MaxDNSUDPPacketSize)
 	// The final padding must not push the sealed UDP query past the cap:
-	// Pad re-rounds len(packet)+1 up to the next 64-byte boundary, so the
-	// requested length is clamped to MaxDNSUDPPacketSize - QueryOverhead.
-	paddedLen := min(max(minWire-QueryOverhead, (len(packet)+1+63)&^63), MaxDNSUDPPacketSize-QueryOverhead)
+	// Pad re-rounds len(packet)+1 up to the next 64-byte boundary and its
+	// minLen must be 64-aligned, so the clamp is rounded DOWN to the last
+	// 64-byte boundary that fits the budget (3968, not 4028 — a
+	// non-aligned cap is overridden by Pad's own roundup for plaintexts
+	// ≥3968 bytes, yielding a >4096-byte query; the sealed-size check in
+	// EncryptedQuery.Encrypt rejects those).
+	paddedLen := min(max(minWire-QueryOverhead, (len(packet)+1+63)&^63), (MaxDNSUDPPacketSize-QueryOverhead)&^63)
 	return Pad(packet, paddedLen)
 }
 

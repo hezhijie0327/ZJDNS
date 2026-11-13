@@ -199,9 +199,10 @@ func (m *Map[K, V]) Len() int {
 		}
 		return n
 	}
-	m.mu.Lock()
+	// m.len only mutates under the write lock — a read lock suffices.
+	m.mu.RLock()
 	n := m.len
-	m.mu.Unlock()
+	m.mu.RUnlock()
 	return n
 }
 
@@ -288,7 +289,8 @@ func (m *Map[K, V]) CompareAndDelete(key K, val V) bool {
 
 // Range calls fn for each entry in the map, from most recent to least recent
 // (per shard on a sharded map; cross-shard ordering is not defined).
-// Iteration stops if fn returns false.
+// Iteration stops if fn returns false.  Holds only the read lock: the list
+// pointers mutate exclusively under the write lock.
 func (m *Map[K, V]) Range(fn func(K, V) bool) {
 	if len(m.shards) > 0 {
 		for _, s := range m.shards {
@@ -296,8 +298,8 @@ func (m *Map[K, V]) Range(fn func(K, V) bool) {
 		}
 		return
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	for e := m.head.next; e != m.tail; e = e.next {
 		if !fn(e.key, e.val) {
 			return

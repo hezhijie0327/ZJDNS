@@ -20,7 +20,9 @@ import (
 //
 // One sequential pass over the sorted-region blocks (pooled buffers) plus
 // the tail map — cheaper than the Entries() + sort + per-key Get sequence
-// it replaced.
+// it replaced.  Metadata is snapshotted under mu and every block/wire read
+// runs OUTSIDE the lock — same protocol as Entries, so a Warm scan never
+// stalls concurrent Get/Put/Indexed behind disk latency.
 //
 // Stale records are skipped, not tombstoned — dead weight stays on disk
 // until the next Compact, which the caller already schedules.
@@ -47,16 +49,23 @@ func (s *Store) Warm(topN int, keep func(ts int64, ttl int) bool) (entries []War
 		}
 	}
 
+	// Snapshot the metadata, then release mu for all reads — same protocol
+	// as Compact's snapshot.  The tail-map copy doubles as the supersede
+	// set for the block scan below.
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	tailSnapshot := make(map[string]tailEntry, len(s.tailMap))
+	maps.Copy(tailSnapshot, s.tailMap)
+	sparseSnapshot := s.sparse
 	ref := s.fref.Load()
-	for k, te := range s.tailMap {
+	s.mu.Unlock()
+
+	for k, te := range tailSnapshot {
 		if te.deleted {
 			continue
 		}
 		consider(Entry{Key: k, Ts: te.ts, Ttl: te.ttl, Validated: te.validated, WireOff: te.wireOff, WireLen: te.wireLen})
 	}
-	for _, blk := range s.sparse {
+	for _, blk := range sparseSnapshot {
 		buf := acquireBlockBuf(int(blk.blockEnd - blk.blockStart))
 		block := buf[:blk.blockEnd-blk.blockStart]
 		if _, err := ref.f.ReadAt(block, blk.blockStart); err != nil {
@@ -64,7 +73,7 @@ func (s *Store) Warm(topN int, keep func(ts int64, ttl int) bool) (entries []War
 			continue
 		}
 		scanBlock(blk.blockStart, block, func(key string, ts int64, ttl int, validated bool, wireOff int64, wireLen int) bool {
-			if _, inTail := s.tailMap[key]; inTail {
+			if _, inTail := tailSnapshot[key]; inTail {
 				return true // superseded by a tail entry, or tombstoned
 			}
 			consider(Entry{Key: key, Ts: ts, Ttl: ttl, Validated: validated, WireOff: wireOff, WireLen: int32(wireLen)}) //nolint:gosec // G115: wire length bounded by maxWireLen

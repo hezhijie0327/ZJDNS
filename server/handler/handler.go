@@ -97,10 +97,13 @@ func (h *Handler) ServeDNS(req *dns.Msg, meta edns.RequestMeta) *dns.Msg {
 		return nil
 	}
 
-	// Plain-transport listeners deliver question-only unpacks (listeners set
-	// MsgOptionUnpackQuestion for routing); the chain operates on the fully
-	// parsed message (Pseudo options, EDNS version, flags).  Force the full
-	// unpack once here, at the pipeline entry.
+	// The chain operates on the fully parsed message (Pseudo options, EDNS
+	// version, flags).  No listener ever requests a question-only unpack
+	// (none sets MsgOptionUnpackQuestion), so a request that arrives with an
+	// OPT record was already fully parsed by its listener and is left
+	// untouched; a no-OPT legacy request (Pseudo empty, wire present) is
+	// fully re-parsed once here — one extra header+question parse, an
+	// accepted cost next to query processing.
 	if err := EnsureFullUnpack(req); err != nil {
 		if log.IsDebug() {
 			log.Debugf("QUERY: full unpack failed: %v", err)
@@ -161,14 +164,17 @@ func (h *Handler) ServeDNS(req *dns.Msg, meta edns.RequestMeta) *dns.Msg {
 	return qctx.Res
 }
 
-// EnsureFullUnpack force-parses a question-only-unpacked request from its
-// wire so the chain sees the EDNS options (Pseudo), version and flags.  It is
-// the pipeline-entry parse step: ServeDNS calls it before dispatching to the
-// chain, and protocol-level tests that feed packed wires to a middleware
-// chain directly must call it too (mirroring the production entry contract).
+// EnsureFullUnpack force-parses a request from its wire so the chain sees
+// the EDNS options (Pseudo), version and flags.  It is the pipeline-entry
+// parse step: ServeDNS calls it before dispatching to the chain, and
+// protocol-level tests that feed packed wires to a middleware chain
+// directly must call it too (mirroring the production entry contract).
 // A request built from fields (Data == nil — direct ServeDNS calls,
 // benchmarks) has no wire to unpack and is left untouched; a message whose
-// Pseudo is already populated was fully unpacked by its listener.
+// Pseudo is already populated was fully unpacked by its listener.  A
+// wire-bearing request with an empty Pseudo (a no-EDNS legacy request) is
+// re-parsed even though its listener already fully unpacked it — the extra
+// header+question parse is the accepted cost of the Pseudo-based trigger.
 func EnsureFullUnpack(req *dns.Msg) error {
 	if len(req.Pseudo) == 0 && req.Data != nil {
 		req.Options = 0

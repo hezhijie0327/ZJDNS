@@ -75,10 +75,13 @@ func BenchmarkResponseServePrePacked(b *testing.B) {
 	})
 }
 
-// BenchmarkResponseServeLargeWire measures the fast path on an oversized
-// pre-packed wire (100 A records, ~1.7KB — beyond the RFC 9715 1400-byte
-// UDP cap): the direct-wire fast path itself is size-independent, but the
-// WireHasDNSSEC gate scans the whole wire for DO=0 clients.
+// BenchmarkResponseServeLargeWire measures the direct-wire fast path on an
+// oversized pre-packed wire (100 A records, ~1.7KB — beyond the RFC 9715
+// 1400-byte UDP cap): the fast path is size-independent (ID/RD/AD byte
+// patches only).  DNSSEC stripping for DO=0 clients is gated by the
+// precomputed qctx.ResHasDNSSEC flag (filled from entry.HasDNSSEC at
+// cache-Set time) — there is no per-hit wire scan, so this measures the
+// pure serve cost over a large wire.
 func BenchmarkResponseServeLargeWire(b *testing.B) {
 	ednsH, err := edns.NewHandler(config.ECSConfig{})
 	if err != nil {
@@ -114,7 +117,7 @@ func BenchmarkResponseServeLargeWire(b *testing.B) {
 	})
 	chain := m.Wrap(next)
 
-	qctx := (&handler.QueryContext{Req: req}).InitQuestion() // DO=0 → WireHasDNSSEC scan runs
+	qctx := (&handler.QueryContext{Req: req}).InitQuestion() // DO=0, ResHasDNSSEC unset → pure fast path
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

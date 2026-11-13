@@ -263,6 +263,9 @@ func (q *EncryptedQuery) Encrypt(
 		return query, clientNonce, err
 	}
 
+	// Preallocate the header so the magic+pk+nonce appends never reallocate
+	// (mirrors EncryptedResponse.Encrypt's response header).
+	query = make([]byte, 0, ClientMagicSize+KeySize+NonceSize/2)
 	query = append(query, q.ClientMagic[:]...)
 	query = append(query, q.ClientPk[:]...)
 	query = append(query, q.Nonce[:NonceSize/2]...)
@@ -288,6 +291,15 @@ func (q *EncryptedQuery) Encrypt(
 		return nil, Nonce{}, ErrESVersion
 	default:
 		return nil, Nonce{}, ErrESVersion
+	}
+
+	// Same sealed-size guarantee as the PQ branch above: over UDP a complete
+	// encrypted query MUST NOT exceed MaxDNSUDPPacketSize (draft §5.2), and
+	// a plaintext ≥3968 bytes pads past the 64-aligned budget clamp in
+	// encryptPadding — reject it instead of sending a fragmented datagram.
+	// TCP DNSCrypt queries may be up to 65535 bytes.
+	if !q.IsTCP && len(query) > MaxDNSUDPPacketSize {
+		return nil, Nonce{}, ErrQueryTooLarge
 	}
 
 	return query, clientNonce, nil

@@ -125,13 +125,22 @@ func buildFromPrePacked(req *dns.Msg, entry *cache.Entry, isExpired bool) *dns.M
 // values from Set() time), filters DNSSEC proofs for DO=0 clients (RFC 3225
 // §4.4) unless the QTYPE itself is a DNSSEC type, and clears Data so the
 // response is re-packed on the way out. Returns false when the wire cannot
-// be unpacked — the caller serves SERVFAIL or skips its modification.
+// be unpacked — Data is released and cleared first so the caller's error
+// response is re-packed by the bridge instead of serving the unparseable
+// wire verbatim; the caller serves SERVFAIL or skips its modification.
 func UnpackPrePackedForModify(qctx *QueryContext) bool {
 	msg := qctx.Res
 	// Unpack re-derives every header flag from the wire — the AD decision
 	// made in buildFromPrePacked (RFC 6840 §5.8 gate) must survive it.
 	ad := msg.AuthenticatedData
 	if err := msg.Unpack(); err != nil {
+		// The wire cannot be parsed — release it and clear Data (same
+		// ownership transfer as the success path below) so the bridge
+		// re-packs the struct fields: the client receives the caller's
+		// SERVFAIL instead of the cached rcode, matching the stats
+		// journal.
+		pool.ReleaseWire(msg.Data)
+		msg.Data = nil
 		return false
 	}
 	msg.ID = qctx.Req.ID

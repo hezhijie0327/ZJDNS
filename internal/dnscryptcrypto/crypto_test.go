@@ -213,3 +213,63 @@ func TestPadResponse_NoRoom(t *testing.T) {
 		t.Errorf("want ErrNoRoomForPadding, got %v", err)
 	}
 }
+
+// TestEncryptedQueryEncryptClassicalUDPBudget (Round 6 F1): the classical
+// UDP query budget.  Pad re-rounds the plaintext up to a 64-byte boundary,
+// so from 3968 plaintext bytes on the padded length (4032) pushes the
+// sealed datagram past MaxDNSUDPPacketSize (4100 > 4096) — those must be
+// rejected with ErrQueryTooLarge instead of sent (and IP-fragmented).
+// 3967 bytes is the last size that fits.
+func TestEncryptedQueryEncryptClassicalUDPBudget(t *testing.T) {
+	var sharedKey [SharedKeySize]byte
+	copy(sharedKey[:], "test-shared-key-32-bytes!!!!!!!")
+
+	for _, tc := range []struct {
+		name     string
+		plainLen int
+		wantErr  error
+	}{
+		{"3967 fits the budget", 3967, nil},
+		{"3968 exceeds via 64-realign", 3968, ErrQueryTooLarge},
+		{"5000 exceeds", 5000, ErrQueryTooLarge},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := &EncryptedQuery{ESVersion: XChacha20Poly1305}
+			query, _, err := q.Encrypt(make([]byte, tc.plainLen), sharedKey)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("Encrypt: want %v, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Encrypt: %v", err)
+			}
+			if len(query) > MaxDNSUDPPacketSize {
+				t.Fatalf("sealed query %d bytes exceeds MaxDNSUDPPacketSize %d", len(query), MaxDNSUDPPacketSize)
+			}
+		})
+	}
+}
+
+// TestEncryptedQueryEncryptClassicalMinQueryLen pins the min-query-len
+// semantics alongside the budget clamp: a small query still pads up to the
+// requested minimum wire size, and TCP is exempt from the UDP budget.
+func TestEncryptedQueryEncryptClassicalMinQueryLen(t *testing.T) {
+	var sharedKey [SharedKeySize]byte
+	copy(sharedKey[:], "test-shared-key-32-bytes!!!!!!!")
+
+	q := &EncryptedQuery{ESVersion: XChacha20Poly1305, MinQueryLen: 512}
+	query, _, err := q.Encrypt(make([]byte, 30), sharedKey)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	if len(query) < 512 {
+		t.Fatalf("sealed query %d bytes below MinQueryLen 512", len(query))
+	}
+
+	tcp := &EncryptedQuery{ESVersion: XChacha20Poly1305, IsTCP: true}
+	if _, _, err := tcp.Encrypt(make([]byte, 5000), sharedKey); err != nil {
+		t.Fatalf("TCP encrypt must be exempt from the UDP budget: %v", err)
+	}
+}
