@@ -10,3 +10,10 @@ proto=http-tlcp  ok=273778   fail=0      qps=54749.0    avg=0.58    ms min=0.23 
 proto=dtlcp      ok=299689   fail=0      qps=59934.5    avg=0.53    ms min=0.03    ms max=1005.37 ms
 proto=dnscrypt   ok=482932   fail=0      qps=96578.4    avg=0.33    ms min=0.03    ms max=3.31    ms
 proto=dnscrypt-tcp ok=542304   fail=0      qps=108454.9   avg=0.29    ms min=0.02    ms max=7.40    ms
+# 2026-11-14 Round 6 (v4.8.26, macOS arm64, 16 workers x 10s per protocol)
+udp=48062 tls=44758 quic=36243 https=38605 http3=34400 dtls=22831 tlcp=42336 http-tlcp=38146 dtlcp=36851 dnscrypt=24098 dnscrypt-tcp=24681 (qps, loopback)
+# NOTE: tcp/tls/dtls/tlcp/dtlcp showed nonzero fail counts under this machine's
+# concurrent load; the pre-fix binary (88de480b) reproduces the same failure
+# signatures, so they are environmental (UDP/handshake loss under contention),
+# not Round 6 regressions. fail=0 was verified for udp/quic/https/http3/
+# http-tlcp/dnscrypt/dnscrypt-tcp.

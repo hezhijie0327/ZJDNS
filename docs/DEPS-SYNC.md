@@ -78,3 +78,15 @@ golang.org/x/{crypto,net,sync,sys} 走 tag,代理 `go list -m -u` 无更新即�
 - Codeberg 克隆慢(全量约 10 分钟),可先做其余 8 个仓库;Codeberg 也有 Gitea API 可快速拉周提交:
   `https://codeberg.org/api/v1/repos/miekg/dns/commits?since=<ISO8601>&limit=50`
 - 升级 pin 后如上游有 API 破坏,适配代码与 pin 升级同一 commit,便于回溯。
+
+## 巡检记录:2026-11-14(Round 6,commit 7974576d)
+
+| 依赖 | pin 变化 | 分类 | 备注 |
+|------|----------|------|------|
+| miekg/dns | 20261103 → 20261113 (v0.6.134) | 自动受益 + 评估拒绝 | `MsgOptionPackExpand` 评估不采纳(压缩是 UDP 截断预算的承载性依赖,Pack 只发生在 cache-write);msg.Z→Flags 无本库使用。**代价**:Pack/Unpack 路径 +2 allocs/+96B(worktree 隔离证明) |
+| pion/dtls/v4 | rc.8 → v4.0.3 | 自动受益 | close_notify 前数据投递(#1291)、拒绝后继续 accept、DTLS 1.3 加固系列 |
+| quic-go | v0.65.0 → 20261110 | 自动受益 | send-stream reset 泄漏(#6157)、http3 Server.Close 死锁(#6162)、帧排序器两级化 4096(#6185) |
+| gmsm | v0.45.2 → v0.45.3 | 自动受益 | 小版本修复 |
+| klauspost/compress | 20261103 → 20261111 | 自动受益 | zstd/s2/gzip 边界与错误修复系列 |
+| x/crypto, x/sync, x/sys, x/text, brotli | 浮动 | 自动受益 | |
+| gotlcp / circl / eTLS | 无变化 | — | 已在最新 |
