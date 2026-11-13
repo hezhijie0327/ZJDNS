@@ -27,6 +27,11 @@ type fakeMQResolver struct {
 // must NOT consult the resolver.
 type blockingMQResolver struct{}
 
+// slowMQResolver answers after a fixed delay.
+type slowMQResolver struct {
+	delay time.Duration
+}
+
 var errTestNotFound = mqtypeError("not found")
 
 func (b *blockingMQResolver) Query(ctx context.Context, _ handler.Question, _ *edns.ECSOption) *resolver.QueryResult {
@@ -35,6 +40,19 @@ func (b *blockingMQResolver) Query(ctx context.Context, _ handler.Question, _ *e
 }
 
 func (b *blockingMQResolver) UpstreamServers() []*config.UpstreamServer {
+	return []*config.UpstreamServer{{Protocol: config.ProtoRecursive}}
+}
+
+func (s *slowMQResolver) Query(ctx context.Context, q handler.Question, _ *edns.ECSOption) *resolver.QueryResult {
+	select {
+	case <-time.After(s.delay):
+		return &resolver.QueryResult{Answer: []dns.RR{aaaaRecord("2001:db8::9")}, Rcode: 0, Cacheable: true}
+	case <-ctx.Done():
+		return &resolver.QueryResult{Err: ctx.Err()}
+	}
+}
+
+func (s *slowMQResolver) UpstreamServers() []*config.UpstreamServer {
 	return []*config.UpstreamServer{{Protocol: config.ProtoRecursive}}
 }
 
@@ -871,5 +889,46 @@ func TestMQTYPE_LocalRejectionSkipsMerge(t *testing.T) {
 		if _, ok := rr.(*dns.MQRESPONSE); ok {
 			t.Error("rejection response must not carry an MQTYPE-Response option")
 		}
+	}
+}
+
+// TestMQTYPE_TCPrimaryDrainWarmsCache pins the detached TC drain (Round C
+// RC-4): QTx results that land after the truncated primary returns are
+// still written to the cache, so the client's TCP retry finds them warm.
+func TestMQTYPE_TCPrimaryDrainWarmsCache(t *testing.T) {
+	store := mqTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	// The QTx resolver is slow — slower than the primary's immediate
+	// truncated response — proving the drain waits instead of only
+	// consuming what already finished.
+	slow := &slowMQResolver{delay: 150 * time.Millisecond}
+	m := &MQTYPE{store: store, secondary: handler.NewSecondary(store, slow, nil)}
+	chain := m.Wrap(handler.QueryHandlerFunc(func(_ context.Context, qctx *handler.QueryContext) error {
+		qctx.Res = handler.BuildResponseMsg(qctx.Req)
+		qctx.Res.Answer = []dns.RR{aRecord("192.0.2.1")}
+		qctx.Res.Truncated = true
+		return nil
+	}))
+
+	qctx := (&handler.QueryContext{Req: mqQuery(t, dns.TypeAAAA)}).InitQuestion()
+	if err := chain.ServeDNS(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+	// The response must not wait for the slow QTx.
+	if qctx.Res == nil || !qctx.Res.Truncated {
+		t.Fatal("truncated primary must be returned as-is")
+	}
+
+	// The drain writes the late QTx result — poll briefly for it.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, ok, _ := store.Get("example.com.", dns.TypeAAAA, dns.ClassINET, nil); ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("late QTx result was never cached — the TC drain must consume it after the primary returns")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

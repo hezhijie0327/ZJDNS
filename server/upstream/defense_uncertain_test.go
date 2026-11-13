@@ -244,3 +244,38 @@ func TestExecuteUDP_SingleReadTTLVerified(t *testing.T) {
 		t.Fatal("single-read datagram passing the armed TTL window must report verified=true")
 	}
 }
+
+// TestExecuteQuery_SpoofguardOnlyScoping pins the spoofguard-only marking
+// scope (Round C RC-1): the collect discipline is the whole defense there,
+// so a collect-verified A response stays cacheable, while the degraded
+// single-read path (non-A qtypes never run collect) carries the mark.
+func TestExecuteQuery_SpoofguardOnlyScoping(t *testing.T) {
+	addr, _, shutdown := startFakeEchoUDPServer(t, false)
+	defer shutdown()
+
+	client := New()
+	defer client.Close()
+	server := &config.UpstreamServer{Address: addr, Protocol: config.ProtoUDP, Spoofguard: true}
+
+	// A query — spoofguard collect discipline runs and verifies.
+	resA := client.ExecuteQuery(context.Background(), queryA("spoof-a.example.com."), server)
+	if resA.Error != nil {
+		t.Fatalf("A query failed: %v", resA.Error)
+	}
+	if resA.Uncertain {
+		t.Fatal("spoofguard-only collect-disciplined A response must stay cacheable — marking every response would collapse the cache for this configuration")
+	}
+
+	// TXT query — no collect discipline exists for it; the single-read
+	// datagram is the degraded path spoofguard-only marking targets.
+	txt := new(dns.Msg)
+	txt.ID = 0x4323
+	dnsutil.SetQuestion(txt, "spoof-txt.example.com.", dns.TypeTXT, dns.ClassINET)
+	resTXT := client.ExecuteQuery(context.Background(), txt, server)
+	if resTXT.Error != nil {
+		t.Fatalf("TXT query failed: %v", resTXT.Error)
+	}
+	if !resTXT.Uncertain {
+		t.Fatal("spoofguard-only single-read (non-A) response must carry the no-cache mark")
+	}
+}

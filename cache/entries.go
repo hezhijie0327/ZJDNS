@@ -95,6 +95,8 @@ func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption) (
 // A/AAAA address lookups).  ECS is not supported — entries are matched on
 // the empty ECS candidate, and the caller must pass a canonical qname.
 func (s *Cache) GetTypes(qname string, qclass uint16, qtypes [2]uint16) (entries [2]*Entry, found, expired [2]bool) {
+	// Canonicalize to match Set's key form (same contract as Get).
+	qname = dnsutil.Canonical(qname)
 	for i, qt := range qtypes {
 		key := cacheKey{qname: qname, qtype: qt, qclass: qclass}
 		if ce, ok := s.entries.Get(key); ok {

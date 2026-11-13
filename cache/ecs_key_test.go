@@ -52,3 +52,23 @@ func TestSet_MixedCaseQnameKeyedCanonically(t *testing.T) {
 		t.Fatal("lowercase lookup must hit the mixed-case Set entry — the key must be canonical")
 	}
 }
+
+// TestGetTypes_CanonicalKeys pins the GetTypes key form (Round C RC-2):
+// mixed-case callers hit entries Set stored through the canonical path.
+func TestGetTypes_CanonicalKeys(t *testing.T) {
+	s := New(config.LimitSettings{}, config.LimitSettings{}, "", "")
+	defer func() { _ = s.Close() }()
+
+	answer := []dns.RR{&dns.A{Hdr: dns.Header{Name: "Ns1.ExAmPlE.CoM.", Class: dns.ClassINET, TTL: 60}, Addr: netip.MustParseAddr("192.0.2.53")}}
+	aaaa := []dns.RR{&dns.AAAA{Hdr: dns.Header{Name: "Ns1.ExAmPlE.CoM.", Class: dns.ClassINET, TTL: 60}, Addr: netip.MustParseAddr("2001:db8::53")}}
+	s.Set("ns1.example.com.", dns.TypeA, dns.ClassINET, nil, answer, nil, nil, false, dns.RcodeSuccess)
+	s.Set("ns1.example.com.", dns.TypeAAAA, dns.ClassINET, nil, aaaa, nil, nil, false, dns.RcodeSuccess)
+
+	entries, found, _ := s.GetTypes("Ns1.ExAmPlE.CoM.", dns.ClassINET, [2]uint16{dns.TypeA, dns.TypeAAAA})
+	if !found[0] || !found[1] {
+		t.Fatalf("GetTypes mixed-case hit: A=%v AAAA=%v — keys must be canonical on both sides", found[0], found[1])
+	}
+	if entries[0] == nil || entries[1] == nil {
+		t.Fatal("GetTypes returned nil entries for canonical hits")
+	}
+}

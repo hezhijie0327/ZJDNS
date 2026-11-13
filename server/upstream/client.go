@@ -275,14 +275,29 @@ func (c *Client) ExecuteQuery(ctx context.Context, msg *dns.Msg, server *config.
 	// passing the armed hopguard fingerprint window (collect-disciplined
 	// winners carry it from the multi-read loop, single-read datagrams from
 	// the pooled exchange — an armed baseline alone never clears a
-	// datagram), or a successful 0x20 echo on this query.
+	// datagram), or a successful 0x20 echo on this query.  With hopguard
+	// enabled but still learning, nothing clears the mark — the collect
+	// discipline's verified flag is only a per-query proof when the
+	// address baseline it feeds is armed (or no hopguard runs at all, in
+	// which case the collect discipline itself is the whole defense).
 	hopArmed := server.HopGuard && c.plainClient.HopGuard().Confident(server.Address)
 	capsEchoVerified := server.CapsGuard && !caseUnverified
 	if result.Error == nil && result.Response != nil && result.Protocol == config.ProtoUDP {
-		if !capsEchoVerified && (!hopArmed || !result.Verified) && (server.CapsGuard || server.HopGuard || server.Spoofguard) {
+		// Three marking dimensions: (1) a capsguard §6.4 retry carries no
+		// 0x20 entropy — it is marked unconditionally, collect discipline
+		// or not; (2) no per-query verification (single-read without a TTL
+		// match, TTL-less collect winner) is marked; (3) hopguard still
+		// learning marks everything it governs — the collect verified flag
+		// only counts once the address baseline it feeds is armed (or no
+		// hopguard runs, where the collect discipline is the whole
+		// defense).
+		capsUnverified := server.CapsGuard && caseUnverified
+		hopLearning := server.HopGuard && !hopArmed
+		if (capsUnverified || (!capsEchoVerified && (!result.Verified || hopLearning))) &&
+			(server.CapsGuard || server.HopGuard || server.Spoofguard) {
 			result.Uncertain = true
-			log.Debugf("UPSTREAM: defense-uncertain response for %s via %s (caps-unverified=%v per-query-verified=%v) — marked no-cache",
-				original, server.Address, caseUnverified, result.Verified)
+			log.Debugf("UPSTREAM: defense-uncertain response for %s via %s (caps-unverified=%v per-query-verified=%v hop-armed=%v) — marked no-cache",
+				original, server.Address, caseUnverified, result.Verified, hopArmed)
 		}
 	}
 

@@ -224,6 +224,7 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.Encrypte
 					return nil, nil, fmt.Errorf("unpacking dns message: %w", unpackErr)
 				}
 				if repErr := s.checkReplay(query); repErr != nil {
+					pool.DefaultMessage.Put(msg)
 					return nil, nil, repErr
 				}
 				return msg, query, nil
@@ -263,6 +264,7 @@ func (s *Server) decrypt(b []byte) (msg *dns.Msg, query *dnscryptcrypto.Encrypte
 					return nil, nil, fmt.Errorf("unpacking dns message: %w", unpackErr)
 				}
 				if repErr := s.checkReplay(query); repErr != nil {
+					pool.DefaultMessage.Put(msg)
 					return nil, nil, repErr
 				}
 				return msg, query, nil
