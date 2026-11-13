@@ -371,7 +371,12 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					for _, c := range prevRoundSigs {
 						pool.DefaultMessage.Put(c.msg)
 					}
-					if sg.last != nil {
+					if sg.last != nil && (!sg.divergentEDNS || sg.confirmed) {
+						// Only a corroborated (or single-window) candidate may
+						// be served when the conn dies — a divergent-round
+						// candidate was never confirmed across rounds, and
+						// serving it here bypasses the cross-round check the
+						// live path enforces (fail-closed: TCP fallback).
 						sg.last.ID = originalID // tracking ID must not escape
 						return sg.last, nil
 					}
@@ -573,7 +578,12 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 				}
 				if now.After(maxDeadline) {
 					// Classify before pickBest — it clears the winning slot.
-					safe := sg.last != nil || sg.nonEDNSSafe || sg.rejected <= 1
+					// Divergent-unconfirmed candidates are never safe: a
+					// forger dripping varied answers under the window length
+					// keeps every window alive, so the deadline is exactly
+					// where the last-injected packet would win pickBest's
+					// coin flip.
+					safe := (sg.last != nil || sg.nonEDNSSafe || sg.rejected <= 1) && (!sg.divergentEDNS || sg.confirmed)
 					resp, respTTL := sg.pickBest()
 					if resp == nil {
 						if previous != nil {
