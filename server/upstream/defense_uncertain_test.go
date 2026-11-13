@@ -171,3 +171,76 @@ func TestExecuteQuery_NonAQtypeArmedCaches(t *testing.T) {
 		t.Fatal("non-A query against an armed baseline must stay cacheable (no collect discipline exists for it)")
 	}
 }
+
+// TestExecuteQuery_NonAQtypeArmedWrongTTLMarked pins the per-datagram half
+// of the armed-baseline clearing: an armed fingerprint that does NOT match
+// this datagram's captured TTL is not a verification — the response must
+// carry the no-cache mark.  The baseline is armed at a TTL no loopback
+// datagram can carry, so the real captured TTL fails Validate.
+func TestExecuteQuery_NonAQtypeArmedWrongTTLMarked(t *testing.T) {
+	addr, _, shutdown := startFakeEchoUDPServer(t, false)
+	defer shutdown()
+
+	client := New()
+	defer client.Close()
+	server := &config.UpstreamServer{Address: addr, Protocol: config.ProtoUDP, HopGuard: true}
+
+	// Arm the baseline at an impossible TTL (real loopback datagrams are
+	// 255 on macOS / 64 on Linux — 57 matches neither).
+	hg := client.plainClient.HopGuard()
+	for range 64 {
+		hg.Feed(addr, 57)
+	}
+	if !hg.Confident(addr) {
+		t.Fatal("pre-flight: baseline did not arm")
+	}
+
+	txt := new(dns.Msg)
+	txt.ID = 0x4321
+	dnsutil.SetQuestion(txt, "txt-wrongttl.example.com.", dns.TypeTXT, dns.ClassINET)
+	res := client.ExecuteQuery(context.Background(), txt, server)
+	if res.Error != nil {
+		t.Fatalf("ExecuteQuery: %v", res.Error)
+	}
+	if !res.Uncertain {
+		t.Fatal("non-A datagram failing the armed TTL window must be marked no-cache — an armed baseline alone never clears a single-read datagram")
+	}
+}
+
+// TestExecuteUDP_SingleReadTTLVerified pins the positive half: a single-read
+// datagram whose captured TTL passes the armed fingerprint window reports
+// verified=true (the per-query proof hopArmed clearing relies on).
+func TestExecuteUDP_SingleReadTTLVerified(t *testing.T) {
+	addr, _, shutdown := startFakeEchoUDPServer(t, false)
+	defer shutdown()
+
+	client := New()
+	defer client.Close()
+
+	// Arm from live traffic on the same loopback path the query takes, so
+	// the captured TTL class matches.
+	server := &config.UpstreamServer{Address: addr, Protocol: config.ProtoUDP, HopGuard: true}
+	for range 64 {
+		res := client.ExecuteQuery(context.Background(), queryA("ttlarm.example.com."), server)
+		if res.Error != nil {
+			t.Fatalf("arming query failed: %v", res.Error)
+		}
+	}
+	hg := client.plainClient.HopGuard()
+	if !hg.Confident(addr) {
+		t.Fatal("pre-flight: baseline did not arm")
+	}
+
+	// TXT (non-A) — served by the pooled single-read path; the datagram's
+	// TTL passes the armed window.
+	txt := new(dns.Msg)
+	txt.ID = 0x4322
+	dnsutil.SetQuestion(txt, "txt-ok.example.com.", dns.TypeTXT, dns.ClassINET)
+	resp, verified, err := client.plainClient.ExecuteUDP(context.Background(), txt, server)
+	if err != nil || resp == nil {
+		t.Fatalf("ExecuteUDP: resp=%v err=%v", resp, err)
+	}
+	if !verified {
+		t.Fatal("single-read datagram passing the armed TTL window must report verified=true")
+	}
+}

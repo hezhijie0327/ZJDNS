@@ -13,7 +13,7 @@ func TestSentinels_ExchangeOnClosedConn(t *testing.T) {
 	_, addr := startFakeUDPServer(t, 0)
 	c := newTestUDPConn(t, addr)
 	c.close()
-	_, err := c.Exchange(context.Background(), []byte("01query"), "01")
+	_, _, err := c.Exchange(context.Background(), []byte("01query"), "01")
 	if !errors.Is(err, ErrConnClosed) {
 		t.Fatalf("Exchange on closed conn: err = %v, want errors.Is(err, ErrConnClosed)", err)
 	}
@@ -42,7 +42,7 @@ func TestSentinels_WriteFailure(t *testing.T) {
 	_, addr := startFakeUDPServer(t, 0)
 	c := newTestUDPConn(t, addr)
 	c.close() // the write below fails: the underlying conn is closed
-	_, err := c.Exchange(context.Background(), []byte("01query"), "01")
+	_, _, err := c.Exchange(context.Background(), []byte("01query"), "01")
 	// Closed-conn state is checked before the write, so this may surface as
 	// ErrConnClosed — accept either sentinel; the point is errors.Is works.
 	if !errors.Is(err, ErrConnClosed) && !errors.Is(err, ErrWriteFailed) {

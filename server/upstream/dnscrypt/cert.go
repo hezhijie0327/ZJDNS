@@ -78,7 +78,7 @@ func (c *Client) fetchCertUDP(ctx context.Context, addr string, query []byte, se
 			return resolv.Default.DialContext(dialCtx, "udp", a, &d)
 		})
 		if err == nil {
-			respPayload, err := uc.Exchange(ctx, query, string(query[:2]))
+			respPayload, _, err := uc.Exchange(ctx, query, string(query[:2])) // _ = ttl: certificate fetch carries no defense gating
 			if err == nil {
 				resp := &dns.Msg{}
 				resp.Data = respPayload

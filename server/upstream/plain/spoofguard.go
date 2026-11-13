@@ -45,6 +45,14 @@ type spoofguardState struct {
 	// pure-UDP path has (GFW fakes vary per packet, the real answer is
 	// deterministic).  Feed sites consult it: an unarmed hopguard baseline
 	// must only learn from corroborated samples.
+	//
+	// Corroboration prior: every confirm channel (identical repeat,
+	// cross-round signature, re-query match) assumes the injector is
+	// NON-deterministic — a deterministic on-path forger repeating one fake
+	// answer self-corroborates and can co-feed the learning histogram 1:1
+	// with real traffic.  This is the spoofguard/hopguard threat-model
+	// boundary (empirical GFW shape), not a covered attacker; a
+	// deterministic adversary requires stream-transport verification.
 	confirmed bool
 
 	// divergentEDNS marks that this round collected EDNS candidates whose

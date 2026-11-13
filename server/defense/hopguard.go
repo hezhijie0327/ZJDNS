@@ -1,6 +1,7 @@
 package defense
 
 import (
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -44,12 +45,13 @@ type hopView struct {
 // enforcement view is published lock-free via view.  rejected is atomic —
 // ShouldSampleRejected may run on the read path.
 type serverState struct {
-	mu          sync.Mutex
-	histogram   map[uint8]int // TTL → occurrence count
-	samples     int           // total responses observed
-	lastRebuild int64         // time-based rebuild fallback (log.NowUnixNano())
-	rejected    atomic.Int64  // rejection sampling counter (1-in-16 feed of Validate-rejected TTLs)
-	view        atomic.Pointer[hopView]
+	mu            sync.Mutex
+	histogram     map[uint8]int // TTL → occurrence count (verified feeds only)
+	rejectedHisto map[uint8]int // TTL → count from Validate-rejected samples (merge-capped)
+	samples       int           // total verified responses observed (rebuild cadence)
+	lastRebuild   int64         // time-based rebuild fallback (log.NowUnixNano())
+	rejected      atomic.Int64  // rejection sampling counter (1-in-16 feed of Validate-rejected TTLs)
+	view          atomic.Pointer[hopView]
 }
 
 const (
@@ -71,6 +73,10 @@ const (
 	// TTLs into the histogram — recovery path for legitimate TTL drift
 	// (anycast reroutes) without meaningfully weakening the guard.
 	hopGuardRejectionSample = 16
+	// hopGuardRejectedMergeDivisor caps a rejected-sourced TTL's merged
+	// count at verifiedMode/divisor — the rejected path recovers genuine
+	// drift but can never out-count verified traffic.
+	hopGuardRejectedMergeDivisor = 4
 )
 
 // NewHopGuard creates a HopGuard with LRU cache.
@@ -130,8 +136,9 @@ func (h *HopGuard) Feed(serverIP string, observed uint8) {
 	st, ok := h.states.Get(serverIP)
 	if !ok {
 		st = &serverState{
-			histogram:   make(map[uint8]int, 16),
-			lastRebuild: log.NowUnixNano(),
+			histogram:     make(map[uint8]int, 16),
+			rejectedHisto: make(map[uint8]int, 4),
+			lastRebuild:   log.NowUnixNano(),
 		}
 		actual, loaded := h.states.LoadOrStore(serverIP, st)
 		if loaded {
@@ -201,14 +208,16 @@ func (h *HopGuard) Confident(serverIP string) bool {
 }
 
 // ShouldSampleRejected counts one Validate-rejected packet and reports
-// whether THIS one should be fed into the histogram anyway — uniform
-// 1-in-16 sampling (the count mutation is part of the contract: the "this
-// one" selection depends on it).  Legitimate TTL drift after an anycast reroute / PoP shift
-// (which stays outside the ±2 window and is hard-rejected while armed)
-// re-enters the histogram this way and can become trusted at the next
-// rebuild, instead of locking the server into SERVFAIL with no recovery
-// path; attacker-injected TTLs are diluted 16x and still cannot win the
-// mode competition.
+// whether THIS one should be recorded via FeedRejected — uniform 1-in-16
+// sampling (the count mutation is part of the contract: the "this one"
+// selection depends on it).  Legitimate TTL drift after an anycast reroute
+// / PoP shift (which stays outside the ±2 window and is hard-rejected
+// while armed) re-enters the histogram this way and can become trusted at
+// the next rebuild, instead of locking the server into SERVFAIL with no
+// recovery path.  A multi-packet injector still cannot win the mode
+// competition: rejected-sourced counts merge at a quarter of the verified
+// mode (see rebuildTrusted), so a forged TTL never reaches the
+// co-promotion bar while any verified traffic exists.
 func (h *HopGuard) ShouldSampleRejected(serverIP string) bool {
 	if h == nil {
 		return false
@@ -223,11 +232,11 @@ func (h *HopGuard) ShouldSampleRejected(serverIP string) bool {
 	return st.rejected.Add(1)%hopGuardRejectionSample == 0
 }
 
-// modeTTL returns the histogram's most frequent TTL (0 if empty).
-func modeTTL(st *serverState) uint8 {
+// modeTTLMap returns the histogram's most frequent TTL (0 if empty).
+func modeTTLMap(histogram map[uint8]int) uint8 {
 	var mode uint8
 	maxCount := 0
-	for ttl, count := range st.histogram {
+	for ttl, count := range histogram {
 		if count > maxCount || (count == maxCount && ttl < mode) {
 			mode = ttl
 			maxCount = count
@@ -240,9 +249,12 @@ func modeTTL(st *serverState) uint8 {
 // This binds the trust bar to the dominant TTL's frequency, preventing
 // low-repeat GFW TTLs from becoming trusted while the mode (the real server's
 // most common TTL) always passes.
-func trustThreshold(st *serverState) int {
+func trustThreshold(st *serverState) int { return trustThresholdMap(st.histogram) }
+
+// trustThresholdMap is trustThreshold over an explicit histogram.
+func trustThresholdMap(histogram map[uint8]int) int {
 	maxCount := 0
-	for _, count := range st.histogram {
+	for _, count := range histogram {
 		if count > maxCount {
 			maxCount = count
 		}
@@ -293,6 +305,33 @@ func trustedKeys(v *hopView) string {
 	return b.String()
 }
 
+// FeedRejected records a TTL sample that Validate rejected.  Rejected
+// samples live in a separate histogram: they never drive the rebuild
+// cadence (an injector must not be able to accelerate decay of the
+// verified baseline) and rebuildTrusted merges them at a quarter of the
+// verified mode, so a forged TTL cannot out-count verified traffic.
+func (h *HopGuard) FeedRejected(serverIP string, observed uint8) {
+	if h == nil || observed == 0 {
+		return
+	}
+	st, ok := h.states.Get(serverIP)
+	if !ok {
+		return // rejection sampling only runs when armed — a state exists
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.rejectedHisto[observed]++
+	// Time-based rebuild fallback only — never the samples%N cadence, so a
+	// rejected-packet flood cannot accelerate the 3/4 decay of the
+	// verified baseline.  Without this a full drift (zero surviving
+	// verified feeds) would never rebuild and the guard would lock the
+	// server out forever.
+	if log.NowUnixNano()-st.lastRebuild > hopGuardRebuildIntervalNanos {
+		st.lastRebuild = log.NowUnixNano()
+		rebuildTrusted(st)
+	}
+}
+
 // rebuildTrusted promotes TTLs meeting the adaptive threshold to the trusted set.
 // Applies a 3/4 decay to all histogram counts before computing the threshold,
 // so stale TTLs naturally lose influence and new TTLs can become trusted after
@@ -308,18 +347,50 @@ func rebuildTrusted(st *serverState) {
 			st.histogram[ttl] = newCount
 		}
 	}
-	// Recompute threshold from the decayed histogram.  Only TTLs meeting
+	for ttl, count := range st.rejectedHisto {
+		newCount := count * 3 / 4
+		if newCount <= 0 {
+			delete(st.rejectedHisto, ttl)
+		} else {
+			st.rejectedHisto[ttl] = newCount
+		}
+	}
+	// Merge rejected-sourced counts into a throwaway copy (never back into
+	// the verified histogram — a rejected contribution must not compound
+	// into the next cycle's verified mode), capped at a quarter of the
+	// verified mode: a rejected TTL can never reach the co-promotion bar
+	// (half the mode) while verified traffic exists, so an injector
+	// flooding rejected packets cannot capture the baseline — yet genuine
+	// drift (a reroute's real TTL, sampled 1-in-16) keeps a recovery path
+	// once the old mode decays.
+	merged := make(map[uint8]int, len(st.histogram)+len(st.rejectedHisto))
+	maps.Copy(merged, st.histogram)
+	verifiedMode := 0
+	for _, count := range st.histogram {
+		if count > verifiedMode {
+			verifiedMode = count
+		}
+	}
+	if allow := verifiedMode / hopGuardRejectedMergeDivisor; allow > 0 {
+		for ttl, count := range st.rejectedHisto {
+			if count > allow {
+				count = allow
+			}
+			merged[ttl] += count
+		}
+	}
+	// Recompute threshold from the merged histogram.  Only TTLs meeting
 	// the confidence threshold are promoted; values at least half the mode
 	// are co-promoted so a stable bimodal baseline converges instead of
 	// thrashing.
-	threshold := trustThreshold(st)
-	mode := modeTTL(st)
-	trusted := make(map[uint8]struct{}, len(st.histogram)/2+1)
+	threshold := trustThresholdMap(merged)
+	mode := modeTTLMap(merged)
+	trusted := make(map[uint8]struct{}, len(merged)/2+1)
 	if mode > 0 {
 		trusted[mode] = struct{}{}
 	}
-	for ttl, count := range st.histogram {
-		if ttl != mode && count >= threshold && count >= st.histogram[mode]/2 {
+	for ttl, count := range merged {
+		if ttl != mode && count >= threshold && count >= merged[mode]/2 {
 			trusted[ttl] = struct{}{}
 		}
 	}

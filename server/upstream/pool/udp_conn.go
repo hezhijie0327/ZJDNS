@@ -29,8 +29,18 @@ type collectPacket struct {
 
 // udpPending is one in-flight query awaiting its response.
 type udpPending struct {
-	resultCh  chan []byte        // raw response payload (ownership transferred)
+	// resultCh carries the raw response payload (ownership transferred)
+	// together with the datagram's captured IP TTL — the struct travels on
+	// the channel so the pairing cannot race a second datagram.
+	resultCh  chan udpResult
 	collectCh chan collectPacket // buffered multi-packet channel for collect mode
+}
+
+// udpResult is one delivered single-read datagram; data == nil marks a
+// connection close.
+type udpResult struct {
+	data []byte
+	ttl  uint8
 }
 
 // UDPConn is a connected UDP socket shared by concurrent queries.
@@ -61,7 +71,7 @@ type UDPConn struct {
 // (close() closes collectCh channels; collect mode is the rare spoofguard
 // path).
 var udpPendingPool = sync.Pool{
-	New: func() any { return &udpPending{resultCh: make(chan []byte, 1)} },
+	New: func() any { return &udpPending{resultCh: make(chan udpResult, 1)} },
 }
 
 // retransmitTimerPool recycles the per-exchange retransmit timer — see
@@ -88,18 +98,20 @@ func releaseRetransmitTimer(t *time.Timer) {
 
 // acquirePacketBuf returns a payload buffer of at least n bytes and the
 // release func that must be called exactly once after the payload has been
-// consumed (read, decrypted, unpacked).
+// consumed (read, decrypted, unpacked).  The release closure does not clear
+// the buffer — the no-clear discipline and its safety argument are shared
+// with releasePacketBuf (see its comment).
 func acquirePacketBuf(n int) (packet []byte, release func()) {
 	switch {
 	case n <= packetBufSmall:
 		bp := packetBufSmallPool.Get().(*[]byte)
-		return (*bp)[:n], func() { clear(*bp); packetBufSmallPool.Put(bp) }
+		return (*bp)[:n], func() { packetBufSmallPool.Put(bp) }
 	case n <= packetBufMedium:
 		bp := packetBufMediumPool.Get().(*[]byte)
-		return (*bp)[:n], func() { clear(*bp); packetBufMediumPool.Put(bp) }
+		return (*bp)[:n], func() { packetBufMediumPool.Put(bp) }
 	case n <= packetBufLarge:
 		bp := packetBufLargePool.Get().(*[]byte)
-		return (*bp)[:n], func() { clear(*bp); packetBufLargePool.Put(bp) }
+		return (*bp)[:n], func() { packetBufLargePool.Put(bp) }
 	default:
 		b := make([]byte, n)
 		return b, func() {}
@@ -116,7 +128,10 @@ func ReleaseUDPPayload(packet []byte) { releasePacketBuf(packet) }
 // No clear: the only writer (readLoop's copy) always fills the consumed
 // range [0:n] before delivery, and the slice length bounds every reader to
 // n — clearing would add a memset of up to 16KB per released packet on the
-// large tier, same reasoning as spillfile's block buffers.
+// large tier, same reasoning as spillfile's block buffers.  acquirePacketBuf's
+// release closures (the collect path) skip the clear for the same reason:
+// the identical overwrite-before-delivery and length-bounded-reader argument
+// holds for every datagram they hand out.
 func releasePacketBuf(packet []byte) {
 	switch cap(packet) {
 	case packetBufSmall:
@@ -146,8 +161,9 @@ func (c *UDPConn) NextID() uint16 {
 }
 
 // Exchange sends payload and waits for the response whose extracted match key
-// equals matchKey.  The returned slice is owned by the caller.
-func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string) ([]byte, error) {
+// equals matchKey.  The returned slice is owned by the caller; ttl is the
+// winning datagram's captured IP TTL (0 when the socket has no TTL capture).
+func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string) (data []byte, ttl uint8, err error) {
 	select {
 	case c.capacity <- struct{}{}:
 		c.inFlight.Add(1)
@@ -157,11 +173,11 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 			<-c.capacity
 		}()
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, 0, ctx.Err()
 	}
 
 	if c.closed.Load() {
-		return nil, ErrConnClosed
+		return nil, 0, ErrConnClosed
 	}
 
 	p := udpPendingPool.Get().(*udpPending)
@@ -170,7 +186,7 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 	if c.closed.Load() {
 		c.mu.Unlock()
 		udpPendingPool.Put(p)
-		return nil, ErrConnClosed
+		return nil, 0, ErrConnClosed
 	}
 	if _, dup := c.inflight[matchKey]; dup {
 		c.mu.Unlock()
@@ -178,7 +194,7 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 		// DNS after 65536 queries) — fail the new query; the caller retries
 		// on a fresh connection.
 		udpPendingPool.Put(p)
-		return nil, ErrKeyCollision
+		return nil, 0, ErrKeyCollision
 	}
 	c.inflight[matchKey] = p
 	c.mu.Unlock()
@@ -188,12 +204,12 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 		delete(c.inflight, matchKey)
 		c.mu.Unlock()
 		// Drain an orphaned response that arrived after ctx cancellation and
-		// return the tiered-pool payload buffer.  A nil value marks
+		// return the tiered-pool payload buffer.  Empty data marks a
 		// connection close — nothing to release.
 		select {
 		case resp := <-p.resultCh:
-			if resp != nil {
-				ReleaseUDPPayload(resp)
+			if resp.data != nil {
+				ReleaseUDPPayload(resp.data)
 			}
 		default:
 		}
@@ -204,11 +220,11 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 	// on one socket must not interleave (kernel treats each Write as one
 	// datagram, yet the Go netpoll path is only safe under serialisation).
 	c.writeMu.Lock()
-	_, err := c.conn.Write(payload)
+	_, err = c.conn.Write(payload)
 	c.writeMu.Unlock()
 	if err != nil {
 		c.close()
-		return nil, errors.Join(ErrWriteFailed, err)
+		return nil, 0, errors.Join(ErrWriteFailed, err)
 	}
 
 	// Retransmit the datagram when the silence window expires without a
@@ -224,14 +240,14 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 	for {
 		select {
 		case resp := <-p.resultCh:
-			if resp == nil {
-				return nil, ErrConnClosed
+			if resp.data == nil {
+				return nil, 0, ErrConnClosed
 			}
-			return resp, nil
+			return resp.data, resp.ttl, nil
 		case <-ctx.Done():
 			// Only cancel this query, not the connection; the deferred cleanup
 			// unlinks the match key and drains a late response.
-			return nil, ctx.Err()
+			return nil, 0, ctx.Err()
 		case <-retransmitTimer.C:
 			if retransmits >= config.DefaultUDPRetransmitCount {
 				// Retransmit budget exhausted — wait out the deadline for a
@@ -239,12 +255,12 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 				// the wait).
 				select {
 				case resp := <-p.resultCh:
-					if resp == nil {
-						return nil, ErrConnClosed
+					if resp.data == nil {
+						return nil, 0, ErrConnClosed
 					}
-					return resp, nil
+					return resp.data, resp.ttl, nil
 				case <-ctx.Done():
-					return nil, ctx.Err()
+					return nil, 0, ctx.Err()
 				}
 			}
 			retransmits++
@@ -253,7 +269,7 @@ func (c *UDPConn) Exchange(ctx context.Context, payload []byte, matchKey string)
 			c.writeMu.Unlock()
 			if err != nil {
 				c.close()
-				return nil, errors.Join(ErrWriteFailed, err)
+				return nil, 0, errors.Join(ErrWriteFailed, err)
 			}
 			retransmitTimer.Reset(config.DefaultUDPRetransmitInterval)
 		}
@@ -312,6 +328,19 @@ func (c *UDPConn) ExchangeCollect(ctx context.Context, payload []byte, matchKey 
 		return nil, errors.Join(ErrWriteFailed, err)
 	}
 	return collectCh, nil
+}
+
+// WriteQuery re-sends payload under the write lock — the collect-mode
+// retransmit path (the round's original write happened inside
+// ExchangeCollect).
+func (c *UDPConn) WriteQuery(payload []byte) error {
+	if c.closed.Load() {
+		return ErrConnClosed
+	}
+	c.writeMu.Lock()
+	_, err := c.conn.Write(payload)
+	c.writeMu.Unlock()
+	return err
 }
 
 // ReleaseCollect unregisters matchKey, returns the queued collect packets'
@@ -409,7 +438,7 @@ func (c *UDPConn) readLoop() {
 		}
 
 		select {
-		case p.resultCh <- packet:
+		case p.resultCh <- udpResult{data: packet, ttl: ttl}:
 		default:
 			// Waiter already gave up (ctx cancelled) — drop.
 			release()
@@ -432,7 +461,7 @@ func (c *UDPConn) close() {
 				close(p.collectCh)
 			} else {
 				select {
-				case p.resultCh <- nil:
+				case p.resultCh <- udpResult{}:
 				default:
 				}
 			}

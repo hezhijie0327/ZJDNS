@@ -257,7 +257,7 @@ func (c *Client) executeOnce(
 		// response header.  Decrypt below re-checks the nonce half and the
 		// message ID — a misrouted datagram can never be served.
 		pooledPayload = true
-		respPayload, err = pooledUDP.Exchange(ctx, encrypted, string(clientNonce[:dnscryptcrypto.NonceSize/2]))
+		respPayload, _, err = pooledUDP.Exchange(ctx, encrypted, string(clientNonce[:dnscryptcrypto.NonceSize/2])) // _ = ttl: datagram identity is the nonce, hopguard does not key DNSCrypt conns
 		if err != nil {
 			if pooledUDP.IsDead() {
 				c.udpPool.Remove(pooledUDP)

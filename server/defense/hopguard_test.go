@@ -235,3 +235,81 @@ func (h *HopGuard) trustedSet(serverIP string) map[uint8]int {
 	}
 	return out
 }
+
+// TestHopGuard_RejectedFloodCannotCaptureBaseline pins the armed-state
+// recovery-path cap: an injector flooding rejected packets (32 per query —
+// the sampling admits 2 per query, out-counting the 1 verified feed) must
+// never get its TTL promoted to trusted.  Rejected-sourced counts merge at
+// a quarter of the verified mode, below the co-promotion bar (mode/2).
+func TestHopGuard_RejectedFloodCannotCaptureBaseline(t *testing.T) {
+	hg := NewHopGuard()
+
+	// Arm with verified TTL=100 traffic.
+	feedTTL(hg, testServer, 100, 32)
+	if !hg.Confident(testServer) {
+		t.Fatal("pre-flight: baseline did not arm")
+	}
+
+	// Flood: 512 rejected datagrams at TTL=60 → 32 sampled feeds, plus
+	// enough verified traffic to force several rebuild cycles (every 32
+	// verified samples) — the attacker's steady state.
+	for range 4 {
+		for range 512 {
+			if hg.ShouldSampleRejected(testServer) {
+				hg.FeedRejected(testServer, 60)
+			}
+		}
+		feedTTL(hg, testServer, 100, 32) // verified traffic + rebuild trigger
+	}
+
+	if hg.Validate(testServer, 60) {
+		t.Fatal("flooded rejected TTL=60 must not become trusted — the merge cap keeps it below the co-promotion bar")
+	}
+	if !hg.Validate(testServer, 100) {
+		t.Fatal("verified TTL=100 must stay trusted under the flood")
+	}
+	if !hg.Confident(testServer) {
+		t.Fatal("baseline must stay armed under the flood")
+	}
+}
+
+// TestHopGuard_RejectedDriftRecoversAfterDecay pins the recovery half: a
+// genuine TTL drift (all real traffic moves to a rejected TTL) re-arms on
+// the new TTL once the old mode decays away — the merge cap must not
+// permanently lock the server out.
+func TestHopGuard_RejectedDriftRecoversAfterDecay(t *testing.T) {
+	hg := NewHopGuard()
+
+	feedTTL(hg, testServer, 100, 32)
+	if !hg.Confident(testServer) {
+		t.Fatal("pre-flight: baseline did not arm")
+	}
+
+	// All traffic drifts to TTL=110 (outside ±2): every datagram is
+	// rejected and only the 1-in-16 sampling records it.  Drive enough
+	// cycles for the old mode to decay to zero and the guard to disarm —
+	// after that, learning re-arms on the new TTL.
+	for range 40 {
+		for range 64 {
+			if hg.ShouldSampleRejected(testServer) {
+				hg.FeedRejected(testServer, 110)
+			}
+		}
+		// Backdate the rebuild clock so the next FeedRejected takes the
+		// time-based rebuild path (pure drift: zero verified feeds remain,
+		// the samples cadence never fires).
+		if st, ok := hg.states.Get(testServer); ok {
+			st.mu.Lock()
+			st.lastRebuild = 0
+			st.mu.Unlock()
+		}
+		hg.FeedRejected(testServer, 110)
+	}
+
+	// The guard must eventually disarm (verified histogram decayed empty)
+	// and accept the drifted TTL again.
+	if hg.Validate(testServer, 110) {
+		return // disarmed → recovery already possible via learning
+	}
+	t.Fatal("drifted TTL=110 must pass after the old mode decays — the guard locked the server out")
+}

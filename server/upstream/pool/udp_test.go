@@ -92,7 +92,7 @@ func TestUDPConn_Multiplex(t *testing.T) {
 	for i := range 8 {
 		key := fmt.Sprintf("%02d", i)
 		wg.Go(func() {
-			resp, err := c.Exchange(context.Background(), []byte(key+"query"), key)
+			resp, _, err := c.Exchange(context.Background(), []byte(key+"query"), key)
 			if err != nil {
 				errs <- err
 				return
@@ -119,7 +119,7 @@ func TestUDPConn_UnknownDatagramDropped(t *testing.T) {
 	_, _ = s.conn.WriteTo([]byte("99orphan"), c.conn.LocalAddr())
 	s.injected.Add(1)
 
-	resp, err := c.Exchange(context.Background(), []byte("01query"), "01")
+	resp, _, err := c.Exchange(context.Background(), []byte("01query"), "01")
 	if err != nil {
 		t.Fatalf("exchange: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestUDPConn_CtxCancelLeavesSocketUsable(t *testing.T) {
 	c := newTestUDPConn(t, addr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Millisecond)
-	if _, err := c.Exchange(ctx, []byte("01query"), "01"); err == nil {
+	if _, _, err := c.Exchange(ctx, []byte("01query"), "01"); err == nil {
 		t.Fatal("short-ctx exchange should time out")
 	}
 	cancel()
@@ -144,7 +144,7 @@ func TestUDPConn_CtxCancelLeavesSocketUsable(t *testing.T) {
 	// The same key is reusable after cancellation; the late response must not
 	// leak into the new query (it is drained by the deferred cleanup).
 	time.Sleep(30 * time.Millisecond) // let the late response arrive
-	resp, err := c.Exchange(context.Background(), []byte("01query"), "01")
+	resp, _, err := c.Exchange(context.Background(), []byte("01query"), "01")
 	if err != nil {
 		t.Fatalf("re-exchange: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestUDPConn_SocketReuse(t *testing.T) {
 
 	for i := range 5 {
 		key := fmt.Sprintf("%02d", i)
-		resp, err := c.Exchange(context.Background(), []byte(key+"query"), key)
+		resp, _, err := c.Exchange(context.Background(), []byte(key+"query"), key)
 		if err != nil {
 			t.Fatalf("exchange %d: %v", i, err)
 		}
@@ -194,7 +194,7 @@ func TestUDPPool_AcquireReuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire 1: %v", err)
 	}
-	if _, err := c1.Exchange(context.Background(), []byte("01query"), "01"); err != nil {
+	if _, _, err := c1.Exchange(context.Background(), []byte("01query"), "01"); err != nil {
 		t.Fatalf("exchange: %v", err)
 	}
 	c2, err := p.Acquire(context.Background(), addr, addr, false, dialFunc)
@@ -352,7 +352,7 @@ func TestUDPPool_GlobalCapEvictsLRU(t *testing.T) {
 	}
 
 	// The new socket is fully usable.
-	if _, err := c3.Exchange(context.Background(), []byte("01query"), "01"); err != nil {
+	if _, _, err := c3.Exchange(context.Background(), []byte("01query"), "01"); err != nil {
 		t.Fatalf("exchange on new socket: %v", err)
 	}
 }
