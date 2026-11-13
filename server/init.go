@@ -185,7 +185,7 @@ func (s *Server) initHandler(cfg *config.ServerConfig, cacheStore cache.Store, e
 
 	if rulesetEngine != nil {
 		deps.TagMatcher = func(qname string, ip net.IP) map[string]bool {
-			return rulesetEngine.Match(qname, ip.String())
+			return rulesetEngine.MatchTags(qname, ip)
 		}
 	}
 

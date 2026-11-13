@@ -83,9 +83,15 @@ func (c *CNAME) cachedHopResult(question Question, ecs *edns.ECSOption) *QueryRe
 		// Stale entries keep the middleware's serve-stale semantics — a hop
 		// reuse only takes fresh data.
 		entry.ReleaseOffsets()
+		pool.ReleaseWire(entry.ResponseWire)
 		return nil
 	}
 	defer entry.ReleaseOffsets()
+	// cache.Get hands out a pool-owned response-wire copy on every hit; both
+	// pooled resources go back on every exit path below (the clones made by
+	// withRemaining own their data, and rcode — the last wire read — is
+	// captured before any release).
+	defer pool.ReleaseWire(entry.ResponseWire)
 	if err := entry.Unpack(); err != nil || (len(entry.Answer) == 0 && len(entry.Authority) == 0) {
 		return nil
 	}
@@ -102,6 +108,7 @@ func (c *CNAME) cachedHopResult(question Question, ecs *edns.ECSOption) *QueryRe
 		}
 		return out
 	}
+	rcode := entry.WireRcode()
 	if log.IsDebug() {
 		log.Debugf("RECURSION: CNAME hop %s %s served from response cache (ttl_remaining=%d)",
 			question.Name, dns.TypeToString[question.Qtype], remaining)
@@ -110,7 +117,7 @@ func (c *CNAME) cachedHopResult(question Question, ecs *edns.ECSOption) *QueryRe
 		Answer:     withRemaining(entry.Answer),
 		Authority:  withRemaining(entry.Authority),
 		Additional: withRemaining(entry.Additional),
-		Rcode:      entry.WireRcode(),
+		Rcode:      rcode,
 		Validated:  entry.Validated,
 		Cacheable:  true,
 		Server:     config.ProtoRecursive,

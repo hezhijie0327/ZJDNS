@@ -17,13 +17,22 @@ import (
 
 func validateTLSCertificateConfig(cfg *ServerConfig) error {
 	tlsCert := &cfg.Server.Certificate.TLS
+	proto := &cfg.Server.Protocol
+
+	// Any TLS-family listener requires the TLS certificate material: QUIC/
+	// DTLS/HTTP3 share it (see server/protocols.go — every TLS-family
+	// listener is gated on Certificate.TLS.IsEnabled()), and without it the
+	// listener is silently NOT created — the operator thinks DoT is up while
+	// the port never listens.  Reject at validation time instead.
+	tlsEnabled := proto.TLS != "" || proto.QUIC != "" || proto.HTTPS.Port != "" || proto.HTTP3.Port != "" || proto.DTLS != ""
+	if tlsEnabled && !tlsCert.IsEnabled() {
+		return errors.New("config: certificate.tls must be configured (cert_file+key_file or self_signed) when tls-family protocols (tls/quic/https/http3/dtls) are enabled — otherwise their listeners are silently not created")
+	}
 	if !tlsCert.IsEnabled() {
 		return nil
 	}
 
 	// Only require cert validation if at least one TLS-based protocol is enabled.
-	proto := &cfg.Server.Protocol
-	tlsEnabled := proto.TLS != "" || proto.QUIC != "" || proto.HTTPS.Port != "" || proto.HTTP3.Port != ""
 	if !tlsEnabled {
 		return nil
 	}

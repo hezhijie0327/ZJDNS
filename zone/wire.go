@@ -5,6 +5,7 @@ import (
 	"strings"
 	"zjdns/config"
 	zdnsutil "zjdns/internal/dnsutil"
+	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -75,8 +76,64 @@ func buildRecord(domain string, record *config.ZoneRecord) dns.RR {
 	if rr, err := dns.New(sb.String()); err == nil {
 		return rr
 	}
+	// dns.New failed: the only packable fallback is RFC 3597 rdata, whose
+	// wire form is hex-decoded verbatim from the Data field.  Any other
+	// content (a typo'd address, a malformed rdata chunk) must be dropped
+	// here — the old blanket fallback silently accepted it and failed to
+	// pack on EVERY serve of the rule.
+	data, ok := rfc3597Rdata(record.Content)
+	if !ok {
+		log.Warnf("ZONE: dropping unparseable record for %s type %s: content %q is neither valid rdata nor RFC 3597 hex", domain, typeStr, record.Content)
+		return nil
+	}
 	return &dns.RFC3597{
 		Hdr:     dns.Header{Name: name, Class: class, TTL: ttl},
-		RFC3597: rdata.RFC3597{RRType: record.Type, Data: record.Content},
+		RFC3597: rdata.RFC3597{RRType: record.Type, Data: data},
 	}
+}
+
+// rfc3597Rdata validates RFC 3597 presentation content — `\# <rdlength>
+// <hex>` with contiguous hex — or a bare contiguous hex string, returning
+// the bare hex payload (the wire packer hex-decodes Data as-is, so the
+// `\# <rdlength>` prefix must not survive).
+func rfc3597Rdata(content string) (string, bool) {
+	fields := strings.Fields(content)
+	if len(fields) >= 2 && fields[0] == `\#` {
+		if len(fields) > 3 {
+			return "", false
+		}
+		rdlength, err := strconv.Atoi(fields[1])
+		if err != nil || rdlength < 0 {
+			return "", false
+		}
+		data := ""
+		if len(fields) == 3 {
+			data = fields[2]
+		}
+		if len(data) != rdlength*2 || !isHexData(data) {
+			return "", false
+		}
+		return data, true
+	}
+	if len(fields) == 1 && isHexData(fields[0]) {
+		return fields[0], true
+	}
+	return "", false
+}
+
+// isHexData reports whether s is an even-length contiguous hex string
+// (possibly empty — zero-length rdata).
+func isHexData(s string) bool {
+	if len(s)%2 != 0 {
+		return false
+	}
+	for i := range len(s) {
+		c := s[i]
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
 }

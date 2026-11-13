@@ -88,6 +88,15 @@ func addRule(table *ruleTable, tag, typ, value string) bool {
 		return true
 	case "domain":
 		key := domainKey(value)
+		// Matching is exact TLD+1 (tldPlusOne returns the rightmost 1-2
+		// labels), so a key with more than two labels can never equal any
+		// query key — warn and skip instead of counting a dead rule as
+		// loaded (a silently non-matching split/block rule defeats the
+		// operator's expectation).
+		if strings.Count(key, ".") > 1 {
+			log.Warnf("RULESET: skipping domain rule %s=%s: more than two labels can never match (matching is TLD+1, e.g. \"google.com\")", tag, value)
+			return false
+		}
 		table.domainRules[key] = append(table.domainRules[key], tag)
 		return true
 	default:
@@ -95,8 +104,17 @@ func addRule(table *ruleTable, tag, typ, value string) bool {
 	}
 }
 
-// Match returns all tags that match the given query name and client IP.
+// Match returns all tags that match the given query name and client IP
+// (string form).  Hot paths already holding a net.IP must call MatchTags —
+// this wrapper re-parses the string on every query.
 func (e *Engine) Match(qname, ip string) map[string]bool {
+	return e.MatchTags(qname, net.ParseIP(ip))
+}
+
+// MatchTags returns all tags that match the given query name and client IP,
+// consuming the net.IP directly (no per-query IP→String→ParseIP round trip).
+// A nil IP skips the CIDR trie; domain rules still match.
+func (e *Engine) MatchTags(qname string, ip net.IP) map[string]bool {
 	var tags map[string]bool
 
 	// Domain: TLD+1 suffix lookup via the in-memory map.  Short-circuits when
@@ -113,12 +131,11 @@ func (e *Engine) Match(qname, ip string) map[string]bool {
 	}
 
 	// IP: binary radix trie — O(128) regardless of rule count.
-	parsedIP := net.ParseIP(ip)
-	if parsedIP == nil {
+	if ip == nil {
 		return tags
 	}
 
-	for _, t := range table.ipTrie.match(parsedIP) {
+	for _, t := range table.ipTrie.match(ip) {
 		if tags == nil {
 			tags = make(map[string]bool)
 		}

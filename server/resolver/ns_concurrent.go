@@ -179,9 +179,15 @@ func (r *Recursive) queryNameserversConcurrent(ctx context.Context, nameservers 
 					pool.DefaultMessage.Put(result.Response)
 				}
 				msg.Pseudo = removeMQQUERY(msg.Pseudo)
-				// Independent retry context: a fresh budget guarantees the
-				// fallback runs even if the first attempt consumed queryCtx.
-				retryCtx, retryCancel := context.WithTimeout(context.WithoutCancel(queryCtx), config.DefaultMQTypeResolveTimeout)
+				// Retry context parented on the ROOT ctx with a fresh
+				// budget: neither an exhausted queryCtx nor the level's own
+				// cancel (first NOERROR) can block or abort the fallback,
+				// while a client disconnect on the root still propagates
+				// and stops the re-query (previously WithoutCancel(queryCtx)
+				// cut every cancel chain, so each in-flight MQQUERY worker
+				// re-queried authorities for its full 3s budget after the
+				// client hung up — WithoutCancel detaches from the root too).
+				retryCtx, retryCancel := context.WithTimeout(ctx, config.DefaultMQTypeResolveTimeout)
 				result = r.resolver.queryClient.ExecuteQuery(retryCtx, msg, server)
 				retryCancel()
 			}

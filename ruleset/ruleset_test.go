@@ -1,6 +1,7 @@
 package ruleset
 
 import (
+	"net"
 	"testing"
 	"zjdns/config"
 )
@@ -89,6 +90,54 @@ func TestEngine_HasIPTag(t *testing.T) {
 	}
 	if e.HasIPTag("google") {
 		t.Error("google should NOT be an IP tag")
+	}
+}
+
+// TestLoadRules_DeepDomainRuleSkipped pins the Round 6 D4 fix: domain rules
+// with more than two labels can never equal the TLD+1 query key, so loading
+// warns and skips them instead of counting dead rules as loaded (silent
+// non-matching split/block config).
+func TestLoadRules_DeepDomainRuleSkipped(t *testing.T) {
+	e := testEngine(t, []config.RuleSet{
+		{Tag: "dead", Type: "domain", Rule: []string{"analytics.google.com", "*.deep.example.com"}},
+		{Tag: "alive", Type: "domain", Rule: []string{"google.com"}},
+	})
+	for _, qname := range []string{
+		"analytics.google.com.", "x.analytics.google.com.", "deep.example.com.", "www.deep.example.com.",
+	} {
+		if tags := e.Match(qname, "1.2.3.4"); tags["dead"] {
+			t.Errorf("Match(%q) = %v: a >2-label rule can never match the TLD+1 key", qname, tags)
+		}
+	}
+	if tags := e.Match("www.google.com.", "1.2.3.4"); !tags["alive"] {
+		t.Errorf("Match(www.google.com.) = %v, want the two-label rule to keep working", tags)
+	}
+}
+
+// TestEngine_MatchTags_NetIPDirect pins the Round 6 D5 path: MatchTags
+// consumes the client net.IP directly (no per-query String→ParseIP round
+// trip) and agrees with the string-based Match on both families; a nil IP
+// matches domain rules only.
+func TestEngine_MatchTags_NetIPDirect(t *testing.T) {
+	e := testEngine(t, []config.RuleSet{
+		{Tag: "google", Type: "domain", Rule: []string{"google.com"}},
+		{Tag: "corp", Type: "ip", Rule: []string{"10.0.0.0/8"}},
+		{Tag: "v6", Type: "ip", Rule: []string{"2001:db8::/32"}},
+	})
+	for _, ip := range []string{"10.1.2.3", "192.0.2.9", "2001:db8::1", "2001:db9::1"} {
+		want := e.Match("www.google.com.", ip)
+		got := e.MatchTags("www.google.com.", net.ParseIP(ip))
+		if len(got) != len(want) {
+			t.Fatalf("MatchTags(%s) = %v, Match(%q) = %v — results diverge", ip, got, ip, want)
+		}
+		for tag := range want {
+			if !got[tag] {
+				t.Fatalf("MatchTags(%s) = %v, missing tag %q present in Match", ip, got, tag)
+			}
+		}
+	}
+	if tags := e.MatchTags("www.google.com.", nil); len(tags) != 1 || !tags["google"] {
+		t.Errorf("MatchTags(nil IP) = %v, want the domain-only match", tags)
 	}
 }
 

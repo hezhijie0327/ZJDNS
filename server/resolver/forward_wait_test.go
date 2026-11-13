@@ -62,6 +62,38 @@ func TestQueryUpstream_NXDOMAINEarlyReturn(t *testing.T) {
 	}
 }
 
+// TestQueryUpstream_ZeroWindowNXDOMAINDrain verifies the zero-window fast
+// path (DefaultNXDOMAINDeferralWindow = 0): the first collected NXDOMAIN is
+// served immediately, without per-query timer churn, while a concurrently
+// arriving NOERROR winner still outranks it.
+func TestQueryUpstream_ZeroWindowNXDOMAINDrain(t *testing.T) {
+	client := &fakeNSClient{handlers: map[string]nsScriptHandler{
+		"10.0.0.1:53": nsReplyAfter(10*time.Millisecond, dns.RcodeNameError),
+		"10.0.0.2:53": nsReplyAfter(1*time.Second, dns.RcodeSuccess),
+	}}
+	r := newTestResolver(client)
+	r.ConfigureServers([]config.UpstreamServer{
+		{Address: "10.0.0.1:53", Protocol: config.ProtoUDP},
+		{Address: "10.0.0.2:53", Protocol: config.ProtoUDP},
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	qr := r.Query(ctx, Question{Name: "zerowindow.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil)
+	elapsed := time.Since(start)
+
+	if qr.Err != nil {
+		t.Fatalf("unexpected error: %v", qr.Err)
+	}
+	if qr.Rcode != dns.RcodeNameError {
+		t.Fatalf("rcode = %s, want the collected NXDOMAIN served by the zero-window fast path", dns.RcodeToString[qr.Rcode])
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("zero-window NXDOMAIN served after %v, want < 500ms", elapsed)
+	}
+}
+
 // TestQueryUpstream_StragglerCanceled verifies the early NXDOMAIN return
 // cancels the fan-out so slow upstreams abort instead of pinning their
 // pooled messages.

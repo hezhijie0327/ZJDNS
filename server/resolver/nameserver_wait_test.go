@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"zjdns/config"
@@ -197,6 +198,64 @@ func TestQueryNameservers_SemaphoreDoesNotBlockLaunch(t *testing.T) {
 // net.JoinHostPort so the fake client keying is deterministic).
 func scriptAddr(i int) string {
 	return "10.1.0." + scriptItoa(i) + ":53"
+}
+
+// TestQueryNameservers_MQTypeRetryRootCancelPropagation pins the RFC 10029
+// fallback retry's context parentage: the retry keeps a fresh 3s budget and
+// ignores the level's own cancel, but is parented on the ROOT context — a
+// client disconnect must still abort it (WithoutCancel(queryCtx) cut every
+// cancel chain, so each in-flight MQQUERY worker re-queried authorities for
+// its full 3s budget after the client hung up).
+func TestQueryNameservers_MQTypeRetryRootCancelPropagation(t *testing.T) {
+	retryStarted := &atomicBool{ch: make(chan struct{}, 1)}
+	retryAborted := make(chan time.Duration, 1)
+	var calls atomic.Int32
+	client := &fakeNSClient{handlers: map[string]nsScriptHandler{
+		"10.0.0.1:53": func(ctx context.Context, msg *dns.Msg) *upstream.Result {
+			if calls.Add(1) == 1 {
+				// First attempt carries MQQUERY — refuse it (authority
+				// rejecting the unknown EDNS option, RFC 10029 §3.5).
+				return nsReply(msg, dns.RcodeRefused)
+			}
+			// Optionless retry: park until its context dies and report how
+			// long that took.
+			retryStarted.set()
+			start := time.Now()
+			<-ctx.Done()
+			retryAborted <- time.Since(start)
+			return &upstream.Result{Error: ctx.Err()}
+		},
+	}}
+	r := newTestRecursiveNS(client)
+	r.mqtype = []uint16{dns.TypeAAAA}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _, _ = r.queryNameserversConcurrent(ctx, []string{"10.0.0.1:53"},
+			Question{Name: "mqretry.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET},
+			nil, false, "example.com.", defense.Detector{}, false)
+	}()
+
+	if !retryStarted.await(2 * time.Second) {
+		cancel()
+		t.Fatal("optionless retry never started after the refused MQQUERY attempt")
+	}
+	cancel()
+	select {
+	case elapsed := <-retryAborted:
+		if elapsed > 1500*time.Millisecond {
+			t.Fatalf("retry outlived the root cancel by %v — client disconnect did not propagate into the retry", elapsed)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("retry never aborted — root cancel did not reach it")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("queryNameserversConcurrent did not return after cancel")
+	}
 }
 
 func scriptItoa(i int) string {

@@ -14,7 +14,7 @@ import (
 func TestLoadConfig_DefaultPortsApplied(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	content := `{"server": {"protocol": {"udp": "53", "tls": "853"}, "certificate": {"domain": "test.example.com"}}, "upstream": [{"address": "8.8.8.8:53", "protocol": "udp"}]}`
+	content := `{"server": {"protocol": {"udp": "53", "tls": "853"}, "certificate": {"domain": "test.example.com", "tls": {"self_signed": true}}}, "upstream": [{"address": "8.8.8.8:53", "protocol": "udp"}]}`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +319,7 @@ func TestDDRRecords_AllProtocolsEnabled(t *testing.T) {
 				"http_tlcp": {"port": "443", "endpoint": "/dns-query"},
 				"dtlcp": "853"
 			},
-			"certificate": {"domain": "dns.example.com"},
+			"certificate": {"domain": "dns.example.com", "tls": {"self_signed": true}},
 			"features": {"ddr": {"ipv4": "127.0.0.1", "ipv6": "::1"}}
 		}
 	}`
@@ -385,7 +385,7 @@ func TestDDRRecords_HTTPSOnly(t *testing.T) {
 			"protocol": {
 				"https": {"port": "443", "endpoint": "/dns-query"}
 			},
-			"certificate": {"domain": "dns.example.com"},
+			"certificate": {"domain": "dns.example.com", "tls": {"self_signed": true}},
 			"features": {"ddr": {"ipv4": "1.2.3.4"}}
 		}
 	}`
@@ -426,7 +426,7 @@ func TestDDRRecords_DifferentPorts(t *testing.T) {
 				"quic": "784",
 				"dtls": "8853"
 			},
-			"certificate": {"domain": "dns.example.com"},
+			"certificate": {"domain": "dns.example.com", "tls": {"self_signed": true}},
 			"features": {"ddr": {"ipv4": "10.0.0.1"}}
 		}
 	}`
@@ -479,7 +479,7 @@ func TestDDRRecords_TLSAndDTLS_SamePort(t *testing.T) {
 				"tls": "853",
 				"dtls": "853"
 			},
-			"certificate": {"domain": "dns.example.com"},
+			"certificate": {"domain": "dns.example.com", "tls": {"self_signed": true}},
 			"features": {"ddr": {"ipv4": "10.0.0.1"}}
 		}
 	}`

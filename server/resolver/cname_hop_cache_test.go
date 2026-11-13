@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"net/netip"
+	"runtime"
 	"testing"
 	"zjdns/cache"
 	"zjdns/config"
@@ -106,5 +107,40 @@ func TestCachedHopResult_ECSScoped(t *testing.T) {
 	ecs := &edns.ECSOption{Family: 1, SourcePrefix: 24, Address: []byte{203, 0, 113, 0}}
 	if hop := c.cachedHopResult(q, ecs); hop != nil {
 		t.Fatal("served an ECS-scoped hop from an ECS-less entry")
+	}
+}
+
+// TestCachedHopResult_WirePoolReuse pins the pool contract on the CNAME-hop
+// hot path: every cache.Get hands the caller a pooled response-wire copy, and
+// the hop path must return it.  Without the release the wire pool silently
+// degrades to one fresh 2 KB allocation per hit, so steady-state cumulative
+// allocation stays far below the leak rate.
+func TestCachedHopResult_WirePoolReuse(t *testing.T) {
+	c, store := newHopCacheTest(t)
+	a := &dns.A{Hdr: dns.Header{Name: "target.example.com.", Class: dns.ClassINET, TTL: 300}, Addr: netip.MustParseAddr("192.0.2.7")}
+	store.Set("target.example.com.", dns.TypeA, dns.ClassINET, nil, []dns.RR{a}, nil, nil, false, 0)
+	q := Question{Name: "target.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
+
+	// Warm up so the measurement sees steady-state reuse, not pool fill.
+	for range 8 {
+		if hop := c.cachedHopResult(q, nil); hop == nil {
+			t.Fatal("warm-up hop missed the fresh entry")
+		}
+	}
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	const calls = 64
+	for range calls {
+		if hop := c.cachedHopResult(q, nil); hop == nil {
+			t.Fatal("measured hop missed the fresh entry")
+		}
+	}
+	runtime.ReadMemStats(&after)
+	// A leaked pool-class wire costs ≥ 2048 bytes per call; the RR clones and
+	// unpacked records of this one-record entry stay well under half that.
+	if grew := after.TotalAlloc - before.TotalAlloc; grew >= calls*2048 {
+		t.Fatalf("cachedHopResult allocated %d bytes over %d hits (≥ %d B/hit): the pooled response wire is leaking to the GC",
+			grew, calls, grew/calls)
 	}
 }

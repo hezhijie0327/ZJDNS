@@ -324,6 +324,30 @@ waitLoop:
 				}
 			}
 		case <-nxdomainCh:
+			if config.DefaultNXDOMAINDeferralWindow <= 0 {
+				// Zero window: serve the collected NXDOMAIN immediately — no
+				// per-query timer churn (mirrors the recursive walk's fast
+				// path, queryNameserversConcurrent).  Same drain as the
+				// deferred path below: a NOERROR winner can enter the
+				// buffered channel concurrently with this arm, and the
+				// successful answer outranks the NXDOMAIN.
+				select {
+				case res, ok := <-resultChan:
+					if ok {
+						if errors.Is(res.Err, ErrCIDRFilterRefused) {
+							return QueryResult{Err: ErrCIDRFilterRefused}
+						}
+						if res.Server != "" {
+							return res
+						}
+					}
+				default:
+				}
+				if nx := nxdomainResult.Load(); nx != nil && nx.Server != "" {
+					return *nx
+				}
+				continue
+			}
 			if deferralTimer == nil {
 				deferralTimer = time.NewTimer(config.DefaultNXDOMAINDeferralWindow)
 				deferralCh = deferralTimer.C

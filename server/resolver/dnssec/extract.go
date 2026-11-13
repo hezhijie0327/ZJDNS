@@ -3,6 +3,7 @@ package dnssec
 import (
 	zdnsutil "zjdns/internal/dnsutil"
 	"zjdns/internal/log"
+	"zjdns/internal/pool"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
@@ -204,13 +205,22 @@ func (c *CryptoValidator) ZoneKeys(zone string) []*dns.DNSKEY {
 	}
 
 	cachedEntry, found, expired := c.cache.Get(zone, dns.TypeDNSKEY, dns.ClassINET, nil)
-	if !found || cachedEntry == nil || expired {
+	if !found || cachedEntry == nil {
 		return nil
 	}
-	// cache.Get returns a pool-owned TTLOffsets slice — release it on every
-	// exit path, or every DNSKEY cache hit (a per-delegation-change hot path)
-	// leaks a pooled slice to the GC.
+	if expired {
+		// An expired hit still owns pooled resources — return them.
+		cachedEntry.ReleaseOffsets()
+		pool.ReleaseWire(cachedEntry.ResponseWire)
+		return nil
+	}
+	// cache.Get returns a pool-owned TTLOffsets slice and a pooled
+	// response-wire copy — release both on every exit path, or every DNSKEY
+	// cache hit (a per-delegation-change hot path) leaks them to the GC.
+	// The unpacked keys own their data, so releasing before the memo Set is
+	// safe.
 	defer cachedEntry.ReleaseOffsets()
+	defer pool.ReleaseWire(cachedEntry.ResponseWire)
 	// _ = error: an unpack failure leaves Answer nil — treated as a miss.
 	_ = cachedEntry.Unpack()
 
