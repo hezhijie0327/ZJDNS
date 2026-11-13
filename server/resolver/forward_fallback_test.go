@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/netip"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 	"zjdns/cache"
@@ -470,5 +471,53 @@ func TestQueryUpstream_MQTypeServfailRetry(t *testing.T) {
 	}
 	if len(qr.Answer) == 0 {
 		t.Fatal("optionless retry did not run — SERVFAIL propagated")
+	}
+}
+
+// cpuTimeMS reports this process's user CPU time in milliseconds.
+func cpuTimeMS() float64 {
+	var ru syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru); err != nil {
+		return 0
+	}
+	return (float64(ru.Utime.Sec) + float64(ru.Utime.Usec)/1e6) * 1000
+}
+
+// TestQueryUpstream_DeadPrimariesNoSpin measures the CPU share of one
+// queryUpstream window with an instantly-failing primary and a slow
+// fallback. The wait loop must not spin on the closed primariesDone
+// channel while waiting for the fallback answer: a perpetually-ready
+// case turns the select into a busy loop burning a full core.
+func TestQueryUpstream_DeadPrimariesNoSpin(t *testing.T) {
+	const fallbackDelay = 400 * time.Millisecond
+
+	client := &fakeNSClient{handlers: map[string]nsScriptHandler{
+		"10.0.0.1:53": func(ctx context.Context, msg *dns.Msg) *upstream.Result {
+			return &upstream.Result{Error: errFastFailPrimary}
+		},
+		"10.0.0.2:53": nsReplyAAfter(fallbackDelay, "192.0.2.9"),
+	}}
+	r, _ := newFallbackTestResolver(t, client)
+	r.ConfigureServers([]config.UpstreamServer{
+		{Address: "10.0.0.1:53", Protocol: config.ProtoUDP},
+		{Address: "10.0.0.2:53", Protocol: config.ProtoUDP, Fallback: true},
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+
+	startCPU := cpuTimeMS()
+	startWall := time.Now()
+	qr := r.Query(ctx, Question{Name: "spin.example.com.", Qtype: dns.TypeA, Qclass: dns.ClassINET}, nil)
+	wall := time.Since(startWall)
+	cpu := cpuTimeMS() - startCPU
+
+	if qr.Err != nil {
+		t.Fatalf("unexpected error: %v", qr.Err)
+	}
+	share := cpu / float64(wall.Milliseconds())
+	t.Logf("wall=%v cpu=%.1fms share=%.2f", wall, cpu, share)
+	if share > 0.5 {
+		t.Fatalf("busy-wait detected: CPU share of the query window is %.2f (cpu=%.1fms, wall=%v)", share, cpu, wall)
 	}
 }

@@ -309,7 +309,10 @@ waitLoop:
 			// Every primary exited without delivering a usable result —
 			// no primary answer can arrive anymore, so the gate has
 			// nothing left to protect.  Same semantics as the timer
-			// firing, just earlier.
+			// firing, just earlier.  One-shot: nil the channel so the
+			// perpetually-ready closed channel cannot spin the loop while
+			// waiting for the fallback answer.
+			primariesDoneCh = nil
 			fallbackFired = true
 			if res, done := coord.tryAdopt(resultChan, &nxdomainResult); done {
 				return res
