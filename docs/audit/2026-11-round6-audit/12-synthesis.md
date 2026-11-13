@@ -54,3 +54,13 @@ ZJDNS 在缓存(replay protection 独有、serve-stale、RFC 8198 aggressive、�
 4. 恢复路径采样上限:被拒绝样本进独立桶、按 verified 流量的比例上限合并、绝不驱动重建节拍(否则攻击者加速基线衰减)——修复自身要防"纯漂移锁死"回归(时间重建兜底)。
 5. 多 shard/多实例字段发布:last-wins 字段在 N 实例启动时静默失效 3/4;参数传递优先于共享字段。
 6. 依赖浮动的 alloc 回归归因:worktree 隔离(同机同参数跑 HEAD vs HEAD~deps)是判定"我们的改动 vs 上游代价"的判别实验。
+
+## Round C 复查(09-roundc-review.md)
+
+逐 commit 对抗审查 10 个修复 commit:无 HIGH 级新缺陷;抓获 1 个修复自身回归(RC-1:S6 重写使 spoofguard-only 部署全量标记——`!hopArmed` 短路掉 per-query verified,缓存整体失效)+ RC-2(GetTypes 单侧 canonical)+ RC-3(replay 拒绝路径漏 Put)+ RC-4(TC drain 缺直接测试)。全部修复于 `28a74100`(标记条件改三分量语义:capsguard §6.4 重试无条件标记 / 无 per-query 验证标记 / hopguard 学习期全标)。RC-5(跨轮确证第 2 轮 conn-death 服务单候选——与单窗口语义同类的已接受残留)、RC-6(DTLCP admitSem 不跨协议)记录为残留。build/vet/test/race 复验全绿。
+
+## 收尾状态
+
+- 12 个 commit(1 deps + 10 fix + 1 Round C),版本 v4.8.27。
+- 基线:benchmark 140 项(bench-baseline.txt)+ loadtest 记录(loadtest-baseline.txt)。
+- AUDIT-METHODOLOGY.md:历史表 Round 6 行 + §4.2 六个新根因模式。
