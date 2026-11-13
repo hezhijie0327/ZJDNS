@@ -799,6 +799,31 @@ func TestUpdateLatency(t *testing.T) {
 	}
 }
 
+// TestUpdateLatencyBatch_FlagOnlyAfterValidIP pins the Round 6 D8 fix: the
+// hasLatencyData sort gate is armed only after a valid IP actually lands in
+// the table — an all-invalid batch must leave it closed (matching the
+// UpdateLatency validation the batch loop's comment promised).
+func TestUpdateLatencyBatch_FlagOnlyAfterValidIP(t *testing.T) {
+	mc := testStore()
+	defer func() { _ = mc.Close() }()
+
+	mc.UpdateLatencyBatch(map[string]int{"not-an-ip": 10, "also bad": 20})
+	if mc.hasLatencyData.Load() {
+		t.Fatal("all-invalid batch armed the latency-sort gate")
+	}
+	if n := mc.LatencyCount(); n != 0 {
+		t.Fatalf("latency table = %d entries, want 0", n)
+	}
+
+	mc.UpdateLatencyBatch(map[string]int{"not-an-ip": 10, "8.8.8.8": 42})
+	if !mc.hasLatencyData.Load() {
+		t.Fatal("valid IP in the batch did not arm the latency-sort gate")
+	}
+	if n := mc.LatencyCount(); n != 1 {
+		t.Fatalf("latency table = %d entries, want 1", n)
+	}
+}
+
 // ── UpdateLatency SRTT (EWMA smoothing) ─────────────────────────────────
 
 func TestUpdateLatency_SRTT_FirstProbe(t *testing.T) {

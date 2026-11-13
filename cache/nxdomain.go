@@ -61,6 +61,11 @@ func (s *Cache) NegativeAncestor(qname string) (soa dns.RR, ttl int, ok bool) {
 		}
 		remaining := int(e.exp - now)
 		if e.soa == nil {
+			// SOA-less denied ancestor.  Unreachable via Set today (Set never
+			// caches a negative without an SOA — cacheTTL returns 0), kept for
+			// any future RFC 9520-style relaxation: callers MUST guard a nil
+			// soa before dereferencing (see the synthesizeNegative guard in
+			// server/handler/middleware/cache_lookup.go).
 			return nil, remaining, true
 		}
 		return e.soa.Clone(), remaining, true

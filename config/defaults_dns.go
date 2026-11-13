@@ -268,6 +268,19 @@ const (
 	// a consistently mismatching upstream triggers it at full query rate.
 	DefaultECSMismatchWarnEvery = 100
 
+	// DefaultECSv4Len / DefaultECSv6Len bound the ECS scope the resolver
+	// caches and forwards (RFC 7871 §7.1.1, §11.1): client prefixes longer
+	// than these collapse to the maximum at the cache-key and outbound
+	// layers alike, so per-client variants share one cache entry.
+	DefaultECSv4Len = 24
+	DefaultECSv6Len = 56
+
+	// DefaultMaxCacheEntryBytes bounds one cached entry's packed wire.
+	// The cache tiers limit entry COUNT; this gate keeps anomalous upstream
+	// responses (max DNS message 64KB over TCP) from inflating the memory
+	// envelope far beyond the per-entry average the limits assume.
+	DefaultMaxCacheEntryBytes = 16 * 1024
+
 	// DefaultChaosDenialWarnEvery samples the destructive-CHAOS denial
 	// Warn — remotely triggerable at packet rate.
 	DefaultChaosDenialWarnEvery = 100

@@ -38,6 +38,10 @@ type cacheEntry struct {
 // promoted back into memory (which may itself evict the LRU tail — that
 // entry spills to disk in turn).
 func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption) (*Entry, bool, bool) {
+	// Canonicalize to match Set's key form (mixed-case or dot-less callers
+	// must hit); ASCIIFold is allocation-free when the name is already
+	// canonical — the pipeline's steady state.
+	qname = dnsutil.Canonical(qname)
 	// ECS fallback candidates from most to least specific — the first hit is
 	// the most specific match.  Stack-allocated (1 exact + up to 4 masked
 	// standard prefixes).
@@ -50,8 +54,8 @@ func (s *Cache) Get(qname string, qtype, qclass uint16, ecs *config.ECSOption) (
 			standardPrefixes = ipv6FallbackPrefixes
 		}
 		for _, p := range standardPrefixes {
-			if p >= int(ecs.SourcePrefix) {
-				continue
+			if p >= int(cand[0].ecsPref) {
+				continue // never coarser than the (capped) exact key
 			}
 			c := cand[0]
 			c.ecsPref = uint8(p) //nolint:gosec // G115: bounded by the standard-prefix tables
@@ -280,10 +284,14 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 		return
 	}
 
+	// Canonicalize before the key is built: recursive-walk callers pass
+	// case-echoing glue names (Fqdn only appends the dot), and a
+	// mixed-case key would be unreachable from the (always lowercase)
+	// client lookup path.
+	qname = dnsutil.Canonical(qname)
 	var key cacheKey
 	key.qname, key.qtype, key.qclass = qname, qtype, qclass
 	key.setECS(ecs)
-	qname = dnsutil.Canonical(qname)
 
 	// RFC 8020: a cacheable NXDOMAIN cuts the name's whole subtree.  Pure
 	// negatives only — a CNAME chain's NXDOMAIN belongs to the chain's final
@@ -357,6 +365,20 @@ func (s *Cache) Set(qname string, qtype, qclass uint16, ecs *config.ECSOption,
 	msg.Extra = additional
 	if err := msg.Pack(); err != nil {
 		log.Debugf("CACHE: skipping cache write for %s (type=%d): pack failed: %v", qname, qtype, err)
+		pool.DefaultMessage.Put(msg)
+		return
+	}
+	// Per-entry byte ceiling: the tier limits count entries, not bytes, so
+	// without this gate a hostile or broken upstream steering 64KB responses
+	// into the cache multiplies the documented memory envelope by the
+	// max-response size.  Legitimate traffic never approaches the ceiling
+	// (DNSKEY RRsets of the largest signed zones stay an order of magnitude
+	// below it); oversized responses still serve, they just bypass the
+	// cache.
+	if len(msg.Data) > config.DefaultMaxCacheEntryBytes {
+		if log.IsDebug() {
+			log.Debugf("CACHE: skipping cache write for %s (type=%d): %d bytes exceeds the %d-byte entry ceiling", qname, qtype, len(msg.Data), config.DefaultMaxCacheEntryBytes)
+		}
 		pool.DefaultMessage.Put(msg)
 		return
 	}

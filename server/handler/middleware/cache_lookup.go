@@ -121,11 +121,20 @@ func (m *CacheLookup) synthesizeNegative(ctx context.Context, qctx *handler.Quer
 			}
 		}
 		if soa, ttl, ok := m.store.NegativeAncestor(qctx.Qname); ok {
-			soa.Header().TTL = uint32(ttl) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+			// soa == nil is NegativeAncestor's SOA-less branch (see
+			// cache/nxdomain.go): unreachable via Set today, but an
+			// unconditional Header() deref here would panic every query the
+			// moment that invariant loosens (RFC 9520-style negatives) —
+			// guard it and synthesize a SOA-less cut instead.
+			var authority []dns.RR
+			if soa != nil {
+				soa.Header().TTL = uint32(ttl) //nolint:gosec // G115: DNS TTL — protocol-bounded uint32
+				authority = []dns.RR{soa}
+			}
 			if log.IsDebug() {
 				log.Debugf("CACHE: RFC 8020 NXDOMAIN cut for %s (denied ancestor cached)", qctx.Qname)
 			}
-			return m.serveSynthesized(ctx, qctx, nil, []dns.RR{soa}, dns.RcodeNameError, next)
+			return m.serveSynthesized(ctx, qctx, nil, authority, dns.RcodeNameError, next)
 		}
 	}
 	return next.ServeDNS(ctx, qctx)

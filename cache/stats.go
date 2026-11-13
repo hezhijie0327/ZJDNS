@@ -176,16 +176,16 @@ func (s *Cache) UpdateLatencyBatch(values map[string]int) {
 	if len(values) == 0 {
 		return
 	}
-	s.hasLatencyData.Store(true)
 
 	now := log.NowUnix()
 	changed := false
+	validSeen := false
 	for ip, latencyMS := range values {
 		if latencyMS < 0 {
 			latencyMS = 0
 		}
 		if net.ParseIP(ip) == nil {
-			// Set the flag only after validation — a non-IP arg must not
+			// Set the flag only after validation — a non-IP key must not
 			// enable the per-hit latency sort (an empty table can never
 			// reorder anything).
 			continue
@@ -202,9 +202,16 @@ func (s *Cache) UpdateLatencyBatch(values map[string]int) {
 			oldLatency, hadOld = old.latency, true
 		}
 		s.latencies.Set(ip, latEntry{latency: latencyMS, lastProbe: now})
+		validSeen = true
 		if !hadOld || materialLatencyChange(oldLatency, latencyMS) {
 			changed = true
 		}
+	}
+	// Arm the sort gate only once a valid IP actually landed in the table —
+	// an all-invalid batch (mis-keyed caller) must not enable the per-hit
+	// latency sort.
+	if validSeen {
+		s.hasLatencyData.Store(true)
 	}
 	if changed {
 		// Bump the latency generation: per-entry sorted-wire caches built

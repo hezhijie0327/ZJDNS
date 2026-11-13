@@ -91,9 +91,13 @@ func decodeCacheKey(s string) (cacheKey, bool) {
 	return k, true
 }
 
-// setECS fills the ECS part from the client option (nil → no ECS) with the
-// FULL (unmasked) address — the exact-match key form; fallback candidates
-// derive masked copies via mask.
+// setECS fills the ECS part from the client option (nil → no ECS).  The key
+// granularity is capped at the resolver's ECS cache scope (RFC 7871
+// §7.1.1): prefixes longer than the cap collapse to the cap and the address
+// is masked to it — the outbound query already truncates to the same scope,
+// so per-client variants below the cap would multiply entries (and miss
+// traffic) for byte-identical upstream answers.  Fallback candidates derive
+// coarser masked copies via mask.
 func (k *cacheKey) setECS(ecs *config.ECSOption) {
 	if ecs == nil || len(ecs.Address) == 0 {
 		k.ecsLen, k.ecsPref = 0, 0
@@ -102,11 +106,13 @@ func (k *cacheKey) setECS(ecs *config.ECSOption) {
 	if v4 := ecs.Address.To4(); v4 != nil {
 		k.ecsLen = 4
 		copy(k.ecsAddr[:4], v4)
+		k.ecsPref = min(ecs.SourcePrefix, config.DefaultECSv4Len)
 	} else {
 		k.ecsLen = 16
 		copy(k.ecsAddr[:], ecs.Address.To16())
+		k.ecsPref = min(ecs.SourcePrefix, config.DefaultECSv6Len)
 	}
-	k.ecsPref = ecs.SourcePrefix
+	k.mask(int(k.ecsPref))
 }
 
 // mask zeroes the address bits below prefix in place (inline CIDR mask).
