@@ -2077,6 +2077,30 @@ Client ⇄ 数据透传 ⇄ Target
 
 ---
 
+## RFC 1918 — 私有互联网地址分配 [Best Current Practice 5]
+
+**概述**：定义 10/8、172.16/12、192.168/16 三个私有地址块。本身不涉 DNS 协议，但定义了"哪些地址不可在公网路由"的事实边界。
+
+**关键要求**：私有地址不得出现在公网 DNS 的可路由应答中（A/AAAA 合成的选址约束）。
+
+**我们的实现**：`internal/dns64` WKP（64:ff9b::/96）合成排除私有源地址（dns64.go:131 及其测试）——依赖 RFC 1918 判定"不可路由"；ECS/ACL 相关逻辑同样引用私有段判定。
+
+## RFC 8906 — DNS 服务器常见操作问题：未能沟通 [Best Current Practice 231] ✅⚠️
+
+**概述**：以"查询-应答矩阵"形式规范 DNS 服务器对结构异常查询的**必答义务**——未知 RR 类型、未知 EDNS 选项、未知 EDNS 版本（BADVERS）、格式异常等，服务器必须返回某种响应而非静默丢弃。是 EDNS 行为合规的审计基准。
+
+**关键常量**：BADVERS=16（EDNS 版本过高时）；unknown RR type → NOERROR(空答)；unknown EDNS option → 忽略该选项其余照常。
+
+**我们的实现**：EDNSMiddleware 的逐项解析与容忍语义、MQTYPE 的 FORMERR 用例（§3.3）、上游对未知 EDNS 选项（MQQUERY）SERVFAIL 时的无选项重试（RFC 10029 §3.5）——均以 8906 矩阵为合规参照；依赖库（miekg/dns fork）2026-11 落地 8906 compliance 测试集，升级 fork 后应复核 BADVERS/unknown-RR 语义。
+
+## draft-westerbaan-dnssec-mldsa-04 — ML-DSA 用于 DNSSEC [Internet-Draft, rev 04, expires 2027-02-12] ✅⚠️
+
+**概述**：定义 ML-DSA-44（算法号 18）的 DNSKEY 公钥、RRSIG 签名与 DS（SHA-384 摘要）编码——DNSSEC 的后量子签名套件。
+
+**关键常量**：DNSKEY alg=18；DS 摘要类型 SHA-384；公钥/签名长度按 ML-DSA-44 参数（FIPS 204）。
+
+**我们的实现**：`server/resolver/dnssec` 的 `nativelyVerified` 接受 `dns.MLDSA44`（crypto.go:310），`TestVerifyRRset_MLDSA44` 覆盖链路。⚠️ 仍是 I-D 非 RFC：出版正式 RFC 后需替换本存档并复核算法号/编码是否变动。
+
 ## 已知偏离与设计权衡
 
 | 偏离                                 | RFC           | 影响              | 原因                                          |

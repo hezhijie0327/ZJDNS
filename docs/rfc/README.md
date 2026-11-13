@@ -15,9 +15,12 @@ The DNSCrypt and DNS Stamps drafts were downloaded from the IETF archive.
 |------|-------|
 | draft-denis-dns-stamps.txt | The DNS Stamps Specification (draft-denis-dns-stamps-02) |
 | draft-denis-dprive-dnscrypt.txt | The DNSCrypt Protocol (draft-denis-dprive-dnscrypt-11) |
+| draft-vixie-dnsext-dns0x20.txt | DNS 0x20 Case Randomization (draft-vixie-dnsext-dns0x20-00) |
+| draft-westerbaan-dnssec-mldsa.txt | Module-Lattice Digital Signature Algorithm for DNSSEC (draft-westerbaan-dnssec-mldsa-04) |
 | draft-dnsop-deleg.txt | Extensible Delegation for DNS (DELEG RR, draft-dnsop-deleg-00) |
 | rfc768.txt | User Datagram Protocol |
 | rfc1034.txt | Domain Names - Concepts and Facilities |
+| rfc1918.txt | Address Allocation for Private Internets (BCP 5) |
 | rfc1035.txt | Domain Names - Implementation and Specification |
 | rfc1348.txt | DNS NSAP RRs (obsoleted by RFC 1706) |
 | rfc1876.txt | A Means for Expressing Location Information in the DNS (LOC RR) |
@@ -98,6 +101,8 @@ The DNSCrypt and DNS Stamps drafts were downloaded from the IETF archive.
 | rfc7873.txt | Domain Name System (DNS) Cookies |
 | rfc7958.txt | DNSSEC Trust Anchor Publication for the Root Zone |
 | rfc8080.txt | Edwards-Curve Digital Security Algorithm (EdDSA) for DNSSEC |
+| rfc8020.txt | NXDOMAIN: There Really Is Nothing Underneath |
+| rfc8624.txt | Algorithm Implementation Requirements and Usage Guidance for DNSSEC |
 | rfc8094.txt | DNS over Datagram Transport Layer Security (DTLS) |
 | rfc8198.txt | Aggressive Use of DNSSEC-Validated Cache |
 | rfc8310.txt | Usage Profiles for DNS over TLS and DNS over DTLS |
@@ -111,6 +116,8 @@ The DNSCrypt and DNS Stamps drafts were downloaded from the IETF archive.
 | rfc8767.txt | Serving Stale Data to Improve DNS Resiliency |
 | rfc8777.txt | DNS Reverse IP Automatic Multicast Tunneling (AMT) Discovery |
 | rfc8879.txt | Certificate Compression in TLS |
+| rfc8906.txt | A Common Operational Problem in DNS Servers: Failure to Communicate (BCP 231) |
+| rfc8998.txt | ShangMi (SM) Cipher Suites for TLS 1.3 |
 | rfc8914.txt | Extended DNS Errors |
 | rfc8976.txt | Message Digest for DNS Zones |
 | rfc9000.txt | QUIC: A UDP-Based Multiplexed and Secure Transport |
@@ -120,17 +127,24 @@ The DNSCrypt and DNS Stamps drafts were downloaded from the IETF archive.
 | rfc9114.txt | HTTP/3 |
 | rfc9147.txt | The Datagram Transport Layer Security (DTLS) Protocol Version 1.3 |
 | rfc9156.txt | DNS Query Name Minimisation to Improve Privacy |
+| rfc9276.txt | EDNS(0) Padding Policy Extension |
 | rfc9250.txt | DNS over Dedicated QUIC Connections |
 | rfc9460.txt | Service Binding and Parameter Specification via the DNS (SVCB and HTTPS Resource Records) |
 | rfc9461.txt | Service Binding Mapping for DNS Servers (SVCB for DoH/DoT discovery) |
 | rfc9462.txt | Discovery of Designated Resolvers (DDR) |
 | rfc9443.txt | Multiplexing Scheme Updates for QUIC |
+| rfc9471.txt | DNS Glue Requirements in Referral Responses |
+| rfc9520.txt | Negative Caching of DNS Resolution Failures (RFC 9520) |
 | rfc9567.txt | DNS Error Reporting |
+| rfc9563.txt | SM2 Digital Signature Algorithm for DNSSEC |
 | rfc9606.txt | DNS Resolver Information (RESINFO RR) |
 | rfc9660.txt | DNS Zone Version (ZONEVERSION EDNS Option) |
 | rfc9715.txt | IP Fragmentation Avoidance in DNS over UDP |
 | rfc9824.txt | Compact Denial of Existence in DNSSEC |
+| rfc9853.txt | DTLS Return Routability Check (reference) |
+| rfc9853.txt | Return Routability Check for DTLS 1.2 and 1.3 |
 | rfc9859.txt | DNS Synchronization (DSYNC RR) |
+| rfc5280.txt | Internet X.509 Public Key Infrastructure Certificate and CRL Profile |
 | rfc10029.txt | Multiple QTYPEs in a Single DNS Query (MQTYPE-Query/Response) |
 
 ## Update
@@ -146,4 +160,10 @@ curl -sL -o draft-denis-dprive-dnscrypt.txt \
   "https://www.ietf.org/archive/id/draft-denis-dprive-dnscrypt-11.txt"
 curl -sL -o draft-denis-dns-stamps.txt \
   "https://www.ietf.org/archive/id/draft-denis-dns-stamps-02.txt"
+curl -sL -o draft-dnsop-deleg.txt \
+  "https://datatracker.ietf.org/doc/draft-dnsop-deleg/"  # pick latest .txt by hand
+curl -sL -o draft-vixie-dnsext-dns0x20.txt \
+  "https://www.ietf.org/archive/id/draft-vixie-dnsext-dns0x20-00.txt"
+curl -sL -o draft-westerbaan-dnssec-mldsa.txt \
+  "https://www.ietf.org/archive/id/draft-westerbaan-dnssec-mldsa-04.txt"  # re-check latest rev; replace with the RFC once published
 ```
