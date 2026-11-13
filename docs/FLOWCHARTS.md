@@ -61,7 +61,7 @@ graph TD
     INIT --> WARM[warmUpConnections]
     WARM --> INITMW[Assemble Middleware Chain<br/>10 Layers<br/>Zone/DNS64 条件挂载]
     INITMW --> STARTPROTO[Start Protocol Listeners<br/>UDP TCP DoT DoH DoH3<br/>DoQ DTLS TLCP DTLCP<br/>DNSCrypt + pprof]
-    STARTPROTO --> BG[Start Background Tasks<br/>Cookie Rotate · ECS Refresh<br/>Prefetch Cleanup · TCP WriteMu Sweep<br/>UDP Pool Reap · Spill Compact<br/>Signal Handling]
+    STARTPROTO --> BG[Start Background Tasks<br/>Cookie Rotate · ECS Refresh<br/>Prefetch Cleanup<br/>UDP Pool Reap · Spill Compact<br/>Signal Handling]
     BG --> RUNNING[Running<br/>accept queries]
     RUNNING --> SIG{Signal?}
     SIG -->|SIGINT/SIGTERM| SHUTDOWN[Mark Closed<br/>Cancel Context<br/>Stop Protocol Listeners + pprof]
@@ -77,9 +77,9 @@ graph TD
     class EXIT exit
 ```
 
-> 后台任务共 7 项（`server/tasks.go`）：Cookie 密钥轮换（24h）、ECS 公网 IP 刷新（15min）、
-> prefetch 节流清理、TCP writeMu 分片注册表 sweep（5min）、UDP 连接池死连接回收、
-> spill 压实（5min）、信号处理。统计**不是**后台任务——同步内存计数（见「同步统计记录」）。
+> 后台任务共 6 项（`server/tasks.go`）：Cookie 密钥轮换（24h）、ECS 公网 IP 刷新（15min）、
+> prefetch 节流清理、UDP 连接池死连接回收、spill 压实（5min）、信号处理。
+> 统计**不是**后台任务——同步内存计数（见「同步统计记录」）。
 
 ## 缓存持久化
 
@@ -163,8 +163,10 @@ graph TD
     S1[客户端查询带 MQQUERY] --> S2{§3.3 八条校验}
     S2 -->|不合法| S3[FORMERR]
     S2 -->|合法| S4[主响应先行<br/>RCODE/AA/AD 定调]
-    S4 --> S5{主响应 TC?}
-    S5 -->|是| S6[不处理 QTx<br/>返回空 MQTYPE-Response]
+    S4 --> S5B{"主 RCODE ∈<br/>NOERROR / NXDOMAIN?"}
+    S5B -->|"否（本地拒绝 / 上游失败）"| S5X[跳过 merge · 不附 MQRESPONSE<br/>QTx goroutine 自行退出]
+    S5B -->|是| S5{主响应 TC?}
+    S5 -->|是| S6[返回空 MQTYPE-Response<br/>QTx 结果后台 drain 写缓存<br/>detached · 客户端 TCP 重试即命中]
     S5 -->|否| S7[逐 QTx 解析<br/>单 flight · 5s 超时]
     S7 --> S8{RCODE/标志与主响应一致?}
     S8 -->|否| S9[排除该 QTx<br/>不入合并与列表]
@@ -173,7 +175,7 @@ graph TD
     S10 -->|是| S12[合并 + 去重<br/>入 MQTYPE-Response 列表]
     S12 --> S13[返回合并响应<br/>空列表也必返]
     classDef sv fill:#fef3c7,stroke:#f59e0b,color:#78350f
-    class S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,S11,S12,S13 sv
+    class S1,S2,S3,S4,S5,S5B,S5X,S6,S7,S8,S9,S10,S11,S12,S13 sv
 ```
 
 > 配置：`upstream[*].mqtype`（数字 QTYPE 列表，如 `[1, 28]`；加载期校验：data type、

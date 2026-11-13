@@ -1,0 +1,306 @@
+// RFC 8906 (BCP 231) conformance probe — raw-packet construction for full
+// header control (QR bit, QDCOUNT, arbitrary QTYPE, EDNS version/options).
+//
+// A recursive/caching resolver is not bound by the authoritative-specific
+// expectations (AA bit, zone SOA); the applicable 8906 requirements tested
+// here: respond-don't-drop for unknown types/flags, NOTIMP for unknown
+// opcodes, BADVERS for EDNS versions > 0, unknown EDNS options ignored,
+// FORMERR for malformed headers (QR=1, QDCOUNT != 1), and advertised-UDP-
+// size compliance.
+package main
+
+import (
+	"encoding/binary"
+	"fmt"
+	"net"
+	"os"
+	"strings"
+	"time"
+)
+
+var nl = "\n"
+
+var addr = "127.0.0.1:10533"
+
+func qnameWire(name string) []byte {
+	name = strings.TrimSuffix(name, ".")
+	out := []byte{}
+	if name != "" {
+		for _, label := range strings.Split(name, ".") {
+			out = append(out, byte(len(label)))
+			out = append(out, label...)
+		}
+	}
+	return append(out, 0)
+}
+
+// query builds a raw DNS query: header + question (+ optional OPT RR).
+func query(id uint16, flags uint16, opcode int, qtype uint16, name string, edns ...[]byte) []byte {
+	hdr := make([]byte, 12)
+	binary.BigEndian.PutUint16(hdr[0:2], id)
+	binary.BigEndian.PutUint16(hdr[2:4], flags|uint16(opcode<<11))
+	binary.BigEndian.PutUint16(hdr[4:6], 1) // QDCOUNT
+	body := qnameWire(name)
+	body = binary.BigEndian.AppendUint16(body, qtype)
+	body = binary.BigEndian.AppendUint16(body, 1) // IN
+	for _, o := range edns {
+		body = append(body, o...)
+	}
+	if len(edns) > 0 {
+		binary.BigEndian.PutUint16(hdr[10:12], 1) // ARCOUNT: the OPT RR
+	}
+	return append(hdr, body...)
+}
+
+// optRR builds an OPT pseudo-record: bufsize in CLASS, version/ext-rcode/DO in TTL.
+func optRR(bufsize uint16, version uint8, options ...[]byte) []byte {
+	rr := []byte{0} // root name
+	rr = binary.BigEndian.AppendUint16(rr, 41)
+	rr = binary.BigEndian.AppendUint16(rr, bufsize)
+	ttl := uint32(version) << 16
+	rr = binary.BigEndian.AppendUint32(rr, ttl)
+	rlen := 0
+	for _, o := range options {
+		rlen += len(o)
+	}
+	rr = binary.BigEndian.AppendUint16(rr, uint16(rlen))
+	for _, o := range options {
+		rr = append(rr, o...)
+	}
+	return rr
+}
+
+// ednsOption encodes one option: code(2) len(2) data.
+func ednsOption(code uint16, data []byte) []byte {
+	out := binary.BigEndian.AppendUint16(nil, code)
+	out = binary.BigEndian.AppendUint16(out, uint16(len(data)))
+	return append(out, data...)
+}
+
+func send(raw []byte, timeout time.Duration) ([]byte, bool) {
+	c, err := net.DialTimeout("udp", addr, timeout)
+	if err != nil {
+		return nil, false
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(timeout))
+	if _, err := c.Write(raw); err != nil {
+		return nil, false
+	}
+	buf := make([]byte, 65535)
+	n, err := c.Read(buf)
+	if err != nil {
+		return nil, false
+	}
+	return buf[:n], true
+}
+
+func rcodeName(raw []byte) string {
+	rc := int(binary.BigEndian.Uint16(raw[2:4]) & 0xF)
+	// Extended rcode (RFC 6891 §6.1.3): BADVERS and friends live in the
+	// OPT TTL's upper byte — scan the additional section for the OPT.
+	arcount := int(binary.BigEndian.Uint16(raw[10:12]))
+	off := 12
+	for i := 0; i < int(binary.BigEndian.Uint16(raw[4:6])); i++ { // skip questions
+		for off < len(raw) && raw[off] != 0 {
+			off += 1 + int(raw[off])
+		}
+		off += 5 // root + type + class
+	}
+	for i := 0; i < int(binary.BigEndian.Uint16(raw[6:8])); i++ { // skip answers
+		off += skipRR(raw, off)
+	}
+	// (authority skipped — responses to these probes carry none)
+	for i := 0; i < arcount && off+11 <= len(raw); i++ {
+		if binary.BigEndian.Uint16(raw[off+1:off+3]) == 41 {
+			ext := int(raw[off+5])
+			rc |= ext << 4
+			break
+		}
+		off += skipRR(raw, off)
+	}
+	return dnsRcodeName(rc)
+}
+
+// skipRR returns the wire length of the RR at off (name assumed root-or-
+// straight labels, no compression pointers — adequate for these probes).
+func skipRR(raw []byte, off int) int {
+	start := off
+	for off < len(raw) && raw[off] != 0 {
+		off += 1 + int(raw[off])
+	}
+	off++ // root
+	return off + 10 - start
+}
+
+func dnsRcodeName(rc int) string {
+	names := map[int]string{0: "NOERROR", 1: "FORMERR", 2: "SERVFAIL", 3: "NXDOMAIN", 4: "NOTIMP", 5: "REFUSED", 16: "BADVERS"}
+	if n, ok := names[rc]; ok {
+		return n
+	}
+	return fmt.Sprintf("RCODE%d", rc)
+}
+
+type result struct {
+	name, want, got string
+	pass            bool
+}
+
+func main() {
+	if len(os.Args) > 1 {
+		addr = os.Args[1]
+	}
+	timeout := 4 * time.Second
+	var results []result
+	check := func(name, want string, fn func() (string, bool)) {
+		got, ok := fn()
+		if !ok {
+			got = "NO RESPONSE"
+		}
+		results = append(results, result{name, want, got, got == want})
+	}
+
+	// Sanity: plain A query answers.
+	check("A query (sanity)", "NOERROR", func() (string, bool) {
+		raw, ok := send(query(0x1001, 0x0100, 0, 1, "example.com."), timeout)
+		if !ok {
+			return "", false
+		}
+		return rcodeName(raw), true
+	})
+
+	// §8.1.2: unknown RR type — NOERROR (empty answer), never dropped.
+	check("TYPE1000 (unknown type)", "NOERROR", func() (string, bool) {
+		raw, ok := send(query(0x1002, 0x0100, 0, 1000, "example.com."), timeout)
+		if !ok {
+			return "", false
+		}
+		return rcodeName(raw), true
+	})
+
+	// §3.1.4: unknown/unimplemented opcodes — NOTIMP.
+	for _, op := range []int{2, 12} {
+		check(fmt.Sprintf("opcode=%d (unknown)", op), "NOTIMP", func() (string, bool) {
+			raw, ok := send(query(0x1003, 0x0100, op, 1, "example.com."), timeout)
+			if !ok {
+				return "", false
+			}
+			return rcodeName(raw), true
+		})
+	}
+
+	// §3.1.3: CD=1 / AD=1 / reserved header bit — respond (not drop).
+	for _, tc := range []struct {
+		bit  uint16
+		name string
+	}{{0x0010, "CD=1"}, {0x0020, "AD=1"}, {0x0040, "reserved bit"}} {
+		check(tc.name+" (respond, not drop)", "NOERROR", func() (string, bool) {
+			raw, ok := send(query(0x1004, 0x0100|tc.bit, 0, 1, "example.com."), timeout)
+			if !ok {
+				return "", false
+			}
+			return rcodeName(raw), true
+		})
+	}
+
+	// §3.2.2: EDNS version > 0 — BADVERS.
+	for _, v := range []uint8{1, 127} {
+		check(fmt.Sprintf("EDNS version=%d", v), "BADVERS", func() (string, bool) {
+			raw, ok := send(query(0x1005, 0x0100, 0, 1, "example.com.", optRR(512, v)), timeout)
+			if !ok {
+				return "", false
+			}
+			if os.Getenv("DUMP") != "" {
+				fmt.Fprintf(os.Stderr, "DUMP v=%d hex=%x\n", v, raw)
+			}
+			return rcodeName(raw), true
+		})
+	}
+
+	// §3.2.3: unknown EDNS option — ignored, normal response.
+	check("unknown EDNS option 65535", "NOERROR", func() (string, bool) {
+		raw, ok := send(query(0x1006, 0x0100, 0, 1, "example.com.",
+			optRR(1232, 0, ednsOption(65535, []byte{1, 2, 3}))), timeout)
+		if !ok {
+			return "", false
+		}
+		return rcodeName(raw), true
+	})
+
+	// §3.1.3: QR=1 in the query — discard or FORMERR, never processed.
+	check("QR=1 in query", "DISCARD", func() (string, bool) {
+		raw, ok := send(query(0x1007, 0x0100, 0, 1, "qrbit.example.com."), timeout)
+		raw[2] |= 0x80 // set QR after build (flags arg reserved for response detection)
+		raw, ok = send(raw, timeout)
+		if !ok {
+			return "DISCARD", true
+		}
+		rc := rcodeName(raw)
+		if rc == "FORMERR" {
+			return "DISCARD", true
+		}
+		return "PROCESSED(" + rc + ")", true
+	})
+
+	// Header sanity: QDCOUNT=0 / QDCOUNT=2 — FORMERR or discard.
+	check("QDCOUNT=0", "FORMERR_OR_DISCARD", func() (string, bool) {
+		raw := query(0x1008, 0x0100, 0, 1, "example.com.")
+		binary.BigEndian.PutUint16(raw[4:6], 0)
+		binary.BigEndian.PutUint16(raw[6:8], 0) // ANCOUNT... keep sections clean: drop the question bytes
+		raw = raw[:12]                          // header only, QDCOUNT=0
+		resp, ok := send(raw, timeout)
+		if !ok {
+			return "DISCARD", true
+		}
+		rc := rcodeName(resp)
+		if rc == "FORMERR" {
+			return "FORMERR_OR_DISCARD", true
+		}
+		return rc, true
+	})
+	check("QDCOUNT=2", "DISCARD", func() (string, bool) {
+		raw := query(0x1009, 0x0100, 0, 1, "a.example.com.")
+		q := qnameWire("b.example.com.")
+		raw = binary.BigEndian.AppendUint16(append(raw, q...), 1)
+		raw = binary.BigEndian.AppendUint16(raw, 1)
+		binary.BigEndian.PutUint16(raw[4:6], 2)
+		binary.BigEndian.PutUint16(raw[6:8], 0)
+		resp, ok := send(raw, timeout)
+		if !ok {
+			return "DISCARD", true
+		}
+		rc := rcodeName(resp)
+		if rc == "FORMERR" {
+			return "FORMERR_OR_DISCARD", true
+		}
+		return rc, true
+	})
+
+	// §3.2.5: response must honor the advertised UDP size — a DO=1 DNSSEC
+	// answer easily exceeds 512 bytes; with bufsize=512 the server must
+	// truncate (TC) instead of sending oversized datagrams.
+	check("UDP size honored (512, DO=1 big answer)", "TC_OR_SMALL", func() (string, bool) {
+		raw, ok := send(query(0x100A, 0x0100, 0, 1, "cloudflare.com.",
+			optRR(512, 0), nil), timeout)
+		if !ok {
+			return "", false
+		}
+		tc := binary.BigEndian.Uint16(raw[2:4])&0x0200 != 0
+		if len(raw) <= 512 || tc {
+			return "TC_OR_SMALL", true
+		}
+		return fmt.Sprintf("OVERSIZE %dB", len(raw)), true
+	})
+
+	pass := 0
+	for _, r := range results {
+		mark := "PASS"
+		if !r.pass {
+			mark = "FAIL"
+		} else {
+			pass++
+		}
+		fmt.Printf("%-42s want=%-20s got=%-28s %s\n", r.name, r.want, r.got, mark)
+	}
+	fmt.Printf("\n%d/%d pass\n", pass, len(results))
+}

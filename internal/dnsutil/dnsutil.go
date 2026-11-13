@@ -13,6 +13,7 @@ import (
 	"zjdns/internal/log"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 )
 
 // HandshakeInfo carries the negotiated parameters from a TLS, TLCP, DTLS, or
@@ -223,4 +224,23 @@ func CloneRRs(rrs []dns.RR) []dns.RR {
 		}
 	}
 	return out
+}
+
+// SetQuestionAny sets the question section for ANY DNS type, including ones
+// the library has no Go representation for (RFC 8906 §8.1.2: unknown-type
+// queries must still be forwarded, not dropped).  Unknown types are encoded
+// as an RFC 3597 question RR — RRToType resolves it back to the real type
+// and Pack emits the original wire type.
+func SetQuestionAny(m *dns.Msg, z string, t uint16, c ...uint16) {
+	if dnsutil.SetQuestion(m, z, t, c...) != nil {
+		return
+	}
+	class := uint16(dns.ClassINET)
+	if len(c) > 0 {
+		class = c[0]
+	}
+	m.Question = []dns.RR{&dns.RFC3597{
+		Hdr:    dns.Header{Name: dnsutil.Fqdn(z), Class: class},
+		RRType: t,
+	}}
 }

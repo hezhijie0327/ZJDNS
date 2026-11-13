@@ -2093,6 +2093,8 @@ Client ⇄ 数据透传 ⇄ Target
 
 **我们的实现**：EDNSMiddleware 的逐项解析与容忍语义、MQTYPE 的 FORMERR 用例（§3.3）、上游对未知 EDNS 选项（MQQUERY）SERVFAIL 时的无选项重试（RFC 10029 §3.5）——均以 8906 矩阵为合规参照；依赖库（miekg/dns fork）2026-11 落地 8906 compliance 测试集，升级 fork 后应复核 BADVERS/unknown-RR 语义。
 
+**合规验证（2026-11-14）**：raw-packet 探针 14 用例实测 14/14 PASS（BADVERS 扩展 rcode、NOTIMP、QR=1 丢弃、QDCOUNT≠1 FORMERR/丢弃、未知 EDNS option 忽略、UDP size 通告合规）。验证中修复未知 TYPE 转发整体失效（SetQuestion 对未知类型返回 nil 被忽略 → 出站 QDCOUNT=0 被上游丢弃；`dnsutil.SetQuestionAny` 以 RFC3597 问题节修复）。报告：docs/audit/2026-11-round6-audit/13-rfc8906-conformance.md。
+
 ## draft-westerbaan-dnssec-mldsa-04 — ML-DSA 用于 DNSSEC [Internet-Draft, rev 04, expires 2027-02-12] ✅⚠️
 
 **概述**：定义 ML-DSA-44（算法号 18）的 DNSKEY 公钥、RRSIG 签名与 DS（SHA-384 摘要）编码——DNSSEC 的后量子签名套件。
