@@ -51,9 +51,9 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 			// control messages, so both spoofguard and hopguard run over
 			// the pooled sockets (proxy ASSOCIATE sockets included; hopguard
 			// TTL capture degrades to unavailable over SOCKS5).
-			resp, err := c.executeUDPCollect(ctx, msg, server)
+			resp, verified, err := c.executeUDPCollect(ctx, msg, server)
 			if err == nil {
-				return resp, true, nil
+				return resp, verified, nil
 			}
 			// An ambiguity verdict must never reach the single-read pooled
 			// path below — its first ID-matching datagram under injection is
@@ -70,9 +70,9 @@ func (c *Client) ExecuteUDP(ctx context.Context, msg *dns.Msg, server *config.Up
 	// Pooled path: reuse connected UDP sockets, proxied ASSOCIATE relays
 	// included (see pool/udp.go).
 	if c.udpPool != nil {
-		resp, err := c.executeUDPPooled(ctx, msg, server)
+		resp, verified, err := c.executeUDPPooled(ctx, msg, server)
 		if err == nil {
-			return resp, false, nil
+			return resp, verified, nil
 		}
 		// A canceled/expired context can never succeed past this point,
 		// and the pool's saturation errors exist precisely to bound
@@ -108,6 +108,7 @@ func (c *Client) exchangeOneShotUDP(ctx context.Context, msg *dns.Msg, addr stri
 		return nil, err
 	}
 	var d net.Dialer
+	d.Control = recvErrControl
 	conn, err := d.DialContext(ctx, "udp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial udp: %w", err)
@@ -176,6 +177,7 @@ func (c *Client) acquireUDP(ctx context.Context, addr, proxy string, wantTTL boo
 			return proxyDialer.DialUDP(dialCtx, a)
 		}
 		var d net.Dialer
+		d.Control = recvErrControl
 		return resolv.Default.DialContext(dialCtx, "udp", a, &d)
 	})
 }
@@ -185,10 +187,14 @@ func (c *Client) acquireUDP(ctx context.Context, addr, proxy string, wantTTL boo
 // verified against the original question before being returned — a misrouted
 // datagram (ID collision after wrap-around, or a buggy server echoing a stale
 // reply) can never be served as this query's response.
-func (c *Client) executeUDPPooled(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+// executeUDPPooled serves a query over a pooled single-read socket.  The
+// verified flag reports per-datagram defense verification: an armed hopguard
+// baseline plus this datagram's captured TTL passing the fingerprint window —
+// an armed baseline alone never clears a datagram.
+func (c *Client) executeUDPPooled(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, bool, error) {
 	uc, err := c.acquireUDP(ctx, server.Address, server.Proxy, server.HopGuard, c.getProxy(server))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	originalID := msg.ID
@@ -206,7 +212,7 @@ func (c *Client) executeUDPPooled(ctx context.Context, msg *dns.Msg, server *con
 		pool.ReleasePackBuf(packBuf)
 		msg.Data = nil
 		msg.ID = originalID
-		return nil, packErr
+		return nil, false, packErr
 	}
 	if cap(msgData) != pool.UDPBufferSize {
 		pool.ReleasePackBuf(packBuf) // Pack grew past the class — recycle it, drop the grown buffer
@@ -214,13 +220,13 @@ func (c *Client) executeUDPPooled(ctx context.Context, msg *dns.Msg, server *con
 	msg.Data = nil
 	msg.ID = originalID
 
-	payload, err := uc.Exchange(ctx, msgData, string([]byte{byte(trackingID >> 8), byte(trackingID)})) //nolint:gosec // G115: DNS ID fits uint16
-	pool.ReleasePackBuf(msgData)                                                                       // class-capacity check inside; grown buffers are dropped
+	payload, respTTL, err := uc.Exchange(ctx, msgData, string([]byte{byte(trackingID >> 8), byte(trackingID)})) //nolint:gosec // G115: DNS ID fits uint16
+	pool.ReleasePackBuf(msgData)                                                                                // class-capacity check inside; grown buffers are dropped
 	if err != nil {
 		if uc.IsDead() {
 			c.udpPool.Remove(uc)
 		}
-		return nil, err
+		return nil, false, err
 	}
 
 	response := pool.DefaultMessage.Get()
@@ -229,7 +235,7 @@ func (c *Client) executeUDPPooled(ctx context.Context, msg *dns.Msg, server *con
 		// Return the pooled payload buffer.
 		zpool.ReleaseUDPPayload(payload)
 		pool.DefaultMessage.Put(response)
-		return nil, err
+		return nil, false, err
 	}
 	response.Data = nil
 	// Payload consumed (unpacked, no longer referenced) — return it.
@@ -241,9 +247,17 @@ func (c *Client) executeUDPPooled(ctx context.Context, msg *dns.Msg, server *con
 	// different question.
 	if !matchQuestion(response, msg) {
 		pool.DefaultMessage.Put(response)
-		return nil, errQuestionMismatch
+		return nil, false, errQuestionMismatch
 	}
-	return response, nil
+	// Per-datagram hopguard verification for every qtype: the socket's TTL
+	// capture gates this exact datagram against the armed fingerprint.  TTL
+	// 0 (capture unavailable) is never a positive verification.
+	var hg *defense.HopGuard
+	if server.HopGuard {
+		hg = c.hopGuard
+	}
+	verified := hg != nil && hg.Confident(server.Address) && respTTL != 0 && hg.Validate(server.Address, respTTL)
+	return response, verified, nil
 }
 
 // executeUDPCollect sends a query over a pooled UDP socket and collects
@@ -252,10 +266,15 @@ func (c *Client) executeUDPPooled(ctx context.Context, msg *dns.Msg, server *con
 // queries.  HopGuard TTL validation gates the same packets (the pool's
 // readLoop captures the IP TTL via control messages); when capture is
 // unavailable (e.g. Windows), HopGuard degrades to TTL-less operation.
-func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, error) {
+// executeUDPCollect serves a query over the pooled collect discipline.  The
+// verified flag reports defense verification of the served datagram: the
+// collect window/confirmation rules, minus the carve-out that a TTL-less
+// winner (capture miss) under an armed baseline is not a positive
+// verification.
+func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *config.UpstreamServer) (*dns.Msg, bool, error) {
 	uc, err := c.acquireUDP(ctx, server.Address, server.Proxy, server.HopGuard, c.getProxy(server))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	// HopGuard: the pooled socket captured TTLs in readLoop — wire the
@@ -311,7 +330,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 			if previous != nil {
 				pool.DefaultMessage.Put(previous)
 			}
-			return nil, packErr
+			return nil, false, packErr
 		}
 		if cap(msgData) != pool.UDPBufferSize {
 			pool.ReleasePackBuf(packBuf) // Pack grew past the class — recycle it, drop the grown buffer
@@ -329,10 +348,23 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 			if previous != nil {
 				pool.DefaultMessage.Put(previous)
 			}
-			return nil, err
+			return nil, false, err
 		}
 
 		var sg spoofguardState
+		// Round-local retransmit state: a fully silent round (no candidate,
+		// no fallback slot — at most hopguard-rejected junk) re-sends the
+		// query after DefaultUDPRetransmitInterval, mirroring the
+		// single-read Exchange path; without it one lost datagram burns the
+		// whole budget and falls to TCP.
+		roundStart := time.Now()
+		roundRetransmits := 0
+		// winnerVerified carves out the TTL-less winner: under an armed
+		// baseline a datagram without captured TTL passed no fingerprint
+		// check, so serving it is not a positive per-query verification.
+		winnerVerified := func(ttl uint8) bool {
+			return hg == nil || !hg.Confident(server.Address) || ttl != 0
+		}
 	collect:
 		for {
 			select {
@@ -353,7 +385,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					pool.DefaultMessage.Put(c.msg)
 				}
 				uc.ReleaseCollect(matchKey)
-				return nil, ctx.Err()
+				return nil, false, ctx.Err()
 			case pkt, ok := <-collectCh:
 				if !ok {
 					// The conn died mid-collect: return the other candidates
@@ -378,9 +410,9 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 						// serving it here bypasses the cross-round check the
 						// live path enforces (fail-closed: TCP fallback).
 						sg.last.ID = originalID // tracking ID must not escape
-						return sg.last, nil
+						return sg.last, winnerVerified(sg.lastTTL), nil
 					}
-					return nil, errCollectClosed
+					return nil, false, errCollectClosed
 				}
 				// Gate on 12 bytes first — processPacket reads raw[6..9] for
 				// the fast-signal checks; a 2-9 byte datagram with a matching
@@ -395,7 +427,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 				// only after spoofguard accepts the response (below).
 				if hg != nil && !hg.Validate(server.Address, pkt.TTL) {
 					if hg.ShouldSampleRejected(server.Address) {
-						hg.Feed(server.Address, pkt.TTL)
+						hg.FeedRejected(server.Address, pkt.TTL)
 					}
 					pkt.Release()
 					continue
@@ -428,7 +460,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					}
 					resp.ID = originalID
 					uc.ReleaseCollect(matchKey)
-					return resp, nil
+					return resp, winnerVerified(pkt.TTL), nil
 				}
 			case <-pollTimer.C:
 				now := time.Now()
@@ -483,7 +515,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 								}
 								match.ID = originalID
 								uc.ReleaseCollect(matchKey)
-								return match, nil
+								return match, winnerVerified(matchTTL), nil
 							}
 							// No signature repeated across rounds — every
 							// candidate varied, so none is corroborated.
@@ -495,7 +527,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 							}
 							if !roundsLeft {
 								uc.ReleaseCollect(matchKey)
-								return nil, errAmbiguousNoConfirm
+								return nil, false, errAmbiguousNoConfirm
 							}
 							// The next round registers under a fresh matchKey —
 							// this round's registration must not outlive it.
@@ -508,7 +540,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 								pool.DefaultMessage.Put(previous)
 							}
 							uc.ReleaseCollect(matchKey)
-							return nil, errAmbiguousNoConfirm
+							return nil, false, errAmbiguousNoConfirm
 						}
 						prevRoundSigs = sigs // ownership moves
 						if previous != nil {
@@ -532,7 +564,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					}
 					resp.ID = originalID
 					uc.ReleaseCollect(matchKey)
-					return resp, nil
+					return resp, winnerVerified(respTTL), nil
 				}
 				if sg.last == nil && sg.nonEDNS != nil && now.Sub(sg.lastRecv) > sg.collectWindow() {
 					resp, respTTL := sg.pickBest()
@@ -554,7 +586,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 							pool.DefaultMessage.Put(previous)
 						}
 						resp.ID = originalID
-						return resp, nil
+						return resp, winnerVerified(respTTL), nil
 					}
 					// Ambiguous bare single-answer non-EDNS: confirm with a
 					// matching re-query before serving (pure UDP).
@@ -564,7 +596,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 						}
 						pool.DefaultMessage.Put(previous)
 						resp.ID = originalID
-						return resp, nil
+						return resp, winnerVerified(respTTL), nil
 					}
 					if previous != nil {
 						pool.DefaultMessage.Put(previous)
@@ -572,9 +604,37 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 					previous = resp
 					if round+1 >= config.DefaultSpoofguardConfirmRounds || now.After(maxDeadline) {
 						pool.DefaultMessage.Put(resp)
-						return nil, errAmbiguousNoConfirm
+						return nil, false, errAmbiguousNoConfirm
 					}
 					break collect // re-query in the next round
+				}
+				if sg.last == nil && sg.nonEDNS == nil && sg.prev == nil &&
+					roundRetransmits < config.DefaultUDPRetransmitCount &&
+					now.Sub(roundStart) > config.DefaultUDPRetransmitInterval {
+					// Fully silent round — the response datagram was likely
+					// lost (or a drifting hopguard baseline rejected it).
+					// Re-send the same tracking ID so a late duplicate still
+					// matches this round's registration.
+					roundRetransmits++
+					roundStart = now
+					if rtBuf := pool.AcquirePackBuf(); true {
+						msg.ID = trackingID
+						msg.Data = rtBuf
+						rtErr := msg.Pack()
+						if rtErr == nil && uc.WriteQuery(msg.Data) != nil {
+							rtErr = errCollectClosed
+						}
+						pool.ReleasePackBuf(rtBuf) // class-capacity check inside
+						msg.Data = nil
+						msg.ID = originalID
+						if rtErr != nil {
+							if previous != nil {
+								pool.DefaultMessage.Put(previous)
+							}
+							uc.ReleaseCollect(matchKey)
+							return nil, false, rtErr
+						}
+					}
 				}
 				if now.After(maxDeadline) {
 					// Classify before pickBest — it clears the winning slot.
@@ -590,7 +650,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 							pool.DefaultMessage.Put(previous)
 						}
 						uc.ReleaseCollect(matchKey)
-						return nil, errNoResponse
+						return nil, false, errNoResponse
 					}
 					if safe {
 						if hg != nil && (hg.Confident(server.Address) || sg.packets == 1) {
@@ -601,7 +661,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 						}
 						resp.ID = originalID
 						uc.ReleaseCollect(matchKey)
-						return resp, nil
+						return resp, winnerVerified(respTTL), nil
 					}
 					// Ambiguous at the deadline — never serve it.
 					pool.DefaultMessage.Put(resp)
@@ -609,7 +669,7 @@ func (c *Client) executeUDPCollect(ctx context.Context, msg *dns.Msg, server *co
 						pool.DefaultMessage.Put(previous)
 					}
 					uc.ReleaseCollect(matchKey)
-					return nil, errAmbiguous
+					return nil, false, errAmbiguous
 				}
 			}
 		}

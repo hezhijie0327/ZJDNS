@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,9 +30,10 @@ import (
 //	single    — one clean EDNS answer with a fixed IP;
 //	silent    — no response at all.
 type collectTestServer struct {
-	pc    *net.UDPConn
-	nonce atomic.Uint32
-	mode  atomic.Value // string
+	pc      *net.UDPConn
+	nonce   atomic.Uint32
+	mode    atomic.Value // string
+	dropped sync.Map     // query ID → already dropped (dropfirst mode)
 }
 
 func newCollectTestServer(t *testing.T) *collectTestServer {
@@ -81,6 +83,13 @@ func (s *collectTestServer) serve() {
 				}
 			}(peer, req)
 		case "single":
+			s.reply(peer, req, netip.MustParseAddr("192.0.2.53"), 1)
+		case "dropfirst":
+			// Drop each query ID's first datagram; answer only the
+			// retransmission — the collect path must re-send to recover.
+			if _, dup := s.dropped.LoadOrStore(req.ID, struct{}{}); !dup {
+				continue
+			}
 			s.reply(peer, req, netip.MustParseAddr("192.0.2.53"), 1)
 		case "silent":
 		}
@@ -151,7 +160,7 @@ func TestExecuteUDPCollect_DivergentRoundsReleaseRegistration(t *testing.T) {
 	srv.setMode("divergent")
 	ctx1, cancel1 := context.WithTimeout(t.Context(), 1400*time.Millisecond)
 	defer cancel1()
-	_, err := c.executeUDPCollect(ctx1, collectQueryMsg("pair.example.com."), server)
+	_, _, err := c.executeUDPCollect(ctx1, collectQueryMsg("pair.example.com."), server)
 	if err == nil {
 		t.Fatal("divergent rounds with no cross-round signature match must not serve an answer")
 	}
@@ -163,7 +172,7 @@ func TestExecuteUDPCollect_DivergentRoundsReleaseRegistration(t *testing.T) {
 	start := time.Now()
 	ctx2, cancel2 := context.WithTimeout(t.Context(), 1400*time.Millisecond)
 	defer cancel2()
-	resp, err2 := c.executeUDPCollect(ctx2, collectQueryMsg("pair.example.com."), server)
+	resp, _, err2 := c.executeUDPCollect(ctx2, collectQueryMsg("pair.example.com."), server)
 	if err2 != nil {
 		t.Fatalf("second collect query blocked — a divergent round leaked its registration: %v", err2)
 	}
@@ -196,7 +205,7 @@ func TestExecuteUDPCollect_ConnDeathDivergentNotServed(t *testing.T) {
 		c.udpPool.Remove(uc)
 	}()
 
-	resp, err := c.executeUDPCollect(t.Context(), collectQueryMsg("conndeath.example.com."), server)
+	resp, _, err := c.executeUDPCollect(t.Context(), collectQueryMsg("conndeath.example.com."), server)
 	if err == nil && resp != nil {
 		t.Fatalf("conn death must not serve an unconfirmed divergent candidate (got answer %v)", resp.Answer)
 	}
@@ -219,8 +228,27 @@ func TestExecuteUDPCollect_DripDeadlineNotServed(t *testing.T) {
 	defer srv.setMode("single")
 	ctx, cancel := context.WithTimeout(t.Context(), 1500*time.Millisecond)
 	defer cancel()
-	resp, err := c.executeUDPCollect(ctx, collectQueryMsg("drip.example.com."), server)
+	resp, _, err := c.executeUDPCollect(ctx, collectQueryMsg("drip.example.com."), server)
 	if err == nil && resp != nil {
 		t.Fatalf("deadline under divergent drip must not serve the last packet (got answer %v)", resp.Answer)
+	}
+}
+
+// TestExecuteUDPCollect_SilentRoundRetransmits pins the collect-mode
+// retransmit: a fully silent round (the response datagram was lost) re-sends
+// the query after DefaultUDPRetransmitInterval instead of burning the whole
+// budget and failing over to TCP.
+func TestExecuteUDPCollect_SilentRoundRetransmits(t *testing.T) {
+	srv := newCollectTestServer(t)
+	c := newMaxPipeOneClient(4 * time.Second)
+	server := &config.UpstreamServer{Address: srv.addr(), Protocol: config.ProtoUDP, Spoofguard: true}
+
+	srv.setMode("dropfirst")
+	resp, _, err := c.executeUDPCollect(t.Context(), collectQueryMsg("loss.example.com."), server)
+	if err != nil || resp == nil {
+		t.Fatalf("collect query did not recover via retransmit: resp=%v err=%v", resp, err)
+	}
+	if len(resp.Answer) == 0 {
+		t.Fatal("retransmitted query returned no answer")
 	}
 }
