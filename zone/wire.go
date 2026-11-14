@@ -42,6 +42,15 @@ func buildRRs(domain string, records []config.ZoneRecord) []dns.RR {
 }
 
 func buildRecord(domain string, record *config.ZoneRecord) dns.RR {
+	// Empty content is the qtype-scope marker: the record line exists to pin
+	// the rule row to one qtype (e.g. `28 ""` under rcode=3 → AAAA blocked
+	// with NXDOMAIN; with rcode=0 → authoritative NODATA).  The rule row is
+	// registered with its qtype by the caller regardless of the built RR —
+	// there is nothing to parse here, and no warning (established idiom, see
+	// TestEvaluator_MatchScore_Priority's "AAAA blocked" rows).
+	if record.Content == "" {
+		return nil
+	}
 	ttl := record.TTL
 	if ttl == 0 {
 		ttl = config.DefaultTTL

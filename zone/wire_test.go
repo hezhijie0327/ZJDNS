@@ -29,6 +29,20 @@ func TestBuildRecord_BadContentDropped(t *testing.T) {
 	}
 }
 
+// TestBuildRecord_EmptyContentIsScopeMarker pins the qtype-scope marker: a
+// record line with empty content (`28 ""` in a zone file, {Type: AAAA} in
+// inline config) pins the rule row to one qtype — e.g. "AAAA blocked" via
+// rcode=3 — and must build no RR without triggering the unparseable-record
+// drop warning (TestEvaluator_MatchScore_Priority exercises the matching
+// side of the same idiom).
+func TestBuildRecord_EmptyContentIsScopeMarker(t *testing.T) {
+	for _, typ := range []uint16{dns.TypeA, dns.TypeAAAA, dns.TypePTR} {
+		if rr := buildRecord("example.com.", &config.ZoneRecord{Type: typ}); rr != nil {
+			t.Errorf("buildRecord(type %d, empty content) = %v, want nil (qtype-scope marker)", typ, rr)
+		}
+	}
+}
+
 // TestBuildRecord_RFC3597FallbackPacks verifies the accepted fallback (bare
 // contiguous hex — Data is hex-decoded verbatim on pack) yields a record
 // that packs cleanly instead of failing at serve time.
