@@ -34,6 +34,12 @@ type Prober struct {
 	bgCtx   context.Context
 	engine  *latency.Prober
 	pending *pending.Group[probeKey]
+	// rounds bounds concurrent probe rounds (not individual probes — the
+	// engine's semaphore does that). Rounds are a best-effort optimization:
+	// when the cap is hit the probe is dropped, not queued — queued rounds
+	// under a distinct-qname flood grow without bound (goroutine per call
+	// blocked on the engine semaphore).
+	rounds chan struct{}
 }
 
 // probeKey identifies a unique in-flight latency probe.
@@ -63,6 +69,7 @@ func New(cache CacheSetter, bgGroup func(func() error), bgCtx context.Context, s
 		bgCtx:   bgCtx,
 		engine:  latency.New(steps, bgCtx),
 		pending: pending.NewGroup[probeKey](),
+		rounds:  make(chan struct{}, config.DefaultLatencyProbeMaxRounds),
 	}
 }
 
@@ -131,9 +138,19 @@ func (p *Prober) Start(qname string, qtype uint16, answer, authority, additional
 		return
 	}
 
+	select {
+	case p.rounds <- struct{}{}:
+	default:
+		// Round cap hit — drop (best-effort optimization, never queue).
+		p.pending.Done(key)
+		log.Debugf("LATENCY: probe skipped for %s — round cap reached", qname)
+		return
+	}
+
 	log.Debugf("LATENCY: starting background latency probe for %s", qname)
 
 	p.bgGroup(func() error {
+		defer func() { <-p.rounds }()
 		defer p.pending.Done(key)
 		defer zdnsutil.HandlePanic("latency probe")
 		if err := p.probeAndReorder(p.bgCtx, qname, answer); err != nil {

@@ -378,12 +378,19 @@ const (
 	// (RFC 8310 §6). This is the default for encrypted upstreams.
 	PrivacyProfileStrict = "strict"
 
-	DefaultLatencyProbeTimeout      = 100 * time.Millisecond
-	DefaultNSProbeTimeout           = 5 * time.Second // timeout for NS/root latency probing
-	DefaultLatencyProbeMinInterval  = 60              // min interval between probes for the same IP (seconds)
-	DefaultLatencyProbeSmoothFactor = 2               // EWMA smoothing factor: srtt = ((N-1)·srtt + rtt) / N (N=2 → α=1/2)
-	DefaultRootCacheTTL             = 3600            // root server cache entry TTL (seconds)
-	DefaultDelegationLookupZones    = 16              // max ancestor zones per delegation lookup
+	DefaultLatencyProbeTimeout     = 100 * time.Millisecond
+	DefaultNSProbeTimeout          = 5 * time.Second // timeout for NS/root latency probing
+	DefaultLatencyProbeMinInterval = 60              // min interval between probes for the same IP (seconds)
+	// DefaultLatencyProbeMaxRounds caps concurrent background probe rounds.
+	// Per-key dedup (qname,qtype) + the engine's probe semaphore do NOT
+	// bound the number of QUEUED rounds: a flood of distinct multi-A
+	// qnames each spawns a round goroutine that blocks on the engine
+	// semaphore — unbounded goroutine/memory growth. Probes are a
+	// best-effort optimization; a round that cannot start is dropped.
+	DefaultLatencyProbeMaxRounds    = 2
+	DefaultLatencyProbeSmoothFactor = 2    // EWMA smoothing factor: srtt = ((N-1)·srtt + rtt) / N (N=2 → α=1/2)
+	DefaultRootCacheTTL             = 3600 // root server cache entry TTL (seconds)
+	DefaultDelegationLookupZones    = 16   // max ancestor zones per delegation lookup
 
 	DefaultProbePortDNS   = 53
 	DefaultProbePortHTTP  = 80

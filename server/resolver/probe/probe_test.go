@@ -1,15 +1,37 @@
 package probe
 
 import (
+	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"zjdns/config"
+	"zjdns/edns"
 	"zjdns/internal/pending"
 
 	"codeberg.org/miekg/dns"
 )
+
+// stubCacheSetter is a no-op CacheSetter with controllable LatencyLastProbe.
+type stubCacheSetter struct {
+	lastProbe int64
+	ok        bool
+}
+
+// multiAAnswer builds n A records with distinct public IPs.
+func multiAAnswer(n int) []dns.RR {
+	out := make([]dns.RR, 0, n)
+	for i := range n {
+		out = append(out, &dns.A{
+			Hdr:  dns.Header{Name: "example.com.", Class: dns.ClassINET, TTL: 300},
+			Addr: netip.MustParseAddr(fmt.Sprintf("203.0.113.%d", i+1)),
+		})
+	}
+	return out
+}
 
 func TestPendingProbes_LeaderAndFollower(t *testing.T) {
 	pp := pending.NewGroup[probeKey]()
@@ -261,5 +283,87 @@ func TestTryStartNSProbe_ConcurrentSameKey(t *testing.T) {
 
 	if n := followers.Load(); n != int32(goroutines-1) {
 		t.Errorf("expected %d followers, got %d", goroutines-1, n)
+	}
+}
+
+func (s *stubCacheSetter) Set(string, uint16, uint16, *edns.ECSOption, []dns.RR, []dns.RR, []dns.RR, bool, uint16) {
+}
+
+func (s *stubCacheSetter) UpdateLatency(string, int)         {}
+func (s *stubCacheSetter) UpdateLatencyBatch(map[string]int) {}
+
+func (s *stubCacheSetter) LatencyLastProbe(string) (int64, bool) {
+	return s.lastProbe, s.ok
+}
+
+// TestStart_RoundCapBoundedSpawn pins the round-cap admission gate: a flood
+// of distinct multi-A qnames must not queue unbounded probe rounds — bgGroup
+// invocations are capped at DefaultLatencyProbeMaxRounds while rounds are
+// in flight (the goroutine/memory amplification vector).
+func TestStart_RoundCapBoundedSpawn(t *testing.T) {
+	started := make(chan struct{}, 64)
+	block := make(chan struct{})
+	var invocations atomic.Int32
+	p := New(&stubCacheSetter{}, func(fn func() error) {
+		// Asynchronous like the production errgroup.Go — a synchronous
+		// body would deadlock the caller inside Start.
+		invocations.Add(1)
+		go func() {
+			started <- struct{}{}
+			<-block  // hold the round in flight
+			_ = fn() // _ = error: stub round, result intentionally discarded
+		}()
+	}, t.Context(), []config.LatencyProbeStep{{Protocol: config.ProtoDNS, Port: 53, Timeout: 10}})
+
+	const flood = 50
+	for i := range flood {
+		p.Start(fmt.Sprintf("flood%d.example.com.", i), dns.TypeA, multiAAnswer(4), nil, nil, false, nil)
+	}
+
+	for range config.DefaultLatencyProbeMaxRounds {
+		<-started
+	}
+	select {
+	case <-started:
+		t.Fatalf("bgGroup spawned %d rounds, want ≤ %d — queued rounds grow without bound under a distinct-qname flood",
+			invocations.Load(), config.DefaultLatencyProbeMaxRounds)
+	default:
+	}
+	close(block)
+}
+
+// TestStart_PendingReleasedOnCapDrop pins that a round-cap-dropped probe
+// releases its pending key — the same qname must be probeable again later.
+func TestStart_PendingReleasedOnCapDrop(t *testing.T) {
+	started := make(chan struct{}, 64)
+	block := make(chan struct{})
+	p := New(&stubCacheSetter{}, func(fn func() error) {
+		go func() {
+			started <- struct{}{}
+			<-block
+			_ = fn() // _ = error: stub round, result intentionally discarded
+		}()
+	}, t.Context(), []config.LatencyProbeStep{{Protocol: config.ProtoDNS, Port: 53, Timeout: 10}})
+
+	p.Start("cap.example.com.", dns.TypeA, multiAAnswer(4), nil, nil, false, nil)
+	<-started
+
+	// Cap is full — this call must be dropped AND release the pending key.
+	for i := range 10 {
+		p.Start(fmt.Sprintf("drop%d.example.com.", i), dns.TypeA, multiAAnswer(4), nil, nil, false, nil)
+	}
+	close(block)
+	// All rounds exit; after drain the same qname must be startable again.
+	deadline := time.After(2 * time.Second)
+	for {
+		if p.pending.Start(probeKey{qname: "cap.example.com.", qtype: dns.TypeA}) {
+			p.pending.Done(probeKey{qname: "cap.example.com.", qtype: dns.TypeA})
+			break // not stuck — pending was released on the cap drop
+		}
+		select {
+		case <-deadline:
+			t.Fatal("pending key still held after cap drop — later probes for this qname are locked out forever")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
