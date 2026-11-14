@@ -1,516 +1,177 @@
-# ZJDNS 审计框架
+# AUDIT-METHODOLOGY.md — ZJDNS 审计 playbook
 
-## 概述
+ZJDNS 全仓库审计的可复用手册，覆盖：并行包级审计、交叉维度扫描、Sprint 修复、
+对抗性修复面复查（Round C）、全协议 E2E 回归、防御注入矩阵、benchmark 分配契约。
+下一轮照此执行：基线 → Phase 1 并行审计 → 修复 → Round C 复查 → E2E → 文档。
 
-本文档定义了 ZJDNS 代码库的端到端审计与修复流程。每次审计均按此框架执行：从多维度并行审查，到按严重程度分 Sprint 修复，到质量门禁收尾。
+目标设定：**按轮审计，直到一轮审计不再产生新发现为止。** 每个修复带红灯→
+绿灯回归测试；每轮把新根因模式落进 §5（同一错误不审计两次）。轮次不设
+独立存档——教训就地沉淀进本文件（§5 根因模式表），历史修复明细以 git log 为准。
 
-每次审计的详细发现和修复计划存档于 [`docs/audit/`](audit/)。
+## 1. 基线（每轮开头）
 
-### 历史记录
-
-| 轮次 | 时间 | 主题 | 报告 | 状态 |
-|------|------|------|------|------|
-| 1 | 2026-08 | 全内存迁移后首次大审计（SQLite 移除 + 快照持久化），重点：内存泄漏 corner case | `docs/audit/2026-08-memory-audit/` | ✅ 全部修复（21/21）+ pprof 验证通过 |
-| 2 | 2026-09 | 全项目审计（Phase 1 七包级 + Phase 2 四交叉组,约 150 项独立发现）,重点:9/1-9/2 性能轮次后的防御面/池计数/锁内 IO;发现即修复全部 Sprint 1-3 + E2E 全协议验证 + 基线刷新 | `docs/audit/2026-09-full-audit/` | ✅ 全部修复(含 1 项 CRITICAL 防御绕过、11 项 HIGH)+ 14 协议 E2E + pprof 零泄漏 |
-| 3 | 2026-09 | Round 3:上轮后 95 个 perf 提交(2.7 万行)为重点面 + 注释风格专项维度;Phase 1 → Sprint 1-3 发现即修复 → Round B 修复复查+交叉扫描;1 CRITICAL + 8 HIGH + ~28 MEDIUM + ~170 注释噪音清除;E2E 21 场景全过(含无 EDNS TCP 缓存命中——上轮遗留盲区) | `docs/audit/2026-09-round3-audit/` | ✅ 全部修复 + Round B 自查回归 2 项(含测试捕获的 DNSCrypt Start 标志丢失)+ 基线无回归 |
-| 4 | 2026-09 | Round 4:手搓 Plain UDP/TCP + Guard 拦截率专项 + 全项目 20 维度;7 并行包级审计(4 HIGH + 14 MEDIUM + ~30 LOW)→ 分 Sprint 修复(22 commits)→ Round C/D 两轮修复面复查(抓获 3 个修复自身引入的回归,含 2 HIGH)→ 确定性注入测试台实测 Guard 矩阵(修复 capsguard 0x20 重试竞态 + 发散 EDNS 随机决胜两个单开缺口,最终单开×组合×三威胁模型全 0 泄漏)→ 14 协议 E2E + 同进程内存收敛精确一致 | `docs/audit/2026-09-round4-audit/` | ✅ 全部修复 + lrumap/spillfile 竞态修复带可复现验证 + 基线仅 2 项已论证的正确性代价 |
-| 6 | 2026-11 | Round 6:依赖全量浮动(miekg/dns v0.6.134、pion/dtls v4.0.3、quic-go 20261110)+ 7 包级新鲜审计 + 对标项目分析(dnscrypt-proxy/eds/coredns,10 项借鉴点、采纳 IP_RECVERR+PMTUDISC_DONT);4 HIGH(自旋/collect 泄漏/防御状态机×2)+ 13 MEDIUM + ~25 LOW 全修(含 ECS 缓存键繁殖、共享口 shard last-wins、hopguard 采样捕获、per-datagram 验证链)+ demux OPT rdlength 生产 bug(P3 补测试抓获);E2E 14 协议+共享 7 组+MQTYPE+递归+无 EDNS TCP 缓存命中全过,压测 QPS 19-49k(非零 fail 经修复前二进制同签名复现判定为环境噪声),内存收敛 <0.1%,race 全绿,bench 唯一 alloc 回归经 worktree 隔离证明为依赖来源 | `docs/audit/2026-11-round6-audit/` | ✅ 全部修复 + Round C 复查 + 基线刷新(140 项) |
-| 5 | 2026-11 | Round 5:上轮后 41 提交(demux MSG_PEEK、internal/ktls、eHTTP→net/http 原生迁移、双栈 TLS/DTLS、pion/dtls v4、DoQ stream-credit、EDE 65281)为重点面 + 亲审全部迁移 commit;7 并行包级审计(1 CRITICAL + 4 HIGH + 9 MEDIUM + ~20 LOW + 4 性能)→ 8 commits 修复 → E2E 循环冒烟抓获 mergeRRs dstKeys 越界 panic(修复自身回归,Round C 复核)→ 14 协议 + 共享端口 7 组 + MQTYPE + 递归 + PM1 迁移(h2/http1.1/TLS1.2)全过,12 协议压测 fail=0,内存收敛精确一致,基线 0 回归,65281 递归链路真网验证(学习期 miss 不缓存) | `docs/audit/2026-11-round5-audit/` | ✅ 全部修复(含 3 个防御标记链缺口、demux 嗅探自旋 DoS)+ race 全绿 |
-
----
-
-## 一、审计流程
-
-### 1.1 审计维度
-
-每个文件、每个包在以下 20 个维度接受审查：
-
-| 维度 | 关注点 |
-|------|--------|
-| **代码质量** | 死代码、冗余代码、重复代码、低效代码 |
-| **内存安全** | 泄漏、无界增长、sync.Pool 误用、缓冲区未归还、快照保存队列/goroutine 泄漏 |
-| **锁正确性** | data race、死锁、竞态、锁顺序 |
-| **耦合度** | 导入分层违规、不必要依赖、接口放置 |
-| **架构设计** | God package、命名一致性、类型别名合理性 |
-| **性能** | QPS 瓶颈、快照序列化开销、热路径分配 |
-| **Panic 检测** | nil 解引用、切片越界、空 map 写入、裸类型断言、通道关闭、除零、use-after-Put |
-| **错误处理** | `%w` 包装链路完整；`errors.Is`/`As` 使用正确；sentinel error vs custom type 选择合理；同一函数内包装策略一致（要么全 Wrap 要么全不 Wrap） |
-| **Context 传播** | 所有 I/O 函数第一参数为 `context.Context`；取消信号正确传播到下游；无 `context.TODO()` 出现在生产代码；`WithoutCancel`/`WithTimeout` 使用场景正确 |
-| **Goroutine 生命周期** | 每个 goroutine 有 `defer HandlePanic`；有明确的父 goroutine/owner；有取消路径（ctx.Done 或 done channel）；`errgroup` 使用 `SetLimit` 限制并发；channel 由唯一 owner 关闭 |
-| **资源生命周期** | `Close()` 幂等（`sync.Once` 或 atomic 守卫）；New 创建的资源在 Close 中全部释放；`Close()` 不阻塞（不在锁内做 IO）；`SetReadDeadline` 用于取消阻塞的 IO |
-| **日志质量** | 完整性（关键路径有日志）、精准性（级别正确、信息充分）、不刷屏（info/warn 不在热路径重复打印） |
-| **文档质量** | 架构文档与代码一致、AGENTS.md 类型引用准确、注释不过时/不误导、关键设计决策有记录、公开 API 有 godoc |
-| **参数校验** | 公开函数未检查 nil/空字符串/零值参数；构造后未验证字段有效性（如 `net.ParseIP("")` 返回 nil）；错误返回值被 `_` 丢弃导致后续代码基于零值继续执行；`func(_, name string)` 中 `_` 丢弃的参数是否存在应校验但未校验的值 |
-| **常量提取** | 魔法数字是否抽取为命名常量（含 `config/defaults.go`）；常量值是否符合 RFC/IETF 推荐（默认端口、超时、缓冲区大小）；同一常量是否跨包重复定义（应统一到一处） |
-| **RFC 一致性** | 实现是否偏离 RFC 规范；RFC 要求的边界条件/错误处理是否完整；新引入的 RFC 是否已在 `docs/rfc/` 存档；代码中的 RFC 注释引用是否正确（RFC 编号、章节号是否有效） |
-| **注释准确性** | 注释是否引用已删除/移动/重命名的函数、类型、字段；注释描述的行为是否与当前代码一致；TODO/FIXME/HACK 是否仍然有效还是已过期；注释中的行号引用是否已失效 |
-| **注释风格** | 注释只写约束/理由,不写历史:① 禁止日期引用(`2026-09`、`9/1-9/2`)与审计编号(`(H1)`、`(M-low)`、`(R3-M2)`)—— 来源噪音对后续读者毫无信息量;② 禁止战史叙述(pprof 数据、生产事故复盘、"190M 调用");③ 禁止变更叙述(`previously X`、`no longer Y`、`used to Z`)—— 一律改写为现在时约束;④ 超过 ~4 行的步骤复述式注释压缩为 1-2 行不变量。RFC 章节引用、`//nolint` 机制、导出符号 godoc 不受影响。审计命令:`grep -rnE '\(20[0-9]{2}-[0-9]{2}|\([A-Z]{1,3}-?[0-9]' --include='*.go'` + `grep -rn 'previously'` |
-| **函数排序** | 文件内声明顺序是否严格遵循 `type → const → var → func`（decorder 强制）；同一接收者的方法是否聚合而非散落；构造/初始化函数是否在最靠近类型的位置（即紧跟 var 块之后的第一个 func）；新增函数是否随机插入在无关函数之间 |
-| **Go 版本特性** | 代码是否采用了当前最低 Go 版本的语言/库特性；是否存在可用 `new(expr)`、`errors.AsType[T]`、`slices.Reverse` 等新版标准库替代的手写模式；`go fix` 现代器覆盖的迁移是否已应用 |
-| **流程图覆盖** | `docs/FLOWCHARTS.md` 是否覆盖全部核心功能和协议；新增特性/协议/中间件是否同步更新了流程图；mermaid 语法是否正确可渲染 |
-
-### 1.2 审计架构
-
-采用分层并行 Agent 架构：
-
-```
-Phase 1: 包级审计（7 agent 并行）
-├── Foundation audit: internal/* 基础包
-├── Domain audit:     config / cache / edns / zone / ruleset / internal/spillfile
-├── Protocol audit:   server/protocol/{plain,tls,tlcp,dnscrypt}
-├── Upstream audit:   server/upstream/*
-├── Resolver audit:   server/resolver/*
-├── Handler audit:    server/handler/*
-└── Defense audit:    server/defense/*
-
-Phase 2: 交叉分析（19 agent 并行）
-├── CrossCut Locks:      全部 sync.Mutex / RWMutex / Once / atomic / channel / WaitGroup / Pool
-├── CrossCut Memory:     goroutine 泄漏、无界增长、资源泄漏、池误用
-├── CrossCut Panic:      nil 解引用、切片越界、空 map 写入、裸类型断言、死锁、除零
-├── CrossCut Error:      错误包装链路（%w）、sentinel error 定义位置、errors.Is/As 正确性、包装策略一致性
-├── CrossCut Context:    ctx 第一参数约定、取消传播、context.TODO() 扫描、WithoutCancel 误用
-├── CrossCut Goroutine:  每个 goroutine 的 HandlePanic、owner、取消路径；errgroup SetLimit；channel 关闭 owner
-├── CrossCut Resource:   Close() 幂等性（sync.Once/atomic）、New/Close 对称性、Close 内不阻塞 IO
-├── CrossCut Validation: 公开函数参数未校验（nil/空字符串/零值）、错误被 _ 丢弃、构造函数未验证字段
-├── CrossCut DeadCode:   未用符号、重复代码、不必要接口
-├── CrossCut Perf:       快照序列化开销、热路径分配、原子快照替换竞态
-├── CrossCut Arch:       导入分层验证、循环依赖风险、接口契约满足性
-├── CrossCut Logging:    日志级别审计、info/warn 热路径刷屏、错误路径缺失日志、格式一致性
-├── CrossCut Docs:       全部 .md 文件与代码一致性、AGENTS.md 准确性、注释是否过时、godoc 覆盖率
-├── CrossCut Constants:  魔法数字扫描、RFC 推荐值对比、跨包重复常量检测
-├── CrossCut RFC:        实现 vs RFC 规范逐条对照、docs/rfc/ 存档完整性、RFC 注释引用有效性
-├── CrossCut Comments:   注释引用符号存在性检查、注释行为描述 vs 代码实际行为、过时 TODO/FIXME
-├── CrossCut Ordering:   构造函数位置、方法聚合度、声明顺序（decorder）、随机插入检测
-├── CrossCut GoVersion:  go.mod 版本对应的语言/库特性采用；手写模式可用标准库替代；`go fix` 现代器覆盖检查
-└── CrossCut Flowcharts:  docs/FLOWCHARTS.md 覆盖率 — 全部核心功能/协议是否有流程图；新增特性是否同步更新
-
-Phase 3: 综合报告
-└── Synthesis: 汇总排序 → 主题分析 → 行动计划
+```sh
+sh scripts/prepare-etls.sh          # eTLS replacement 目录就绪（每 clone 一次）
+go build ./...                      # 零编译错误
+go test -short ./... -count=1       # 全部测试（看退出码，勿接管道 tail）
+golangci-lint run                   # 零警告
+go test -bench=. -short -benchtime=500ms -benchmem ./...   # 基线数字
 ```
 
-### 1.3 审计报告格式
+- 重点面 = 上一轮以来的提交 diff（`git log <上轮基线>..HEAD`）——迁移类
+  commit 逐个亲审（eTLS/协议栈迁移的历史事故多在自己引入的接合点）。
+- 依赖升级不搭审计便车：先独立提交（build+test 绿），再开审计轮。
 
-每个发现包含：
+## 2. 审计架构与维度
 
-- **文件路径 + 行号**
-- **严重程度**：CRITICAL / HIGH / MEDIUM / LOW
-- **类别标签**：pool-leak / lock / memory / snapshot / dead-code / inefficiency / coupling / ...
-- **问题描述**：具体的技术问题
-- **风险说明**：如果未修复会产生的后果
-- **修复建议**：具体的代码变更方向
+Phase 1：7 个并行只读包级审计（foundation=`internal/*`、domain=`config/cache/edns/zone/ruleset/spillfile`、
+protocol、upstream、resolver、handler、defense）——每个 agent 先读上轮教训避免重复报告。
+Phase 2：交叉维度扫描（锁、内存、panic、错误包装 %w、context 传播、goroutine
+owner、Close 幂等、参数校验、死代码、性能、架构分层、日志、文档一致性、
+常量与 RFC 值、RFC 引用有效性、注释准确性、声明顺序、Go 版本特性、流程图覆盖）。
+Phase 3：综合排序 → Sprint 分批修复 → **Round C 对抗复查**（逐 commit 读 diff，
+专抓"修复自身引入的回归"——连续两轮复查无新发现才收尾）。
 
----
+20 个审计维度里最易出活的入口（grep 命令即审计命令）：
 
-## 二、修复流程
+| 维度 | 入口 |
+|------|------|
+| 错误包装 | `grep -rn 'fmt.Errorf.*%v.*err'`——应 %w 的位置 |
+| context 断裂 | `grep -rn 'context.Background()\|context.TODO()'`（排除 main/test） |
+| goroutine owner | `grep -rn 'go func'`——逐一核对 errgroup/WaitGroup/done channel + HandlePanic |
+| Close 幂等 | `grep -rn 'func.*Close()'`——sync.Once / atomic CAS / nil 守卫 |
+| 手写有界缓存 | `grep -rn 'map\[.*\].*sync\.(Mutex|RWMutex)'`——应迁移 `lrumap` |
+| 冗余函数对 | `grep -rn 'func.*With[A-Z]'`——Foo/FooWithB 合并为导出字段 |
+| lrumap 资源泄漏 | `grep -rn 'lrumap.New'`——值持 fd/goroutine 必须 OnEvict |
+| 魔法数字 | `grep -nE '[0-9]{3,}'`——抽常量、对 RFC 推荐值、跨包唯一 |
+| Go 特性滞后 | `go fix ./...`；`errors.As`→`errors.AsType[T]`、手写反向循环→`slices.Backward` |
+| 注释风格 | 日期/审计编号/pprof 战史/`previously` 叙述不得出现（现在时约束） |
+| 流程图覆盖 | 新特性/协议/中间件必须同步 `docs/FLOWCHARTS.md`（mermaid 可渲染） |
 
-### 2.1 Sprint 策略
-
-按严重程度分三批修复：
+## 3. 修复流程
 
 | Sprint | 范围 | 标准 |
 |--------|------|------|
-| Sprint 1 | CRITICAL | 立即修复 — 数据损坏、崩溃、panic、安全绕过 |
-| Sprint 2 | HIGH | 下个发布周期 — 池耗尽、goroutine 泄漏、竞态 |
-| Sprint 3 | MEDIUM + LOW | 文档/优化 — 耦合、冗余、微优化、注释 |
+| 1 | CRITICAL/HIGH | 立即——数据损坏、崩溃、DoS、防御绕过 |
+| 2 | MEDIUM | 资源耗尽、竞态、缓存污染、安全一致性 |
+| 3 | LOW | 注释漂移、微优化、纪律缺口 |
 
-### 2.2 修复优先级
+- 优先序：单行修复 → 模式匹配修复（可模板化）→ 逻辑重写 → 死代码删除。
+- 每个修复**带回归测试**（先证明测试在修复前失败）；一类修复一个 commit，
+  主题行写具体修复内容 + 审计编号（`fix: … (R1)`），禁止 `fix: audit fixes`。
+- 提交前：`go fix ./... && golangci-lint run && golangci-lint fmt`（零警告）。
 
-在同一 Sprint 内，按以下顺序修复：
+## 4. 质量门禁
 
-1. **单字符/单行修复** — 快照写入竞态、切片复制、条件取反等
-2. **模式匹配修复** — 池 defer Put、锁内不 IO 等可模板化的缺陷
-3. **逻辑重写** — 状态机修正、并发结构重构
-4. **死代码删除** — 未用函数/类型/导入
+### 4.1 benchmark 回归
 
-### 2.3 参考实现
-
-池归还纪律以 `server/protocol/tls/tls.go` 为**标准模板**：
-
-```go
-// 正确模式 (TLS DoT handler)
-resp := s.handler.ServeDNS(msg, clientIP, false, protocol)
-defer pool.DefaultMessage.Put(resp)
-```
-
-其他所有协议处理器必须遵循此模式。
-
----
-
-## 三、质量门禁
-
-### 3.1 每次提交前
-
-```bash
-go build ./...                    # 零编译错误
-go fix ./...                      # 自动修复
-golangci-lint run                 # 零警告
-golangci-lint fmt                 # 格式化
-```
-
-### 3.2 每个 Sprint 后
-
-```bash
-go test -short ./...              # 全部测试通过
-go test -short ./server/...       # 核心包测试
-go test -short ./cache/...        # 缓存测试
-```
-
-### 3.3 Benchmark 回归检测
-
-审计修复可能引入性能回退（如额外的 nil 检查、锁竞争、内存分配）。每个 Sprint 修复完成后必须执行 benchmark 对比。**分配（allocs）与延迟（ns/op）同等重要**——本项目的 pre-packed 直发路径承诺 0 B/op / 0 allocs/op，任何引入分配的改动都是契约破坏，即使 ns/op 仍在噪声带内。
-
-```bash
-# 刷新基线（必须带 -benchmem：Alloc 回归不体现在 ns/op 中）
+```sh
+# 刷新基线（必须 -benchmem：alloc 回归不体现在 ns/op）
 go test -bench=. -short -benchtime=500ms -benchmem ./... \
   | grep '^Benchmark' | sort > docs/benchmark/benchmark-baseline.txt
-
-# 对比旧基线（ns/op 或 allocs/op 任一超阈值即为回归）
-git diff HEAD~1 -- docs/benchmark/benchmark-baseline.txt
 ```
 
-回归判定标准：
-
-| 指标 | 变化 | 判断 |
-|------|------|------|
-| ns/op | >15% 变慢 | **回归** — 审计修改影响了热路径，需回滚或优化 |
-| ns/op | <15% 波动 | 测量噪声 — `time.Now()` 调用 ~28ns 是正常下限，<5ns 为编译器架空 |
-| ns/op | >15% 变快 | 附带优化 — 记录到提交信息中 |
-| **allocs/op** | **任何增加（>0）** | **回归** — 热路径（缓存命中直发、ServeDNS 直发等承诺零分配的路径）引入任何分配都视为契约破坏；非零分配路径（如 zone 合成 + Pack）则按 ns/op 的 >15% 标准判定 |
-| B/op | 与 allocs/op 同向增加 | 同上（两者一起看；大对象单次分配会放大 B/op） |
-| 出现新列 / 列消失 | 路径变化 | **先验证路径有效性**（见下），再判定 |
-
-**路径有效性验证（必做）**：异常快（或异常慢）的结果必须先确认 benchmark 测的是预期路径，再下结论。2026-08 实测教训：链序重排后 `BenchmarkServerProcessQuery` 显示 34ns / 28.9M qps（"快 103 倍"）——实际是 EDNS.pre 对 `Data=nil` 的直接调用请求 Unpack 失败 → FORMERR 短路，benchmark 测的是错误路径；修复后真实路径为 3451ns / 290K qps，与基线一致。验证方法：对怀疑的 benchmark 打印响应形态（rcode/answer 数/Data 长度），或临时断言（`if resp.Rcode != 0 { b.Fatal(...) }`）——benchmark 里缺少响应断言是本次漏检的根因，新 benchmark 必须带 `b.Fatal` 级响应正确性检查。
-
-回退判定前需确认：(1) 修改确实触及了该 benchmark 的代码路径，(2) 差异不是运行环境波动（CPU 频率、缓存状态），(3) **该 benchmark 的输出正确性已断言**（响应 rcode/answer 符合预期，未被短路路径绕过）。
-
-**跨版本对比**：涉及重排/重构时，用 `git worktree add <dir> <旧commit>` 在旧版本上跑同一命令对比——同机同参数才是可比基准（6bedbfb 基线文件里 66µs 的 UDP 查询与同机实测 330µs 的差异即环境漂移实例）。
-
-### 3.4 Linter 纪律
-
-- **零全局排除** — 所有抑制通过 `//nolint:NAME // reason` 内联
-- **声明顺序** (`decorder`)：`type → const → var → func`
-- **格式化** (`gofumpt`)：禁止空行分组，导入按字母排序
-- **每个 nolint 注释** 必须包含 linter 名称和具体原因
-
-### 3.5 提交规范
-
-**每次提交只包含一类修复**，不要将不同维度/不同包的修复混在一个 commit 中。
-
-**主题行格式**：
-
-```
-<type>: <具体描述> (<审计引用>)
-```
-
-- `type`: `fix`（修 bug）、`perf`（性能）、`refactor`（重构）、`docs`（文档）
-- `<具体描述>`：说明**修复了什么**，不是审计阶段。禁止 `Round X audit`、`fix audit findings` 等笼统描述
-- `<审计引用>`：可选，引用审计报告中的发现编号（如 `C1`、`H3`、`M7`）
-
-**Good（描述具体修复内容）**：
-
-```
-fix: clear Data before pool.Put on serve-stale miss (C1)
-
-The stale-refresh path returned the pooled message without clearing
-Data, leaving the buffer reachable after Put and serving stale
-payload on the next Get.
-
-Co-Authored-By: Claude <noreply@anthropic.com>
-```
-
-```
-fix: acquire writeMu in TCP SERVFAIL path to prevent stream corruption (H1)
-
-The capacity overflow branch in handleDNSRequest wrote SERVFAIL
-directly to the TCP connection without acquiring writeMu, racing
-with pipelined response writes and corrupting the byte stream.
-
-Co-Authored-By: Claude <noreply@anthropic.com>
-```
-
-```
-fix: check discarded errors in TLCP self-signed cert generation (H1)
-
-rand.Int and smx509.ParseCertificate errors were silently discarded
-with _, causing nil-pointer dereference panics when entropy or DER
-parsing failed.
-
-Co-Authored-By: Claude <noreply@anthropic.com>
-```
-
-**Bad（禁止使用）**：
-
-```
-fix: Round 1 audit fixes           ← 太笼统，无法知道改了什么
-fix: fix audit findings             ← 同上
-fix: Round 1+2 audit — 11 HIGH fixes ← 数量没有意义，描述具体内容
-fix: various bug fixes              ← 无法 git bisect 定位
-```
-
-**多个修复分多次提交**：
-
-```
-git commit -m "fix: acquire writeMu in TCP SERVFAIL path (H1)"   ← 一个修复一个 commit
-git commit -m "fix: check nil synth before DNS64 log (H2)"       ← 另一个修复另一个 commit
-```
-
-**同一类修复（同一维度、同一根因）可以合并**：
-
-```
-git commit -m "fix: annotate 5 missing defer HandlePanic calls (M1-M5)"
-```
-
----
-
-## 四、审计发现分类
-
-### 4.1 严重程度定义
-
-| 等级 | 定义 | 示例 |
-|------|------|------|
-| **CRITICAL** | 数据损坏、崩溃、panic、安全绕过、数据丢失 | 快照损坏/静默降级、nil-map panic、池双重归还导致连接损坏、参数 nil 未检查导致 panic |
-| **HIGH** | 资源耗尽、goroutine 泄漏、竞态、缓存损坏、死锁 | 池泄漏导致 QPS 下降、goroutine 无界增长、浅拷贝共享底层数组、mutex 成功路径未解锁、错误被 `_` 丢弃导致基于零值的错误逻辑 |
-| **MEDIUM** | 维护性、边际正确性问题、次优分配、日志质量、文档质量 | 耦合违规、死代码、不必要的堆分配、配置验证缺失、info/warn 热路径刷屏、错误路径无日志、架构文档与代码不一致、空字符串/零值参数未经校验传入深层调用 |
-| **LOW** | 文档、微优化、代码异味 | 误导性注释、重复逻辑、脆弱的假设注释、Debug 日志格式不一致 |
-
-### 4.2 常见根因模式
-
-历次审计中反复出现的系统性根因：
-
-| 模式 | 根因 | 预防措施 |
-|------|------|----------|
-| **池归还纪律** | 协议处理器独立开发，缺乏共享模板 | 新协议以 TLS DoT handler 为模板；CI 检查每个 `Get()` 是否有对应 `defer Put()` |
-| **并发安全** | 临界区过窄或缺失（锁-drop 窗口、无锁写入） | 锁保护区域明确注释；`go test -race` 作为 CI 必需项 |
-| **防御算法** | 状态机缺少逃逸路径、过度拒绝合法响应 | 每个防御模块必须有 fuzz 测试和边界条件用例 |
-| **死代码/冗余** | 重构后遗留（中间件、迁移、未用字段） | `staticcheck -checks U1000` 集成 CI |
-| **spill 持久化** | `spillfile` 追加写失败静默忽略（evict 回调 `_ = Put(...)`）、索引与文件失步（Compact 期间并发 Put）、启动扫描损坏文件导致索引错位、内存索引无限增长 | Put/Compact 错误必须记日志（可降级为 warn）；Compact 全程持锁、完成后重建索引；启动扫描必须校验记录边界并截断尾部残片（`internal/spillfile` 已实现）；索引大小与 `limit.disk` 挂钩 |
-| **跨协议一致性** | 同类型 bug 在不同协议处理器中重复出现（DTLS/DTLCP 固定缓冲区） | 修复一个协议 bug 后，全局搜索相同模式到所有协议处理器 |
-| **Pool buffer 生命周期** | `response.Data` 指向已归还的 pool buffer（use-after-free） | `pool.Put` 前必须 `response.Data = nil`，参考 `tcp.go` 的 `resp.Data = nil` 模式 |
-| **TODO 管理** | TODO 注释累积但不实现，变成虚假安全感 | 每个 TODO 要么实现、要么改为 NOTE 并说明原因、要么删除 |
-| **日志质量** | info/warn 在热路径重复打印刷屏；错误路径缺少上下文（无 qname/qtype/server）；日志级别误用（error 用于可恢复、debug 用于关键信号） | 每查询一条日志原则：info 仅用于状态变更，warn 仅用于可恢复异常且带采样，error 仅用于不可恢复；热路径日志全部 debug；每个日志含足够定位信息 |
-| **文档腐烂** | 架构文档描述已删除的类型/字段/中间件；AGENTS.md 类型参考表过时；注释引用的行号/函数名已失效；新功能无文档 | 每次 PR 检查受影响的 .md 文件；`grep` 文档中的类型名/函数名确认仍存在；注释中用 `FindSymbol` 而非行号引用代码 |
-| **参数校验缺失** | 公开函数未检查 nil/空字符串/零值参数直接使用；构造后未验证字段有效性（如 `net.ParseIP("")` 返回 nil 后直接传入下游）；错误返回值被 `_` 丢弃，后续代码基于零值继续执行 | 每个公开函数入口处检查关键参数；`net.ParseIP` / `net.ParseCIDR` 结果立即判 nil；`_` 丢弃错误必须注释原因；构造函数返回前验证内部状态 |
-| **提交信息不规范** | 使用 `Round X audit`、`fix audit findings` 等笼统描述，无法从 `git log` 了解具体改了什么 | 主题行描述**具体修复内容**（"fix: acquire writeMu in TCP SERVFAIL path"），不是审计阶段；一个 commit 只含一类修复；跨维度修复分多次提交 |
-| **魔法数字** | 硬编码数值散落在业务逻辑中；默认值不符合 RFC 推荐；同一常量在多个包中独立定义 | `grep -nE '[0-9]{3,}'` 找长数字；与 RFC/IETF 标准值逐一对比；重复常量统一到 `config/defaults.go` 或所属包的最顶层 |
-| **RFC 偏离** | 实现时对规范理解有误；边缘条件被省略；RFC 更新后实现未跟进；新增 RFC 未存档到 `docs/rfc/` | 每个协议实现文件顶部标注 RFC 章节引用；实现前先 `cp rfc{number}.txt docs/rfc/`；审计时逐条核对 MUST/SHOULD/MAY 条款 |
-| **注释腐烂** | 代码移动/重命名/删除后注释未更新；注释引用的函数名/行号已失效；TODO 的触发条件已不存在但注释仍在；"临时方案"注释超过 6 个月未清理 | 每次重构后 `grep` 被移动符号的旧名确认无残留引用；注释中用函数名而非行号引用代码；每个 TODO 加截止日期，过期即处理 |
-| **函数散乱** | 新增方法时随意插入在文件末尾或两个无关函数之间；同一接收者的方法跨文件散落；其他类型插入在主类型和其构造器之间 | 新增方法时找到同一接收者的方法块再插入；同一接收者的方法按调用链/复杂度排序（公开在前，私有在后）；在 `type → const → var → func` 顺序下，`New*` 应是 var 块之后的第一个 func；const/var 夹在类型和 `New*` 之间是**正确行为**（decorder 要求），不应标记为问题 |
-| **手动有界缓存** | 用 `map[K]V` + `sync.Mutex`/`sync.RWMutex` 手写容量限制和淘汰逻辑，存在随机淘汰（`range` 第一个元素）、TOCTOU 窗口（check-then-set 不在同一锁内）、无界内存增长风险（清扫逻辑遗漏或 OOM 阈值过高） | 所有有界缓存统一使用 `lrumap.Map[K, V]`（`internal/lrumap`）：并发安全、LRU 淘汰语义、零手动锁。审计时 grep `map\[.*\].*sync\.(Mutex|RWMutex)` 查找未迁移的手动实现；`LoadOrStore` 替代 check-then-set 模式；确需自定义淘汰回调的场景才单独实现 |
-| **冗余函数对** | `Foo(a)` + `FooWithB(a, b)` 成对出现：两者做同一件事，后者只是多了可选参数。不限于构造函数 — `Replace`/`ReplaceAll`、`Read`/`ReadWith` 等都适用。每增加一个可选参数就多一个函数，API 线性膨胀 | 合并为单一函数，可选行为通过导出字段/option 设置（如 `m.OnEvict = fn`）。审计时 `grep -rn 'func.*With[A-Z]' --include='*.go'` 找到所有 `With*` 函数，检查是否存在对应的无 `With` 版本 |
-| **LRU 淘汰资源泄漏** | `lrumap.Map` 缓存持有可释放资源的值（网络连接、channel、句柄），淘汰时未设置 `OnEvict` 回调导致 goroutine/fd 泄漏 | 每个 `lrumap.New` 调用点审计：(1) 值类型是否实现了 `Close()` 或持有 channel/goroutine？(2) 是 → 必须设 `OnEvict`；(3) 否（纯数据）→ 无需 |
-| **错误包装断裂** | 中间层函数用 `fmt.Errorf("...: %v", err)` 而非 `%w`，导致 `errors.Is`/`As` 在上层失效；或反之，用 `%w` 包装了不应暴露给调用方的内部 sentinel | `grep -rn 'fmt.Errorf.*%v.*err' --include='*.go'` 找出所有用 `%v` 包装 error 的地方，判断是否应改用 `%w`；`grep -rn 'errors\.Is\|errors\.As'` 确认 sentinel 可被检测到 |
-| **Context 断裂** | 函数接受 `ctx` 但内部创建 `context.Background()` 或 `context.TODO()` 绕过取消链；goroutine 使用父 ctx 而非派生 ctx 导致取消泄漏 | `grep -rn 'context\.Background()\|context\.TODO()' --include='*.go'` 排除 `main.go` 和 `_test.go` 后审计每个调用点 |
-| **Close 非幂等** | `Close()` 可被多次调用（shutdown 重试、defer 链），但实现未用 `sync.Once` 或 atomic 守卫 | `grep -rn 'func.*Close()' --include='*.go'` 检查每个 `Close()` 方法是否有 `sync.Once`、`atomic.CompareAndSwap` 或 nil channel 守卫 |
-| **Goroutine 无 owner** | goroutine 被 `go func()` 启动后无任何机制等待其退出；父函数返回后子 goroutine 成为孤儿 | `grep -rn 'go func' --include='*.go'` 排除 `_test.go`，审计每个 goroutine 是否被 errgroup/WaitGroup/channel 追踪 |
-| **Go 特性滞后** | 代码停留在旧版 Go 风格 — 手写模式已有标准库替代（如 `errors.As` 循环 → `errors.AsType[T]`、手写反向切片 → `slices.Reverse`/`slices.Backward`、`fmt.Errorf("x")` 可受益于新版分配优化） | `go fix ./...` 检查是否有未应用的现代器；`grep -rn 'errors\.As(' --include='*.go'` 检查可否替换为 `errors.AsType[T]`；`grep -rn 'for i := len' --include='*.go'` 检查手写反向迭代 |
-| **预打包响应重 Pack** | 帧写入方(TCP 族/HTTP 族)无条件 `resp.Pack()` 或先覆盖 `resp.Data` — 预打包缓存命中(Data 已置、RR sections 为 nil)被重序列化为 12 字节头帧 | 每个响应写入方必须守护 `len(resp.Data) == 0` 才 Pack,否则原样服务/复制 wire(参考 `dnsutil.PackStreamFrame`、`tlcp.buildDOTFrame`);E2E 必须包含**无 EDNS 客户端的 TCP 缓存命中**场景(带 DNSSEC 的测试域名会走解包路径掩盖此 bug) |
-| **池槽位所有权别名** | 从状态结构返回槽内指针(getter 返回 `s.xxx` 不清槽),调用方持有的引用与后续 `Put(s.xxx)` 形成悬垂/双重归还 | 返回槽内池对象的方法必须清槽(所有权转移),或文档化别名契约;同型 bug 检查:`grep -n 'return s\.' 结合槽位是否可能被 Put` |
-| **错误变量遮蔽** | 内层 `resp, err := ...` 遮蔽外层错误变量,外层错误分支在 err==nil 时执行 `return nil, err` 返回 (nil, nil) | 内外两层错误路径用不同变量名(acqErr/exErr);Review 时对每个 `if err != nil` 检查 err 的声明层级 |
-| **池归还后读取** | `sync.Pool.Put` 与后续读取交错的"释放后使用"竞态——结构体字面量里 `Rcode: entry.WireRcode()` 这类字段求值发生在同语句更早的 `ReleaseWire` 之后,另一 goroutine 的 Get 可覆盖缓冲 | 归还前先把 wire 派生值读入局部变量;Review 每个 `pool.ReleaseWire/X.Put` 调用点,确认其后不再触碰缓冲或其派生读取器 |
-| **上下文键误用** | 从请求 ctx 取连接/凭据时用错键——`http.ServerContextKey` 存的是 `*http.Server` 不是 `net.Conn`,`r.TLS` 仅对 `*crypto/tls.Conn` 填充 | 断言前先查 stdlib 该键的真实类型;非 stdlib TLS 栈(如 gotlcp)需要显式传递通道(`http.Server.ConnContext` hook);修复后用真实客户端 E2E 验证凭据非空 |
-| **修复引入回归** | 修复提交本身带新缺陷(误用不存在的 API、归还/读取次序、丢条件),修复验证只盯原始发现不看 diff | 每轮修复后必须有一轮"修复面复查"(Round C):逐 commit 读 diff + 全量测试 + 修复声称行为的 E2E 复验;连续两轮复查无新发现才收尾 |
-| **注入测试台保真度** | 防御测试台的伪造包不经意携带真实流量特征,测错威胁模型——`SetReply` 复制查询的 DO 位,fork 的 `Pack` 自动物化 OPT,伪造包变成"EDNS 响应" | 裸 GFW 模型的伪造包必须显式 `Security=false`;测试台应支持多威胁模型开关(bare/case-blind/EDNS-forger)并逐一标注 |
-| **测试台状态泄漏** | 注入台的预热(arm)计数器是全局序号,多场景共用 rig 时预热相位跨场景泄漏;残留的旧实例占端口让新查询打到旧二进制 | 每个测试场景重启 rig 与被测实例;跑前 `pgrep` 清场;对"全拦截"结果抽查日志确认防御路径真实执行过 |
-| **单开 Guard 缺口** | Guard 组合测试全绿掩盖单开缺口——capsguard 0x20 未随机化重试在单读路径接受首包;发散等丰富度 EDNS 候选使 pickBest 成随机决胜 | 矩阵必须含"每个 guard 单开 × 每个威胁模型";失败路径降级(重试/回退)本身是攻击面:降级后的第一包接受逻辑要重新审查 |
-| **水平触发轮询自旋** | poll(2) 是水平触发,与"不消费"的读法(MSG_PEEK)组合后,已排队字节让 POLLIN 恒 ready——部分数据 + 停发的对端把嗅探/等待循环烧满一个核直到超时预算耗尽 | peek 类循环必须做零进展退避(无新字节 → 指数退避 sleep),poll 集订阅 POLLRDHUP/POLLHUP 让半关闭快速终结,并处理 POLLERR/POLLNVAL;测试要断言 CPU(getrusage 差分)而非只断言正确性——正确性测试自己就在自旋中通过 |
-| **聚合点丢标记** | per-hop 安全标记(EDE 65280/65281)在聚合层被丢弃——CNAME 链合并逐字段复制 11 个字段唯独丢 UpstreamEDE/Cacheable,随后外层又无条件覆盖 Cacheable,安全特性在聚合路径整体失效 | 聚合函数要显式传播安全相关字段并 AND 语义(任一 hop 不可缓存 → 聚合不可缓存);E2E 验证必须覆盖**每条特性声称的路径**(65281 首次只在转发路径验证,递归路径靠单测孤立函数全绿而漏网) |
-| **预计算 keys 与增长的容器失步** | 性能优化把循环内的重复计算(如 rr.String)提升为入口预计算 keys 切片,但容器(dst)在循环内 append 增长——内层 range 走到了 keys 长度之外 → 越界 panic | 预计算 keys 与其源容器必须 lockstep 增长(append 时同步 append);单测要覆盖"src 追加后再去重"的场景(dst 不增长的测试全部漏检——Round 5 E2E 实例) |
-| **地址级状态冒充 per-query 验证** | "基线已武装"(地址级 Confident)被当作"本包已验证"——单读降级路径(collect 失败落入)的响应无任何 per-query 验证却被清标进缓存 | 验证标记必须 per-query 传播(返回值/Result 字段),地址级状态只能作为 per-query 验证的输入之一;每列出降级路径,逐条问"降级后的响应凭什么清标" |
-| **closed-channel select 自旋** | select 的某个 case 拿到的是已 close 的 channel(如"全部完成"信号)——closed channel 永远 ready,若 case 处理后不消音,循环剩余 case 全阻塞时变成 100% CPU 自旋 | 一次性触发的 case 必须在 case 体内 `ch = nil`(nil channel 永久阻塞);回归测试断言 CPU share(wall-clock vs getrusage 差分)而非只断言功能正确 |
-| **注册-重注册轮次失配** | 循环体内每轮以新 key 注册资源(collect 注册、租约、inflight 表项),`break` 跳回外层循环进入下一轮时本轮注册无人释放——泄漏的不是本轮使用而是"轮次切换"这个瞬间 | 枚举循环内全部 break/return 出口,逐条核对注册释放配对;测试用 maxPipe=1 类微型配额让单次泄漏在第二次操作即可观测 |
-| **防御状态机异常出口降级** | 状态机的异常出口(conn 死亡、预算耗尽、采集缺失)绕过正常出口的确证纪律直接服务候选——正常路径精心设计的 fail-closed 被两个"兜底"分支整体绕过 | 异常出口与正常出口跑同一确证标准;每个 safe/verified 判定逐条问"这个包凭什么算已验证"(TTL=0、分歧未确证、地址级武装都不是);滴注攻击(间隔 < 窗口)要显式测试 |
-| **恢复路径采样捕获** | 防御基线的"拒绝样本 1/N 采样回灌"恢复机制无内容门/计数上限——定向攻击者以 N 倍速率灌拒绝包即可让伪值赢得众数竞争,注释里的"diluted N×"是速率条件句不是保证 | 拒绝样本进独立直方图,按 verified 流量比例上限合并(一次性副本防复利);拒绝路径绝不驱动重建/衰减节拍(否则攻击者加速基线老化);保留时间触发重建兜底防"纯漂移锁死"(修复自身的回归方向) |
-| **多实例字段 last-wins** | 按 shard/实例多次启动的 handler 把各自的 cache/状态发布到共享字段——最后启动者覆盖前者,N 实例中 N-1 个静默失效(白名单永不命中、每连接多付 RTT),且无锁写构成数据竞争 | per-instance 状态经参数传递,不经共享字段中转;多实例启动路径(多 shard/多 listener)必须进 E2E,单实例冒烟测不出 |
-| **依赖浮动的 alloc 归因** | 依赖升级后 bench 出现跨包一致的分配回归(+N allocs 模式)——先入为主归因给并行的本地改动会误判 | `git worktree add` 在"仅含依赖 bump"的 commit 上跑同参数 bench:同数字 → 上游来源(记录为依赖代价);不同 → 本地改动(二分定位) | `net.SplitHostPort("http://host/path")` 不报错(把 "http" 当 host)——嵌在 `if err != nil` 里的 URL 校验对 scheme 形态地址从不执行,http:// DoH 上游静默明文发出 | URL 族地址校验必须直接 url.Parse 并检查 scheme/host,勿以 SplitHostPort 的失败作为进入 URL 校验的前提;测试用例要含 http:// 形态(死代码分支没有测试就永远不知道自己是死的) |
-
-## 五、审计与修复工具
-
-### 5.1 审计工具
-
-| 工具 | 用途 |
+| 指标 | 判定 |
 |------|------|
-| `Agent (Workflow)` | 编排并行审计 + 交叉分析 + 综合 |
-| `Grep` | 全库搜索符号、模式、导入 |
-| `Read` | 逐文件审查代码 |
-| `Bash` (git grep) | 跨包引用验证 |
+| ns/op >15% 变慢 | 回归——回滚或优化 |
+| allocs/op 任何增加 | **回归**——零分配路径（缓存命中直发）的分配是契约破坏 |
+| 异常快/慢 | 先验证 benchmark 测的是预期路径（响应断言），再下结论 |
+| 跨版本对比 | `git worktree add` 在旧 commit 上跑同命令（同机同参数才可比）；依赖浮动后的分配回归用此法归因（同数字=上游代价） |
 
-### 5.2 修复工具
+### 4.2 E2E 门禁
 
-| 工具 | 用途 |
-|------|------|
-| `Edit` | 精确字符串替换 |
-| `Bash` (sed) | 行级删除、导入清理 |
-| `Bash` (python) | 跨文件批量重构 |
-| `go build` | 编译验证 |
-| `golangci-lint` | 代码质量 |
-| `go test` | 回归验证 |
-| `go test -bench=.` | Benchmark 回归检测（对比基线） |
-| `go tool pprof` | pprof 取证判读（allocs 差分 `-base`、CPU/heap top、`-peek` 调用方归因） |
+14 协议专用口 + 7 组共享端口 + MQTYPE（forward/递归合并/FORMERR）+ 递归真网
+（DNSSEC + CNAME 链）+ **无 EDNS TCP 缓存命中**（防直发路径盲区）+ 12 协议压测
+（fail=0；环境噪声以修复前二进制同签名复现排除）+ 内存两轮压测精确一致 +
+`-race` 全绿 + 域名清单全量解析 A/B（新旧失败集合 diff 为空）。全协议方法见
+`docs/debug/DEBUG.md` 与 `docs/benchmark/LOADTEST.md`。
 
-### 5.3 pprof 性能取证（CPU / 内存 / 分配 / goroutine）
+### 4.3 防御注入矩阵
 
-与 §3.3 的 `go test -bench` 互补：bench 是微观回归数字（单路径 ns/op、allocs/op），pprof 是宏观取证证据（CPU 花在哪、分配从哪来、goroutine 形态是否健康）。采集操作入口：`docs/debug/pprof-dual.sh`（双端一键：全协议 E2E + goroutine/heap 采样）与 `docs/benchmark/LOADTEST.md`（直连单端 + CPU/block profile 手法）。本节记录判读方法与已验证的判别实验。
+确定性注入测试台（`docs/poc/interception`）：脚本化上游按威胁模型（bare /
+case-blind / EDNS-forging）注入 N 个逐包变化假应答 + 延迟真答，逐守卫组合
+计数泄漏率——**单开 × 组合 × 三威胁模型全 0 泄漏**；无守卫基线必须 100% 泄漏
+（证明测试台有效）。测试台自身也是被审对象。
 
-#### 5.3.1 采集矩阵
+### 4.4 pprof 取证
 
-| 信号 | 采集 | 判读 |
+allocs 差分（负载前后各采一次，`-base` 归因 B/查询）→ CPU 画像（健康缓存
+命中路径 syscall/netpoll>90%、应用栈个位数）→ goroutineleak 必须为空 →
+内存两轮精确一致。**平台墙**：macOS loopback ~10⁵ qps 数据报过栈墙——跨机
+QPS 对比失效，可比的是分配与 CPU/查询。疑象先做判别实验再归因（换池实现、
+调 GOGC、QPS-vs-worker 的 Little 定律校验）。
+
+## 5. 根因模式（历轮沉淀——修复前先对照）
+
+| 模式 | 根因 | 预防 |
 |------|------|------|
-| CPU | `curl '…/debug/pprof/profile?seconds=N'`（覆盖压测窗口） | top 里 syscall/netpoll/调度占比 vs 应用栈占比（见 5.3.3） |
-| 堆驻留 | `heap`（压测结束、连接回收后采） | `-inuse_space` 看真实驻留；同端两轮压测 inuse **精确一致** = 无泄漏（第一轮增长是 warm-up） |
-| 分配 | `allocs` 差分：负载前后各采一次，`go tool pprof -top -base pre.pb.gz post.pb.gz` | 负载窗口内全部新增分配的调用点归因；总量 ÷ 查询数 = B/查询 |
-| goroutine | `goroutine?debug=1`（总数）+ `goroutineleak`（Go 1.27 泄漏检测） | 总数是**架构基线**（常驻 worker 池是设计内驻留，不是泄漏）；leak 采样必须为空；负载后等待 idle 回落再对比 |
-| block | `block?seconds=N`（客户端侧尤其有用） | 大量阻塞在单一库调用（如 `OpenStreamSync`）= 协议栈配额/等待问题 |
+| **池归还纪律** | 协议处理器独立开发，缺共享模板 | 新协议以 TLS DoT handler 为模板；每个 `Get()` 配对 `defer Put()`；`Put` 前 `Data=nil` |
+| **并发安全** | 临界区过窄/缺失、锁-drop 窗口 | 锁保护区注释化；`-race` 必过 |
+| **防御算法** | 状态机缺逃逸路径、过度拒绝合法响应 | fuzz + 边界用例；降级路径逐条问"凭什么清标" |
+| **跨协议一致性** | 同型 bug 在多协议处理器重复 | 修一处后全局搜同模式 |
+| **spill 持久化** | 追加写静默失败、索引失步、启动扫描错位 | Put/Compact 错误必记日志；Compact 全程持锁 + temp/rename 原子替换；损坏区分冷启动 |
+| **Pool buffer 生命周期** | `response.Data` 指向已归还缓冲（use-after-Put） | 归还前置 nil；struct 字面量里先读派生值再 Release |
+| **TODO 管理** | TODO 累积成虚假安全感 | 实现、改 NOTE 说明原因、或删除 |
+| **日志质量** | info/warn 热路径刷屏；缺定位信息 | 每查询一条日志原则：热路径 Debug；warn 采样；error 不可恢复；日志带 qname/qtype/server |
+| **文档腐烂** | 架构文档描述已删类型；AGENTS.md 过时 | 每次 PR grep 受影响 .md；符号名引用而非行号 |
+| **参数校验缺失** | 公开函数不查 nil/空值；`net.ParseIP` 结果未判 nil；`_` 丢错未注释 | 入口校验；`_` 必须注释类型与原因；standalone 函数的 `_` 参数直接删 |
+| **提交信息不规范** | `fix: audit fixes` 无法 bisect | 主题行写具体修复内容 + 审计编号 |
+| **魔法数字** | 裸数值散落；跨包重复定义 | 抽常量到 `config/defaults*.go`；可追溯 RFC 章节 |
+| **RFC 偏离** | 理解偏差/边缘省略/新 RFC 未存档 | 实现前 `cp` 进 `docs/rfc/`；代码引用带章节号；实现后跑合规探针 |
+| **注释腐烂** | 引用已移动符号、过期 TODO、行号引用 | 重构后 grep 旧符号名；TODO 带截止日期 |
+| **函数散乱** | 方法随机插入；同一接收者跨文件散落 | 找到接收者方法块再插入；`New*` 紧跟类型（const/var 夹在中间是 decorder 要求，正常） |
+| **手动有界缓存** | map+mutex 手写淘汰：随机淘汰、TOCTOU、无界增长 | 统一 `lrumap.Map[K,V]`（LoadOrStore 原子）；自定义淘汰才单独实现 |
+| **冗余函数对** | `Foo` + `FooWithB` 成对膨胀 | 合并为单一函数 + 导出字段（如 `m.OnEvict`） |
+| **LRU 淘汰资源泄漏** | lrumap 值持连接/goroutine 无 OnEvict | 每个 `lrumap.New` 调用点核对值类型 |
+| **错误包装断裂** | `%v` 切断错误链 | 默认 `%w`；有意隐藏才 `%v` 并注释 |
+| **Context 断裂** | 签名带 ctx 内部绕过；goroutine 继承父 ctx | 排除 main/test 逐点审；`WithoutCancel` 剪断一切取消链——要根取消传播用根 ctx 派生 |
+| **Close 非幂等** | 二次 Close panic/竞态 | sync.Once / atomic CAS / nil channel |
+| **Goroutine 无 owner** | fire-and-forget 孤儿 | errgroup/WaitGroup/done 三选一 + `defer HandlePanic` |
+| **Go 特性滞后** | 手写模式已有标准库替代 | `go fix`；`errors.AsType`、`slices.Backward`、`new(expr)` |
+| **预打包响应重 Pack** | 帧写入方无条件 Pack——预打包命中变 12 字节头帧 | 守护 `len(Data)==0` 才 Pack；E2E 必含无 EDNS TCP 缓存命中 |
+| **池槽位所有权别名** | getter 返回槽内指针与后续 Put 悬垂 | 返回即清槽（所有权转移）或文档化契约 |
+| **错误变量遮蔽** | 内层 `resp, err :=` 遮蔽外层 → 返回 (nil, nil) | 内外层用不同变量名（acqErr/exErr） |
+| **池归还后读取** | 同语句里 ReleaseWire 先于字段求值执行 | 归还前把派生值读入局部变量 |
+| **上下文键误用** | `http.ServerContextKey` 存的是 Server 不是 Conn；非 stdlib TLS 栈需显式通道 | 断言前查 stdlib 键的真实类型；E2E 验证凭据非空 |
+| **修复引入回归** | 修复带新缺陷；验证只盯原始发现不看 diff | Round C：逐 commit 读 diff + 全量测试 + 声称行为的 E2E 复验 |
+| **注入测试台保真度** | 伪造包不经意携带真实流量特征（SetReply 复制 DO 位→物化 OPT） | 裸 GFW 模型显式 `Security=false`；多威胁模型开关逐一标注 |
+| **测试台状态泄漏** | 全局预热计数跨场景泄漏；残留进程占端口 | 每场景重启 rig；跑前 pgrep/lsof 清场；抽查日志确认防御路径真实执行 |
+| **单开 Guard 缺口** | 组合测试全绿掩盖单开缺口 | 矩阵含"每 guard 单开 × 每威胁模型"；降级路径的接受逻辑重审 |
+| **水平触发轮询自旋** | poll(2) + MSG_PEEK 不消费 → 全核自旋 | 零进展指数退避 + POLLRDHUP/POLLHUP + POLLERR/NVAL；测试断言 CPU 而非只断言正确性 |
+| **聚合点丢标记** | per-hop 安全标记在聚合层被丢弃/覆盖 | 聚合显式传播 + AND 语义；E2E 覆盖特性声称的每条路径 |
+| **预计算 keys 与增长容器失步** | 循环内 append 增长 dst，预计算 keys 越界 | keys 与容器 lockstep 增长；单测覆盖"追加后再去重" |
+| **地址级状态冒充 per-query 验证** | "基线已武装"被当作"本包已验证" | 验证标记 per-query 传播；每条降级路径问"凭什么清标"（TTL=0/分歧态都否） |
+| **校验依赖死代码分支** | `SplitHostPort("http://host")` 不报错 → URL 校验从不执行 | URL 族直接 url.Parse 查 scheme/host；测试含 http:// 形态 |
+| **closed-channel select 自旋** | 一次性信号 case 拿到 closed channel 永远 ready → 紧自旋烧核 | case 体内 `ch = nil`（一次性语义）；测试断言 CPU share |
+| **注册-重注册轮次失配** | 循环内每轮新 key 注册，break 进下一轮时本轮注册泄漏 | 枚举全部 break/return 出口核对配对；maxPipe=1 类微型配额让单次泄漏可观测 |
+| **防御状态机异常出口降级** | conn 死亡/预算耗尽出口绕过正常确证纪律 | 异常出口跑同一确证标准；滴注攻击（间隔<窗口）显式测试 |
+| **恢复路径采样捕获** | 拒绝样本 1/N 回灌无内容门/上限——N 倍速灌包赢众数竞争 | 独立直方图 + 按 verified 流量比例封顶合并（一次性副本）；拒绝路径不驱动重建节拍；保留时间重建防纯漂移锁死 |
+| **多实例字段 last-wins** | 多 shard 启动把各自状态发布到共享字段 | per-instance 状态走参数；多实例启动路径进 E2E |
+| **依赖浮动 alloc 归因** | 升级后 bench 跨包一致 +N allocs，误判给本地改动 | worktree 隔离（仅含依赖 bump 的 commit 跑同参数 bench）归因 |
+| **后台最优化任务无准入上限** | 逐 key 去重 + 引擎内部信号量不约束**排队调用方**——flood 旋转 distinct key，每个调用 spawn 一个阻塞在引擎信号量上的 goroutine，无界增长（测速轮：任意 distinct 多 A 域名 × bgGroup 无 SetLimit） | best-effort 优化任务在 spawn 点加轮次上限（非阻塞 try-acquire，满了就丢——丢弃是正确语义）；回归测试断言 spawn 数 ≤ 上限而非只断言功能正确 |
 
-#### 5.3.2 分配归因套路
+## 6. 环境陷阱清单
 
-1. 冒烟预热被测路径（填缓存/池），采 `allocs` 前快照；
-2. 定量负载（benchclient 固定秒数与 workers），采后快照；
-3. `-base` 差分 → 总量 ÷ 查询数 = B/查询，top 节点即分配归因；跨 commit 记录 B/查询数字作回归追踪；
-4. 对可疑节点 `pprof -peek` 找调用方，判断是设计内成本还是缺陷。
+- **管道接 `| head`/`| tail` 会吞退出码**——全量测试判定用 exit code——
+  管道截断会吞掉 FAIL 行。
+- **压测/测试残留进程占端口**：QUIC 复测全挂实为前轮进程未退净占用 UDP 口——
+  跑前 `pgrep` + `lsof` 清场。
+- **zsh 不做 word-splitting**：`$var` 展开成单参数——脚本用显式分支或 `sh -c`。
+- **dig 无 EDNS/大小写变体要显式混入**：全用 DNSSEC 域名会把预打包直发路径整个
+  掩盖（RR sections 过滤强制走解包）。
+- **测试台/夹具也是被审对象**：DO=1 下 rig 真答 pack 失败曾让整个防御矩阵失效
+  （假 NO RESPONSE）；伪造包要显式控制 OPT/DO 位。
+- **外部 helper 会失效**：文档引用的第三方测试工具（如 go-socks5 cmd 包）上游
+  会删除——依赖的测试工具收编进仓库（docs/debug/socks5srv 先例）。
+- **RFC 探针教训**：扩展 RCODE 在响应 OPT TTL 高字节（只读 header 低 4 位会把
+  BADVERS 误判成 NOERROR）；手工构造 DNS 包 ARCOUNT 必须与附加节匹配；EDNS
+  TTL 布局 = ext-rcode(31..24) | version(23..16) | DO(15) | Z(14..0)。
 
-分配热点的三类典型：
+## 7. 收尾闭环
 
-| 类别 | 特征 | 处置 |
-|------|------|------|
-| 运行时/内核层 | sync.Pool 回补、sockaddr/OOB 转换——每包固定成本 | 确认可避免性（如读路径直入池缓冲消掉一次拷贝）；确属内核固有则记录为平台成本 |
-| 日志格式化 | `fmt.Sprintf` + 日志 sanitize 合计可占 ~35% 分配，吞吐砍半 | 压测与性能对比一律 `log_level=error`（LOADTEST 口径）；生产默认 info 不受影响（热路径日志均为 Debug 级被过滤） |
-| 池回补异常 | 回补 B/查询 ≈ 池对象尺寸的量级 | 走 5.3.4 判别实验定位是池实现问题还是归还路径缺失 |
-
-#### 5.3.3 CPU 判读基准
-
-健康的缓存命中热路径画像：syscall（recvmsg/sendmsg）+ netpoll（kevent）+ 调度等待合计 >90%，应用管线（ServeDNS 中间件链）个位数百分比，`mallocgc` <5%。应用栈占比升高 = 代码瓶颈；syscall 占比高且机器 sys% 高 = 内核/平台墙（见 5.3.5）。
-
-#### 5.3.4 关键判别实验
-
-疑象先做判别实验再归因——本轮取证的两个关键定位（fork 服务循环从不归还缓冲、debug 日志占 35% 分配）都来自下表方法：
-
-| 疑象 | 实验 | 判读 |
-|------|------|------|
-| 池未命中率异常高 | 换一种**强引用**池实现（如 channel free-list）重测 | 依旧高 → 缓冲根本没被归还，查 Get/Put 调用方是否对称（归还路径缺失），而非调池实现 |
-| 疑似 GC 驱动的池排空 | 调 GOGC（如 400）重测分配构成 | 回补率不变 → 与 GC 无关；回补率下降 → GC 频率是根因 |
-| QPS 不随 worker 数上升 | 对比 8/32 workers 的 QPS 与 RTT | QPS ≈ workers/RTT（Little 定律）→ **客户端是瓶颈**，server 未饱和；server 真实上限需多连接饱和（dnsperf 或多 benchclient 进程，各自独立 socket） |
-| 分配差分为 0 / 数字好得可疑 | 查被测端 `zjdns.stats` total 是否与压测 ok 数同量级 | total 不涨 = 负载没到被测端（转发客户端自己的缓存吃掉了固定 qname 负载）——**先证明负载到达，再读数据** |
-| miss 路径打不满 | 固定 qname 全是命中 | `-d` 域名文件轮转 + 周期 `dig zjdns.cache.clear` 制造持续 miss 流 |
-
-#### 5.3.5 平台墙识别
-
-单机 loopback 存在与实现无关的数据报吞吐墙（macOS 实测 ≈10⁵ queries/s，即双倍数据报过栈）。特征：多客户端聚合 QPS 不再上升、server CPU 占总核数比例不高、机器整体 sys ≈50%。识别到墙后 QPS 对比在该平台失效——继续追 QPS 需换 Linux + dnsperf 多连接；此时可比较的是分配 B/查询与 CPU/查询效率。
-
-### 5.4 提交前 checklist（性能相关改动）
-
-1. `go test -bench` 对比基线（§3.3，allocs/op 契约）
-2. E2E 压测门禁（DEBUG.md 双端判定表）：冒烟全过 / fail=0 / goroutineleak 为空 / 两轮 inuse 精确一致 / 0 PANIC / 池 dialed 与 falling back 计数
-3. allocs 差分 B/查询数字记录进提交信息（5.3.2），供跨 commit 回归追踪
-
----
-
-## 六、经验教训
-
-### 6.1 可复用实践
-
-1. **池对象必须 defer Put**：任何 `pool.DefaultMessage.Get()` 必须在同一函数作用域内用 `defer pool.DefaultMessage.Put()` 配合（或在循环中显式 Put）
-2. **锁内不要做 IO**：在锁外关闭旧连接，在锁内操作数据结构
-3. **切片共享底层数组**：从 atomic pointer 获取的切片在修改前必须复制
-4. **多读循环必须检查 ctx.Done()**：每个 poll 迭代都应可取消
-5. **spill 压实必须 temp+rename 原子替换**：`spillfile.Compact` 先写 `.tmp` 再 `os.Rename`，崩溃不会破坏上一份 spill 文件；追加写错误不能静默丢弃（至少 warn）；启动打开损坏文件时错误必须区分"文件不存在"冷启动与"文件损坏"（后者禁用磁盘层而非覆盖）
-6. **每查询一条日志原则**：hot-path（每次查询都经过的路径）只用 Debug；Info 仅用于状态变更（启动/关闭/重载）；Warn 用于可恢复异常且应带采样或限流；Error 仅用于不可恢复
-7. **日志必须含定位信息**：错误/Warn 日志至少包含 qname/qtype/server/error 中与上下文相关的字段；不要打印"query failed"而没说哪个查询
-8. **禁止 info/warn 在热路径**：`log.Infof` / `log.Warnf` 不得出现在每次查询都会执行的代码路径中（如 ServeDNS、middleware Wrap、upstream Exchange）。每查询超过一条 info/warn 即为刷屏
-9. **文档与代码同步更新**：修改函数签名、删除类型/字段、新增/删除中间件时，检查 `docs/*.md` 和 `AGENTS.md` 是否引用该符号；用 `git grep` 确认
-10. **注释引用符号名，不引用行号**：行号在每次编辑后失效。注释中如果必须引用代码位置，使用函数名/类型名（可 grep），而非行号
-11. **`_` 丢弃的值必须注释类型和原因**：`result, _ := someFunc()` 必须注释 `// _ = error: <原因>`，防止被调用函数签名变更后 `_` 静默丢弃不同类型的值。不写注释的 `_` 在重构时是定时炸弹——函数返回值从 `(T, error)` 变为 `(T, Cleanup)` 时编译通过但语义全变
-12. **废弃参数应删除而非改名 `_`**：`func f(name, target string)` 中如果 `name` 不再使用，应将 `name` 从签名中删除并更新所有调用方，而不是改成 `func f(_, target string)`。`_` 参数只用于接口实现（无法改签名）和 callback（协议要求）。Standalone function 的 `_` 参数是 dead code
-13. **魔法数字必须抽取为命名常量**：任何数值字面量（超时、端口、缓冲区大小、重试次数）必须定义为 `config/defaults.go` 或所在包顶部的命名常量。常量值必须与 RFC/IETF 推荐值一致。同一常量只定义一次，跨包引用
-14. **新增 RFC 必须存档后再实现**：引入新协议或修改现有协议实现前，先将对应 RFC 文本放入 `docs/rfc/`（命名 `rfc{NUMBER}.txt`），阅读确认 MUST/SHOULD/MAY 条款，再编码。代码中引用 RFC 时注明具体章节号（如 `RFC 7873 §5.2`）
-15. **注释引用符号名而非行号**：行号在每次编辑后失效。注释中引用代码位置使用函数名/类型名（可 grep），而非行号。代码移动后立即 grep 旧符号名检查注释残留
-16. **构造函数紧跟类型定义**：在 `type → const → var → func` 顺序下，`type Foo struct` 之后的 const/var 是正常的（decorder 要求），`func NewFoo` 应是 var 块之后的**第一个 func**。不应有其他类型或其他接收者的方法插入在 `type Foo` 和 `func NewFoo` 之间。同一接收者的方法聚合在一个连续块中，不跨文件散落 |
-17. **有界缓存统一用 lrumap**：任何需要容量上限的缓存（证书、HTTP client、proxy dialer、连接配置）统一使用 `lrumap.Map[K, V]`（`internal/lrumap`）。它内置并发安全 + LRU 淘汰 + `LoadOrStore` 原子操作。禁止用 `map[K]V` + `sync.Mutex` 手写淘汰逻辑 — 这种模式在审计中反复出现且每次实现都有细微并发 bug（TOCTOU、随机淘汰而非 LRU、清理泄漏） |
-18. **可选行为用导出字段，不用冗余函数对**：`Foo(a)` 是唯一函数；可选回调/配置通过导出字段设置（如 `m.OnEvict = fn`）。禁止 `Foo(a)` + `FooWithB(a, b)` 成对出现 — 不限构造函数，`Replace`/`ReplaceAll`、任何 `DoX`/`DoXWithY` 都算。每增加一个可选参数就多一个函数，API 线性膨胀。审计命令：`grep -rn 'func.*With[A-Z]' --include='*.go'` 列出所有带 `With` 的函数，人工核对是否存在对应的无 `With` 版本 |
-19. **lrumap 持有资源型值必须设 OnEvict**：如果 `lrumap.Map[K, V]` 的 V 是 `*socks5.Dialer`、`*pendingCall`（含 channel）、`*http.Client` 等持有 goroutine/fd/连接的资源型值，必须设 `OnEvict` 回调释放资源。纯数据值（`string`、`int`、`time.Time`、不可变 struct）无需。审计方法：列出所有 `lrumap.New` 调用点，对每个值类型判断是否实现了 `Close()` 或包含 `chan`/`sync.WaitGroup` 字段 |
-20. **错误包装用 %w 不用 %v**：`fmt.Errorf("context: %w", err)` 保留错误链，`errors.Is`/`As` 可穿透。仅在有意对上层隐藏实现细节时才用 `%v`。审计命令：`grep -rn 'fmt.Errorf.*%v.*err'` |
-21. **每个 goroutine 都要有 owner**：`go func()` 启动后，要么被 errgroup 追踪，要么通过 `done` channel/`ctx.Done()` 被父 goroutine 管理。fire-and-forget goroutine 必须有 `defer HandlePanic`。审计命令：`grep -rn 'go func' --include='*.go'` |
-22. **Close 必须幂等**：`Close()` 多次调用不 panic，不 double-close channel。实现模式：`sync.Once`、`atomic.CompareAndSwapInt32`、或 nil channel 检查 |
-23. **跟踪 Go 版本特性采用**：每次 Go 版本升级后审计：`go fix ./...` 应用现代器；`errors.As` → `errors.AsType[T]`；`slices.Backward` 替代手写反向迭代；`new(expr)` 简化指针构造。通过 `grep -rn 'for i := len.*-1' --include='*.go'` 找手写反向循环
-24. **注释不写出处**：注释记录的是约束和理由,不是变更履历。日期(`2026-09`)、审计编号(`(H1)`)、pprof/事故战史、`previously` 叙述一律不得出现 —— 要么删,要么改写为现在时不变量。全库残留即审计发现
-25. **全量测试必须查退出码**：`go test ... | grep -v '^ok' | head -3` 会因管道截断吞掉 FAIL 行(Round 3 实例:DNSCrypt Start 回归被 head 掩盖了一轮)。CI 判定用 exit code,本地验证用 `echo $?` 或完整落盘检查
-26. **E2E 域名选择影响覆盖面**：全用 DNSSEC-signed 域名(cloudflare.com)测试会把预打包直发路径整个掩盖(RR sections 过滤强制走解包)。协议矩阵必须混入无 DNSSEC 域名 + 无 EDNS 客户端(`dig +noedns`) |
-
-### 6.2 避免的反模式
-
-1. **defer 在循环中**：defer 在函数返回前累积，循环中应使用显式清理
-2. **锁内释放再获取**：创建竞态窗口
-3. **nil-map 写入**：`sync.Map` 或关闭前清理所有条目再设 nil
-4. **`_` 丢弃值不注释**：`_` 丢弃的值必须注释类型和原因（如 `// _ = error: DNSKEY query best-effort`）。不注释的 `_` 在函数签名重构时是定时炸弹——返回值从 `(T, error)` 变为 `(T, Cleanup)` 时编译通过，但 `_` 静默丢弃了 Cleanup 导致资源泄漏。裸类型断言 `v := x.(*T)` 应改用 comma-ok。**`func f(_, name string)` 将参数改名 `_` 而非从签名中删除——如果这不是接口实现，应直接删参并更新所有调用方**
-5. **info/warn 刷屏**：热路径上的 `log.Infof` / `log.Warnf` 在高 QPS 下产生海量日志，淹没真正重要的信号。所有每查询日志必须是 Debug 级别
-6. **日志缺少上下文**：`log.Warnf("resolve failed: %v", err)` 不包含 qname/qtype/server，无法定位问题
-7. **错误级别膨胀**：可恢复的错误（超时、单次查询失败）用 Warn，不可恢复的（配置错误、快照损坏）用 Error。不要把每个 upstream 超时都打成 Error
-8. **格式不一致**：同一组件内混用 `log.Infof("TLS: ...")` 和 `log.Infof("[TLS] ...")` 和 `log.Infof("tls: ...")` — 应统一使用 28 个规范前缀（清单见 AGENTS.md「Logging」）
-9. **架构文档过时**：`ARCHITECTURE.md` 描述已删除的中间件/类型/表；类型引用表未随代码更新。每次重构后 grep 文档确认引用的符号仍存在
-10. **注释与代码矛盾**：注释说"Phase 3 会改回来"但 Phase 3 永远不会来；注释描述的行为与实际代码不一致。每个注释在所在函数修改后必须重新验证
-11. **公开 API 无 godoc**：导出的类型/函数/方法缺少文档注释，或 godoc 只重复函数名没有说明用途和参数含义
-12. **魔法数字散落**：`time.Second * 30`、`65535`、`4096` 等裸数值直接出现在业务逻辑中。应全部抽取为命名常量并统一在 `config/defaults.go`
-13. **常量值不符合 RFC**：如 DNS 端口写成 `5353` 而非 RFC 1035 规定的 `53`；缓冲区大小不遵循 RFC 6891 的 `1232`/`65535` 等。所有常量值必须可追溯到具体 RFC 章节
-14. **乱序插入**：在文件末尾或两个无关函数之间随意插入新增方法。应找到同一接收者的方法块，按 `公开 → 私有`、`简单 → 复杂` 的顺序插入
-15. **`New*` 与类型之间有其他类型或方法**：其他类型或其他接收者的方法插入在 `type Foo struct` 和 `func NewFoo` 之间。const/var 在二者之间是**正确的**（decorder 要求 `type → const → var → func`）——这不是问题。问题是插入了不相关的 type 或 method |
-16. **注释残留**：代码已删除/移动/重命名但旧注释还在原地；TODO 的截止日期已过但无人处理；注释说"临时方案"但已存在超过两个版本
-17. **新 RFC 未存档**：实现了新协议功能但 `docs/rfc/` 中没有对应 RFC 文本。先存档 RFC，再编码
-18. **手写有界 map**：用 `map[K]V` + `sync.Mutex` + `len >= cap` 检查 + `range` 随机踢一个来实现"有界缓存"。这不能保证 LRU 语义，`range` 在 map 上的迭代顺序是随机的，且 check-then-set 和 check-evict-set 存在 TOCTOU 窗口。应使用 `lrumap.Map[K, V]` |
-19. **冗余函数对**：`Foo(a)` + `FooWithB(a, b)` 成对出现。可选行为应通过导出字段设置（`m.OnEvict = fn`），而非新建函数。不限构造函数 — `Replace`/`ReplaceAll`、`Read`/`ReadWith` 等都适用。每增加一个可选参数就多一个函数，API 线性膨胀 |
-20. **lrumap 持有资源型值未设 OnEvict**：V 为 `*socks5.Dialer`、`*pendingCall`（含 channel）、`*http.Client` 等持有 goroutine/fd 的类型，淘汰时不调用 `OnEvict` 导致资源泄漏 |
-21. **错误包装用 %v**：`fmt.Errorf("...: %v", err)` 切断了错误链 — 上层的 `errors.Is(err, ErrFoo)` 永远返回 false。应默认用 `%w`，仅在故意隐藏实现细节时用 `%v` 并注释原因 |
-22. **Context 断裂**：函数签名有 `ctx context.Context`，内部却 `context.Background()` 绕过取消链；或 goroutine 继承了父 ctx 导致父函数返回后 goroutine 立即被取消 |
-23. **Close 非幂等**：`Close()` 无 `sync.Once`/atomic 守卫 — 第二次调用 double-close channel 导致 panic，或重复关闭连接产生竞态 |
-24. **Goroutine 无回收**：`go func()` 后无任何机制等待其退出 — errgroup、WaitGroup、done channel 三者至少有一 |
-25. **Go 特性滞后**：手写 `for i := len(s)-1; i >= 0; i--` 反向迭代（用 `slices.Backward`）、`errors.As` 循环（用 `errors.AsType[T]`）、裸 `new(T)` 可简化为 `new(expr)` |
-
-### 6.3 持续改进
-
-- 每次添加新协议处理器时，自动检查池归还纪律
-- 死代码检测集成到 CI（`staticcheck -checks U1000`）
-- 竞态检测器作为 CI 必需项（`go test -race`）
-- 定期（季度）重新运行全审计流程
-- 审计修复后执行 benchmark 瓶颈分析：
-  1. 刷新基线 `go test -bench=. -short -benchtime=500ms ./... | grep '^Benchmark' | sort`
-  2. 排序 `ns/op` 找最慢 20 个 benchmark，确认是否被审计修改触及
-  3. 按模块分中位数，对比旧基线识别 >15% 回归
-  4. 对可疑回归做 `-benchmem` 分配分析，确认根因后回退或优化
-- 每次审计修复后刷新 benchmark 基线，对比检测性能回归
-- 每次审计包含专门的 CrossCut Logging 阶段：grep `log\.(Info|Warn)` 确认不在热路径，grep `log\.Error` 确认是可恢复还是不可恢复
-- 每次审计包含 CrossCut Docs 阶段：grep 全部 .md 文件中的类型名/函数名/字段名，与代码交叉验证是否仍存在
-- 每次审计包含 CrossCut Validation 阶段：grep `_, :=\|_ = ` 确认每个 `_` 丢弃的 error 有注释说明原因；grep `func.*_.*,\|\.(.*)` 确认裸类型断言；grep `net\.ParseIP\|net\.ParseCIDR` 确认结果判 nil；grep `func.*(_.*,\|func.*(_.*)` 排除接口/callback 后确认没有 standalone function 用 `_` 隐藏废弃参数
-- 每次审计包含 CrossCut Constants 阶段：grep 长数字字面量（`\d{3,}`）确认已抽取为命名常量；逐项对比常量值与 RFC 推荐值；`grep -rn 'const\|Default' config/defaults.go` 确认无跨包重复定义
-- 每次审计包含 CrossCut RFC 阶段：检查 `docs/rfc/` 目录确认所有协议实现有对应 RFC 存档；grep RFC 注释引用确认编号和章节号有效；逐条核对 MUST/SHOULD 条款覆盖率
-- 每次审计包含 CrossCut Comments 阶段：grep 注释中的函数名/类型名与 `go doc` 交叉验证仍存在；grep `TODO\|FIXME\|HACK\|临时` 确认每个有截止日期且未过期；检查被移动/删除代码附近的注释是否仍有残留引用
-- 每次审计包含 CrossCut Ordering 阶段：检查每个 `New*` 函数是否紧跟对应类型定义；检查同一接收者的方法是否聚合而非散落；检查声明顺序 `type → const → var → func`（`decorder` linter 已覆盖）；检查文件末尾是否有随机插入的新函数（无前置关联）
-- 每次审计包含 CrossCut RedundantPairs 阶段：`grep -rn 'func.*With[A-Z]' --include='*.go'` 列出所有带 `With` 的函数，核对是否存在对应的无 `With` 版本 → 合并为导出字段；`grep -rn 'lrumap\.New\[' --include='*.go'` 列出所有 lrumap 实例，逐个检查值类型是否持有资源 → 是否设了 `OnEvict`
-- 每次审计包含 CrossCut Error 阶段：`grep -rn 'fmt.Errorf.*%v.*err' --include='*.go'` 找出所有用 `%v` 包装 error 的位置，判断是否应改用 `%w`；`grep -rn 'errors\.Is\|errors\.As'` 确认 sentinel 可被检测到
-- 每次审计包含 CrossCut Context 阶段：`grep -rn 'context\.Background()\|context\.TODO()' --include='*.go'` 排除 `main.go` 和 `_test.go` 后审计每个调用点
-- 每次审计包含 CrossCut Goroutine 阶段：`grep -rn 'go func' --include='*.go'` 排除 `_test.go`，审计每个 goroutine 是否有 owner（errgroup/WaitGroup/channel）、是否有 `defer HandlePanic`
-- 每次审计包含 CrossCut Resource 阶段：`grep -rn 'func.*Close()' --include='*.go'` 检查每个 `Close()` 是否有 `sync.Once` 或 atomic 守卫，确保幂等
-- 每次审计包含 CrossCut GoVersion 阶段：`go fix ./...` 应用所有现代器；`grep -rn 'for i := len.*-1\|for i := .*-1;.*>=' --include='*.go'` 找手写反向迭代 → `slices.Backward`；`grep -rn 'errors\.As(' --include='*.go'` 评估 → `errors.AsType[T]`
-- 每次审计包含 CrossCut Flowcharts 阶段：检查 `docs/FLOWCHARTS.md` 中的 mermaid 流程图是否覆盖了所有核心功能和协议 —— 整体架构、服务生命周期、快照持久化、中间件管道、缓存查询、递归解析、DNSSEC 验证链、EDNS 处理、防御机制（含每种详解，含 DNS 0x20）、TC→TCP 回退、Zone 规则、Singleflight 去重、DNS64 合成、规则集引擎、延迟探测、连接池与协议协商、SOCKS5 代理、协议对照、DNSCrypt 密钥管理、DNSCrypt 加密流程、同步统计记录、UDP 响应截断（RFC 9715）。新增特性/协议/中间件时必须同步更新流程图。
-
----
-
-## 七、审计报告存档
-
-每次审计的详细报告放入 `docs/audit/`，命名规范：
-
-```
-docs/audit/<YYYY-MM>-<主题>/
-├── 01-foundation.md     ← internal/* 包审计
-├── 02-domain.md         ← config / cache / edns / zone / ruleset / spillfile
-├── 03-protocol.md       ← server/protocol/*
-├── 04-upstream.md       ← server/upstream/*
-├── 05-resolver.md       ← server/resolver/*
-├── 06-handler.md        ← server/handler/*
-├── 07-defense.md        ← server/defense/*
-├── 08-logging.md         ← 日志质量审计（级别、刷屏、上下文）
-├── 09-debug-coverage.md  ← Debug 日志覆盖率审计
-├── 10-docs.md            ← 文档一致性审计（与代码交叉验证）
-├── 11-validation.md      ← 参数校验审计（nil/空值/零值/_丢弃/裸断言）
-├── 12-synthesis.md       ← 综合报告（排序、主题分析、行动计划）
-└── 00-plan.md            ← 逐项修复计划 + 全覆盖清单
-```
-
-每轮审计结束后，更新上方 §概述 的历史记录表。
+1. 修复 → 全量测试 + lint 零警告 → bench 基线对比（§4.1）→ E2E 门禁（§4.2）。
+2. Round C 复查无新发现 → 刷新 `docs/benchmark/benchmark-baseline.txt` 与
+   `loadtest-baseline.txt` → 新根因模式落进 §5 → 流程图同步（`docs/FLOWCHARTS.md`）→
+   AGENTS.md / ARCHITECTURE.md 与代码一致性核对。
+3. 提交风格：约定式粒度（`fix:`/`perf:`/`docs:`…），一类修复一个 commit，
+   文档与代码分开；Co-authored-by 只留一行。

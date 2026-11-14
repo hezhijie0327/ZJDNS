@@ -217,7 +217,7 @@ Key dependencies: `codeberg.org/miekg/dns` (DNS), `github.com/quic-go/quic-go` (
 ## Architecture
 
 ZJDNS is a high-performance recursive DNS server. Full architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-Audit framework: [docs/AUDIT-METHODOLOGY.md](docs/AUDIT-METHODOLOGY.md). Reports: [docs/audit/](docs/audit/).
+Audit framework: [AUDIT.md](AUDIT.md)（根目录单文件 playbook，教训就地沉淀，不设轮次存档）.
 
 ### Project Structure
 
@@ -361,8 +361,7 @@ Prefix matches logical component, not Go package. `HIJACK:`/`DNSSEC:` → `SECUR
 | [docs/README.md](docs/README.md) | **文档索引** — 导航树、压测文档边界、约定（新文件先看这里） |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full architecture, storage design, type reference |
 | [docs/FLOWCHARTS.md](docs/FLOWCHARTS.md) | 核心功能/协议 mermaid 流程图 |
-| [docs/AUDIT-METHODOLOGY.md](docs/AUDIT-METHODOLOGY.md) | Audit framework, severity definitions, fix Sprint process |
-| [docs/audit/](docs/audit/) | Per-audit detailed findings and fix plans (`YYYY-MM-主题/`, see methodology §7) |
+| [AUDIT.md](AUDIT.md) | Audit playbook — dimensions, gates, root-cause patterns（历轮教训就地沉淀） |
 | [docs/debug/DEBUG.md](docs/debug/DEBUG.md) | Debug config, test domains, TLCP/DTLCP E2E tests, 双端压测判定标准 |
 | [docs/debug/pprof-dual.sh](docs/debug/pprof-dual.sh) | 双端压测 & pprof 采集脚本（审计修复后泄漏复核） |
 | [docs/benchmark/BENCHMARK.md](docs/benchmark/BENCHMARK.md) | Benchmark & E2E test guide (dnsperf, DNSCrypt, defense) |

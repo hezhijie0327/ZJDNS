@@ -229,7 +229,7 @@ golangci-lint run && golangci-lint fmt                 # Lint
 
 | 文档 | 内容 |
 |------|------|
-| [AUDIT-METHODOLOGY.md](docs/AUDIT-METHODOLOGY.md) | 审计框架 |
+| [AUDIT.md](AUDIT.md) | 审计 playbook |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计、设计决策 |
 | [BENCHMARK.md](docs/benchmark/BENCHMARK.md) | Benchmark 指南 |
 | [DEBUG.md](docs/debug/DEBUG.md) | 调试配置、E2E 测试 |
