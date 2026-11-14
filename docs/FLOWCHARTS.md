@@ -289,6 +289,9 @@ graph TD
 
 > ECS 候选 = 精确前缀 + 固定 fallback 链（IPv4 /24→/16→/8→/0，IPv6 /56→/48→/32→/0），
 > 第一个命中即返回（等价于旧 SQL `max(ecs_prefix)`）。命中路径无 Unpack/Pack 往返。
+> 键侧 ECS 前缀封顶在出站 scope（v4 /24、v6 /56，RFC 7871 §7.1.1）并按前缀掩码地址——
+> 客户端 /32//128 变体共享一条缓存（变体繁殖不再驱逐全表）。Set 单条 >16KiB
+> 绕过缓存（条数计量的两级上限不按字节，异常 64KB 上游不得放大 envelope）。
 
 ## 递归解析流程
 
@@ -536,12 +539,17 @@ graph TD
     ARMED -->|Yes| CHECK{TTL within +-2<br/>of trusted baseline?}
     CHECK -->|Yes| PASS2[Accept<br/>TTL-gated first-datagram]
     CHECK -->|No| REJECT[Reject<br/>Silent Drop]
+    REJECT -.->|"1/16 采样"| RJHIST["独立拒绝直方图<br/>rebuild 按 verified mode/4 封顶合并<br/>永不驱动 rebuild 节拍"]
     LEARN --> GATE
     PASS2 --> GATE{"Armed OR corroborated?<br/>identical repeat /<br/>single-datagram silence"}
-    GATE -->|Yes| FEED[Feed TTL into histogram<br/>1-in-16 拒绝采样恢复]
+    GATE -->|Yes| FEED[Feed TTL into histogram<br/>verified feed only]
     GATE -->|No| DONE[Done — 不进基线]
     FEED --> TIMER{"样本 >= 32<br/>或 >= 5min?"}
-    TIMER -->|Yes| REBUILD["Rebuild trusted set<br/>×3/4 衰减 · 自适应阈值<br/>max(4, modeCount/4)"]
+    TIMER -->|Yes| REBUILD["Rebuild trusted set<br/>×3/4 衰减 · 自适应阈值<br/>max(4, modeCount/4)<br/>拒绝样本一次性副本合并"]
+    REBUILD --> ARM{Trusted 集非空?}
+    ARM -->|Yes| ARMED
+    ARM -->|No| DISARM[Disarm<br/>重新学习]
+    TIMER -->|No| DONE[Done]
     REBUILD --> ARM{Trusted 集非空?}
     ARM -->|Yes| ARMED
     ARM -->|No| DISARM[Disarm<br/>重新学习]
@@ -551,7 +559,7 @@ graph TD
     classDef learn fill:#fef3c7,stroke:#f59e0b,color:#78350f
     classDef pass fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
     class PASS,PASS2,FEED,DONE,ARM ok
-    class REJECT reject
+    class REJECT,RJHIST reject
     class TIMER,REBUILD,DISARM,LEARN learn
     class Q,CAP,VS,ARMED,CHECK,GATE pass
 ```
@@ -600,6 +608,18 @@ graph TD
 > 无 EDNS 的裸单答案 A/AAAA 不再直接拒绝——收集为歧义候选，仅 1 个响应时直接服务，
 > ≥2 个响应（注入信号）时重查确认（`DefaultSpoofguardConfirmRounds = 3`）。EDNS 响应是
 > 合法候选（GFW 裸响应无 EDNS）。决胜：EDNS 优先 → answer 数多者胜 → 随机 tie-break。
+>
+> **分歧 fail-closed**：EDNS 候选出现分歧（答案互相矛盾）时，唯一合法出口是**跨轮
+> 签名匹配**——签名在两轮重查询中都出现的答案才服务；分歧未确证的候选在一切异常
+> 出口（连接死亡、查询预算耗尽）一律失败转 TCP 回退，绝不按"末包/首包"掷硬币
+> 服务（注入者可见真答后置后发包即能选定赢家；滴注攻击以 <500ms 间隔喂变体假包
+> 可把窗口永久吊住，deadline 分支同样拒绝分歧尾包）。静默轮（零候选）按
+> `DefaultUDPRetransmitInterval`（1s）重传，与单读路径一致。
+>
+> **逐包验证与标记链**：collect 纪律的获胜包只有在其捕获 TTL 通过 armed hopguard
+> 窗口（或 capsguard 0x20 回显命中）时才算"本包已验证"；验证失败的应答携带
+> 私有 EDE 65281 照常服务但旁路缓存（递归 CNAME 链与 MQTYPE 合并以 AND 语义传播
+> 标记）。armed 基线本身不构成对任何单读数据报的验证，TTL=0 获胜包亦然。
 
 #### SplitGuard（TCP 分段发送）
 
@@ -946,6 +966,11 @@ graph LR
 > 在锁外）。空闲回收 UDP 30s / TCP 60s。服务端并发上限统一派生自
 > `DefaultServerGoroutineLimit`（256），QUIC 连接准入 128。
 
+> **饱和语义**：池饱和错误（容量 / 连接数 / 关停哨兵）直接 fail-fast 返回，绝不
+> 落入逐查询拨号 + 完整握手绕过上限（plain 与四个安全传输同纪律；DNSCrypt 例外
+> 有注释论证——池不得成为新的故障模式）。出站连接态 UDP 在 Linux 设
+> IP_RECVERR：不可达上游的 ICMP 即时唤醒读，免吃满整个查询超时。
+
 ## SOCKS5 代理路径
 
 ```mermaid
@@ -1014,6 +1039,12 @@ graph TD
 > 检测刻意保守（错误阳性会从 DNSCrypt 回退偷走数据报——其明文证书获取首字节近乎随机）：
 > 明文 DNS 查询形状最先判定并落到底层回退；QUIC Initial 恒 ≥1200 字节（RFC 9000 §14），
 > 长度下限排除与明文 DNS 的随机 ID 碰撞。检测结果按客户端地址缓存（`peerProto`）。
+>
+> **QUIC Retry 白名单按 shard 独立**：每 shard 的 DoQ/DoH3 handler 把自己 transport 的
+> 地址校验缓存作为参数持有（不经 server 字段中转）——多 shard 下 last-wins 覆写会让
+> 其余 shard 的客户端每连接受付一次 Retry 往返（RFC 9000 §8.1.1）。TCP demux 的
+> accept 循环对非临时错误 Warn + 退避重试（不再静默退出整个共享端口），临时错误
+> （EMFILE 等）同样带退避。
 >
 > 每客户端队列与饱和语义（2026-09 修复后）：DNSCrypt/DTLCP 队列 256 包（替代 dedicated
 > 监听器本有的内核 socket 缓冲）、worker 信号量 64；饱和时在客户端自己的 drain 协程
